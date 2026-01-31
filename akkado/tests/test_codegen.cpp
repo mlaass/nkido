@@ -2093,6 +2093,58 @@ TEST_CASE("Codegen: Pattern transformations", "[codegen]") {
         auto result = akkado::compile("velocity(pat(\"c4 e4 g4\"), 0.5)");
         CHECK(result.success);
     }
+
+    SECTION("pattern transformations emit no W130 warnings") {
+        // Verify that pattern transformations are now fully implemented
+        // and don't emit "not yet implemented" warnings
+
+        auto check_no_w130 = [](const akkado::CompileResult& result) {
+            for (const auto& diag : result.diagnostics) {
+                if (diag.code == "W130") {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        auto slow_result = akkado::compile("slow(pat(\"c4 e4 g4\"), 2)");
+        CHECK(slow_result.success);
+        CHECK(check_no_w130(slow_result));
+
+        auto fast_result = akkado::compile("fast(pat(\"c4 e4\"), 2)");
+        CHECK(fast_result.success);
+        CHECK(check_no_w130(fast_result));
+
+        auto rev_result = akkado::compile("rev(pat(\"c4 e4 g4\"))");
+        CHECK(rev_result.success);
+        CHECK(check_no_w130(rev_result));
+
+        auto transpose_result = akkado::compile("transpose(pat(\"c4 e4 g4\"), 12)");
+        CHECK(transpose_result.success);
+        CHECK(check_no_w130(transpose_result));
+
+        auto velocity_result = akkado::compile("velocity(pat(\"c4 e4 g4\"), 0.5)");
+        CHECK(velocity_result.success);
+        CHECK(check_no_w130(velocity_result));
+    }
+
+    SECTION("transformations with pat() syntax") {
+        // Test that all transformations work with pat() syntax
+        auto slow_result = akkado::compile("slow(pat(\"c4 e4 g4\"), 2)");
+        CHECK(slow_result.success);
+
+        auto fast_result = akkado::compile("fast(pat(\"c4 e4\"), 2)");
+        CHECK(fast_result.success);
+
+        auto rev_result = akkado::compile("rev(pat(\"c4 e4 g4\"))");
+        CHECK(rev_result.success);
+
+        auto transpose_result = akkado::compile("transpose(pat(\"c4 e4 g4\"), 12)");
+        CHECK(transpose_result.success);
+
+        auto velocity_result = akkado::compile("velocity(pat(\"c4 e4 g4\"), 0.5)");
+        CHECK(velocity_result.success);
+    }
 }
 
 // =============================================================================

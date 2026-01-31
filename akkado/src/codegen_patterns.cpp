@@ -1160,9 +1160,177 @@ static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
     return false;
 }
 
+// Helper: Compile a pattern and return the compiled data
+// Returns true on success. On success, populates out_* parameters.
+static bool compile_pattern_for_transform(
+    CodeGenerator& gen,
+    const Ast& ast,
+    NodeIndex pattern_arg,
+    SampleRegistry* sample_registry,
+    SequenceCompiler& compiler,
+    NodeIndex& out_pattern_node,
+    std::uint32_t& out_num_elements) {
+
+    const Node& pat_node = ast.arena[pattern_arg];
+
+    // Handle MiniLiteral: get the pattern node inside
+    if (pat_node.type == NodeType::MiniLiteral) {
+        out_pattern_node = pat_node.first_child;
+        if (out_pattern_node == NULL_NODE) {
+            return false;
+        }
+
+        const Node& pattern = ast.arena[out_pattern_node];
+        compiler.set_pattern_base_offset(pattern.location.offset);
+
+        if (!compiler.compile(out_pattern_node)) {
+            return false;
+        }
+
+        out_num_elements = compiler.count_top_level_elements(out_pattern_node);
+        return true;
+    }
+
+    // Handle pattern-producing Call nodes (pat, seq, etc.)
+    // For now, recurse and compile the Call to get the inner pattern
+    if (pat_node.type == NodeType::Call) {
+        // Get the first argument which should be a string literal
+        NodeIndex first_arg = pat_node.first_child;
+        if (first_arg != NULL_NODE) {
+            const Node& arg_node = ast.arena[first_arg];
+            NodeIndex actual_arg = first_arg;
+
+            // Unwrap Argument node
+            if (arg_node.type == NodeType::Argument) {
+                actual_arg = arg_node.first_child;
+            }
+
+            if (actual_arg != NULL_NODE) {
+                const Node& actual_node = ast.arena[actual_arg];
+                if (actual_node.type == NodeType::MiniLiteral) {
+                    out_pattern_node = actual_node.first_child;
+                    if (out_pattern_node != NULL_NODE) {
+                        const Node& pattern = ast.arena[out_pattern_node];
+                        compiler.set_pattern_base_offset(pattern.location.offset);
+
+                        if (compiler.compile(out_pattern_node)) {
+                            out_num_elements = compiler.count_top_level_elements(out_pattern_node);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+// Helper: Emit a compiled pattern with transformations applied
+// This is the common code for emitting SEQPAT_QUERY/SEQPAT_STEP
+static std::uint16_t emit_pattern_with_state(
+    CodeGenerator& gen,
+    BufferAllocator& buffers,
+    std::vector<cedar::Instruction>& instructions,
+    std::vector<StateInitData>& state_inits,
+    std::set<std::string>& required_samples,
+    std::unordered_map<NodeIndex, std::uint16_t>& node_buffers,
+    std::unordered_map<NodeIndex, std::unordered_map<std::string, std::uint16_t>>& record_fields,
+    NodeIndex node,
+    std::uint32_t state_id,
+    float cycle_length,
+    const SequenceCompiler& compiler,
+    std::vector<std::vector<cedar::Event>>& sequence_events,
+    const SourceLocation& pattern_loc,
+    const SourceLocation& call_loc,
+    void (*emit_fn)(std::vector<cedar::Instruction>&, const cedar::Instruction&)) {
+
+    // Collect required samples
+    compiler.collect_samples(required_samples);
+
+    bool is_sample_pattern = compiler.is_sample_pattern();
+
+    // Allocate buffers for outputs
+    std::uint16_t value_buf = buffers.allocate();
+    std::uint16_t velocity_buf = buffers.allocate();
+    std::uint16_t trigger_buf = buffers.allocate();
+
+    if (value_buf == BufferAllocator::BUFFER_UNUSED ||
+        velocity_buf == BufferAllocator::BUFFER_UNUSED ||
+        trigger_buf == BufferAllocator::BUFFER_UNUSED) {
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Emit SEQPAT_QUERY instruction
+    cedar::Instruction query_inst{};
+    query_inst.opcode = cedar::Opcode::SEQPAT_QUERY;
+    query_inst.out_buffer = 0xFFFF;
+    query_inst.inputs[0] = 0xFFFF;
+    query_inst.inputs[1] = 0xFFFF;
+    query_inst.inputs[2] = 0xFFFF;
+    query_inst.inputs[3] = 0xFFFF;
+    query_inst.inputs[4] = 0xFFFF;
+    query_inst.state_id = state_id;
+    emit_fn(instructions, query_inst);
+
+    // Check for polyphonic patterns
+    std::uint8_t max_voices = compiler.max_voices();
+    std::vector<std::uint16_t> voice_buffers;
+
+    // Emit SEQPAT_STEP for each voice
+    for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
+        std::uint16_t voice_value_buf = (voice == 0) ? value_buf : buffers.allocate();
+        if (voice_value_buf == BufferAllocator::BUFFER_UNUSED) {
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+
+        cedar::Instruction step_inst{};
+        step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
+        step_inst.out_buffer = voice_value_buf;
+        step_inst.inputs[0] = (voice == 0) ? velocity_buf : 0xFFFF;
+        step_inst.inputs[1] = (voice == 0) ? trigger_buf : 0xFFFF;
+        step_inst.inputs[2] = voice;
+        step_inst.inputs[3] = 0xFFFF;
+        step_inst.inputs[4] = 0xFFFF;
+        step_inst.state_id = state_id;
+        emit_fn(instructions, step_inst);
+
+        voice_buffers.push_back(voice_value_buf);
+    }
+
+    // Store sequence program initialization data
+    StateInitData seq_init;
+    seq_init.state_id = state_id;
+    seq_init.type = StateInitData::Type::SequenceProgram;
+    seq_init.cycle_length = cycle_length;
+    seq_init.sequences = compiler.sequences();
+    seq_init.sequence_events = std::move(sequence_events);
+    seq_init.total_events = compiler.total_events();
+    seq_init.is_sample_pattern = is_sample_pattern;
+    seq_init.pattern_location = pattern_loc;
+    seq_init.sequence_sample_mappings = compiler.sample_mappings();
+    state_inits.push_back(std::move(seq_init));
+
+    // Store pattern field buffers for %.field access
+    std::unordered_map<std::string, std::uint16_t> pattern_fields;
+    pattern_fields["freq"] = value_buf;
+    pattern_fields["vel"] = velocity_buf;
+    pattern_fields["trig"] = trigger_buf;
+    record_fields[node] = std::move(pattern_fields);
+
+    node_buffers[node] = value_buf;
+    return value_buf;
+}
+
+// Helper to emit instruction (wrapper for member function access)
+static void emit_instruction_helper(std::vector<cedar::Instruction>& instructions,
+                                    const cedar::Instruction& inst) {
+    instructions.push_back(inst);
+}
+
 std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
     // slow(pattern, factor) - stretch pattern by factor
-    // Equivalent to dividing all event times by factor
+    // Multiplies all event times, durations, and cycle_length by factor
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
     auto factor = get_number_arg(*ast_, n, 1);
@@ -1180,20 +1348,61 @@ std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
     const Node& pat_node = ast_->arena[pattern_arg];
 
     // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type == NodeType::MiniLiteral || is_pattern_expr(*ast_, pattern_arg)) {
-        // For MVP, emit warning and pass through
-        warn("W130", "slow() not yet fully implemented - pattern will play at normal speed", n.location);
-        return visit(pattern_arg);
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "slow() first argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // For non-pattern arguments, this is an error
-    error("E133", "slow() first argument must be a pattern", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    // Compile the pattern
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements)) {
+        error("E130", "slow() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t slow_count = call_counters_["slow"]++;
+    push_path("slow#" + std::to_string(slow_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Get compiled events and apply slow transformation
+    auto sequence_events = compiler.sequence_events();
+    float slow_factor = *factor;
+
+    // Transform all events: multiply time and duration by factor
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            event.time *= slow_factor;
+            event.duration *= slow_factor;
+        }
+    }
+
+    // Adjust cycle length
+    float cycle_length = static_cast<float>(std::max(1u, num_elements)) * slow_factor;
+
+    const Node& pattern = ast_->arena[pattern_node];
+    std::uint16_t result = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_buffers_, record_fields_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+
+    if (result == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+
+    return result;
 }
 
 std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
     // fast(pattern, factor) - compress pattern by factor
-    // Equivalent to multiplying all event times by factor
+    // Divides all event times, durations, and cycle_length by factor
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
     auto factor = get_number_arg(*ast_, n, 1);
@@ -1208,18 +1417,64 @@ std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
+    const Node& pat_node = ast_->arena[pattern_arg];
+
     // Accept MiniLiteral or pattern-producing Call nodes
-    if (is_pattern_expr(*ast_, pattern_arg)) {
-        warn("W130", "fast() not yet fully implemented - pattern will play at normal speed", n.location);
-        return visit(pattern_arg);
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "fast() first argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
     }
 
-    error("E133", "fast() first argument must be a pattern", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    // Compile the pattern
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements)) {
+        error("E130", "fast() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t fast_count = call_counters_["fast"]++;
+    push_path("fast#" + std::to_string(fast_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Get compiled events and apply fast transformation
+    auto sequence_events = compiler.sequence_events();
+    float fast_factor = *factor;
+
+    // Transform all events: divide time and duration by factor
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            event.time /= fast_factor;
+            event.duration /= fast_factor;
+        }
+    }
+
+    // Adjust cycle length
+    float cycle_length = static_cast<float>(std::max(1u, num_elements)) / fast_factor;
+
+    const Node& pattern = ast_->arena[pattern_node];
+    std::uint16_t result = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_buffers_, record_fields_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+
+    if (result == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+
+    return result;
 }
 
 std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
     // rev(pattern) - reverse event order in pattern
+    // Reverses the start times: new_time = cycle_duration - old_time - old_duration
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
 
@@ -1228,19 +1483,67 @@ std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
+    const Node& pat_node = ast_->arena[pattern_arg];
+
     // Accept MiniLiteral or pattern-producing Call nodes
-    if (is_pattern_expr(*ast_, pattern_arg)) {
-        warn("W130", "rev() not yet fully implemented - pattern will play normally", n.location);
-        return visit(pattern_arg);
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "rev() argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
     }
 
-    error("E133", "rev() argument must be a pattern", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    // Compile the pattern
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements)) {
+        error("E130", "rev() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t rev_count = call_counters_["rev"]++;
+    push_path("rev#" + std::to_string(rev_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Get compiled events and apply reverse transformation
+    auto sequence_events = compiler.sequence_events();
+    float cycle_length = static_cast<float>(std::max(1u, num_elements));
+
+    // Transform all events: reverse time positions within each sequence
+    // For events normalized to [0, 1), we use: new_time = 1 - old_time - old_duration
+    // But since we work with beats, we use cycle_length
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            // Calculate new start time so event ends where it used to start
+            // old_end = old_time + old_duration
+            // new_time = cycle_length - old_end = cycle_length - old_time - old_duration
+            float new_time = cycle_length - event.time - event.duration;
+            if (new_time < 0.0f) new_time = 0.0f;  // Clamp to avoid negative times
+            event.time = new_time;
+        }
+    }
+
+    const Node& pattern = ast_->arena[pattern_node];
+    std::uint16_t result = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_buffers_, record_fields_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+
+    if (result == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+
+    return result;
 }
 
 std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n) {
     // transpose(pattern, semitones) - shift all pitches by semitones
-    (void)node;  // Unused for now
+    // Converts frequency to MIDI, adds semitones, converts back to frequency
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
     auto semitones = get_number_arg(*ast_, n, 1);
@@ -1255,19 +1558,75 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
         return BufferAllocator::BUFFER_UNUSED;
     }
 
+    const Node& pat_node = ast_->arena[pattern_arg];
+
     // Accept MiniLiteral or pattern-producing Call nodes
-    if (is_pattern_expr(*ast_, pattern_arg)) {
-        warn("W130", "transpose() not yet fully implemented - pattern will play at original pitch", n.location);
-        return visit(pattern_arg);
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "transpose() first argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
     }
 
-    error("E133", "transpose() first argument must be a pattern", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    // Compile the pattern
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements)) {
+        error("E130", "transpose() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t transpose_count = call_counters_["transpose"]++;
+    push_path("transpose#" + std::to_string(transpose_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Get compiled events and apply transpose transformation
+    auto sequence_events = compiler.sequence_events();
+    float semitones_value = *semitones;
+
+    // Transpose ratio: multiply frequency by 2^(semitones/12)
+    float transpose_ratio = std::pow(2.0f, semitones_value / 12.0f);
+
+    // Transform all events: multiply frequency values by transpose ratio
+    // Only for pitch patterns (not sample patterns)
+    if (!compiler.is_sample_pattern()) {
+        for (auto& seq_events : sequence_events) {
+            for (auto& event : seq_events) {
+                if (event.type == cedar::EventType::DATA) {
+                    // Transpose all pitch values in the event
+                    for (std::uint8_t i = 0; i < event.num_values; ++i) {
+                        event.values[i] *= transpose_ratio;
+                    }
+                }
+            }
+        }
+    }
+
+    float cycle_length = static_cast<float>(std::max(1u, num_elements));
+
+    const Node& pattern = ast_->arena[pattern_node];
+    std::uint16_t result = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_buffers_, record_fields_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+
+    if (result == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+
+    return result;
 }
 
 std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     // velocity(pattern, vel) - set velocity on all events
-    (void)node;  // Unused for now
+    // Note: This currently doesn't modify velocity since velocity is not stored
+    // in cedar::Event. Instead, we'd need to emit instructions that multiply
+    // the velocity buffer. For now, we emit a warning if vel != 1.0.
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
     auto vel = get_number_arg(*ast_, n, 1);
@@ -1282,14 +1641,142 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
         return BufferAllocator::BUFFER_UNUSED;
     }
 
+    const Node& pat_node = ast_->arena[pattern_arg];
+
     // Accept MiniLiteral or pattern-producing Call nodes
-    if (is_pattern_expr(*ast_, pattern_arg)) {
-        warn("W130", "velocity() not yet fully implemented - pattern will use default velocity", n.location);
-        return visit(pattern_arg);
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "velocity() first argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
     }
 
-    error("E133", "velocity() first argument must be a pattern", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    // Compile the pattern
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements)) {
+        error("E130", "velocity() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t velocity_count = call_counters_["velocity"]++;
+    push_path("velocity#" + std::to_string(velocity_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Get compiled events
+    auto sequence_events = compiler.sequence_events();
+    float velocity_value = *vel;
+
+    // Note: The current event structure doesn't store velocity per event.
+    // Velocity is applied at the pattern level via the velocity buffer output.
+    // For now, we compile the pattern normally and multiply the velocity output.
+    // This is a simplified implementation - a full implementation would need
+    // per-event velocity stored in the Event struct.
+
+    float cycle_length = static_cast<float>(std::max(1u, num_elements));
+
+    // Collect required samples
+    compiler.collect_samples(required_samples_);
+
+    bool is_sample_pattern = compiler.is_sample_pattern();
+
+    // Allocate buffers for outputs
+    std::uint16_t value_buf = buffers_.allocate();
+    std::uint16_t velocity_buf = buffers_.allocate();
+    std::uint16_t trigger_buf = buffers_.allocate();
+
+    if (value_buf == BufferAllocator::BUFFER_UNUSED ||
+        velocity_buf == BufferAllocator::BUFFER_UNUSED ||
+        trigger_buf == BufferAllocator::BUFFER_UNUSED) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Emit SEQPAT_QUERY instruction
+    cedar::Instruction query_inst{};
+    query_inst.opcode = cedar::Opcode::SEQPAT_QUERY;
+    query_inst.out_buffer = 0xFFFF;
+    query_inst.inputs[0] = 0xFFFF;
+    query_inst.inputs[1] = 0xFFFF;
+    query_inst.inputs[2] = 0xFFFF;
+    query_inst.inputs[3] = 0xFFFF;
+    query_inst.inputs[4] = 0xFFFF;
+    query_inst.state_id = state_id;
+    emit(query_inst);
+
+    // Emit SEQPAT_STEP
+    cedar::Instruction step_inst{};
+    step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
+    step_inst.out_buffer = value_buf;
+    step_inst.inputs[0] = velocity_buf;
+    step_inst.inputs[1] = trigger_buf;
+    step_inst.inputs[2] = 0;
+    step_inst.inputs[3] = 0xFFFF;
+    step_inst.inputs[4] = 0xFFFF;
+    step_inst.state_id = state_id;
+    emit(step_inst);
+
+    // Now multiply the velocity buffer by the velocity value
+    std::uint16_t vel_const_buf = buffers_.allocate();
+    std::uint16_t scaled_velocity_buf = buffers_.allocate();
+
+    if (vel_const_buf == BufferAllocator::BUFFER_UNUSED ||
+        scaled_velocity_buf == BufferAllocator::BUFFER_UNUSED) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Push the velocity constant
+    cedar::Instruction vel_const{};
+    vel_const.opcode = cedar::Opcode::PUSH_CONST;
+    vel_const.out_buffer = vel_const_buf;
+    vel_const.inputs[0] = 0xFFFF;
+    vel_const.inputs[1] = 0xFFFF;
+    vel_const.inputs[2] = 0xFFFF;
+    vel_const.inputs[3] = 0xFFFF;
+    codegen::encode_const_value(vel_const, velocity_value);
+    emit(vel_const);
+
+    // Multiply velocity by constant
+    cedar::Instruction mul_inst{};
+    mul_inst.opcode = cedar::Opcode::MUL;
+    mul_inst.out_buffer = scaled_velocity_buf;
+    mul_inst.inputs[0] = velocity_buf;
+    mul_inst.inputs[1] = vel_const_buf;
+    mul_inst.inputs[2] = 0xFFFF;
+    mul_inst.inputs[3] = 0xFFFF;
+    mul_inst.inputs[4] = 0xFFFF;
+    emit(mul_inst);
+
+    // Store sequence program initialization data
+    StateInitData seq_init;
+    seq_init.state_id = state_id;
+    seq_init.type = StateInitData::Type::SequenceProgram;
+    seq_init.cycle_length = cycle_length;
+    seq_init.sequences = compiler.sequences();
+    seq_init.sequence_events = std::move(sequence_events);
+    seq_init.total_events = compiler.total_events();
+    seq_init.is_sample_pattern = is_sample_pattern;
+    const Node& pattern = ast_->arena[pattern_node];
+    seq_init.pattern_location = pattern.location;
+    seq_init.sequence_sample_mappings = compiler.sample_mappings();
+    state_inits_.push_back(std::move(seq_init));
+
+    // Store pattern field buffers for %.field access
+    // Use the scaled velocity buffer
+    std::unordered_map<std::string, std::uint16_t> pattern_fields;
+    pattern_fields["freq"] = value_buf;
+    pattern_fields["vel"] = scaled_velocity_buf;  // Use scaled velocity
+    pattern_fields["trig"] = trigger_buf;
+    record_fields_[node] = std::move(pattern_fields);
+
+    pop_path();
+    node_buffers_[node] = value_buf;
+    return value_buf;
 }
 
 } // namespace akkado
