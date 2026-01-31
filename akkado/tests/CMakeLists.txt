@@ -18,6 +18,7 @@ include(Catch)
 add_executable(akkado_tests
     test_akkado.cpp
     test_analyzer.cpp
+    test_builtins.cpp
     test_codegen.cpp
     test_diagnostics.cpp
     test_fm_detection.cpp
@@ -27,6 +28,8 @@ add_executable(akkado_tests
     test_ast_arena.cpp
     test_buffer_allocator.cpp
     test_pattern_debug.cpp
+    test_pattern_event.cpp
+    test_sample_registry.cpp
     test_symbol_table.cpp
     test_chord.cpp
 )

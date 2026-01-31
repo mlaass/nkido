@@ -47,6 +47,13 @@ TEST_CASE("has_errors helper", "[diagnostics]") {
         CHECK_FALSE(akkado::has_errors(diags));
     }
 
+    SECTION("hints are not errors") {
+        std::vector<akkado::Diagnostic> diags{
+            {.severity = akkado::Severity::Hint}
+        };
+        CHECK_FALSE(akkado::has_errors(diags));
+    }
+
     SECTION("detects errors") {
         std::vector<akkado::Diagnostic> diags{
             {.severity = akkado::Severity::Warning},
