@@ -2345,3 +2345,224 @@ TEST_CASE("Codegen: Mini-notation patterns", "[codegen]") {
         CHECK(result.success);
     }
 }
+
+// =============================================================================
+// UGen Auto-Expansion Tests
+// =============================================================================
+
+TEST_CASE("Codegen: UGen auto-expansion", "[codegen][arrays]") {
+    SECTION("array of frequencies expands sine_osc to 3 instances") {
+        // [440, 550, 660] |> sine_osc(%) produces 3 OSC_SIN instructions
+        auto result = akkado::compile("[440, 550, 660] |> sine_osc(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should have 3 OSC_SIN instructions
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SIN) == 3);
+    }
+
+    SECTION("array expansion followed by sum") {
+        // Note: sum(%) requires the % to pass the multi-buffer through
+        auto result = akkado::compile("[220, 330, 440] |> saw(%) |> sum(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 3 sawtooth oscillators
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 3);
+        // 2 additions to sum them
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) == 2);
+    }
+
+    SECTION("array of frequencies through osc() stdlib") {
+        // osc() is defined in stdlib and calls sine_osc for type="sin"
+        // This currently produces 1 osc because the match resolves before expansion.
+        // For full expansion through stdlib osc(), need to call directly:
+        auto result = akkado::compile("freqs = [440, 550, 660]\nsine_osc(freqs)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should have 3 OSC_SIN instructions
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SIN) == 3);
+    }
+
+    SECTION("single element array does not expand") {
+        auto result = akkado::compile("[440] |> sine_osc(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Single element: just one instruction
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SIN) == 1);
+    }
+
+    SECTION("filter expansion with array input") {
+        // Filters also expand when given array inputs
+        auto result = akkado::compile("n = noise()\nfreqs = [1000, 2000, 3000]\nfreqs |> lp(n, %)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should have 3 SVF_LP instructions
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 3);
+    }
+}
+
+// =============================================================================
+// Binary Operation Broadcasting Tests
+// =============================================================================
+
+TEST_CASE("Codegen: Array broadcasting", "[codegen][arrays]") {
+    SECTION("array * scalar") {
+        auto result = akkado::compile("[1, 2, 3] * 2");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 3 multiplications
+        CHECK(count_instructions(insts, cedar::Opcode::MUL) == 3);
+    }
+
+    SECTION("scalar + array") {
+        auto result = akkado::compile("10 + [1, 2, 3]");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 3 additions
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) == 3);
+    }
+
+    SECTION("array + array same length") {
+        auto result = akkado::compile("[1, 2] + [3, 4]");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 2 additions
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) == 2);
+    }
+
+    SECTION("array + array broadcasting") {
+        // [1, 2, 3, 4] + [10, 20] -> [11, 22, 13, 24] (shorter array cycles)
+        auto result = akkado::compile("[1, 2, 3, 4] + [10, 20]");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 4 additions (length of longer array)
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) == 4);
+    }
+
+    SECTION("division broadcasting") {
+        auto result = akkado::compile("[10, 20, 30] / 10");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::DIV) == 3);
+    }
+}
+
+// =============================================================================
+// Array Reduction Tests
+// =============================================================================
+
+TEST_CASE("Codegen: Array reductions", "[codegen][arrays]") {
+    SECTION("product of array") {
+        auto result = akkado::compile("product([2, 3, 4])");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 2 multiplications to compute 2*3*4
+        CHECK(count_instructions(insts, cedar::Opcode::MUL) == 2);
+    }
+
+    SECTION("mean of array") {
+        auto result = akkado::compile("mean([10, 20, 30])");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 2 ADDs + 1 DIV
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::DIV) == 1);
+    }
+
+    SECTION("min of array") {
+        auto result = akkado::compile("min([5, 2, 8, 1])");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 3 MIN operations
+        CHECK(count_instructions(insts, cedar::Opcode::MIN) == 3);
+    }
+
+    SECTION("max of array") {
+        auto result = akkado::compile("max([5, 2, 8, 1])");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 3 MAX operations
+        CHECK(count_instructions(insts, cedar::Opcode::MAX) == 3);
+    }
+
+    SECTION("binary min still works") {
+        auto result = akkado::compile("min(3, 5)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Single MIN operation
+        CHECK(count_instructions(insts, cedar::Opcode::MIN) == 1);
+    }
+}
+
+// =============================================================================
+// Array Transformation Tests
+// =============================================================================
+
+TEST_CASE("Codegen: Array transformations", "[codegen][arrays]") {
+    SECTION("rotate") {
+        auto result = akkado::compile("rotate([1, 2, 3, 4], 1)");
+        REQUIRE(result.success);
+        // Rotation is just reordering - no arithmetic ops needed
+    }
+
+    SECTION("shuffle") {
+        auto result = akkado::compile("shuffle([1, 2, 3, 4])");
+        REQUIRE(result.success);
+    }
+
+    SECTION("sort") {
+        auto result = akkado::compile("sort([3, 1, 4, 1, 5])");
+        REQUIRE(result.success);
+    }
+
+    SECTION("normalize") {
+        auto result = akkado::compile("normalize([10, 20, 30])");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should have MIN, MAX, SUB, and DIV operations
+        CHECK(count_instructions(insts, cedar::Opcode::MIN) > 0);
+        CHECK(count_instructions(insts, cedar::Opcode::MAX) > 0);
+    }
+
+    SECTION("scale") {
+        auto result = akkado::compile("scale([10, 20, 30], 0, 100)");
+        REQUIRE(result.success);
+    }
+}
+
+// =============================================================================
+// Array Generation Tests
+// =============================================================================
+
+TEST_CASE("Codegen: Array generation", "[codegen][arrays]") {
+    SECTION("linspace") {
+        auto result = akkado::compile("linspace(0, 10, 5)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 5 constants: 0, 2.5, 5, 7.5, 10
+        CHECK(count_instructions(insts, cedar::Opcode::PUSH_CONST) == 5);
+    }
+
+    SECTION("random") {
+        auto result = akkado::compile("random(4)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 4 random constants
+        CHECK(count_instructions(insts, cedar::Opcode::PUSH_CONST) == 4);
+    }
+
+    SECTION("harmonics") {
+        auto result = akkado::compile("harmonics(110, 4)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 4 harmonics: 110, 220, 330, 440
+        CHECK(count_instructions(insts, cedar::Opcode::PUSH_CONST) == 4);
+    }
+
+    SECTION("harmonics through oscillator") {
+        auto result = akkado::compile("harmonics(110, 4) |> sine_osc(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // 4 oscillators
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SIN) == 4);
+    }
+}

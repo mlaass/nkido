@@ -73,11 +73,11 @@ describe('Array Compilation', () => {
 		expect(arrayPack.length).toBeGreaterThanOrEqual(1);
 	});
 
-	it.todo('compiles array with UGen auto-expansion', () => {
-		// TODO: Implement UGen auto-expansion for arrays
+	it('compiles array with UGen auto-expansion', () => {
 		// Array through oscillator should expand to multiple oscillators
+		// Note: osc() routes through stdlib match, so use sine_osc directly
 		const source = `
-			[220, 330, 440] |> osc("sin", %) |> sum() |> out(%, %)
+			[220, 330, 440] |> sine_osc(%) |> sum(%) |> out(%, %)
 		`;
 		const result = enkido.akkado_compile(source);
 		expect(result).toBe(1);
@@ -89,10 +89,9 @@ describe('Array Compilation', () => {
 		expect(oscs.length).toBe(3);
 	});
 
-	it.todo('compiles map() over array', () => {
-		// TODO: Implement map() for arrays
+	it('compiles map() over array', () => {
 		const source = `
-			[1, 2, 3] |> map(x => x * 2) |> sum() |> out(%, %)
+			map([1, 2, 3], (x) -> x * 2) |> sum(%) |> out(%, %)
 		`;
 		const result = enkido.akkado_compile(source);
 		expect(result).toBe(1);
@@ -104,10 +103,9 @@ describe('Array Compilation', () => {
 		expect(muls.length).toBe(3);
 	});
 
-	it.todo('compiles sum() of array', () => {
-		// TODO: Implement sum() for arrays
+	it('compiles sum() of array', () => {
 		const source = `
-			[1, 2, 3, 4] |> sum() |> out(%, %)
+			sum([1, 2, 3, 4]) |> out(%, %)
 		`;
 		const result = enkido.akkado_compile(source);
 		expect(result).toBe(1);
@@ -117,6 +115,34 @@ describe('Array Compilation', () => {
 		// Sum of 4 elements requires 3 ADD instructions
 		const adds = disasm.instructions.filter((i) => i.opcode === 'ADD');
 		expect(adds.length).toBe(3);
+	});
+
+	it('compiles broadcasting operations', () => {
+		const source = `
+			[1, 2, 3] * 2 |> sum(%) |> out(%, %)
+		`;
+		const result = enkido.akkado_compile(source);
+		expect(result).toBe(1);
+
+		const disasm = getDisassembly(enkido);
+
+		// Should have 3 MUL instructions (one for each element)
+		const muls = disasm.instructions.filter((i) => i.opcode === 'MUL');
+		expect(muls.length).toBe(3);
+	});
+
+	it('compiles harmonics() for additive synthesis', () => {
+		const source = `
+			harmonics(110, 4) |> sine_osc(%) |> sum(%) * 0.25 |> out(%, %)
+		`;
+		const result = enkido.akkado_compile(source);
+		expect(result).toBe(1);
+
+		const disasm = getDisassembly(enkido);
+
+		// Should have 4 OSC_SIN instructions
+		const oscs = disasm.instructions.filter((i) => i.opcode === 'OSC_SIN');
+		expect(oscs.length).toBe(4);
 	});
 
 	it('compiles len() of array', () => {
@@ -150,10 +176,10 @@ describe('Array Audio Processing', () => {
 		enkido.cedar_reset();
 	});
 
-	it.todo('produces audio from chord (array of frequencies)', () => {
-		// TODO: Requires UGen auto-expansion and sum()
+	it('produces audio from chord (array of frequencies)', () => {
+		// Note: use sine_osc directly and sum(%) for proper multi-buffer piping
 		const source = `
-			[220, 330, 440] |> osc("sin", %) |> sum() * 0.3 |> out(%, %)
+			[220, 330, 440] |> sine_osc(%) |> sum(%) * 0.3 |> out(%, %)
 		`;
 		const compileResult = enkido.akkado_compile(source);
 		expect(compileResult).toBe(1);

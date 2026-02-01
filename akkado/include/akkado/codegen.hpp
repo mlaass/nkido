@@ -363,6 +363,58 @@ private:
     std::uint16_t handle_repeat_call(NodeIndex node, const Node& n);
 
     // ============================================================================
+    // Array reduction operations
+    // ============================================================================
+
+    /// Handle product(array) call - multiply all elements
+    std::uint16_t handle_product_call(NodeIndex node, const Node& n);
+
+    /// Handle mean(array) call - average of elements
+    std::uint16_t handle_mean_call(NodeIndex node, const Node& n);
+
+    /// Handle min/max calls - either binary or reduction depending on args
+    std::uint16_t handle_minmax_call(NodeIndex node, const Node& n);
+
+    // ============================================================================
+    // Array transformation operations
+    // ============================================================================
+
+    /// Handle rotate(array, n) call - rotate elements by n positions
+    std::uint16_t handle_rotate_call(NodeIndex node, const Node& n);
+
+    /// Handle shuffle(array) call - deterministic random permutation
+    std::uint16_t handle_shuffle_call(NodeIndex node, const Node& n);
+
+    /// Handle sort(array) call - sort elements in ascending order
+    std::uint16_t handle_sort_call(NodeIndex node, const Node& n);
+
+    /// Handle normalize(array) call - scale to 0-1 range
+    std::uint16_t handle_normalize_call(NodeIndex node, const Node& n);
+
+    /// Handle scale(array, lo, hi) call - map to new range
+    std::uint16_t handle_scale_call(NodeIndex node, const Node& n);
+
+    // ============================================================================
+    // Array generation operations
+    // ============================================================================
+
+    /// Handle linspace(start, end, n) call - N evenly spaced values
+    std::uint16_t handle_linspace_call(NodeIndex node, const Node& n);
+
+    /// Handle random(n) call - N random values (deterministic by path)
+    std::uint16_t handle_random_call(NodeIndex node, const Node& n);
+
+    /// Handle harmonics(fundamental, n) call - harmonic series
+    std::uint16_t handle_harmonics_call(NodeIndex node, const Node& n);
+
+    // ============================================================================
+    // Binary operation broadcasting
+    // ============================================================================
+
+    /// Handle binary operations (add, sub, mul, div, pow) with array broadcasting
+    std::uint16_t handle_binary_op_call(NodeIndex node, const Node& n);
+
+    // ============================================================================
     // Record support
     // ============================================================================
 

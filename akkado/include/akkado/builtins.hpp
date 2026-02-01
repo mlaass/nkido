@@ -391,14 +391,15 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  "Hyperbolic tangent (soft clipper)"}},
 
     // Math binary (2 inputs)
-    {"min",     {cedar::Opcode::MIN, 2, 0, false,
+    // min/max can be binary or unary (reduction over array)
+    {"min",     {cedar::Opcode::MIN, 1, 1, false,
                  {"a", "b", "", "", "", ""},
                  {NAN, NAN, NAN},
-                 "Minimum of two values"}},
-    {"max",     {cedar::Opcode::MAX, 2, 0, false,
+                 "Minimum: min(a, b) or min(array)"}},
+    {"max",     {cedar::Opcode::MAX, 1, 1, false,
                  {"a", "b", "", "", "", ""},
                  {NAN, NAN, NAN},
-                 "Maximum of two values"}},
+                 "Maximum: max(a, b) or max(array)"}},
 
     // Math ternary (3 inputs)
     {"clamp",   {cedar::Opcode::CLAMP, 3, 0, false,
@@ -558,6 +559,52 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"value", "n", "", "", "", ""},
                  {NAN, NAN, NAN},
                  "Repeat value n times: [v, v, ..., v]"}},
+
+    // Array reduction operations
+    {"product", {cedar::Opcode::NOP, 1, 0, false,
+                 {"array", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Multiply all elements of array"}},
+    {"mean",    {cedar::Opcode::NOP, 1, 0, false,
+                 {"array", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Average of array elements"}},
+
+    // Array transformation operations
+    {"rotate",    {cedar::Opcode::NOP, 2, 0, false,
+                   {"array", "n", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Rotate array elements by n positions"}},
+    {"shuffle",   {cedar::Opcode::NOP, 1, 0, false,
+                   {"array", "", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Deterministic random permutation of array"}},
+    {"sort",      {cedar::Opcode::NOP, 1, 0, false,
+                   {"array", "", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Sort array in ascending order"}},
+    {"normalize", {cedar::Opcode::NOP, 1, 0, false,
+                   {"array", "", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Scale array to 0-1 range"}},
+    {"scale",     {cedar::Opcode::NOP, 3, 0, false,
+                   {"array", "lo", "hi", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Scale array to [lo, hi] range"}},
+
+    // Array generation operations
+    {"linspace",  {cedar::Opcode::NOP, 3, 0, false,
+                   {"start", "end", "n", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Generate n evenly spaced values from start to end"}},
+    {"random",    {cedar::Opcode::NOP, 1, 0, false,
+                   {"n", "", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Generate n random values (deterministic)"}},
+    {"harmonics", {cedar::Opcode::NOP, 2, 0, false,
+                   {"fundamental", "n", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Generate harmonic series: f, 2f, 3f, ..., nf"}},
 
     // Chord function (handled specially by codegen)
     // chord("Am") -> array of MIDI notes (root note only for now)

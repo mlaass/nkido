@@ -540,6 +540,28 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"button",  &CodeGenerator::handle_button_call},
                 {"toggle",  &CodeGenerator::handle_toggle_call},
                 {"dropdown", &CodeGenerator::handle_select_call},
+                // Array reduction operations
+                {"product", &CodeGenerator::handle_product_call},
+                {"mean",    &CodeGenerator::handle_mean_call},
+                // Array transformation operations
+                {"rotate",    &CodeGenerator::handle_rotate_call},
+                {"shuffle",   &CodeGenerator::handle_shuffle_call},
+                {"sort",      &CodeGenerator::handle_sort_call},
+                {"normalize", &CodeGenerator::handle_normalize_call},
+                {"scale",     &CodeGenerator::handle_scale_call},
+                // Array generation operations
+                {"linspace",  &CodeGenerator::handle_linspace_call},
+                {"random",    &CodeGenerator::handle_random_call},
+                {"harmonics", &CodeGenerator::handle_harmonics_call},
+                // Binary operation broadcasting (desugared from +, -, *, /, ^)
+                {"add",     &CodeGenerator::handle_binary_op_call},
+                {"sub",     &CodeGenerator::handle_binary_op_call},
+                {"mul",     &CodeGenerator::handle_binary_op_call},
+                {"div",     &CodeGenerator::handle_binary_op_call},
+                {"pow",     &CodeGenerator::handle_binary_op_call},
+                // min/max with array support
+                {"min",     &CodeGenerator::handle_minmax_call},
+                {"max",     &CodeGenerator::handle_minmax_call},
             };
 
             auto handler_it = special_handlers.find(func_name);
@@ -633,6 +655,114 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             // Special case: out() with single argument (mono to stereo)
             if (func_name == "out" && arg_buffers.size() == 1) {
                 arg_buffers.push_back(arg_buffers[0]);  // Duplicate L to R
+            }
+
+            // UGen Auto-Expansion: If this is a stateful UGen and an argument is multi-buffer,
+            // expand to N instances. E.g., [440, 550, 660] |> sine_osc(%) produces 3 oscillators.
+            if (builtin->requires_state && !arg_buffers.empty()) {
+                // Find expansion argument: first multi-buffer argument
+                int expansion_arg_idx = -1;
+                std::vector<std::uint16_t> expansion_buffers;
+
+                // Track argument nodes for multi-buffer lookup
+                std::vector<NodeIndex> arg_nodes;
+                NodeIndex arg_iter = n.first_child;
+                while (arg_iter != NULL_NODE) {
+                    const Node& arg_node = ast_->arena[arg_iter];
+                    NodeIndex arg_value = (arg_node.type == NodeType::Argument) ?
+                                         arg_node.first_child : arg_iter;
+                    arg_nodes.push_back(arg_value);
+                    arg_iter = ast_->arena[arg_iter].next_sibling;
+                }
+
+                // Look for first multi-buffer argument
+                for (std::size_t i = 0; i < arg_nodes.size(); ++i) {
+                    if (is_multi_buffer(arg_nodes[i])) {
+                        expansion_arg_idx = static_cast<int>(i);
+                        expansion_buffers = get_multi_buffers(arg_nodes[i]);
+                        break;
+                    }
+                }
+
+                // If we have an expansion argument, generate N instances
+                if (expansion_arg_idx >= 0 && expansion_buffers.size() > 1) {
+                    std::vector<std::uint16_t> result_buffers;
+                    std::size_t n_params = builtin->total_params();
+
+                    for (std::size_t i = 0; i < expansion_buffers.size(); ++i) {
+                        // Push unique path for each expansion
+                        push_path("elem" + std::to_string(i));
+
+                        // Create argument buffers with expanded element substituted
+                        auto expanded_args = arg_buffers;
+                        expanded_args[static_cast<std::size_t>(expansion_arg_idx)] = expansion_buffers[i];
+
+                        // Fill in defaults for this instance
+                        for (std::size_t j = expanded_args.size(); j < n_params; ++j) {
+                            if (builtin->has_default(j)) {
+                                std::uint16_t default_buf = buffers_.allocate();
+                                if (default_buf == BufferAllocator::BUFFER_UNUSED) {
+                                    error("E101", "Buffer pool exhausted", n.location);
+                                    pop_path();
+                                    if (pushed_path) pop_path();
+                                    return BufferAllocator::BUFFER_UNUSED;
+                                }
+                                cedar::Instruction push_inst{};
+                                push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                                push_inst.out_buffer = default_buf;
+                                push_inst.inputs[0] = 0xFFFF;
+                                push_inst.inputs[1] = 0xFFFF;
+                                push_inst.inputs[2] = 0xFFFF;
+                                push_inst.inputs[3] = 0xFFFF;
+                                encode_const_value(push_inst, builtin->get_default(j));
+                                emit(push_inst);
+                                expanded_args.push_back(default_buf);
+                            }
+                        }
+
+                        // Allocate output buffer for this instance
+                        std::uint16_t inst_out = buffers_.allocate();
+                        if (inst_out == BufferAllocator::BUFFER_UNUSED) {
+                            error("E101", "Buffer pool exhausted", n.location);
+                            pop_path();
+                            if (pushed_path) pop_path();
+                            return BufferAllocator::BUFFER_UNUSED;
+                        }
+
+                        // Build instruction for this instance
+                        cedar::Instruction inst{};
+                        inst.opcode = builtin->opcode;
+                        inst.out_buffer = inst_out;
+                        inst.inputs[0] = expanded_args.size() > 0 ? expanded_args[0] : 0xFFFF;
+                        inst.inputs[1] = expanded_args.size() > 1 ? expanded_args[1] : 0xFFFF;
+                        inst.inputs[2] = expanded_args.size() > 2 ? expanded_args[2] : 0xFFFF;
+                        inst.inputs[3] = expanded_args.size() > 3 ? expanded_args[3] : 0xFFFF;
+                        inst.inputs[4] = expanded_args.size() > 4 ? expanded_args[4] : 0xFFFF;
+                        inst.rate = 0;
+
+                        // FM detection for this instance
+                        if (is_upgradeable_oscillator(inst.opcode) && !expanded_args.empty()) {
+                            if (is_fm_modulated(expanded_args[0])) {
+                                inst.opcode = upgrade_for_fm(inst.opcode);
+                            }
+                        }
+
+                        // Compute state_id with unique path
+                        inst.state_id = compute_state_id();
+                        emit(inst);
+
+                        result_buffers.push_back(inst_out);
+                        pop_path();
+                    }
+
+                    // Pop the outer stateful path
+                    if (pushed_path) pop_path();
+
+                    // Register as multi-buffer result
+                    std::uint16_t first_buf = register_multi_buffer(node, std::move(result_buffers));
+                    node_buffers_[node] = first_buf;
+                    return first_buf;
+                }
             }
 
             // Restore call location before emitting default parameter instructions
