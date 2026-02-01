@@ -44,6 +44,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     node_buffers_.clear();
     call_counters_.clear();
     multi_buffers_.clear();
+    array_lengths_.clear();
     current_source_loc_ = {};
 
     // Start with "main" path
@@ -225,18 +226,169 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
         case NodeType::Index: {
             // Array indexing: arr[i]
-            // For now, just return the array (first element) since we don't
-            // have runtime array support yet
-            NodeIndex arr = n.first_child;
-            if (arr == NULL_NODE) {
-                error("E111", "Invalid index expression", n.location);
+            NodeIndex arr_node = n.first_child;
+            if (arr_node == NULL_NODE) {
+                error("E111", "Invalid index expression: no array", n.location);
                 return BufferAllocator::BUFFER_UNUSED;
             }
 
-            std::uint16_t arr_buf = visit(arr);
-            // TODO: Implement actual indexing when we have runtime arrays
-            node_buffers_[node] = arr_buf;
-            return arr_buf;
+            // Get the index node (second child via next_sibling)
+            NodeIndex idx_node = ast_->arena[arr_node].next_sibling;
+            if (idx_node == NULL_NODE) {
+                error("E111", "Invalid index expression: no index", n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+
+            // Visit array first to populate multi_buffers_ / array_lengths_
+            std::uint16_t arr_buf = visit(arr_node);
+
+            // Check if we have a compile-time known array
+            std::uint8_t arr_len = 0;
+            if (is_multi_buffer(arr_node)) {
+                auto buffers = get_multi_buffers(arr_node);
+                arr_len = static_cast<std::uint8_t>(buffers.size());
+            } else if (is_array_buffer(arr_buf)) {
+                arr_len = get_array_length(arr_buf);
+            }
+
+            // Check if index is a constant number
+            const Node& idx = ast_->arena[idx_node];
+            if (idx.type == NodeType::NumberLit && arr_len > 0) {
+                // Constant index - use ARRAY_UNPACK or direct multi-buffer access
+                int idx_val = static_cast<int>(idx.as_number());
+
+                // Handle negative indices (wrap)
+                if (idx_val < 0) {
+                    idx_val = ((idx_val % arr_len) + arr_len) % arr_len;
+                } else if (idx_val >= arr_len) {
+                    idx_val = idx_val % arr_len;
+                }
+
+                // For multi-buffer arrays (compile-time unrolled), return the specific buffer
+                if (is_multi_buffer(arr_node)) {
+                    auto buffers = get_multi_buffers(arr_node);
+                    std::uint16_t result = buffers[static_cast<std::size_t>(idx_val)];
+                    node_buffers_[node] = result;
+                    return result;
+                }
+
+                // For runtime arrays, emit ARRAY_UNPACK
+                std::uint16_t out = buffers_.allocate();
+                if (out == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    return BufferAllocator::BUFFER_UNUSED;
+                }
+
+                cedar::Instruction unpack_inst{};
+                unpack_inst.opcode = cedar::Opcode::ARRAY_UNPACK;
+                unpack_inst.out_buffer = out;
+                unpack_inst.inputs[0] = arr_buf;
+                unpack_inst.inputs[1] = 0xFFFF;
+                unpack_inst.inputs[2] = 0xFFFF;
+                unpack_inst.inputs[3] = 0xFFFF;
+                unpack_inst.inputs[4] = 0xFFFF;
+                unpack_inst.rate = static_cast<std::uint8_t>(idx_val);
+                unpack_inst.state_id = 0;
+                emit(unpack_inst);
+
+                node_buffers_[node] = out;
+                return out;
+            }
+
+            // Dynamic index - need to emit ARRAY_INDEX for per-sample indexing
+            // This requires the array to be packed into a single buffer
+
+            // If we have a multi-buffer array, we need to pack it first using ARRAY_PACK
+            if (is_multi_buffer(arr_node)) {
+                auto buffers = get_multi_buffers(arr_node);
+                arr_len = static_cast<std::uint8_t>(buffers.size());
+
+                // Pack multi-buffer into single array buffer
+                // For arrays larger than 5, we need multiple ARRAY_PACK calls
+                std::uint16_t packed_buf = buffers_.allocate();
+                if (packed_buf == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    return BufferAllocator::BUFFER_UNUSED;
+                }
+
+                // Pack first 5 elements
+                cedar::Instruction pack_inst{};
+                pack_inst.opcode = cedar::Opcode::ARRAY_PACK;
+                pack_inst.out_buffer = packed_buf;
+                std::uint8_t pack_count = std::min(arr_len, static_cast<std::uint8_t>(5));
+                pack_inst.rate = pack_count;
+                for (std::uint8_t i = 0; i < 5; ++i) {
+                    pack_inst.inputs[i] = (i < pack_count) ? buffers[i] : 0xFFFF;
+                }
+                pack_inst.state_id = 0;
+                emit(pack_inst);
+
+                // For arrays > 5 elements, we need to pack remaining with ARRAY_PUSH
+                for (std::uint8_t i = 5; i < arr_len; ++i) {
+                    std::uint16_t new_packed = buffers_.allocate();
+                    if (new_packed == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        return BufferAllocator::BUFFER_UNUSED;
+                    }
+
+                    cedar::Instruction push_inst{};
+                    push_inst.opcode = cedar::Opcode::ARRAY_PUSH;
+                    push_inst.out_buffer = new_packed;
+                    push_inst.inputs[0] = packed_buf;
+                    push_inst.inputs[1] = buffers[i];
+                    push_inst.inputs[2] = 0xFFFF;
+                    push_inst.inputs[3] = 0xFFFF;
+                    push_inst.inputs[4] = 0xFFFF;
+                    push_inst.rate = i;  // Current length before push
+                    push_inst.state_id = 0;
+                    emit(push_inst);
+
+                    packed_buf = new_packed;
+                }
+
+                arr_buf = packed_buf;
+                set_array_length(arr_buf, arr_len);
+            }
+
+            // Now emit ARRAY_INDEX for dynamic per-sample indexing
+            std::uint16_t idx_buf = visit(idx_node);
+            std::uint16_t out = buffers_.allocate();
+            if (out == BufferAllocator::BUFFER_UNUSED) {
+                error("E101", "Buffer pool exhausted", n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+
+            // Create a constant buffer with the array length for ARRAY_INDEX
+            std::uint16_t len_buf = buffers_.allocate();
+            if (len_buf == BufferAllocator::BUFFER_UNUSED) {
+                error("E101", "Buffer pool exhausted", n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+
+            cedar::Instruction len_inst{};
+            len_inst.opcode = cedar::Opcode::PUSH_CONST;
+            len_inst.out_buffer = len_buf;
+            len_inst.inputs[0] = 0xFFFF;
+            len_inst.inputs[1] = 0xFFFF;
+            len_inst.inputs[2] = 0xFFFF;
+            len_inst.inputs[3] = 0xFFFF;
+            encode_const_value(len_inst, static_cast<float>(arr_len > 0 ? arr_len : 1));
+            emit(len_inst);
+
+            cedar::Instruction index_inst{};
+            index_inst.opcode = cedar::Opcode::ARRAY_INDEX;
+            index_inst.out_buffer = out;
+            index_inst.inputs[0] = arr_buf;
+            index_inst.inputs[1] = idx_buf;
+            index_inst.inputs[2] = len_buf;  // Array length
+            index_inst.inputs[3] = 0xFFFF;
+            index_inst.inputs[4] = 0xFFFF;
+            index_inst.rate = 0;  // 0 = wrap mode (default), 1 = clamp mode
+            index_inst.state_id = 0;
+            emit(index_inst);
+
+            node_buffers_[node] = out;
+            return out;
         }
 
         case NodeType::Identifier: {

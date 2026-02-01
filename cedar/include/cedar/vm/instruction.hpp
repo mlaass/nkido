@@ -152,6 +152,20 @@ enum class Opcode : std::uint8_t {
     SEQPAT_QUERY = 152,      // Query sequence system at block boundaries
     SEQPAT_STEP = 153,       // Step through sequence results: out=value, in[0]=velocity, in[1]=trigger
 
+    // Array Operations (160-169)
+    // Arrays reuse existing BufferPool buffers - elements stored at indices 0..length-1
+    // Max 128 elements (matches BLOCK_SIZE). Akkado tracks lengths at compile time.
+    ARRAY_PACK = 160,        // Pack up to 5 scalars into array (rate=count, in0-4=values)
+    ARRAY_INDEX = 161,       // Per-sample indexing: out[i]=arr[idx[i]] (rate: 0=wrap, 1=clamp)
+    ARRAY_UNPACK = 162,      // Extract element: out=fill(arr[rate]) where rate=element index
+    ARRAY_LEN = 163,         // Fill with length: out=fill(rate) where rate=array length
+    ARRAY_SLICE = 164,       // out=arr[start:end] (in0=arr, in1=start, in2=end)
+    ARRAY_CONCAT = 165,      // out=concat(a,b) (in0=a, in1=b, rate=len_a, inputs[2]=len_b)
+    ARRAY_PUSH = 166,        // out=push(arr,elem) (in0=arr, in1=elem, rate=arr_len)
+    ARRAY_SUM = 167,         // out=fill(sum(arr)) (in0=arr, rate=length)
+    ARRAY_REVERSE = 168,     // out=reverse(arr) (in0=arr, rate=length)
+    ARRAY_FILL = 169,        // out=fill(value,length) (in0=value, rate=length)
+
     INVALID = 255
 };
 

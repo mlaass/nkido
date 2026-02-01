@@ -119,6 +119,16 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::LOGIC_NOT: return "LOGIC_NOT";
         case Opcode::SEQPAT_QUERY: return "SEQPAT_QUERY";
         case Opcode::SEQPAT_STEP: return "SEQPAT_STEP";
+        case Opcode::ARRAY_PACK: return "ARRAY_PACK";
+        case Opcode::ARRAY_INDEX: return "ARRAY_INDEX";
+        case Opcode::ARRAY_UNPACK: return "ARRAY_UNPACK";
+        case Opcode::ARRAY_LEN: return "ARRAY_LEN";
+        case Opcode::ARRAY_SLICE: return "ARRAY_SLICE";
+        case Opcode::ARRAY_CONCAT: return "ARRAY_CONCAT";
+        case Opcode::ARRAY_PUSH: return "ARRAY_PUSH";
+        case Opcode::ARRAY_SUM: return "ARRAY_SUM";
+        case Opcode::ARRAY_REVERSE: return "ARRAY_REVERSE";
+        case Opcode::ARRAY_FILL: return "ARRAY_FILL";
         case Opcode::INVALID: return "INVALID";
         default: return "UNKNOWN";
     }

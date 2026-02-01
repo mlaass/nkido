@@ -388,6 +388,32 @@ private:
     // Used to track field buffers for record literals
     std::unordered_map<NodeIndex, std::unordered_map<std::string, std::uint16_t>> record_fields_;
 
+    // ============================================================================
+    // Array length tracking (compile-time)
+    // ============================================================================
+    // Track array lengths per buffer (0 = scalar audio buffer)
+    // Arrays reuse BufferPool buffers - elements stored at indices 0..length-1
+    std::unordered_map<std::uint16_t, std::uint8_t> array_lengths_;
+
+    /// Check if a buffer holds an array (vs scalar audio signal)
+    [[nodiscard]] bool is_array_buffer(std::uint16_t buf) const {
+        auto it = array_lengths_.find(buf);
+        return it != array_lengths_.end() && it->second > 0;
+    }
+
+    /// Get the length of an array buffer (0 if not an array)
+    [[nodiscard]] std::uint8_t get_array_length(std::uint16_t buf) const {
+        auto it = array_lengths_.find(buf);
+        return (it != array_lengths_.end()) ? it->second : 0;
+    }
+
+    /// Register a buffer as holding an array of given length
+    void set_array_length(std::uint16_t buf, std::uint8_t length) {
+        if (length > 0) {
+            array_lengths_[buf] = length;
+        }
+    }
+
     /// Apply a binary function reference to two buffer arguments
     /// @param ref The function reference containing closure/body info
     /// @param arg_buf1 The first argument buffer

@@ -6,6 +6,7 @@
 #include "dsp_state.hpp"
 #include "dsp_utils.hpp"
 #include "arithmetic.hpp"
+#include "arrays.hpp"
 #include "math.hpp"
 #include "utility.hpp"
 #include "oscillators.hpp"

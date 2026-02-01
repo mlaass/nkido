@@ -687,6 +687,47 @@ void VM::execute(const Instruction& inst) {
             op_logic_not(ctx_, inst);
             break;
 
+        // === Arrays ===
+        case Opcode::ARRAY_PACK:
+            op_array_pack(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_INDEX:
+            op_array_index(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_UNPACK:
+            op_array_unpack(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_LEN:
+            op_array_len(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_SLICE:
+            op_array_slice(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_CONCAT:
+            op_array_concat(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_PUSH:
+            op_array_push(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_SUM:
+            op_array_sum(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_REVERSE:
+            op_array_reverse(ctx_, inst);
+            break;
+
+        case Opcode::ARRAY_FILL:
+            op_array_fill(ctx_, inst);
+            break;
+
         // === Invalid ===
         [[unlikely]] case Opcode::INVALID:
         [[unlikely]] default:

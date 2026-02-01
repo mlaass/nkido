@@ -21,6 +21,7 @@ option(CEDAR_ENABLE_CONCURRENCY_TESTS "Enable thread safety tests" ON)
 add_executable(cedar_tests
     test_cedar.cpp
     test_vm.cpp
+    test_arrays.cpp
     test_audio_arena.cpp
     test_buffer_pool.cpp
     test_state_pool.cpp
