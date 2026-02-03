@@ -190,18 +190,37 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                      {NAN, NAN, NAN},
                      "Looping sample playback"}},
 
-    // Delays
-    {"delay",   {cedar::Opcode::DELAY, 3, 0, true,
-                 {"in", "time", "fb", "", "", ""},
-                 {NAN, NAN, NAN},
-                 "Delay line with feedback"}},
+    // Delays - time in seconds (default, intuitive)
+    // Optional dry/wet parameters for mix control (defaults: dry=0.0, wet=1.0 = 100% wet)
+    {"delay",   {cedar::Opcode::DELAY, 3, 2, true,
+                 {"in", "time", "fb", "dry", "wet", ""},
+                 {0.0f, 1.0f, NAN, NAN, NAN},
+                 "Delay line (time in seconds, 0-10)"}},
+    // Delay variants with different time units
+    {"delay_ms",    {cedar::Opcode::DELAY, 3, 2, true,
+                     {"in", "time_ms", "fb", "dry", "wet", ""},
+                     {0.0f, 1.0f, NAN, NAN, NAN},
+                     "Delay line (time in milliseconds, 0-10000)"}},
+    {"delay_smp",   {cedar::Opcode::DELAY, 3, 2, true,
+                     {"in", "time_smp", "fb", "dry", "wet", ""},
+                     {0.0f, 1.0f, NAN, NAN, NAN},
+                     "Delay line (time in samples, direct control)"}},
     // Tap delay with configurable feedback processing (handled specially by codegen)
     // tap_delay(in, time, fb, processor) where processor is a closure: (x) -> ...
     // The closure receives the delayed signal and its output is mixed back with feedback.
-    {"tap_delay", {cedar::Opcode::DELAY_TAP, 4, 0, true,
-                   {"in", "time", "fb", "processor", "", ""},
-                   {NAN, NAN, NAN, NAN, NAN},
-                   "Tap delay with configurable feedback chain"}},
+    // Optional dry/wet parameters for mix control (defaults: dry=0.0, wet=1.0 = 100% wet)
+    {"tap_delay", {cedar::Opcode::DELAY_TAP, 4, 2, true,
+                   {"in", "time", "fb", "processor", "dry", "wet"},
+                   {0.0f, 1.0f, NAN, NAN, NAN},
+                   "Tap delay with feedback chain (time in seconds)"}},
+    {"tap_delay_ms", {cedar::Opcode::DELAY_TAP, 4, 2, true,
+                      {"in", "time_ms", "fb", "processor", "dry", "wet"},
+                      {0.0f, 1.0f, NAN, NAN, NAN},
+                      "Tap delay with feedback chain (time in milliseconds)"}},
+    {"tap_delay_smp", {cedar::Opcode::DELAY_TAP, 4, 2, true,
+                       {"in", "time_smp", "fb", "processor", "dry", "wet"},
+                       {0.0f, 1.0f, NAN, NAN, NAN},
+                       "Tap delay with feedback chain (time in samples)"}},
 
     // Reverbs (stateful - large delay networks)
     // freeverb: room_scale (density factor), room_offset (decay baseline)

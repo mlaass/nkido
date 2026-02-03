@@ -46,34 +46,51 @@ The TAP and WRITE share the same `state_id`, operating on the same delay buffer.
 ### 2.1 Basic Usage
 
 ```akkado
-// Simple delay with lowpass filter in feedback
-osc("saw", 110) |> tap_delay(%, 300, 0.7, (x) -> lp(x, 1000))
+// Simple delay with lowpass filter in feedback (time in seconds)
+osc("saw", 110) |> tap_delay(%, 0.3, 0.7, (x) -> lp(x, 1000))
 
 // Multi-stage feedback processing
-osc("saw", 110) |> tap_delay(%, 500, 0.6, (x) ->
+osc("saw", 110) |> tap_delay(%, 0.5, 0.6, (x) ->
     lp(x, 2000) |> saturate(%, 0.2) |> hp(%, 80)
 )
+
+// Using milliseconds variant for precise timing
+osc("saw", 110) |> tap_delay_ms(%, 300, 0.7, (x) -> lp(x, 1000))
+
+// Using samples variant for comb filtering effects
+noise() |> tap_delay_smp(%, 100, 0.9, (x) -> x)  // ~480Hz resonance at 48kHz
 ```
 
-### 2.2 Function Signature
+### 2.2 Function Signatures
+
+There are multiple variants for different time units:
 
 ```akkado
-tap_delay(input, time_ms, feedback, processor)
+tap_delay(input, time_sec, feedback, processor)     // Time in seconds (default)
+tap_delay_ms(input, time_ms, feedback, processor)   // Time in milliseconds
+tap_delay_smp(input, time_smp, feedback, processor) // Time in samples (direct control)
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `input` | signal | Input audio signal |
-| `time_ms` | signal/number | Delay time in milliseconds (0-2000), can be modulated |
+| `time_sec` | signal/number | Delay time in seconds (0-10), can be modulated |
+| `time_ms` | signal/number | Delay time in milliseconds (0-10000), can be modulated |
+| `time_smp` | signal/number | Delay time in samples (direct, for comb filtering) |
 | `feedback` | signal/number | Feedback amount (0.0-0.99) |
 | `processor` | closure | `(delayed_signal) -> processed_signal` |
 
-**Note:** The `time_ms` parameter accepts signal-rate modulation for effects like wow/flutter:
+**Note:** The time parameter accepts signal-rate modulation for effects like wow/flutter:
 
 ```akkado
 // Modulated delay time for tape-style wow/flutter
-vocal |> tap_delay(%, 400 + osc("sin", 0.3) * 5, 0.6, (x) -> lp(x, 2000))
+vocal |> tap_delay(%, 0.4 + osc("sin", 0.3) * 0.005, 0.6, (x) -> lp(x, 2000))
 ```
+
+**Choosing the right variant:**
+- `tap_delay` (seconds): Most intuitive for musical delays (e.g., 0.5 = half second)
+- `tap_delay_ms` (milliseconds): Precise control for tight timing
+- `tap_delay_smp` (samples): Sound design, comb filtering (e.g., 100 samples at 48kHz = 480Hz resonance)
 
 ### 2.3 Wet/Dry Mix
 
@@ -98,14 +115,14 @@ osc("saw", 110) as dry
 
 **Dub Delay** (classic reggae/dub sound):
 ```akkado
-guitar_in |> tap_delay(%, 375, 0.75, (x) ->
+guitar_in |> tap_delay(%, 0.375, 0.75, (x) ->
     lp(x, 1500) |> hp(%, 100) |> saturate(%, 0.15)
 ) |> out(%, %)
 ```
 
 **Shimmer Delay** (pitch-shifted feedback):
 ```akkado
-pad |> tap_delay(%, 600, 0.5, (x) ->
+pad |> tap_delay(%, 0.6, 0.5, (x) ->
     pitch_shift(x, 12) * 0.7 + x * 0.3  // Mix octave up with original
 ) |> out(%, %)
 ```
@@ -119,11 +136,18 @@ lead |> tap_delay(%, beat(0.5), 0.6, (x) ->
 
 **Degrading Delay** (lo-fi tape simulation):
 ```akkado
-vocal |> tap_delay(%, 400, 0.65, (x) ->
+vocal |> tap_delay(%, 0.4, 0.65, (x) ->
     lp(x, 3000)
     |> bitcrush(%, 12, 0.8)  // Reduce bit depth
     |> saturate(%, 0.1)
 ) |> out(%, %)
+```
+
+**Comb Filter Resonance** (using sample-based delay):
+```akkado
+// Create pitched resonance from noise using short sample-based delay
+noise() |> tap_delay_smp(%, 109, 0.95, (x) -> x)  // ~440Hz at 48kHz
+|> out(%, %)
 ```
 
 ---
@@ -274,8 +298,8 @@ Extend existing `DelayState` in `dsp_state.hpp` with tap coordination fields:
 
 ```cpp
 struct DelayState {
-    // Maximum delay time: 2 seconds at 96kHz = 192000 samples
-    static constexpr std::size_t MAX_DELAY_SAMPLES = 192000;
+    // Maximum delay time: 10 seconds at 96kHz = 960000 samples
+    static constexpr std::size_t MAX_DELAY_SAMPLES = 960000;
 
     // Ring buffer (allocated from arena)
     float* buffer = nullptr;
@@ -323,7 +347,7 @@ inline void op_delay_tap(ExecutionContext& ctx, const Instruction& inst) {
     auto& state = ctx.states->get_or_create<DelayState>(inst.state_id);
 
     // Calculate buffer size based on sample rate (same pattern as op_delay)
-    float max_delay_ms = 2000.0f;
+    float max_delay_ms = 10000.0f;
     std::size_t max_samples = static_cast<std::size_t>(max_delay_ms * 0.001f * ctx.sample_rate) + 1;
     max_samples = std::min(max_samples, DelayState::MAX_DELAY_SAMPLES);
     state.ensure_buffer(max_samples, ctx.arena);

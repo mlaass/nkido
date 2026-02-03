@@ -676,9 +676,22 @@ std::uint16_t CodeGenerator::handle_match_expr(NodeIndex node, const Node& n) {
 }
 
 // Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
+// Also handles tap_delay_ms and tap_delay_smp variants with different time units.
 // Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
 // Both opcodes share the same state_id to operate on the same delay buffer
 std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n) {
+    // Extract function name to determine time unit
+    const std::string& func_name = n.as_identifier();
+
+    // Determine time unit from function name
+    // 0 = seconds (default), 1 = milliseconds, 2 = samples
+    std::uint8_t time_unit = 0;
+    if (func_name == "tap_delay_ms") {
+        time_unit = 1;
+    } else if (func_name == "tap_delay_smp") {
+        time_unit = 2;
+    }
+
     // Collect arguments: in, time, fb, processor
     std::vector<NodeIndex> args;
     NodeIndex arg = n.first_child;
@@ -693,7 +706,7 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     }
 
     if (args.size() < 4) {
-        error("E301", "tap_delay() requires 4 arguments: tap_delay(in, time, fb, processor)", n.location);
+        error("E301", func_name + "() requires 4 arguments: " + func_name + "(in, time, fb, processor)", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
@@ -755,6 +768,18 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     std::uint16_t time_buf = visit(args[1]);
     std::uint16_t fb_buf = visit(args[2]);
 
+    // Handle optional dry/wet arguments (args[4], args[5])
+    // Default: dry=0.0, wet=1.0 (100% wet, backward compatible)
+    std::uint16_t dry_buf = BufferAllocator::BUFFER_UNUSED;
+    std::uint16_t wet_buf = BufferAllocator::BUFFER_UNUSED;
+
+    if (args.size() > 4) {
+        dry_buf = visit(args[4]);
+    }
+    if (args.size() > 5) {
+        wet_buf = visit(args[5]);
+    }
+
     // Allocate output buffer for DELAY_TAP
     std::uint16_t tap_out_buf = buffers_.allocate();
     if (tap_out_buf == BufferAllocator::BUFFER_UNUSED) {
@@ -765,7 +790,8 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
 
     // Emit DELAY_TAP instruction
     // DELAY_TAP: reads from delay buffer, outputs delayed signal
-    // in0: input (passed through for signal flow), in1: delay time (ms)
+    // in0: input (passed through for signal flow), in1: delay time
+    // rate field: time unit (0=seconds, 1=ms, 2=samples)
     cedar::Instruction tap_inst{};
     tap_inst.opcode = cedar::Opcode::DELAY_TAP;
     tap_inst.out_buffer = tap_out_buf;
@@ -774,7 +800,7 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     tap_inst.inputs[2] = 0xFFFF;
     tap_inst.inputs[3] = 0xFFFF;
     tap_inst.inputs[4] = 0xFFFF;
-    tap_inst.rate = 0;
+    tap_inst.rate = time_unit;
     tap_inst.state_id = delay_state_id;
     emit(tap_inst);
 
@@ -812,14 +838,16 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     // Emit DELAY_WRITE instruction
     // DELAY_WRITE: writes input + processed*fb to buffer, outputs delayed signal
     // in0: input, in1: processed feedback, in2: feedback amount
+    // in3: dry level (0xFFFF = default 0.0), in4: wet level (0xFFFF = default 1.0)
+    // Note: DELAY_WRITE doesn't need rate field (time conversion done by DELAY_TAP)
     cedar::Instruction write_inst{};
     write_inst.opcode = cedar::Opcode::DELAY_WRITE;
     write_inst.out_buffer = write_out_buf;
     write_inst.inputs[0] = in_buf;
     write_inst.inputs[1] = processed_buf;
     write_inst.inputs[2] = fb_buf;
-    write_inst.inputs[3] = 0xFFFF;
-    write_inst.inputs[4] = 0xFFFF;
+    write_inst.inputs[3] = dry_buf;
+    write_inst.inputs[4] = wet_buf;
     write_inst.rate = 0;
     write_inst.state_id = delay_state_id;  // Same state_id as TAP!
     emit(write_inst);

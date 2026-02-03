@@ -116,13 +116,17 @@ struct SAHState {
 // Delay state with arena-allocated ring buffer
 // Buffer is allocated from AudioArena on first use (zero heap allocation during audio)
 struct DelayState {
-    // Maximum delay time: 2 seconds at 96kHz = 192000 samples
-    static constexpr std::size_t MAX_DELAY_SAMPLES = 192000;
+    // Maximum delay time: 10 seconds at 96kHz = 960000 samples
+    static constexpr std::size_t MAX_DELAY_SAMPLES = 960000;
 
     // Ring buffer (allocated from arena)
     float* buffer = nullptr;
     std::size_t buffer_size = 0;    // Allocated size in floats
     std::size_t write_pos = 0;
+
+    // Smoothed delay time (prevents clicks when delay time changes)
+    float smoothed_delay = 0.0f;       // Current smoothed delay time in samples
+    bool delay_initialized = false;    // For first-sample initialization
 
     // Tap delay coordination (used by DELAY_TAP/DELAY_WRITE pair)
     // Caches delayed samples between TAP and WRITE so feedback chain can process them
@@ -153,6 +157,8 @@ struct DelayState {
             write_pos = 0;
         }
         tap_cache.fill(0.0f);
+        smoothed_delay = 0.0f;
+        delay_initialized = false;
     }
 };
 

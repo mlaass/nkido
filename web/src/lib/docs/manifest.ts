@@ -707,6 +707,36 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Sequencing & Timing"
 	},
+	"delay_ms": {
+		"slug": "delays",
+		"category": "builtins",
+		"title": "delay_ms",
+		"anchor": "delay-ms"
+	},
+	"delay_smp": {
+		"slug": "delays",
+		"category": "builtins",
+		"title": "delay_smp",
+		"anchor": "delay-smp"
+	},
+	"tap_delay": {
+		"slug": "delays",
+		"category": "builtins",
+		"title": "tap_delay",
+		"anchor": "tap-delay"
+	},
+	"tap_delay_ms": {
+		"slug": "delays",
+		"category": "builtins",
+		"title": "tap_delay_ms",
+		"anchor": "tap-delay-ms"
+	},
+	"tap_delay_smp": {
+		"slug": "delays",
+		"category": "builtins",
+		"title": "tap_delay_smp",
+		"anchor": "tap-delay-smp"
+	},
 	"echo": {
 		"slug": "delays",
 		"category": "builtins",

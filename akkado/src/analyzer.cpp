@@ -781,8 +781,8 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                     error("E006", "Function 'osc' expects at least 2 arguments: "
                           "osc(type, freq) or osc(type, freq, pwm)", n.location);
                 }
-            } else if (func_name == "tap_delay") {
-                // Validate tap_delay(in, time, fb, processor)
+            } else if (func_name == "tap_delay" || func_name == "tap_delay_ms" || func_name == "tap_delay_smp") {
+                // Validate tap_delay(in, time, fb, processor, [dry], [wet])
                 std::size_t arg_count = 0;
                 NodeIndex arg = output_arena_[node].first_child;
                 NodeIndex fourth_arg = NULL_NODE;
@@ -795,9 +795,9 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                     }
                     arg = output_arena_[arg].next_sibling;
                 }
-                if (arg_count != 4) {
-                    error("E301", "Function 'tap_delay' expects exactly 4 arguments: "
-                          "tap_delay(in, time, fb, processor)", n.location);
+                if (arg_count < 4 || arg_count > 6) {
+                    error("E301", "Function '" + func_name + "' expects 4-6 arguments: "
+                          + func_name + "(in, time, fb, processor, [dry], [wet])", n.location);
                 } else if (fourth_arg != NULL_NODE) {
                     // Validate 4th argument is a closure with 1 parameter
                     const Node& proc_node = output_arena_[fourth_arg];

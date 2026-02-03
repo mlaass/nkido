@@ -562,8 +562,10 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 // min/max with array support
                 {"min",     &CodeGenerator::handle_minmax_call},
                 {"max",     &CodeGenerator::handle_minmax_call},
-                // Tap delay with configurable feedback chain
+                // Tap delay with configurable feedback chain (all time unit variants)
                 {"tap_delay", &CodeGenerator::handle_tap_delay_call},
+                {"tap_delay_ms", &CodeGenerator::handle_tap_delay_call},
+                {"tap_delay_smp", &CodeGenerator::handle_tap_delay_call},
             };
 
             auto handler_it = special_handlers.find(func_name);
@@ -840,6 +842,16 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     }
                     adsr_arg = ast_->arena[adsr_arg].next_sibling;
                 }
+            }
+
+            // Special handling for delay time units: rate field encodes unit type
+            // 0 = seconds (default), 1 = milliseconds, 2 = samples
+            if (func_name == "delay") {
+                inst.rate = 0;  // seconds
+            } else if (func_name == "delay_ms") {
+                inst.rate = 1;  // milliseconds
+            } else if (func_name == "delay_smp") {
+                inst.rate = 2;  // samples
             }
 
             // Generate state_id from current path (already pushed if stateful)
