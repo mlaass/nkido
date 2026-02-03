@@ -77,6 +77,8 @@ enum class Opcode : std::uint8_t {
     REVERB_FREEVERB = 71,    // Schroeder-Moorer algorithm
     REVERB_DATTORRO = 72,    // Plate reverb
     REVERB_FDN = 73,         // Feedback Delay Network
+    DELAY_TAP = 74,          // Read from delay line (coordinated with DELAY_WRITE)
+    DELAY_WRITE = 75,        // Write feedback to delay line (coordinated with DELAY_TAP)
 
     // Effects - Modulation (80-83)
     EFFECT_CHORUS = 80,      // Multi-voice chorus

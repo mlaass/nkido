@@ -131,4 +131,106 @@ inline void op_delay_sync(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// ============================================================================
+// Tap Delay Opcodes (Coordinated Pair)
+// ============================================================================
+// DELAY_TAP and DELAY_WRITE work together to enable configurable feedback
+// processing. The pattern is:
+//   1. DELAY_TAP reads from the delay buffer and caches in tap_cache
+//   2. User's feedback chain processes the cached samples
+//   3. DELAY_WRITE writes input + processed feedback to buffer, outputs delayed
+//
+// Both opcodes MUST share the same state_id to operate on the same delay buffer.
+
+// DELAY_TAP: Read from delay line, cache for feedback processing
+// in0: input signal (passed through, not used for reading)
+// in1: delay time (milliseconds)
+// out: delayed signal (also cached in state.tap_cache)
+//
+// Uses linear interpolation for sub-sample accuracy.
+// This opcode does NOT advance write_pos - that's done by DELAY_WRITE.
+[[gnu::always_inline]]
+inline void op_delay_tap(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    const float* delay_ms = ctx.buffers->get(inst.inputs[1]);
+    auto& state = ctx.states->get_or_create<DelayState>(inst.state_id);
+
+    // Calculate maximum delay in samples and ensure buffer is allocated
+    float max_delay_ms = 2000.0f;  // 2 second max delay
+    std::size_t max_samples = static_cast<std::size_t>(max_delay_ms * 0.001f * ctx.sample_rate) + 1;
+    max_samples = std::min(max_samples, DelayState::MAX_DELAY_SAMPLES);
+    state.ensure_buffer(max_samples, ctx.arena);
+
+    if (!state.buffer) {
+        // Buffer allocation failed, output silence
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            out[i] = 0.0f;
+            state.tap_cache[i] = 0.0f;
+        }
+        return;
+    }
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        // Convert delay time to samples
+        float delay_samples = delay_ms[i] * 0.001f * ctx.sample_rate;
+        delay_samples = std::clamp(delay_samples, 0.0f, static_cast<float>(state.buffer_size - 2));
+
+        // Integer and fractional parts for linear interpolation
+        std::size_t delay_int = static_cast<std::size_t>(delay_samples);
+        float delay_frac = delay_samples - static_cast<float>(delay_int);
+
+        // Calculate read positions (circular buffer)
+        // Note: we read relative to current write_pos which hasn't advanced yet
+        std::size_t read_pos1 = (state.write_pos + i + state.buffer_size - delay_int) % state.buffer_size;
+        std::size_t read_pos2 = (read_pos1 + state.buffer_size - 1) % state.buffer_size;
+
+        // Linear interpolation for fractional delay
+        float delayed = state.buffer[read_pos1] * (1.0f - delay_frac) +
+                       state.buffer[read_pos2] * delay_frac;
+
+        // Output and cache the delayed signal
+        out[i] = delayed;
+        state.tap_cache[i] = delayed;
+    }
+}
+
+// DELAY_WRITE: Write feedback to delay line, output delayed signal
+// in0: input signal (dry signal to feed into delay)
+// in1: processed feedback (output from user's feedback chain)
+// in2: feedback amount (0.0-1.0, clamped to 0.99)
+// out: delayed signal from tap_cache (for continuity with TAP output)
+//
+// Writes: buffer[write_pos] = input + processed_feedback * feedback_amount
+// Then advances write_pos.
+[[gnu::always_inline]]
+inline void op_delay_write(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    const float* input = ctx.buffers->get(inst.inputs[0]);
+    const float* processed = ctx.buffers->get(inst.inputs[1]);
+    const float* feedback = ctx.buffers->get(inst.inputs[2]);
+    auto& state = ctx.states->get_or_create<DelayState>(inst.state_id);
+
+    if (!state.buffer) {
+        // Buffer not allocated (TAP should have done this), output silence
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            out[i] = 0.0f;
+        }
+        return;
+    }
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        // Clamp feedback to prevent runaway oscillation
+        float fb = std::clamp(feedback[i], 0.0f, 0.99f);
+
+        // Write input + processed feedback to buffer
+        state.buffer[state.write_pos] = input[i] + processed[i] * fb;
+
+        // Advance write position
+        state.write_pos = (state.write_pos + 1) % state.buffer_size;
+
+        // Output the cached delayed signal (from TAP)
+        out[i] = state.tap_cache[i];
+    }
+}
+
 }  // namespace cedar

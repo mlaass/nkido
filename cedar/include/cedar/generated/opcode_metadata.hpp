@@ -65,6 +65,8 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::REVERB_FREEVERB: return "REVERB_FREEVERB";
         case Opcode::REVERB_DATTORRO: return "REVERB_DATTORRO";
         case Opcode::REVERB_FDN: return "REVERB_FDN";
+        case Opcode::DELAY_TAP: return "DELAY_TAP";
+        case Opcode::DELAY_WRITE: return "DELAY_WRITE";
         case Opcode::EFFECT_CHORUS: return "EFFECT_CHORUS";
         case Opcode::EFFECT_FLANGER: return "EFFECT_FLANGER";
         case Opcode::EFFECT_PHASER: return "EFFECT_PHASER";
@@ -169,6 +171,8 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::REVERB_FREEVERB:
         case Opcode::REVERB_DATTORRO:
         case Opcode::REVERB_FDN:
+        case Opcode::DELAY_TAP:
+        case Opcode::DELAY_WRITE:
         case Opcode::EFFECT_CHORUS:
         case Opcode::EFFECT_FLANGER:
         case Opcode::EFFECT_PHASER:

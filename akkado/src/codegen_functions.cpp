@@ -675,4 +675,160 @@ std::uint16_t CodeGenerator::handle_match_expr(NodeIndex node, const Node& n) {
     }
 }
 
+// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
+// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
+// Both opcodes share the same state_id to operate on the same delay buffer
+std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n) {
+    // Collect arguments: in, time, fb, processor
+    std::vector<NodeIndex> args;
+    NodeIndex arg = n.first_child;
+    while (arg != NULL_NODE) {
+        const Node& arg_node = ast_->arena[arg];
+        NodeIndex arg_value = arg;
+        if (arg_node.type == NodeType::Argument) {
+            arg_value = arg_node.first_child;
+        }
+        args.push_back(arg_value);
+        arg = ast_->arena[arg].next_sibling;
+    }
+
+    if (args.size() < 4) {
+        error("E301", "tap_delay() requires 4 arguments: tap_delay(in, time, fb, processor)", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Validate that processor (4th arg) is a Closure
+    const Node& processor_node = ast_->arena[args[3]];
+    if (processor_node.type != NodeType::Closure) {
+        error("E302", "tap_delay() 4th argument must be a closure: (x) -> ...", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Extract closure parameter (must have exactly 1 parameter)
+    std::string param_name;
+    NodeIndex closure_body = NULL_NODE;
+    NodeIndex child = processor_node.first_child;
+    int param_count = 0;
+
+    while (child != NULL_NODE) {
+        const Node& child_node = ast_->arena[child];
+        if (child_node.type == NodeType::Identifier) {
+            if (std::holds_alternative<Node::ClosureParamData>(child_node.data)) {
+                param_name = child_node.as_closure_param().name;
+                param_count++;
+            } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
+                param_name = child_node.as_identifier();
+                param_count++;
+            } else {
+                // Not a parameter - this is the body
+                closure_body = child;
+                break;
+            }
+        } else {
+            // Body node
+            closure_body = child;
+            break;
+        }
+        child = ast_->arena[child].next_sibling;
+    }
+
+    if (param_count != 1) {
+        error("E303", "tap_delay() processor closure must have exactly 1 parameter", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    if (closure_body == NULL_NODE) {
+        error("E304", "tap_delay() processor closure has no body", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Push path for semantic ID tracking (before TAP)
+    std::uint32_t count = call_counters_["tap_delay"]++;
+    std::string unique_name = "tap_delay#" + std::to_string(count);
+    push_path(unique_name);
+
+    // Compute shared state_id for TAP and WRITE
+    std::uint32_t delay_state_id = compute_state_id();
+
+    // Visit input arguments (in, time, fb)
+    std::uint16_t in_buf = visit(args[0]);
+    std::uint16_t time_buf = visit(args[1]);
+    std::uint16_t fb_buf = visit(args[2]);
+
+    // Allocate output buffer for DELAY_TAP
+    std::uint16_t tap_out_buf = buffers_.allocate();
+    if (tap_out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        pop_path();
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Emit DELAY_TAP instruction
+    // DELAY_TAP: reads from delay buffer, outputs delayed signal
+    // in0: input (passed through for signal flow), in1: delay time (ms)
+    cedar::Instruction tap_inst{};
+    tap_inst.opcode = cedar::Opcode::DELAY_TAP;
+    tap_inst.out_buffer = tap_out_buf;
+    tap_inst.inputs[0] = in_buf;
+    tap_inst.inputs[1] = time_buf;
+    tap_inst.inputs[2] = 0xFFFF;
+    tap_inst.inputs[3] = 0xFFFF;
+    tap_inst.inputs[4] = 0xFFFF;
+    tap_inst.rate = 0;
+    tap_inst.state_id = delay_state_id;
+    emit(tap_inst);
+
+    // Push scope and bind closure parameter to TAP output
+    symbols_->push_scope();
+    symbols_->define_variable(param_name, tap_out_buf);
+
+    // Push semantic context for nested opcodes
+    push_path("fb");
+
+    // Save node_buffers_ state before visiting closure body
+    auto saved_node_buffers = std::move(node_buffers_);
+    node_buffers_.clear();
+
+    // Compile the closure body (feedback chain)
+    std::uint16_t processed_buf = visit(closure_body);
+
+    // Restore node_buffers_
+    node_buffers_ = std::move(saved_node_buffers);
+
+    // Pop semantic context
+    pop_path();
+
+    // Pop scope
+    symbols_->pop_scope();
+
+    // Allocate output buffer for DELAY_WRITE
+    std::uint16_t write_out_buf = buffers_.allocate();
+    if (write_out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        pop_path();
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Emit DELAY_WRITE instruction
+    // DELAY_WRITE: writes input + processed*fb to buffer, outputs delayed signal
+    // in0: input, in1: processed feedback, in2: feedback amount
+    cedar::Instruction write_inst{};
+    write_inst.opcode = cedar::Opcode::DELAY_WRITE;
+    write_inst.out_buffer = write_out_buf;
+    write_inst.inputs[0] = in_buf;
+    write_inst.inputs[1] = processed_buf;
+    write_inst.inputs[2] = fb_buf;
+    write_inst.inputs[3] = 0xFFFF;
+    write_inst.inputs[4] = 0xFFFF;
+    write_inst.rate = 0;
+    write_inst.state_id = delay_state_id;  // Same state_id as TAP!
+    emit(write_inst);
+
+    // Pop the outer path
+    pop_path();
+
+    node_buffers_[node] = write_out_buf;
+    return write_out_buf;
+}
+
 } // namespace akkado

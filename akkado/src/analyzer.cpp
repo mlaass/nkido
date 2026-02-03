@@ -781,6 +781,50 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                     error("E006", "Function 'osc' expects at least 2 arguments: "
                           "osc(type, freq) or osc(type, freq, pwm)", n.location);
                 }
+            } else if (func_name == "tap_delay") {
+                // Validate tap_delay(in, time, fb, processor)
+                std::size_t arg_count = 0;
+                NodeIndex arg = output_arena_[node].first_child;
+                NodeIndex fourth_arg = NULL_NODE;
+                while (arg != NULL_NODE) {
+                    arg_count++;
+                    if (arg_count == 4) {
+                        const Node& arg_node = output_arena_[arg];
+                        fourth_arg = (arg_node.type == NodeType::Argument) ?
+                                     arg_node.first_child : arg;
+                    }
+                    arg = output_arena_[arg].next_sibling;
+                }
+                if (arg_count != 4) {
+                    error("E301", "Function 'tap_delay' expects exactly 4 arguments: "
+                          "tap_delay(in, time, fb, processor)", n.location);
+                } else if (fourth_arg != NULL_NODE) {
+                    // Validate 4th argument is a closure with 1 parameter
+                    const Node& proc_node = output_arena_[fourth_arg];
+                    if (proc_node.type != NodeType::Closure) {
+                        error("E302", "tap_delay() 4th argument must be a closure: (x) -> ...",
+                              proc_node.location);
+                    } else {
+                        // Count closure parameters
+                        int param_count = 0;
+                        NodeIndex child = proc_node.first_child;
+                        while (child != NULL_NODE) {
+                            const Node& child_node = output_arena_[child];
+                            if (child_node.type == NodeType::Identifier &&
+                                (std::holds_alternative<Node::ClosureParamData>(child_node.data) ||
+                                 std::holds_alternative<Node::IdentifierData>(child_node.data))) {
+                                param_count++;
+                            } else {
+                                break;  // Body node
+                            }
+                            child = output_arena_[child].next_sibling;
+                        }
+                        if (param_count != 1) {
+                            error("E303", "tap_delay() processor closure must have exactly 1 parameter",
+                                  proc_node.location);
+                        }
+                    }
+                }
             } else {
                 // Reorder named arguments if any
                 reorder_named_arguments(node, sym->builtin, func_name);

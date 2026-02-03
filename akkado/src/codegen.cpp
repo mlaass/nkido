@@ -562,6 +562,8 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 // min/max with array support
                 {"min",     &CodeGenerator::handle_minmax_call},
                 {"max",     &CodeGenerator::handle_minmax_call},
+                // Tap delay with configurable feedback chain
+                {"tap_delay", &CodeGenerator::handle_tap_delay_call},
             };
 
             auto handler_it = special_handlers.find(func_name);

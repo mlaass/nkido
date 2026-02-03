@@ -250,6 +250,10 @@ private:
     /// Handle velocity(pattern, vel) - set velocity on all events
     std::uint16_t handle_velocity_call(NodeIndex node, const Node& n);
 
+    /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
+    /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
+    std::uint16_t handle_tap_delay_call(NodeIndex node, const Node& n);
+
     // ============================================================================
     // Parameter exposure handlers
     // ============================================================================

@@ -195,6 +195,13 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"in", "time", "fb", "", "", ""},
                  {NAN, NAN, NAN},
                  "Delay line with feedback"}},
+    // Tap delay with configurable feedback processing (handled specially by codegen)
+    // tap_delay(in, time, fb, processor) where processor is a closure: (x) -> ...
+    // The closure receives the delayed signal and its output is mixed back with feedback.
+    {"tap_delay", {cedar::Opcode::DELAY_TAP, 4, 0, true,
+                   {"in", "time", "fb", "processor", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Tap delay with configurable feedback chain"}},
 
     // Reverbs (stateful - large delay networks)
     // freeverb: room_scale (density factor), room_offset (decay baseline)

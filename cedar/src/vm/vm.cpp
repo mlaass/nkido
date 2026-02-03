@@ -566,6 +566,14 @@ void VM::execute(const Instruction& inst) {
             op_delay(ctx_, inst);
             break;
 
+        case Opcode::DELAY_TAP:
+            op_delay_tap(ctx_, inst);
+            break;
+
+        case Opcode::DELAY_WRITE:
+            op_delay_write(ctx_, inst);
+            break;
+
         // === Reverbs ===
         case Opcode::REVERB_FREEVERB:
             op_reverb_freeverb(ctx_, inst);

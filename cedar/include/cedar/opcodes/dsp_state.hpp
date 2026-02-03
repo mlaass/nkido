@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <algorithm>
@@ -123,6 +124,11 @@ struct DelayState {
     std::size_t buffer_size = 0;    // Allocated size in floats
     std::size_t write_pos = 0;
 
+    // Tap delay coordination (used by DELAY_TAP/DELAY_WRITE pair)
+    // Caches delayed samples between TAP and WRITE so feedback chain can process them
+    static constexpr std::size_t BLOCK_SIZE = 128;
+    std::array<float, BLOCK_SIZE> tap_cache{};
+
     // Ensure buffer is allocated with requested size
     // arena: AudioArena to allocate from (from ExecutionContext)
     void ensure_buffer(std::size_t samples, AudioArena* arena) {
@@ -146,6 +152,7 @@ struct DelayState {
             std::memset(buffer, 0, buffer_size * sizeof(float));
             write_pos = 0;
         }
+        tap_cache.fill(0.0f);
     }
 };
 
