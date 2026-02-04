@@ -2566,3 +2566,260 @@ TEST_CASE("Codegen: Array generation", "[codegen][arrays]") {
         CHECK(count_instructions(insts, cedar::Opcode::OSC_SIN) == 4);
     }
 }
+
+// =============================================================================
+// Stereo Tests
+// =============================================================================
+
+TEST_CASE("Codegen: stereo() creates stereo signal", "[codegen][stereo]") {
+    SECTION("stereo from mono duplicates signal") {
+        auto result = akkado::compile("stereo(saw(220))");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should have: PUSH_CONST, OSC_SAW, COPY, COPY (duplicate to L and R)
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::COPY) == 2);
+    }
+
+    SECTION("stereo from L/R pair") {
+        auto result = akkado::compile("stereo(saw(218), saw(222))");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Two separate oscillators, no COPY needed
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::COPY) == 0);
+    }
+}
+
+TEST_CASE("Codegen: left() and right() extract channels", "[codegen][stereo]") {
+    SECTION("left extracts left channel") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            left(s) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Two oscillators, output instruction
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
+        auto* out = find_instruction(insts, cedar::Opcode::OUTPUT);
+        REQUIRE(out != nullptr);
+    }
+
+    SECTION("right extracts right channel") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            right(s) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
+        auto* out = find_instruction(insts, cedar::Opcode::OUTPUT);
+        REQUIRE(out != nullptr);
+    }
+}
+
+TEST_CASE("Codegen: pan() emits PAN opcode", "[codegen][stereo]") {
+    SECTION("pan mono to stereo") {
+        auto result = akkado::compile("pan(saw(220), 0.5)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 1);
+        auto* pan = find_instruction(insts, cedar::Opcode::PAN);
+        REQUIRE(pan != nullptr);
+    }
+
+    SECTION("pan with modulated position") {
+        auto result = akkado::compile("pan(saw(220), lfo(0.5))");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::LFO) == 1);
+        auto* pan = find_instruction(insts, cedar::Opcode::PAN);
+        REQUIRE(pan != nullptr);
+    }
+}
+
+TEST_CASE("Codegen: width() emits WIDTH opcode", "[codegen][stereo]") {
+    SECTION("width control on stereo signal") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            width(s, 1.5)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* width = find_instruction(insts, cedar::Opcode::WIDTH);
+        REQUIRE(width != nullptr);
+    }
+
+    SECTION("width with modulated amount") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            width(s, 1.0 + lfo(0.2) * 0.5)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::LFO) == 1);
+        auto* width = find_instruction(insts, cedar::Opcode::WIDTH);
+        REQUIRE(width != nullptr);
+    }
+}
+
+TEST_CASE("Codegen: ms_encode() and ms_decode()", "[codegen][stereo]") {
+    SECTION("mid/side encoding") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            ms_encode(s)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* encode = find_instruction(insts, cedar::Opcode::MS_ENCODE);
+        REQUIRE(encode != nullptr);
+    }
+
+    SECTION("mid/side decoding") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            ms = ms_encode(s)
+            ms_decode(ms)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* encode = find_instruction(insts, cedar::Opcode::MS_ENCODE);
+        auto* decode = find_instruction(insts, cedar::Opcode::MS_DECODE);
+        REQUIRE(encode != nullptr);
+        REQUIRE(decode != nullptr);
+    }
+}
+
+TEST_CASE("Codegen: pingpong() emits DELAY_PINGPONG opcode", "[codegen][stereo]") {
+    SECTION("basic ping-pong delay") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(220), saw(220))
+            pingpong(s, 0.25, 0.6)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* pingpong = find_instruction(insts, cedar::Opcode::DELAY_PINGPONG);
+        REQUIRE(pingpong != nullptr);
+    }
+
+    SECTION("ping-pong with modulated parameters") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(220), saw(220))
+            pingpong(s, lfo(0.1) * 0.25 + 0.1, 0.5)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::LFO) == 1);
+        auto* pingpong = find_instruction(insts, cedar::Opcode::DELAY_PINGPONG);
+        REQUIRE(pingpong != nullptr);
+    }
+}
+
+TEST_CASE("Codegen: out() with stereo signal", "[codegen][stereo]") {
+    SECTION("out auto-routes stereo L/R") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            out(s)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* out = find_instruction(insts, cedar::Opcode::OUTPUT);
+        REQUIRE(out != nullptr);
+        // L and R should be different buffers
+        CHECK(out->inputs[0] != out->inputs[1]);
+    }
+
+    SECTION("out with mono still works") {
+        auto result = akkado::compile("out(saw(220))");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* out = find_instruction(insts, cedar::Opcode::OUTPUT);
+        REQUIRE(out != nullptr);
+        // Mono: both channels same buffer
+        CHECK(out->inputs[0] == out->inputs[1]);
+    }
+}
+
+TEST_CASE("Codegen: stereo propagation through mono effects", "[codegen][stereo]") {
+    SECTION("stereo through filter expands to two filters") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            lp(s, 1000)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should have 2 oscillators and 2 filters (one per channel)
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 2);
+    }
+
+    SECTION("stereo through chain of effects") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            s |> lp(%, 1000) |> hp(%, 100)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_HP) == 2);
+    }
+
+    SECTION("stereo through delay") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            delay(s, 0.25, 0.5)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Each channel gets its own delay
+        CHECK(count_instructions(insts, cedar::Opcode::DELAY) == 2);
+    }
+}
+
+TEST_CASE("Codegen: stereo pipeline examples", "[codegen][stereo]") {
+    SECTION("pan sweep") {
+        auto result = akkado::compile(R"(
+            saw(220) |> pan(%, lfo(0.5)) |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::OSC_SAW) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::LFO) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::PAN) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::OUTPUT) != nullptr);
+    }
+
+    SECTION("stereo width modulation") {
+        auto result = akkado::compile(R"(
+            stereo(saw(218), saw(222))
+            |> width(%, 1.0 + lfo(0.2) * 0.5)
+            |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
+        CHECK(find_instruction(insts, cedar::Opcode::WIDTH) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::OUTPUT) != nullptr);
+    }
+
+    SECTION("full stereo chain with ping-pong") {
+        auto result = akkado::compile(R"(
+            saw(220)
+            |> stereo(%)
+            |> lp(%, 1000)
+            |> pingpong(%, 0.25, 0.5)
+            |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::OSC_SAW) != nullptr);
+        // stereo() from mono creates 2 COPYs
+        CHECK(count_instructions(insts, cedar::Opcode::COPY) == 2);
+        // lp() expands to 2 filters
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 2);
+        CHECK(find_instruction(insts, cedar::Opcode::DELAY_PINGPONG) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::OUTPUT) != nullptr);
+    }
+}

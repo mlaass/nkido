@@ -22,16 +22,32 @@ std::uint16_t CodeGenerator::register_multi_buffer(NodeIndex node, std::vector<s
 }
 
 bool CodeGenerator::is_multi_buffer(NodeIndex node) const {
+    // First check node-based tracking
     auto it = multi_buffers_.find(node);
-    return it != multi_buffers_.end() && it->second.size() > 1;
+    if (it != multi_buffers_.end() && it->second.size() > 1) {
+        return true;
+    }
+    // Fallback: check if the node's buffer is a stereo left channel
+    auto buf_it = node_buffers_.find(node);
+    if (buf_it != node_buffers_.end()) {
+        return is_stereo_buffer(buf_it->second);
+    }
+    return false;
 }
 
 std::vector<std::uint16_t> CodeGenerator::get_multi_buffers(NodeIndex node) const {
+    // First check node-based tracking
     auto it = multi_buffers_.find(node);
     if (it != multi_buffers_.end()) return it->second;
 
+    // Fallback: check buffer-based stereo tracking
     auto buf_it = node_buffers_.find(node);
     if (buf_it != node_buffers_.end() && buf_it->second != BufferAllocator::BUFFER_UNUSED) {
+        // Check if this is a stereo buffer
+        auto pair_it = stereo_buffer_pairs_.find(buf_it->second);
+        if (pair_it != stereo_buffer_pairs_.end()) {
+            return {buf_it->second, pair_it->second};
+        }
         return {buf_it->second};
     }
     return {};

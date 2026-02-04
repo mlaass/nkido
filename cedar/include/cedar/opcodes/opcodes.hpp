@@ -20,3 +20,4 @@
 #include "dynamics.hpp"
 #include "reverbs.hpp"
 #include "logic.hpp"
+#include "stereo.hpp"

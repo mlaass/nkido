@@ -131,6 +131,11 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::ARRAY_SUM: return "ARRAY_SUM";
         case Opcode::ARRAY_REVERSE: return "ARRAY_REVERSE";
         case Opcode::ARRAY_FILL: return "ARRAY_FILL";
+        case Opcode::PAN: return "PAN";
+        case Opcode::WIDTH: return "WIDTH";
+        case Opcode::MS_ENCODE: return "MS_ENCODE";
+        case Opcode::MS_DECODE: return "MS_DECODE";
+        case Opcode::DELAY_PINGPONG: return "DELAY_PINGPONG";
         case Opcode::INVALID: return "INVALID";
         default: return "UNKNOWN";
     }
@@ -203,6 +208,7 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::OSC_SAW_PWM_4X:
         case Opcode::SEQPAT_QUERY:
         case Opcode::SEQPAT_STEP:
+        case Opcode::DELAY_PINGPONG:
             return true;
         default:
             return false;

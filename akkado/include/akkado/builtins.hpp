@@ -511,6 +511,53 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {NAN, NAN, NAN},
                  "Audio output (mono or stereo)"}},
 
+    // Stereo Operations (handled specially by codegen for stereo signal propagation)
+    // stereo(mono) creates stereo from mono by duplicating to both channels
+    // stereo(left, right) creates stereo from two separate signals
+    {"stereo",  {cedar::Opcode::NOP, 1, 1, false,
+                 {"L", "R", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Create stereo signal from mono or L/R pair"}},
+    // Extract left channel from stereo signal
+    {"left",    {cedar::Opcode::NOP, 1, 0, false,
+                 {"stereo", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Extract left channel from stereo signal"}},
+    // Extract right channel from stereo signal
+    {"right",   {cedar::Opcode::NOP, 1, 0, false,
+                 {"stereo", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Extract right channel from stereo signal"}},
+    // Pan mono signal to stereo position (-1=L, 0=center, 1=R)
+    {"pan",     {cedar::Opcode::PAN, 2, 0, false,
+                 {"mono", "pos", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Pan mono to stereo (-1=L, 0=center, 1=R)"}},
+    // Stereo width control (0=mono, 1=normal, >1=wide)
+    // Convenience: width(stereo, amount) or explicit: width(L, R, amount)
+    {"width",   {cedar::Opcode::WIDTH, 2, 0, false,
+                 {"stereo/L", "amount/R", "amount?", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Stereo width (0=mono, 1=normal, >1=wide)"}},
+    // Mid/side encoding
+    // Convenience: ms_encode(stereo) or explicit: ms_encode(L, R)
+    {"ms_encode", {cedar::Opcode::MS_ENCODE, 1, 0, false,
+                   {"stereo/L", "R?", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Convert stereo to mid/side"}},
+    // Mid/side decoding
+    // Convenience: ms_decode(ms) or explicit: ms_decode(M, S)
+    {"ms_decode", {cedar::Opcode::MS_DECODE, 1, 0, false,
+                   {"ms/M", "S?", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Convert mid/side to stereo"}},
+    // True stereo ping-pong delay
+    // Convenience: pingpong(stereo, time, fb) or explicit: pingpong(L, R, time, fb, width?)
+    {"pingpong", {cedar::Opcode::DELAY_PINGPONG, 3, 1, true,
+                  {"stereo/L", "time/R", "fb/time", "fb?", "width?", ""},
+                  {1.0f, NAN, NAN, NAN, NAN},
+                  "Ping-pong stereo delay"}},
+
     // Timing/Sequencing
     {"clock",   {cedar::Opcode::CLOCK,   0, 0, false,
                  {"", "", "", "", "", ""},

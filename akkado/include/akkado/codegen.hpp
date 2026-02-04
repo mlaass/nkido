@@ -255,6 +255,34 @@ private:
     std::uint16_t handle_tap_delay_call(NodeIndex node, const Node& n);
 
     // ============================================================================
+    // Stereo handlers
+    // ============================================================================
+
+    /// Handle stereo(mono) or stereo(left, right) - create stereo signal
+    std::uint16_t handle_stereo_call(NodeIndex node, const Node& n);
+
+    /// Handle left(stereo) - extract left channel
+    std::uint16_t handle_left_call(NodeIndex node, const Node& n);
+
+    /// Handle right(stereo) - extract right channel
+    std::uint16_t handle_right_call(NodeIndex node, const Node& n);
+
+    /// Handle pan(mono, pos) - pan mono to stereo
+    std::uint16_t handle_pan_call(NodeIndex node, const Node& n);
+
+    /// Handle width(stereo, amount) - adjust stereo width (convenience wrapper)
+    std::uint16_t handle_width_call(NodeIndex node, const Node& n);
+
+    /// Handle ms_encode(stereo) - convert to mid/side (convenience wrapper)
+    std::uint16_t handle_ms_encode_call(NodeIndex node, const Node& n);
+
+    /// Handle ms_decode(ms) - convert mid/side to stereo (convenience wrapper)
+    std::uint16_t handle_ms_decode_call(NodeIndex node, const Node& n);
+
+    /// Handle pingpong(stereo, time, fb) - true stereo ping-pong delay
+    std::uint16_t handle_pingpong_call(NodeIndex node, const Node& n);
+
+    // ============================================================================
     // Parameter exposure handlers
     // ============================================================================
 
@@ -305,6 +333,35 @@ private:
     // ============================================================================
     // Track nodes that produce multiple buffers (arrays/chords for polyphony)
     std::unordered_map<NodeIndex, std::vector<std::uint16_t>> multi_buffers_;
+
+    // ============================================================================
+    // Stereo signal tracking
+    // ============================================================================
+    // Track nodes that produce stereo signals (2-buffer pairs: left, right)
+    struct StereoBuffers {
+        std::uint16_t left;
+        std::uint16_t right;
+    };
+    std::unordered_map<NodeIndex, StereoBuffers> stereo_outputs_;
+
+    // Track stereo by buffer index (for variable propagation)
+    // Key is the left buffer index, value is the right buffer index
+    std::unordered_map<std::uint16_t, std::uint16_t> stereo_buffer_pairs_;
+
+    /// Register a node as producing a stereo signal (2 buffers)
+    void register_stereo(NodeIndex node, std::uint16_t left, std::uint16_t right);
+
+    /// Check if a node produces a stereo signal
+    [[nodiscard]] bool is_stereo(NodeIndex node) const;
+
+    /// Check if a buffer index is the left channel of a stereo pair
+    [[nodiscard]] bool is_stereo_buffer(std::uint16_t buffer) const;
+
+    /// Get stereo buffer pair for a node (must check is_stereo first)
+    [[nodiscard]] StereoBuffers get_stereo_buffers(NodeIndex node) const;
+
+    /// Get stereo buffer pair by left buffer index
+    [[nodiscard]] StereoBuffers get_stereo_buffers_by_buffer(std::uint16_t buffer) const;
 
     /// Register a node as producing multiple buffers
     /// @return First buffer index (for compatibility with single-buffer code)

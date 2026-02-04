@@ -736,6 +736,27 @@ void VM::execute(const Instruction& inst) {
             op_array_fill(ctx_, inst);
             break;
 
+        // === Stereo ===
+        case Opcode::PAN:
+            op_pan(ctx_, inst);
+            break;
+
+        case Opcode::WIDTH:
+            op_width(ctx_, inst);
+            break;
+
+        case Opcode::MS_ENCODE:
+            op_ms_encode(ctx_, inst);
+            break;
+
+        case Opcode::MS_DECODE:
+            op_ms_decode(ctx_, inst);
+            break;
+
+        case Opcode::DELAY_PINGPONG:
+            op_delay_pingpong(ctx_, inst);
+            break;
+
         // === Invalid ===
         [[unlikely]] case Opcode::INVALID:
         [[unlikely]] default:

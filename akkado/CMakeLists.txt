@@ -50,6 +50,7 @@ add_library(akkado STATIC
     src/codegen_functions.cpp
     src/codegen_params.cpp
     src/codegen_patterns.cpp
+    src/codegen_stereo.cpp
     src/chord_parser.cpp
     src/pattern_debug.cpp
 )

@@ -700,6 +700,61 @@ struct FDNState {
     }
 };
 
+// ============================================================================
+// Stereo Effect States
+// ============================================================================
+
+// Ping-pong delay state with arena-allocated stereo buffers
+struct PingPongDelayState {
+    // Maximum delay time: 10 seconds at 96kHz = 960000 samples
+    static constexpr std::size_t MAX_DELAY_SAMPLES = 960000;
+
+    // Separate stereo delay lines
+    float* buffer_left = nullptr;
+    float* buffer_right = nullptr;
+    std::size_t buffer_size = 0;
+    std::size_t write_pos = 0;
+
+    // Smoothed delay time (prevents clicks)
+    float smoothed_delay = 0.0f;
+    bool initialized = false;
+
+    // Damping filter state for each channel
+    float damp_state_left = 0.0f;
+    float damp_state_right = 0.0f;
+
+    void ensure_buffers(std::size_t samples, AudioArena* arena) {
+        if (buffer_left && buffer_size >= samples) {
+            return;  // Already have enough space
+        }
+        if (!arena) return;
+
+        std::size_t new_size = std::min(samples, MAX_DELAY_SAMPLES);
+        float* new_buffer_left = arena->allocate(new_size);
+        float* new_buffer_right = arena->allocate(new_size);
+        if (new_buffer_left && new_buffer_right) {
+            buffer_left = new_buffer_left;
+            buffer_right = new_buffer_right;
+            buffer_size = new_size;
+            write_pos = 0;
+        }
+    }
+
+    void reset() {
+        if (buffer_left && buffer_size > 0) {
+            std::memset(buffer_left, 0, buffer_size * sizeof(float));
+        }
+        if (buffer_right && buffer_size > 0) {
+            std::memset(buffer_right, 0, buffer_size * sizeof(float));
+        }
+        write_pos = 0;
+        smoothed_delay = 0.0f;
+        initialized = false;
+        damp_state_left = 0.0f;
+        damp_state_right = 0.0f;
+    }
+};
+
 // Variant holding all possible DSP state types
 // std::monostate represents stateless operations
 using DSPState = std::variant<
@@ -748,7 +803,9 @@ using DSPState = std::variant<
     // Reverb states
     FreeverbState,
     DattorroState,
-    FDNState
+    FDNState,
+    // Stereo effect states
+    PingPongDelayState
 >;
 
 }  // namespace cedar

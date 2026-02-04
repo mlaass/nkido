@@ -403,7 +403,9 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             if (sym->kind == SymbolKind::Variable || sym->kind == SymbolKind::Parameter) {
                 // Return the buffer index from the symbol table
                 // (should have been set during Assignment processing)
-                return sym->buffer_index;
+                std::uint16_t buf = sym->buffer_index;
+                node_buffers_[node] = buf;
+                return buf;
             }
 
             if (sym->kind == SymbolKind::Pattern) {
@@ -566,6 +568,15 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"tap_delay", &CodeGenerator::handle_tap_delay_call},
                 {"tap_delay_ms", &CodeGenerator::handle_tap_delay_call},
                 {"tap_delay_smp", &CodeGenerator::handle_tap_delay_call},
+                // Stereo operations
+                {"stereo", &CodeGenerator::handle_stereo_call},
+                {"left", &CodeGenerator::handle_left_call},
+                {"right", &CodeGenerator::handle_right_call},
+                {"pan", &CodeGenerator::handle_pan_call},
+                {"width", &CodeGenerator::handle_width_call},
+                {"ms_encode", &CodeGenerator::handle_ms_encode_call},
+                {"ms_decode", &CodeGenerator::handle_ms_decode_call},
+                {"pingpong", &CodeGenerator::handle_pingpong_call},
             };
 
             auto handler_it = special_handlers.find(func_name);
@@ -656,9 +667,29 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 arg = ast_->arena[arg].next_sibling;
             }
 
-            // Special case: out() with single argument (mono to stereo)
+            // Special case: out() with single argument
+            // Check if the argument is stereo - if so, use both channels
             if (func_name == "out" && arg_buffers.size() == 1) {
-                arg_buffers.push_back(arg_buffers[0]);  // Duplicate L to R
+                // Get the first argument node to check if it's stereo
+                NodeIndex first_arg = n.first_child;
+                if (first_arg != NULL_NODE) {
+                    const Node& arg_node = ast_->arena[first_arg];
+                    NodeIndex arg_value = (arg_node.type == NodeType::Argument) ?
+                                         arg_node.first_child : first_arg;
+
+                    if (is_stereo(arg_value)) {
+                        // Stereo input - use both channels
+                        auto stereo = get_stereo_buffers(arg_value);
+                        arg_buffers[0] = stereo.left;
+                        arg_buffers.push_back(stereo.right);
+                    } else {
+                        // Mono input - duplicate to both channels
+                        arg_buffers.push_back(arg_buffers[0]);
+                    }
+                } else {
+                    // No argument node? Just duplicate
+                    arg_buffers.push_back(arg_buffers[0]);
+                }
             }
 
             // UGen Auto-Expansion: If this is a stateful UGen and an argument is multi-buffer,
@@ -687,6 +718,11 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                         break;
                     }
                 }
+
+                // Check if the expansion argument is stereo (exactly 2 buffers from a stereo source)
+                bool is_stereo_expansion = (expansion_arg_idx >= 0 &&
+                                           expansion_buffers.size() == 2 &&
+                                           is_stereo(arg_nodes[static_cast<std::size_t>(expansion_arg_idx)]));
 
                 // If we have an expansion argument, generate N instances
                 if (expansion_arg_idx >= 0 && expansion_buffers.size() > 1) {
@@ -764,6 +800,15 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
                     // Register as multi-buffer result
                     std::uint16_t first_buf = register_multi_buffer(node, std::move(result_buffers));
+
+                    // If the expansion was from a stereo source, also register as stereo
+                    if (is_stereo_expansion) {
+                        auto bufs = get_multi_buffers(node);
+                        if (bufs.size() == 2) {
+                            stereo_outputs_[node] = {bufs[0], bufs[1]};
+                        }
+                    }
+
                     node_buffers_[node] = first_buf;
                     return first_buf;
                 }

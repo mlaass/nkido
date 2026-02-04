@@ -168,6 +168,14 @@ enum class Opcode : std::uint8_t {
     ARRAY_REVERSE = 168,     // out=reverse(arr) (in0=arr, rate=length)
     ARRAY_FILL = 169,        // out=fill(value,length) (in0=value, rate=length)
 
+    // Stereo Operations (170-179)
+    // True stereo effects requiring cross-channel processing
+    PAN = 170,               // Mono to stereo panning: out=L, out+1=R, in0=mono, in1=pan (-1..1)
+    WIDTH = 171,             // Stereo width: out=L', out+1=R', in0=L, in1=R, in2=width
+    MS_ENCODE = 172,         // Mid/side encode: out=M, out+1=S, in0=L, in1=R
+    MS_DECODE = 173,         // Mid/side decode: out=L, out+1=R, in0=M, in1=S
+    DELAY_PINGPONG = 174,    // Ping-pong delay: out=L', out+1=R', in0=L, in1=R, in2=time, in3=fb, in4=pan_width
+
     INVALID = 255
 };
 
