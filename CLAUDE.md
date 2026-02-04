@@ -321,7 +321,12 @@ def test_filter_something():
 ## Implementation Notes
 
 ### Effect Parameters
-- Effects (chorus, flanger, phaser, reverbs) output 100% wet signal. Users mix dry/wet manually if needed:
+- **Dry/wet mixing convention**: All delays and filters should have explicit `dry` and `wet` parameters in their function signature. This is the standard interface for mixable effects.
+  ```akkado
+  delay(input, time, feedback, dry, wet)  // Standard delay signature
+  filter_lp(input, freq, q, dry, wet)     // Filters follow same pattern
+  ```
+- Effects without dry/wet params (chorus, flanger, phaser, reverbs) output 100% wet signal. Users mix manually:
   ```akkado
   dry = osc("saw", 220)
   dry * 0.3 + chorus(dry, 0.5, 0.5) * 0.7 |> out(%, %)  // 30% dry, 70% wet
@@ -337,3 +342,65 @@ def test_filter_something():
 - Use `[[likely]]`/`[[unlikely]]` hints in VM switch
 - SIMD (SSE/AVX) for hot loops
 - Consider cpp-taskflow for parallel DAG branches
+
+### Extended Parameter Patterns
+
+The instruction format has 5 input buffer slots (`inst.inputs[0..4]`). When a builtin needs more than 5 parameters, use these mechanisms:
+
+| Mechanism | Capacity | Use Case |
+|-----------|----------|----------|
+| **Default constants** | Unlimited | Optional parameters with fallback values |
+| **Rate field** | 8 bits (2×4-bit or 1×8-bit) | Packed enum/int params |
+| **State ID bit_cast** | 32-bit float | Single compile-time constant |
+| **ExtendedParams<N>** | N additional params | Complex opcodes with 7+ params |
+
+#### 1. Default Constants (preferred for optional tuning params)
+```cpp
+// In builtin definition
+{"myop", {cedar::Opcode::MY_OP, 3, 2, true,  // 3 required + 2 optional
+          {"in", "freq", "res", "drive", "mix", ""},
+          {1.0f, 0.5f, NAN, NAN, NAN},  // defaults for params 3, 4
+          "My operation"}}
+
+// In opcode implementation
+float drive = inst.inputs[3] != 0xFFFF ? ctx.get_input(inst, 3)[i] : 1.0f;
+float mix = inst.inputs[4] != 0xFFFF ? ctx.get_input(inst, 4)[i] : 0.5f;
+```
+
+#### 2. Rate Field Packing (for enum/int params, 4-8 bits)
+```cpp
+// Low 4 bits: inst.rate & 0x0F (0-15)
+// High 4 bits: (inst.rate >> 4) & 0x0F (0-15)
+// Full byte: inst.rate (0-255)
+
+// Example: DELAY uses rate for time unit (0=seconds, 1=ms, 2=samples)
+std::uint8_t time_unit = inst.rate;
+```
+
+#### 3. State ID bit_cast (for single compile-time float)
+```cpp
+// Codegen:
+inst.state_id = std::bit_cast<std::uint32_t>(compile_time_value);
+
+// Opcode:
+float value = std::bit_cast<float>(inst.state_id);
+```
+Note: Only use when opcode doesn't need state (is stateless), as this overwrites the state ID.
+
+#### 4. ExtendedParams<N> (for 7+ params)
+For complex opcodes needing many parameters, use StatePool's `ExtendedParams<N>`:
+```cpp
+// In opcode implementation
+auto& ext = ctx.states->get_or_create<ExtendedParams<3>>(inst.state_id);
+for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+    float param5 = ext.get(0, i, ctx.buffers);  // 6th param
+    float param6 = ext.get(1, i, ctx.buffers);  // 7th param
+    // ...
+}
+```
+
+**Decision guide:**
+- Rarely changed from default? → Default constant
+- Enum/mode/small int? → Rate field
+- Single compile-time float on stateless opcode? → State ID bit_cast
+- 7+ params or complex parameter groups? → ExtendedParams

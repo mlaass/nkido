@@ -755,6 +755,95 @@ struct PingPongDelayState {
     }
 };
 
+// ============================================================================
+// Visualization States
+// ============================================================================
+
+// ============================================================================
+// Extended Parameters
+// ============================================================================
+
+// Extended parameters for opcodes needing more than 5 inputs.
+// Each slot can be either a compile-time constant or a runtime buffer reference.
+// Stored in StatePool using the same state_id as the opcode.
+template<std::size_t N>
+struct ExtendedParams {
+    struct Slot {
+        float constant = 0.0f;              // Compile-time constant value
+        std::uint16_t buffer_idx = 0xFFFF;  // Buffer index, or 0xFFFF = use constant
+
+        [[nodiscard]] bool is_constant() const { return buffer_idx == 0xFFFF; }
+    };
+
+    std::array<Slot, N> params{};
+
+    // Get parameter value at sample index
+    // buffers: array of buffer pointers from ExecutionContext
+    [[nodiscard]] float get(std::size_t param_idx, std::size_t sample_idx,
+                           const float* const* buffers) const {
+        const auto& slot = params[param_idx];
+        if (slot.is_constant()) {
+            return slot.constant;
+        }
+        return buffers[slot.buffer_idx][sample_idx];
+    }
+
+    // Set a parameter slot to a constant value
+    void set_constant(std::size_t param_idx, float value) {
+        params[param_idx].constant = value;
+        params[param_idx].buffer_idx = 0xFFFF;
+    }
+
+    // Set a parameter slot to a buffer reference
+    void set_buffer(std::size_t param_idx, std::uint16_t buffer_idx) {
+        params[param_idx].buffer_idx = buffer_idx;
+    }
+};
+
+// Composition helper: combines a DSP state with extended parameters
+// Use when an opcode needs both state (e.g., filter memory) AND extra params
+template<typename StateT, std::size_t N>
+struct StateWithExtParams {
+    StateT state{};
+    ExtendedParams<N> ext{};
+};
+
+// ============================================================================
+// Visualization States
+// ============================================================================
+
+// Probe state for signal capture (oscilloscope, waveform, spectrum)
+// Uses a ring buffer to store recent samples for visualization
+struct ProbeState {
+    // Buffer size: ~21ms at 48kHz = 1024 samples
+    // This is enough for oscilloscope and spectrum (1024-point FFT)
+    static constexpr std::size_t PROBE_BUFFER_SIZE = 1024;
+
+    float buffer[PROBE_BUFFER_SIZE] = {0.0f};
+    std::size_t write_pos = 0;
+    bool initialized = false;
+
+    void reset() {
+        std::memset(buffer, 0, sizeof(buffer));
+        write_pos = 0;
+        initialized = false;
+    }
+
+    // Write a block of samples to the ring buffer
+    void write_block(const float* samples, std::size_t count) {
+        for (std::size_t i = 0; i < count; ++i) {
+            buffer[write_pos] = samples[i];
+            write_pos = (write_pos + 1) % PROBE_BUFFER_SIZE;
+        }
+        initialized = true;
+    }
+
+    // Get number of valid samples
+    std::size_t sample_count() const {
+        return initialized ? PROBE_BUFFER_SIZE : 0;
+    }
+};
+
 // Variant holding all possible DSP state types
 // std::monostate represents stateless operations
 using DSPState = std::variant<
@@ -805,7 +894,13 @@ using DSPState = std::variant<
     DattorroState,
     FDNState,
     // Stereo effect states
-    PingPongDelayState
+    PingPongDelayState,
+    // Visualization states
+    ProbeState,
+    // Extended parameters (for opcodes with 7+ params)
+    ExtendedParams<3>,   // 8-param opcodes (5 inputs + 3 extended)
+    ExtendedParams<5>,   // 10-param opcodes (5 inputs + 5 extended)
+    ExtendedParams<8>    // 13-param opcodes (5 inputs + 8 extended)
 >;
 
 }  // namespace cedar

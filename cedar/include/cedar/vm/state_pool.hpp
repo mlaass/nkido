@@ -91,6 +91,20 @@ public:
         return std::get<T>(states_[idx].state);
     }
 
+    // Get existing state if it exists and is the correct type (returns nullptr otherwise)
+    template<typename T>
+    [[nodiscard]] T* get_if(std::uint32_t state_id) {
+        std::size_t idx = find_slot(state_id);
+        if (idx == INVALID_SLOT) {
+            return nullptr;
+        }
+        auto& entry = states_[idx];
+        if (!entry.occupied) {
+            return nullptr;
+        }
+        return std::get_if<T>(&entry.state);
+    }
+
     // Check if state exists
     [[nodiscard]] bool exists(std::uint32_t state_id) const {
         return find_slot(state_id) != INVALID_SLOT;
@@ -477,6 +491,33 @@ public:
                 json << R"(,"initialized":)" << (state.osc.initialized ? "true" : "false");
                 json << "}";
             }
+            else if constexpr (std::is_same_v<T, ExtendedParams<3>> ||
+                               std::is_same_v<T, ExtendedParams<5>> ||
+                               std::is_same_v<T, ExtendedParams<8>>) {
+                constexpr std::size_t N = std::is_same_v<T, ExtendedParams<3>> ? 3 :
+                                          (std::is_same_v<T, ExtendedParams<5>> ? 5 : 8);
+                json << R"({"type":"ExtendedParams")";
+                json << R"(,"count":)" << N;
+                json << R"(,"params":[)";
+                for (std::size_t i = 0; i < N; ++i) {
+                    if (i > 0) json << ",";
+                    const auto& slot = state.params[i];
+                    json << R"({"is_constant":)" << (slot.is_constant() ? "true" : "false");
+                    if (slot.is_constant()) {
+                        json << R"(,"value":)" << slot.constant;
+                    } else {
+                        json << R"(,"buffer_idx":)" << slot.buffer_idx;
+                    }
+                    json << "}";
+                }
+                json << "]}";
+            }
+            else if constexpr (std::is_same_v<T, ProbeState>) {
+                json << R"({"type":"ProbeState")";
+                json << R"(,"write_pos":)" << state.write_pos;
+                json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
+                json << "}";
+            }
             else {
                 json << R"({"type":"Unknown"})";
             }
@@ -504,6 +545,45 @@ public:
             state.values[i] = values[i];
             state.velocities[i] = velocities[i];
         }
+    }
+
+    // =========================================================================
+    // Extended Parameter Initialization
+    // =========================================================================
+
+    /**
+     * Initialize extended parameters for an opcode.
+     * Used by codegen to set up parameters beyond inputs[0..4].
+     *
+     * @tparam N Number of extended parameters (matches ExtendedParams<N>)
+     * @param state_id Semantic ID for this opcode instance
+     * @param constants Array of N constant values (use NAN for buffer-backed params)
+     * @param buffer_indices Array of N buffer indices (0xFFFF = use constant)
+     */
+    template<std::size_t N>
+    void init_extended_params(std::uint32_t state_id,
+                              const std::array<float, N>& constants,
+                              const std::array<std::uint16_t, N>& buffer_indices) {
+        auto& ext = get_or_create<ExtendedParams<N>>(state_id);
+        for (std::size_t i = 0; i < N; ++i) {
+            if (buffer_indices[i] != 0xFFFF) {
+                ext.set_buffer(i, buffer_indices[i]);
+            } else {
+                ext.set_constant(i, constants[i]);
+            }
+        }
+    }
+
+    /**
+     * Initialize extended parameters with all constants.
+     * Convenience overload when no parameters are buffer-backed.
+     */
+    template<std::size_t N>
+    void init_extended_params_const(std::uint32_t state_id,
+                                    const std::array<float, N>& constants) {
+        std::array<std::uint16_t, N> buffer_indices;
+        buffer_indices.fill(0xFFFF);
+        init_extended_params<N>(state_id, constants, buffer_indices);
     }
 
     // Initialize a SequenceState with compiled sequences (arena-allocated)

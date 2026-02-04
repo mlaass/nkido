@@ -9,11 +9,15 @@
 
 namespace akkado {
 
-/// Maximum number of parameters for a builtin function
+/// Maximum number of parameters for a builtin function (using inputs[0..4] + defaults)
+/// For builtins needing more parameters, use extended_param_count with ExtendedParams<N>
 constexpr std::size_t MAX_BUILTIN_PARAMS = 6;
 
 /// Maximum number of optional parameters with defaults
 constexpr std::size_t MAX_BUILTIN_DEFAULTS = 5;
+
+/// Maximum number of extended parameters (stored in StatePool)
+constexpr std::size_t MAX_EXTENDED_PARAMS = 8;
 
 /// Metadata for a built-in function
 struct BuiltinInfo {
@@ -24,10 +28,21 @@ struct BuiltinInfo {
     std::array<std::string_view, MAX_BUILTIN_PARAMS> param_names;  // Parameter names for named args
     std::array<float, MAX_BUILTIN_DEFAULTS> defaults;              // Default values (NaN = required)
     std::string_view description;  // One-line docstring for autocomplete
+    std::uint8_t extended_param_count = 0;  // Parameters beyond inputs[5] (stored in ExtendedParams)
 
     /// Get total parameter count (required + optional)
     [[nodiscard]] std::uint8_t total_params() const {
         return input_count + optional_count;
+    }
+
+    /// Check if this builtin uses extended parameters (stored in StatePool)
+    [[nodiscard]] bool has_extended_params() const {
+        return extended_param_count > 0;
+    }
+
+    /// Get total parameter count including extended params
+    [[nodiscard]] std::uint8_t total_with_extended() const {
+        return total_params() + extended_param_count;
     }
 
     /// Find parameter index by name, returns -1 if not found
@@ -743,6 +758,25 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"name", "opt1", "opt2", "opt3", "opt4", "opt5"},
                  {NAN, NAN, NAN},
                  "Selection dropdown. Returns index (0, 1, ...) of selected option."}},
+
+    // Visualization builtins (handled specially by codegen)
+    // These create visualization widgets in the editor and pass signal through
+    {"pianoroll", {cedar::Opcode::COPY, 1, 1, false,
+                   {"signal", "name", "", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Attach piano roll visualization. Signal passes through unchanged."}},
+    {"oscilloscope", {cedar::Opcode::COPY, 1, 1, true,
+                      {"signal", "name", "", "", "", ""},
+                      {NAN, NAN, NAN, NAN, NAN},
+                      "Attach oscilloscope visualization. Signal passes through unchanged."}},
+    {"waveform", {cedar::Opcode::COPY, 1, 1, true,
+                  {"signal", "name", "", "", "", ""},
+                  {NAN, NAN, NAN, NAN, NAN},
+                  "Attach waveform visualization. Signal passes through unchanged."}},
+    {"spectrum", {cedar::Opcode::COPY, 1, 1, true,
+                  {"signal", "name", "", "", "", ""},
+                  {NAN, NAN, NAN, NAN, NAN},
+                  "Attach spectrum analyzer visualization. Signal passes through unchanged."}},
 };
 
 /// Alias mappings for convenience syntax
