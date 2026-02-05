@@ -10,6 +10,7 @@
 #include <cedar/generated/opcode_metadata.hpp>
 #include <cedar/opcodes/sequencing.hpp>
 #include <cedar/opcodes/sequence.hpp>
+#include <cedar/opcodes/dsp_state.hpp>
 #include <akkado/akkado.hpp>
 #include <akkado/builtins.hpp>
 #include <akkado/sample_registry.hpp>
@@ -478,10 +479,70 @@ WASM_EXPORT const char* akkado_get_required_sample(uint32_t index) {
     return g_compile_result.required_samples[index].c_str();
 }
 
+// ============================================================================
+// Extended Sample Info API (for sample banks)
+// ============================================================================
+
+/**
+ * Get number of required samples with extended info (bank/variant support)
+ * @return Number of unique sample references used in the compiled code
+ */
+WASM_EXPORT uint32_t akkado_get_required_samples_extended_count() {
+    return static_cast<uint32_t>(g_compile_result.required_samples_extended.size());
+}
+
+/**
+ * Get required sample bank name by index
+ * @param index Sample index (0 to count-1)
+ * @return Pointer to null-terminated bank name, or nullptr if invalid/default bank
+ */
+WASM_EXPORT const char* akkado_get_required_sample_bank(uint32_t index) {
+    if (index >= g_compile_result.required_samples_extended.size()) return nullptr;
+    const auto& sample = g_compile_result.required_samples_extended[index];
+    if (sample.bank.empty()) return nullptr;
+    return sample.bank.c_str();
+}
+
+/**
+ * Get required sample name by index (extended version)
+ * @param index Sample index (0 to count-1)
+ * @return Pointer to null-terminated sample name, or nullptr if invalid
+ */
+WASM_EXPORT const char* akkado_get_required_sample_name(uint32_t index) {
+    if (index >= g_compile_result.required_samples_extended.size()) return nullptr;
+    return g_compile_result.required_samples_extended[index].name.c_str();
+}
+
+/**
+ * Get required sample variant by index
+ * @param index Sample index (0 to count-1)
+ * @return Variant index (0 = first variant), or -1 if invalid
+ */
+WASM_EXPORT int32_t akkado_get_required_sample_variant(uint32_t index) {
+    if (index >= g_compile_result.required_samples_extended.size()) return -1;
+    return g_compile_result.required_samples_extended[index].variant;
+}
+
+/**
+ * Get qualified sample name for Cedar lookup (e.g., "TR808_bd_0")
+ * This is the name that should be used when loading and looking up samples in Cedar.
+ * @param index Sample index (0 to count-1)
+ * @return Pointer to null-terminated qualified name, or nullptr if invalid
+ */
+static std::string g_qualified_name_buffer;  // Static buffer for returning string
+WASM_EXPORT const char* akkado_get_required_sample_qualified(uint32_t index) {
+    if (index >= g_compile_result.required_samples_extended.size()) return nullptr;
+    g_qualified_name_buffer = g_compile_result.required_samples_extended[index].qualified_name();
+    return g_qualified_name_buffer.c_str();
+}
+
 /**
  * Resolve sample IDs in state_inits using currently loaded samples.
  * Call this AFTER loading required samples, BEFORE cedar_apply_state_inits().
  * This maps sample names to IDs in the sample bank.
+ *
+ * For bank samples, the qualified name format is: "bank_name_variant" (e.g., "TR808_bd_0")
+ * The TypeScript side must load samples with these qualified names.
  */
 WASM_EXPORT void akkado_resolve_sample_ids() {
     if (!g_vm) return;
@@ -502,7 +563,18 @@ WASM_EXPORT void akkado_resolve_sample_ids() {
             if (mapping.seq_idx < init.sequence_events.size()) {
                 auto& events = init.sequence_events[mapping.seq_idx];
                 if (mapping.event_idx < events.size()) {
-                    auto id = g_vm->sample_bank().get_sample_id(mapping.sample_name);
+                    // Build qualified name for bank samples
+                    std::string lookup_name;
+                    if (mapping.bank.empty() || mapping.bank == "default") {
+                        // Default bank - use simple name with variant suffix if non-zero
+                        lookup_name = mapping.variant > 0
+                            ? mapping.sample_name + ":" + std::to_string(mapping.variant)
+                            : mapping.sample_name;
+                    } else {
+                        // Custom bank - use qualified name format: bank_name_variant
+                        lookup_name = mapping.bank + "_" + mapping.sample_name + "_" + std::to_string(mapping.variant);
+                    }
+                    auto id = g_vm->sample_bank().get_sample_id(lookup_name);
                     events[mapping.event_idx].values[0] = static_cast<float>(id);
                 }
             }
@@ -1244,6 +1316,165 @@ WASM_EXPORT uint32_t akkado_get_param_source_offset(uint32_t index) {
 WASM_EXPORT uint32_t akkado_get_param_source_length(uint32_t index) {
     if (index >= g_compile_result.param_decls.size()) return 0;
     return g_compile_result.param_decls[index].source_length;
+}
+
+// ============================================================================
+// Visualization Declaration API
+// ============================================================================
+
+/**
+ * Get number of visualization declarations from compile result
+ * @return Number of declared visualizations
+ */
+WASM_EXPORT uint32_t akkado_get_viz_count() {
+    return static_cast<uint32_t>(g_compile_result.viz_decls.size());
+}
+
+/**
+ * Get visualization name by index
+ * @param index Visualization index (0 to count-1)
+ * @return Pointer to null-terminated name string, or nullptr if invalid
+ */
+WASM_EXPORT const char* akkado_get_viz_name(uint32_t index) {
+    if (index >= g_compile_result.viz_decls.size()) return nullptr;
+    return g_compile_result.viz_decls[index].name.c_str();
+}
+
+/**
+ * Get visualization type by index
+ * @param index Visualization index
+ * @return Type: 0=PianoRoll, 1=Oscilloscope, 2=Waveform, 3=Spectrum, or -1 if invalid
+ */
+WASM_EXPORT int akkado_get_viz_type(uint32_t index) {
+    if (index >= g_compile_result.viz_decls.size()) return -1;
+    return static_cast<int>(g_compile_result.viz_decls[index].type);
+}
+
+/**
+ * Get visualization state_id (for probe-based visualizations)
+ * @param index Visualization index
+ * @return State ID for probe buffer lookup, or 0 if invalid
+ */
+WASM_EXPORT uint32_t akkado_get_viz_state_id(uint32_t index) {
+    if (index >= g_compile_result.viz_decls.size()) return 0;
+    return g_compile_result.viz_decls[index].state_id;
+}
+
+/**
+ * Get visualization options JSON string
+ * @param index Visualization index
+ * @return Pointer to JSON options string, or nullptr if invalid
+ */
+WASM_EXPORT const char* akkado_get_viz_options(uint32_t index) {
+    if (index >= g_compile_result.viz_decls.size()) return nullptr;
+    const auto& viz = g_compile_result.viz_decls[index];
+    if (viz.options_json.empty()) return nullptr;
+    return viz.options_json.c_str();
+}
+
+/**
+ * Get source offset for a visualization declaration
+ * @param index Visualization index
+ * @return Source offset in bytes
+ */
+WASM_EXPORT uint32_t akkado_get_viz_source_offset(uint32_t index) {
+    if (index >= g_compile_result.viz_decls.size()) return 0;
+    return g_compile_result.viz_decls[index].source_offset;
+}
+
+/**
+ * Get source length for a visualization declaration
+ * @param index Visualization index
+ * @return Source length in characters
+ */
+WASM_EXPORT uint32_t akkado_get_viz_source_length(uint32_t index) {
+    if (index >= g_compile_result.viz_decls.size()) return 0;
+    return g_compile_result.viz_decls[index].source_length;
+}
+
+/**
+ * Get pattern state_init index for a piano roll visualization
+ * @param index Visualization index
+ * @return Index into state_inits array, or -1 if not a piano roll or no pattern linked
+ */
+WASM_EXPORT int32_t akkado_get_viz_pattern_index(uint32_t index) {
+    if (index >= g_compile_result.viz_decls.size()) return -1;
+    return g_compile_result.viz_decls[index].pattern_state_init_index;
+}
+
+// ============================================================================
+// Probe Data API (for oscilloscope/waveform/spectrum visualizations)
+// ============================================================================
+
+// Static buffer for probe data copy (avoid concurrent access issues)
+static float g_probe_data_buffer[1024];
+
+/**
+ * Get the number of samples available in a probe buffer
+ * @param state_id The state_id of the probe (from viz decl)
+ * @return Number of samples (0-1024), or 0 if not found
+ */
+WASM_EXPORT uint32_t cedar_get_probe_sample_count(uint32_t state_id) {
+    if (!g_vm) return 0;
+
+    auto& states = g_vm->states();
+    if (!states.exists(state_id)) return 0;
+
+    auto* probe = states.get_if<cedar::ProbeState>(state_id);
+    if (!probe) return 0;
+
+    return static_cast<uint32_t>(probe->sample_count());
+}
+
+/**
+ * Get probe data as a contiguous array (linearized from ring buffer)
+ * @param state_id The state_id of the probe
+ * @return Pointer to float array with samples, or nullptr if not found
+ *
+ * The returned data is ordered from oldest to newest sample.
+ * Call cedar_get_probe_sample_count first to get the count.
+ */
+WASM_EXPORT const float* cedar_get_probe_data(uint32_t state_id) {
+    if (!g_vm) return nullptr;
+
+    auto& states = g_vm->states();
+    if (!states.exists(state_id)) return nullptr;
+
+    auto* probe = states.get_if<cedar::ProbeState>(state_id);
+    if (!probe || !probe->initialized) return nullptr;
+
+    // Linearize ring buffer: copy from write_pos to end, then from start to write_pos
+    std::size_t size = cedar::ProbeState::PROBE_BUFFER_SIZE;
+    std::size_t wp = probe->write_pos;
+
+    // Copy oldest samples first (from write_pos to end)
+    std::size_t first_chunk = size - wp;
+    std::memcpy(g_probe_data_buffer, probe->buffer + wp, first_chunk * sizeof(float));
+
+    // Copy newest samples (from start to write_pos)
+    if (wp > 0) {
+        std::memcpy(g_probe_data_buffer + first_chunk, probe->buffer, wp * sizeof(float));
+    }
+
+    return g_probe_data_buffer;
+}
+
+/**
+ * Get the write position in the probe ring buffer
+ * Useful for efficient partial updates
+ * @param state_id The state_id of the probe
+ * @return Current write position (0-1023)
+ */
+WASM_EXPORT uint32_t cedar_get_probe_write_pos(uint32_t state_id) {
+    if (!g_vm) return 0;
+
+    auto& states = g_vm->states();
+    if (!states.exists(state_id)) return 0;
+
+    auto* probe = states.get_if<cedar::ProbeState>(state_id);
+    if (!probe) return 0;
+
+    return static_cast<uint32_t>(probe->write_pos);
 }
 
 // ============================================================================

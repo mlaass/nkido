@@ -197,11 +197,15 @@ class CedarProcessor extends AudioWorkletProcessor {
 			case 'getPatternDebug':
 				this.getPatternDebug(msg.patternIndex);
 				break;
+
+			case 'getProbeData':
+				this.getProbeData(msg.stateId);
+				break;
 		}
 	}
 
 	/**
-	 * Get required sample names from the compile result
+	 * Get required sample names from the compile result (legacy simple names)
 	 * @returns {string[]} Array of sample names used in the compiled code
 	 */
 	getRequiredSamples() {
@@ -212,6 +216,39 @@ class CedarProcessor extends AudioWorkletProcessor {
 			if (ptr) {
 				samples.push(this.module.UTF8ToString(ptr));
 			}
+		}
+		return samples;
+	}
+
+	/**
+	 * Get required samples with extended info (bank, name, variant)
+	 * @returns {Array<{bank: string|null, name: string, variant: number, qualifiedName: string}>}
+	 */
+	getRequiredSamplesExtended() {
+		// Check if extended API is available
+		if (!this.module._akkado_get_required_samples_extended_count) {
+			return [];
+		}
+
+		const count = this.module._akkado_get_required_samples_extended_count();
+		const samples = [];
+		for (let i = 0; i < count; i++) {
+			// Get bank name (may be null for default bank)
+			const bankPtr = this.module._akkado_get_required_sample_bank(i);
+			const bank = bankPtr ? this.module.UTF8ToString(bankPtr) : null;
+
+			// Get sample name
+			const namePtr = this.module._akkado_get_required_sample_name(i);
+			const name = namePtr ? this.module.UTF8ToString(namePtr) : '';
+
+			// Get variant
+			const variant = this.module._akkado_get_required_sample_variant(i);
+
+			// Get qualified name for Cedar lookup
+			const qualifiedPtr = this.module._akkado_get_required_sample_qualified(i);
+			const qualifiedName = qualifiedPtr ? this.module.UTF8ToString(qualifiedPtr) : name;
+
+			samples.push({ bank, name, variant, qualifiedName });
 		}
 		return samples;
 	}
@@ -325,6 +362,49 @@ class CedarProcessor extends AudioWorkletProcessor {
 		}
 
 		return paramDecls;
+	}
+
+	/**
+	 * Extract all visualization declarations from compile result into JS objects.
+	 * Must be called immediately after compilation, before any memory growth.
+	 */
+	extractVizDecls() {
+		const count = this.module._akkado_get_viz_count ? this.module._akkado_get_viz_count() : 0;
+		const vizDecls = [];
+
+		for (let i = 0; i < count; i++) {
+			const namePtr = this.module._akkado_get_viz_name(i);
+			const name = namePtr ? this.module.UTF8ToString(namePtr) : '';
+			const type = this.module._akkado_get_viz_type(i);
+			const stateId = this.module._akkado_get_viz_state_id(i);
+			const sourceOffset = this.module._akkado_get_viz_source_offset(i);
+			const sourceLength = this.module._akkado_get_viz_source_length(i);
+			const patternIndex = this.module._akkado_get_viz_pattern_index(i);
+
+			// Extract options JSON if present
+			let options = null;
+			const optionsPtr = this.module._akkado_get_viz_options ? this.module._akkado_get_viz_options(i) : null;
+			if (optionsPtr) {
+				const optionsStr = this.module.UTF8ToString(optionsPtr);
+				try {
+					options = JSON.parse(optionsStr);
+				} catch (e) {
+					console.warn('[CedarProcessor] Failed to parse viz options:', e);
+				}
+			}
+
+			vizDecls.push({
+				name,
+				type,  // 0=PianoRoll, 1=Oscilloscope, 2=Waveform, 3=Spectrum
+				stateId,
+				sourceOffset,
+				sourceLength,
+				patternIndex,  // Index into stateInits array for piano roll, or -1
+				options
+			});
+		}
+
+		return vizDecls;
 	}
 
 	/**
@@ -457,14 +537,18 @@ class CedarProcessor extends AudioWorkletProcessor {
 						}
 					}
 
-					// Extract required sample names
+					// Extract required sample names (both legacy and extended)
 					const requiredSamples = this.getRequiredSamples();
+					const requiredSamplesExtended = this.getRequiredSamplesExtended();
 
 					// Extract all state initialization data
 					const stateInits = this.extractStateInits();
 
 					// Extract parameter declarations for UI generation
 					const paramDecls = this.extractParamDecls();
+
+					// Extract visualization declarations for UI generation
+					const vizDecls = this.extractVizDecls();
 
 					// CRITICAL: Clear the compile result NOW, before returning
 					// This ensures we don't have stale pointers when memory grows
@@ -486,11 +570,12 @@ class CedarProcessor extends AudioWorkletProcessor {
 					}
 
 					// Store extracted data for loadCompiledProgram()
-					this.pendingProgram = { bytecode, stateInits, requiredSamples };
+					this.pendingProgram = { bytecode, stateInits, requiredSamples, requiredSamplesExtended };
 
 					console.log('[CedarProcessor] Compiled successfully, bytecode size:', bytecodeSize,
-						'required samples:', requiredSamples, 'state inits:', stateInits.length,
-						'param decls:', paramDecls.length,
+						'required samples:', requiredSamples, 'extended samples:', requiredSamplesExtended.length,
+						'state inits:', stateInits.length,
+						'param decls:', paramDecls.length, 'viz decls:', vizDecls.length,
 						'unique states:', disassembly?.summary?.uniqueStateIds ?? 'N/A');
 
 					this.port.postMessage({
@@ -498,7 +583,9 @@ class CedarProcessor extends AudioWorkletProcessor {
 						success: true,
 						bytecodeSize,
 						requiredSamples,
+						requiredSamplesExtended,
 						paramDecls,
+						vizDecls,
 						disassembly
 					});
 				} else {
@@ -993,6 +1080,70 @@ class CedarProcessor extends AudioWorkletProcessor {
 				type: 'stateInspection',
 				stateId,
 				data: null,
+				error: String(err)
+			});
+		}
+	}
+
+	/**
+	 * Get probe data for a visualization (oscilloscope, waveform, spectrum)
+	 * @param {number} stateId - The probe's state_id
+	 */
+	getProbeData(stateId) {
+		if (!this.module) {
+			this.port.postMessage({
+				type: 'probeData',
+				stateId,
+				samples: null
+			});
+			return;
+		}
+
+		try {
+			// Check if WASM exports are available
+			if (!this.module._cedar_get_probe_sample_count || !this.module._cedar_get_probe_data) {
+				this.port.postMessage({
+					type: 'probeData',
+					stateId,
+					samples: null,
+					error: 'Probe exports not available'
+				});
+				return;
+			}
+
+			const sampleCount = this.module._cedar_get_probe_sample_count(stateId);
+			if (sampleCount === 0) {
+				this.port.postMessage({
+					type: 'probeData',
+					stateId,
+					samples: null
+				});
+				return;
+			}
+
+			const ptr = this.module._cedar_get_probe_data(stateId);
+			if (!ptr) {
+				this.port.postMessage({
+					type: 'probeData',
+					stateId,
+					samples: null
+				});
+				return;
+			}
+
+			// Copy the data from WASM memory
+			const samples = this.extractFloatArray(ptr, sampleCount);
+
+			this.port.postMessage({
+				type: 'probeData',
+				stateId,
+				samples
+			});
+		} catch (err) {
+			this.port.postMessage({
+				type: 'probeData',
+				stateId,
+				samples: null,
 				error: String(err)
 			});
 		}

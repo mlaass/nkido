@@ -88,6 +88,19 @@ if(EMSCRIPTEN)
         _akkado_get_state_init_type
         _akkado_get_state_init_values_count
         _akkado_get_state_init_values
+        # Visualization declarations
+        _akkado_get_viz_count
+        _akkado_get_viz_name
+        _akkado_get_viz_type
+        _akkado_get_viz_state_id
+        _akkado_get_viz_options
+        _akkado_get_viz_source_offset
+        _akkado_get_viz_source_length
+        _akkado_get_viz_pattern_index
+        # Probe data API
+        _cedar_get_probe_sample_count
+        _cedar_get_probe_data
+        _cedar_get_probe_write_pos
         # Utility
         _enkido_get_block_size
         _enkido_malloc

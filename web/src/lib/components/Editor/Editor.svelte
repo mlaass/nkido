@@ -11,9 +11,9 @@
 	import { linterExtensions, updateEditorDiagnostics } from './editor-linter';
 	import { akkadoCompletions } from '$lib/editor/akkado-completions';
 	import { signatureHelp } from '$lib/editor/signature-help';
-	import { patternPreview } from '$lib/editor/pattern-preview';
 	import { stepHighlight } from '$lib/editor/step-highlight';
 	import { instructionHighlight, highlightInstruction } from '$lib/editor/instruction-highlight';
+	import { visualizationWidgets } from '$lib/editor/visualization-widgets';
 	import { patternHighlightStore } from '$stores/pattern-highlight.svelte';
 	import type { SourceLocation } from '$stores/audio.svelte';
 
@@ -178,9 +178,10 @@
 				}),
 				// Linter for inline error display
 				...linterExtensions,
-				// Pattern highlighting (preview + step highlighting)
-				patternPreview(),
+				// Step highlighting for active pattern notes
 				...stepHighlight(),
+				// Visualization block widgets (pianoroll, oscilloscope, etc.)
+				visualizationWidgets(),
 				// Instruction highlighting for debug panel
 				...instructionHighlight()
 			]

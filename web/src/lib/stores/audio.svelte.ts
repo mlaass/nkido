@@ -6,6 +6,7 @@
 
 import { DEFAULT_DRUM_KIT } from '$lib/audio/default-samples';
 import { settingsStore } from './settings.svelte';
+import { bankRegistry, type SampleReference } from '$lib/audio/bank-registry';
 
 interface Diagnostic {
 	severity: number;
@@ -31,6 +32,24 @@ export interface ParamDecl {
 	options: string[];
 	sourceOffset: number;
 	sourceLength: number;
+}
+
+// Visualization declaration types
+export enum VizType {
+	PianoRoll = 0,
+	Oscilloscope = 1,
+	Waveform = 2,
+	Spectrum = 3
+}
+
+export interface VizDecl {
+	name: string;
+	type: VizType;
+	stateId: number;
+	sourceOffset: number;
+	sourceLength: number;
+	patternIndex: number; // Index into stateInits for piano roll, or -1
+	options: Record<string, unknown> | null;
 }
 
 // Source location for bytecode-to-source mapping
@@ -68,12 +87,24 @@ interface DisassemblyInfo {
 
 export type { DisassemblyInfo, DisassemblyInstruction, DisassemblySummary };
 
+/**
+ * Extended sample requirement with bank context
+ */
+export interface RequiredSampleExtended {
+	bank: string | null; // Bank name (null = default)
+	name: string; // Sample name
+	variant: number; // Variant index
+	qualifiedName: string; // Full name for Cedar lookup (e.g., "TR808_bd_0")
+}
+
 interface CompileResult {
 	success: boolean;
 	bytecodeSize?: number;
 	diagnostics?: Diagnostic[];
-	requiredSamples?: string[];
+	requiredSamples?: string[]; // Legacy: simple sample names
+	requiredSamplesExtended?: RequiredSampleExtended[]; // Extended: with bank/variant info
 	paramDecls?: ParamDecl[];
+	vizDecls?: VizDecl[];
 	disassembly?: DisassemblyInfo;
 }
 
@@ -184,6 +215,7 @@ interface AudioState {
 	samplesLoading: boolean;
 	params: ParamDecl[];
 	paramValues: Map<string, number>;
+	vizDecls: VizDecl[];
 	disassembly: DisassemblyInfo | null;
 	activeSampleRate: number | null;
 }
@@ -204,6 +236,7 @@ function createAudioEngine() {
 		samplesLoading: false,
 		params: [],
 		paramValues: new Map(),
+		vizDecls: [],
 		disassembly: null,
 		activeSampleRate: null
 	});
@@ -225,9 +258,12 @@ function createAudioEngine() {
 	// Pattern highlighting resolve functions
 	let patternInfoResolve: ((patterns: PatternInfo[]) => void) | null = null;
 	let patternPreviewResolve: ((events: PatternEvent[]) => void) | null = null;
-	let beatPositionResolve: ((position: number) => void) | null = null;
+	// Array of pending beat position resolvers - all get resolved with same value
+	let beatPositionResolvers: Array<(position: number) => void> = [];
 	let activeStepsResolve: ((steps: Record<number, { offset: number; length: number }>) => void) | null = null;
 	let stateInspectionResolve: ((data: StateInspection | null) => void) | null = null;
+	// Map from stateId to resolve callback - supports multiple concurrent probe requests
+	const probeDataResolvers = new Map<number, (samples: Float32Array | null) => void>();
 	let patternDebugResolve: ((data: PatternDebugInfo | null) => void) | null = null;
 
 	// Track sample loading state: 'pending' | 'loading' | 'loaded' | 'error'
@@ -320,7 +356,9 @@ function createAudioEngine() {
 					bytecodeSize: msg.bytecodeSize as number | undefined,
 					diagnostics: msg.diagnostics as Diagnostic[] | undefined,
 					requiredSamples: msg.requiredSamples as string[] | undefined,
+					requiredSamplesExtended: msg.requiredSamplesExtended as RequiredSampleExtended[] | undefined,
 					paramDecls: msg.paramDecls as ParamDecl[] | undefined,
+					vizDecls: msg.vizDecls as VizDecl[] | undefined,
 					disassembly: msg.disassembly as DisassemblyInfo | undefined
 				};
 				if (result.success) {
@@ -338,6 +376,8 @@ function createAudioEngine() {
 					if (result.paramDecls) {
 						updateParamDecls(result.paramDecls);
 					}
+					// Update visualization declarations
+					state.vizDecls = result.vizDecls ?? [];
 					// Store disassembly for debug panel
 					state.disassembly = result.disassembly ?? null;
 				} else {
@@ -411,10 +451,12 @@ function createAudioEngine() {
 				break;
 			}
 			case 'beatPosition': {
-				if (beatPositionResolve) {
-					beatPositionResolve(msg.position as number);
-					beatPositionResolve = null;
+				const position = msg.position as number;
+				// Resolve ALL pending beat position requests with the same value
+				for (const resolve of beatPositionResolvers) {
+					resolve(position);
 				}
+				beatPositionResolvers = [];
 				break;
 			}
 			case 'activeSteps': {
@@ -435,6 +477,16 @@ function createAudioEngine() {
 				if (patternDebugResolve) {
 					patternDebugResolve(msg.success ? (msg.data as PatternDebugInfo) : null);
 					patternDebugResolve = null;
+				}
+				break;
+			}
+			case 'probeData': {
+				const stateId = msg.stateId as number;
+				const samples = msg.samples as number[] | null;
+				const resolver = probeDataResolvers.get(stateId);
+				if (resolver) {
+					resolver(samples ? new Float32Array(samples) : null);
+					probeDataResolvers.delete(stateId);
 				}
 				break;
 			}
@@ -609,6 +661,137 @@ function createAudioEngine() {
 	}
 
 	/**
+	 * Ensure an extended sample (with bank context) is loaded
+	 * @returns true if sample is loaded, false if loading failed
+	 */
+	async function ensureBankSampleLoaded(sample: RequiredSampleExtended): Promise<boolean> {
+		const { bank, name, variant, qualifiedName } = sample;
+
+		// Already loaded?
+		if (loadedSamples.has(qualifiedName)) {
+			return true;
+		}
+
+		const currentState = sampleLoadState.get(qualifiedName);
+
+		// Already loaded (check state too)
+		if (currentState === 'loaded') {
+			return true;
+		}
+
+		// Failed previously
+		if (currentState === 'error') {
+			return false;
+		}
+
+		// Currently loading - wait for it
+		if (currentState === 'loading') {
+			return new Promise((resolve) => {
+				const check = setInterval(() => {
+					const s = sampleLoadState.get(qualifiedName);
+					if (s === 'loaded') {
+						clearInterval(check);
+						resolve(true);
+					}
+					if (s === 'error') {
+						clearInterval(check);
+						resolve(false);
+					}
+				}, 50);
+				// Timeout after 30 seconds
+				setTimeout(() => {
+					clearInterval(check);
+					resolve(false);
+				}, 30000);
+			});
+		}
+
+		// Default bank - try to load from default kit
+		if (!bank || bank === 'default') {
+			// For default bank, name with variant suffix (e.g., "bd:1") or simple name
+			const simpleName = variant > 0 ? `${name}:${variant}` : name;
+			const baseName = name; // Try without variant first
+
+			// Try variant-specific name first
+			const variantSample = DEFAULT_DRUM_KIT.find((s) => s.name === simpleName);
+			if (variantSample) {
+				sampleLoadState.set(qualifiedName, 'loading');
+				try {
+					const success = await loadSampleFromUrl(qualifiedName, variantSample.url);
+					if (!success) {
+						sampleLoadState.set(qualifiedName, 'error');
+					}
+					return success;
+				} catch {
+					sampleLoadState.set(qualifiedName, 'error');
+					return false;
+				}
+			}
+
+			// Try base name (variant 0)
+			const baseSample = DEFAULT_DRUM_KIT.find((s) => s.name === baseName);
+			if (baseSample) {
+				sampleLoadState.set(qualifiedName, 'loading');
+				try {
+					const success = await loadSampleFromUrl(qualifiedName, baseSample.url);
+					if (!success) {
+						sampleLoadState.set(qualifiedName, 'error');
+					}
+					return success;
+				} catch {
+					sampleLoadState.set(qualifiedName, 'error');
+					return false;
+				}
+			}
+
+			return false;
+		}
+
+		// Custom bank - try to load via BankRegistry
+		if (!bankRegistry.hasBank(bank)) {
+			console.warn(`[AudioEngine] Bank "${bank}" not loaded`);
+			return false;
+		}
+
+		const manifest = bankRegistry.getBank(bank);
+		if (!manifest) {
+			return false;
+		}
+
+		const variants = manifest.samples.get(name);
+		if (!variants || variants.length === 0) {
+			console.warn(`[AudioEngine] Sample "${name}" not found in bank "${bank}"`);
+			return false;
+		}
+
+		// Wrap variant index if out of range (Strudel behavior)
+		const actualVariant = variant % variants.length;
+		const samplePath = variants[actualVariant];
+
+		// Construct full URL
+		const baseUrl = manifest.baseUrl.endsWith('/') ? manifest.baseUrl : manifest.baseUrl + '/';
+		const fullUrl = samplePath.startsWith('http') || samplePath.startsWith('/') ? samplePath : baseUrl + samplePath;
+
+		// Load the sample with qualified name
+		sampleLoadState.set(qualifiedName, 'loading');
+		try {
+			console.log(`[AudioEngine] Loading bank sample ${qualifiedName} from ${fullUrl}`);
+			const success = await loadSampleFromUrl(qualifiedName, fullUrl);
+			if (!success) {
+				sampleLoadState.set(qualifiedName, 'error');
+			} else {
+				// Mark as loaded in bank manifest
+				manifest.loaded.add(`${name}:${actualVariant}`);
+			}
+			return success;
+		} catch (err) {
+			console.error(`[AudioEngine] Failed to load bank sample ${qualifiedName}:`, err);
+			sampleLoadState.set(qualifiedName, 'error');
+			return false;
+		}
+	}
+
+	/**
 	 * Compile source code in the worklet and load into Cedar VM
 	 * This handles the full compile -> load samples -> load program flow
 	 */
@@ -645,13 +828,27 @@ function createAudioEngine() {
 		}
 
 		// Step 2: Load any required samples that aren't loaded yet
-		const requiredSamples = compileResult.requiredSamples || [];
+		// Prefer extended samples if available (has bank/variant info)
+		const extendedSamples = compileResult.requiredSamplesExtended || [];
+		const legacySamples = compileResult.requiredSamples || [];
 		const missingSamples: string[] = [];
 
-		for (const name of requiredSamples) {
-			const loaded = await ensureSampleLoaded(name);
-			if (!loaded) {
-				missingSamples.push(name);
+		if (extendedSamples.length > 0) {
+			// Use extended sample info with bank support
+			for (const sample of extendedSamples) {
+				const loaded = await ensureBankSampleLoaded(sample);
+				if (!loaded) {
+					const displayName = sample.bank ? `${sample.bank}/${sample.name}:${sample.variant}` : sample.name;
+					missingSamples.push(displayName);
+				}
+			}
+		} else {
+			// Fall back to legacy simple sample names
+			for (const name of legacySamples) {
+				const loaded = await ensureSampleLoaded(name);
+				if (!loaded) {
+					missingSamples.push(name);
+				}
 			}
 		}
 
@@ -953,6 +1150,67 @@ function createAudioEngine() {
 		console.log('[AudioEngine] Cleared all samples');
 	}
 
+	// =========================================================================
+	// Sample Bank API
+	// =========================================================================
+
+	/**
+	 * Load a sample bank from a URL (strudel.json manifest)
+	 * @param url URL to the strudel.json manifest
+	 * @param name Optional name override for the bank
+	 */
+	async function loadBank(url: string, name?: string): Promise<boolean> {
+		try {
+			await bankRegistry.loadBank(url, name);
+			return true;
+		} catch (err) {
+			console.error('[AudioEngine] Failed to load bank:', err);
+			return false;
+		}
+	}
+
+	/**
+	 * Load a sample bank from GitHub
+	 * @param repo GitHub shortcut (e.g., "github:user/repo" or "github:user/repo/branch/path")
+	 */
+	async function loadBankFromGitHub(repo: string): Promise<boolean> {
+		try {
+			await bankRegistry.loadFromGitHub(repo);
+			return true;
+		} catch (err) {
+			console.error('[AudioEngine] Failed to load bank from GitHub:', err);
+			return false;
+		}
+	}
+
+	/**
+	 * Get all loaded bank names
+	 */
+	function getBankNames(): string[] {
+		return bankRegistry.getBankNames();
+	}
+
+	/**
+	 * Get sample names in a bank
+	 */
+	function getBankSampleNames(bankName: string): string[] {
+		return bankRegistry.getSampleNames(bankName);
+	}
+
+	/**
+	 * Get variant count for a sample in a bank
+	 */
+	function getBankSampleVariantCount(bankName: string, sampleName: string): number {
+		return bankRegistry.getVariantCount(bankName, sampleName);
+	}
+
+	/**
+	 * Check if a bank is loaded
+	 */
+	function hasBank(name: string): boolean {
+		return bankRegistry.hasBank(name);
+	}
+
 	/**
 	 * Get builtin function metadata for autocomplete
 	 * Returns cached data if available, otherwise fetches from worklet
@@ -1124,14 +1382,19 @@ function createAudioEngine() {
 		}
 
 		return new Promise((resolve) => {
-			beatPositionResolve = resolve;
+			beatPositionResolvers.push(resolve);
+			// Only send message if this is the first pending request
+			if (beatPositionResolvers.length === 1) {
+				workletNode!.port.postMessage({ type: 'getCurrentBeatPosition' });
+			}
+			// Timeout for this specific resolver
 			setTimeout(() => {
-				if (beatPositionResolve === resolve) {
-					beatPositionResolve = null;
+				const idx = beatPositionResolvers.indexOf(resolve);
+				if (idx !== -1) {
+					beatPositionResolvers.splice(idx, 1);
 					resolve(0);
 				}
 			}, 100);
-			workletNode!.port.postMessage({ type: 'getCurrentBeatPosition' });
 		});
 	}
 
@@ -1199,6 +1462,30 @@ function createAudioEngine() {
 		});
 	}
 
+	/**
+	 * Get probe data (ring buffer samples) for a visualization
+	 * @param stateId The probe's state_id from viz decl
+	 * @returns Float32Array of samples (oldest to newest) or null if not available
+	 */
+	async function getProbeData(stateId: number): Promise<Float32Array | null> {
+		if (!workletNode) {
+			return null;
+		}
+
+		return new Promise((resolve) => {
+			// Store resolver keyed by stateId for concurrent requests
+			probeDataResolvers.set(stateId, resolve);
+			setTimeout(() => {
+				// Timeout: resolve with null if still pending
+				if (probeDataResolvers.get(stateId) === resolve) {
+					probeDataResolvers.delete(stateId);
+					resolve(null);
+				}
+			}, 100);
+			workletNode!.port.postMessage({ type: 'getProbeData', stateId });
+		});
+	}
+
 	return {
 		get isPlaying() { return state.isPlaying; },
 		get bpm() { return state.bpm; },
@@ -1215,6 +1502,8 @@ function createAudioEngine() {
 		// Parameter exposure
 		get params() { return state.params; },
 		get paramValues() { return state.paramValues; },
+		// Visualization declarations
+		get vizDecls() { return state.vizDecls; },
 		// Debug info
 		get disassembly() { return state.disassembly; },
 		// Audio config
@@ -1240,6 +1529,13 @@ function createAudioEngine() {
 		loadSampleFromUrl,
 		loadSamplePack,
 		clearSamples,
+		// Sample bank API
+		loadBank,
+		loadBankFromGitHub,
+		getBankNames,
+		getBankSampleNames,
+		getBankSampleVariantCount,
+		hasBank,
 		getBuiltins,
 		// Parameter exposure API
 		setParamValue,
@@ -1256,7 +1552,9 @@ function createAudioEngine() {
 		// State inspection API
 		inspectState,
 		// Pattern debug API
-		getPatternDebug
+		getPatternDebug,
+		// Visualization probe data
+		getProbeData
 	};
 }
 
