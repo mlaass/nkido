@@ -15,6 +15,12 @@
 - [x] Closures with environment capture
 - [x] Docstrings (`///`)
 - [x] Binary operators (`+`, `-`, `*`, `/`, `^`, comparisons, logical)
+- [ ] Variadic function arguments
+- [ ] Compile-time and runtime `match`
+- [ ] JS-style dictionaries/objects
+- [ ] Multiline strings
+- [ ] Code import (source modules)
+- [ ] Compiled code / library import
 
 ### Mini-Notation
 
@@ -29,6 +35,7 @@
 - [x] Pattern functions: `pat()`, `seq()`, `note()`, `timeline()`
 - [x] Pattern transformations: `slow`, `fast`, `rev`, `transpose`, `velocity`
 - [x] Sample bank/variant control: `bank()`, `n()`
+- [ ] Microtonal mini-notation
 
 ### Sample Loading
 
@@ -77,6 +84,7 @@
 - [x] Inline pattern preview widgets (piano rolls)
 - [x] Active step highlighting during playback
 - [x] Font size control (10–24px)
+- [ ] Better syntax highlighting in web frontend
 
 ### Web App — Transport & Audio
 
@@ -127,6 +135,7 @@
 - [x] Auto-generated opcode metadata
 - [x] Auto-generated docs lookup index
 - [x] Catch2 test suites (cedar + akkado)
+- [ ] Godot extension
 
 ---
 
