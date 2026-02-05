@@ -56,7 +56,7 @@ State preservation during code updates:
 - `|>` (pipe): Defines signal flow through the DAG
 - `%` (hole): Explicit input port for signal injection
 - `as` (pipe binding): Named binding for multi-stage access: `expr as name`
-- Mini-notation patterns: `pat()`, `seq()`, `timeline()`, `note()`
+- Mini-notation patterns: `pat()`, `seq()`, `timeline()`, `note()` - see [Mini-Notation Reference](docs/mini-notation-reference.md)
 
 ### Records and Field Access
 Record literals allow grouping related values:
