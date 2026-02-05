@@ -331,7 +331,9 @@ private:
                 sample_mappings_.push_back(SequenceSampleMapping{
                     seq_idx,
                     event_idx,
-                    atom_data.sample_name
+                    atom_data.sample_name,
+                    atom_data.sample_bank,
+                    atom_data.sample_variant
                 });
             }
             if (sample_registry_ && !atom_data.sample_name.empty()) {
@@ -622,8 +624,7 @@ private:
             }
 
             case Node::MiniModifierType::Weight:
-            case Node::MiniModifierType::Duration:
-                // Weight and Duration are handled by parent (get_node_weight)
+                // Weight is handled by parent (get_node_weight)
                 compile_into_sequence(child, seq_idx, time_offset, time_span);
                 break;
         }
@@ -739,12 +740,20 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
 
     // Check for polyphonic patterns (chords with multiple values per event)
     std::uint8_t max_voices = compiler.max_voices();
-    std::vector<std::uint16_t> voice_buffers;
+    std::vector<std::uint16_t> voice_freq_buffers;
+    std::vector<std::uint16_t> voice_vel_buffers;
+    std::vector<std::uint16_t> voice_trig_buffers;
 
     // Emit SEQPAT_STEP for each voice
+    // For polyphonic patterns, each voice gets its own freq, vel, and trig buffers
     for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
         std::uint16_t voice_value_buf = (voice == 0) ? value_buf : buffers_.allocate();
-        if (voice_value_buf == BufferAllocator::BUFFER_UNUSED) {
+        std::uint16_t voice_vel_buf = (voice == 0) ? velocity_buf : buffers_.allocate();
+        std::uint16_t voice_trig_buf = (voice == 0) ? trigger_buf : buffers_.allocate();
+
+        if (voice_value_buf == BufferAllocator::BUFFER_UNUSED ||
+            voice_vel_buf == BufferAllocator::BUFFER_UNUSED ||
+            voice_trig_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return BufferAllocator::BUFFER_UNUSED;
@@ -753,9 +762,8 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
         cedar::Instruction step_inst{};
         step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
         step_inst.out_buffer = voice_value_buf;
-        // Only first voice outputs velocity and trigger
-        step_inst.inputs[0] = (voice == 0) ? velocity_buf : 0xFFFF;
-        step_inst.inputs[1] = (voice == 0) ? trigger_buf : 0xFFFF;
+        step_inst.inputs[0] = voice_vel_buf;
+        step_inst.inputs[1] = voice_trig_buf;
         // Voice index for polyphonic selection
         step_inst.inputs[2] = voice;
         step_inst.inputs[3] = 0xFFFF;
@@ -763,7 +771,9 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
         step_inst.state_id = state_id;
         emit(step_inst);
 
-        voice_buffers.push_back(voice_value_buf);
+        voice_freq_buffers.push_back(voice_value_buf);
+        voice_vel_buffers.push_back(voice_vel_buf);
+        voice_trig_buffers.push_back(voice_trig_buf);
     }
 
     // Store sequence program initialization data
@@ -861,9 +871,18 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
     pattern_fields["trig"] = trigger_buf;
     record_fields_[node] = std::move(pattern_fields);
 
-    // Register multi-buffer for polyphonic patterns (chords)
+    // Register polyphonic fields and multi-buffer for polyphonic patterns (chords)
     if (max_voices > 1 && !is_sample_pattern && closure_node == NULL_NODE) {
-        register_multi_buffer(node, std::move(voice_buffers));
+        // Store polyphonic field buffers for %.field access with multi-buffer support
+        PolyphonicFields poly_fields;
+        poly_fields.freq_buffers = voice_freq_buffers;
+        poly_fields.vel_buffers = voice_vel_buffers;
+        poly_fields.trig_buffers = voice_trig_buffers;
+        poly_fields.num_voices = max_voices;
+        polyphonic_fields_[node] = std::move(poly_fields);
+
+        // Also register as multi-buffer for UGen auto-expansion
+        register_multi_buffer(node, std::move(voice_freq_buffers));
     }
 
     return result_buf;
@@ -1056,12 +1075,20 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
 
     // Check for polyphonic patterns (chords with multiple values per event)
     std::uint8_t max_voices = compiler.max_voices();
-    std::vector<std::uint16_t> voice_buffers;
+    std::vector<std::uint16_t> voice_freq_buffers;
+    std::vector<std::uint16_t> voice_vel_buffers;
+    std::vector<std::uint16_t> voice_trig_buffers;
 
     // Emit SEQPAT_STEP for each voice
+    // For polyphonic patterns, each voice gets its own freq, vel, and trig buffers
     for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
         std::uint16_t voice_value_buf = (voice == 0) ? value_buf : buffers_.allocate();
-        if (voice_value_buf == BufferAllocator::BUFFER_UNUSED) {
+        std::uint16_t voice_vel_buf = (voice == 0) ? velocity_buf : buffers_.allocate();
+        std::uint16_t voice_trig_buf = (voice == 0) ? trigger_buf : buffers_.allocate();
+
+        if (voice_value_buf == BufferAllocator::BUFFER_UNUSED ||
+            voice_vel_buf == BufferAllocator::BUFFER_UNUSED ||
+            voice_trig_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return BufferAllocator::BUFFER_UNUSED;
@@ -1070,9 +1097,8 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
         cedar::Instruction step_inst{};
         step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
         step_inst.out_buffer = voice_value_buf;
-        // Only first voice outputs velocity and trigger
-        step_inst.inputs[0] = (voice == 0) ? velocity_buf : 0xFFFF;
-        step_inst.inputs[1] = (voice == 0) ? trigger_buf : 0xFFFF;
+        step_inst.inputs[0] = voice_vel_buf;
+        step_inst.inputs[1] = voice_trig_buf;
         // Voice index for polyphonic selection
         step_inst.inputs[2] = voice;
         step_inst.inputs[3] = 0xFFFF;
@@ -1080,7 +1106,9 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
         step_inst.state_id = state_id;
         emit(step_inst);
 
-        voice_buffers.push_back(voice_value_buf);
+        voice_freq_buffers.push_back(voice_value_buf);
+        voice_vel_buffers.push_back(voice_vel_buf);
+        voice_trig_buffers.push_back(voice_trig_buf);
     }
 
     // Store sequence program initialization data
@@ -1098,8 +1126,18 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
 
     pop_path();
 
-    // Register multi-buffer for polyphony
-    std::uint16_t first_buf = register_multi_buffer(node, std::move(voice_buffers));
+    // Store polyphonic field buffers for %.field access with multi-buffer support
+    if (max_voices > 1) {
+        PolyphonicFields poly_fields;
+        poly_fields.freq_buffers = voice_freq_buffers;
+        poly_fields.vel_buffers = voice_vel_buffers;
+        poly_fields.trig_buffers = voice_trig_buffers;
+        poly_fields.num_voices = max_voices;
+        polyphonic_fields_[node] = std::move(poly_fields);
+    }
+
+    // Register multi-buffer for polyphony (freq buffers are the main output)
+    std::uint16_t first_buf = register_multi_buffer(node, std::move(voice_freq_buffers));
     node_buffers_[node] = first_buf;
     return first_buf;
 }
@@ -1141,6 +1179,19 @@ static std::optional<float> get_number_arg(const Ast& ast, const Node& n, std::s
     return std::nullopt;
 }
 
+// Helper: Get string argument from a function call
+// Returns the string value or nullopt if not a valid string
+static std::optional<std::string> get_string_arg(const Ast& ast, const Node& n, std::size_t arg_index) {
+    NodeIndex arg = get_pattern_arg(ast, n, arg_index);
+    if (arg == NULL_NODE) return std::nullopt;
+
+    const Node& arg_node = ast.arena[arg];
+    if (arg_node.type == NodeType::StringLit) {
+        return arg_node.as_string();
+    }
+    return std::nullopt;
+}
+
 // Helper: Check if a node is a pattern-producing expression
 // Returns true for MiniLiteral or Call to pat/seq/timeline
 static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
@@ -1154,7 +1205,8 @@ static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
         const std::string& func_name = n.as_identifier();
         return func_name == "pat" || func_name == "seq" || func_name == "timeline" ||
                func_name == "note" || func_name == "slow" || func_name == "fast" ||
-               func_name == "rev" || func_name == "transpose" || func_name == "velocity";
+               func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
+               func_name == "bank" || func_name == "n";
     }
 
     return false;
@@ -1771,6 +1823,325 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
     std::unordered_map<std::string, std::uint16_t> pattern_fields;
     pattern_fields["freq"] = value_buf;
     pattern_fields["vel"] = scaled_velocity_buf;  // Use scaled velocity
+    pattern_fields["trig"] = trigger_buf;
+    record_fields_[node] = std::move(pattern_fields);
+
+    pop_path();
+    node_buffers_[node] = value_buf;
+    return value_buf;
+}
+
+std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
+    // bank(pattern, bank_name) - set sample bank for all events
+    // Sets the bank field on all sample mappings for deferred resolution
+
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto bank_name = get_string_arg(*ast_, n, 1);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "bank() requires a pattern as first argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    if (!bank_name.has_value()) {
+        error("E131", "bank() requires a string as second argument (e.g., \"TR808\")", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    const Node& pat_node = ast_->arena[pattern_arg];
+
+    // Accept MiniLiteral or pattern-producing Call nodes
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "bank() first argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Compile the pattern
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements)) {
+        error("E130", "bank() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t bank_count = call_counters_["bank"]++;
+    push_path("bank#" + std::to_string(bank_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Get compiled events and sample mappings
+    auto sequence_events = compiler.sequence_events();
+    auto sample_mappings = compiler.sample_mappings();
+    float cycle_length = static_cast<float>(std::max(1u, num_elements));
+
+    // Update bank field on all sample mappings
+    for (auto& mapping : sample_mappings) {
+        mapping.bank = *bank_name;
+    }
+
+    // Collect required samples (with updated bank info)
+    compiler.collect_samples(required_samples_);
+
+    bool is_sample_pattern = compiler.is_sample_pattern();
+
+    // Allocate buffers for outputs
+    std::uint16_t value_buf = buffers_.allocate();
+    std::uint16_t velocity_buf = buffers_.allocate();
+    std::uint16_t trigger_buf = buffers_.allocate();
+
+    if (value_buf == BufferAllocator::BUFFER_UNUSED ||
+        velocity_buf == BufferAllocator::BUFFER_UNUSED ||
+        trigger_buf == BufferAllocator::BUFFER_UNUSED) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Emit SEQPAT_QUERY instruction
+    cedar::Instruction query_inst{};
+    query_inst.opcode = cedar::Opcode::SEQPAT_QUERY;
+    query_inst.out_buffer = 0xFFFF;
+    query_inst.inputs[0] = 0xFFFF;
+    query_inst.inputs[1] = 0xFFFF;
+    query_inst.inputs[2] = 0xFFFF;
+    query_inst.inputs[3] = 0xFFFF;
+    query_inst.inputs[4] = 0xFFFF;
+    query_inst.state_id = state_id;
+    emit(query_inst);
+
+    // Emit SEQPAT_STEP
+    cedar::Instruction step_inst{};
+    step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
+    step_inst.out_buffer = value_buf;
+    step_inst.inputs[0] = velocity_buf;
+    step_inst.inputs[1] = trigger_buf;
+    step_inst.inputs[2] = 0;
+    step_inst.inputs[3] = 0xFFFF;
+    step_inst.inputs[4] = 0xFFFF;
+    step_inst.state_id = state_id;
+    emit(step_inst);
+
+    // Store sequence program initialization data
+    StateInitData seq_init;
+    seq_init.state_id = state_id;
+    seq_init.type = StateInitData::Type::SequenceProgram;
+    seq_init.cycle_length = cycle_length;
+    seq_init.sequences = compiler.sequences();
+    seq_init.sequence_events = std::move(sequence_events);
+    seq_init.total_events = compiler.total_events();
+    seq_init.is_sample_pattern = is_sample_pattern;
+    const Node& pattern = ast_->arena[pattern_node];
+    seq_init.pattern_location = pattern.location;
+    seq_init.sequence_sample_mappings = std::move(sample_mappings);  // Use updated mappings
+    state_inits_.push_back(std::move(seq_init));
+
+    // Add to extended samples with bank info
+    for (const auto& mapping : state_inits_.back().sequence_sample_mappings) {
+        RequiredSample req_sample;
+        req_sample.name = mapping.sample_name;
+        req_sample.bank = mapping.bank;
+        req_sample.variant = mapping.variant;
+
+        std::string key = req_sample.key();
+        if (required_samples_extended_keys_.find(key) == required_samples_extended_keys_.end()) {
+            required_samples_extended_keys_.insert(key);
+            required_samples_extended_.push_back(std::move(req_sample));
+        }
+    }
+
+    // Store pattern field buffers for %.field access
+    std::unordered_map<std::string, std::uint16_t> pattern_fields;
+    pattern_fields["freq"] = value_buf;
+    pattern_fields["vel"] = velocity_buf;
+    pattern_fields["trig"] = trigger_buf;
+    record_fields_[node] = std::move(pattern_fields);
+
+    pop_path();
+    node_buffers_[node] = value_buf;
+    return value_buf;
+}
+
+std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
+    // n(pattern, variant) - set sample variant for all events
+    // Two cases:
+    //   1. n(pattern, number) - fixed variant for all events
+    //   2. n(pattern, pattern) - variant per-event from another pattern (TODO: future)
+
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    NodeIndex variant_arg = get_pattern_arg(*ast_, n, 1);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "n() requires a pattern as first argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    if (variant_arg == NULL_NODE) {
+        error("E131", "n() requires a variant number or pattern as second argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    const Node& pat_node = ast_->arena[pattern_arg];
+
+    // Accept MiniLiteral or pattern-producing Call nodes
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "n() first argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Check variant argument type
+    const Node& variant_node = ast_->arena[variant_arg];
+    bool is_fixed_variant = (variant_node.type == NodeType::NumberLit);
+    int fixed_variant = 0;
+
+    if (is_fixed_variant) {
+        fixed_variant = static_cast<int>(variant_node.as_number());
+        if (fixed_variant < 0) {
+            error("E131", "n() variant must be non-negative", n.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+    } else if (variant_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, variant_arg)) {
+        error("E131", "n() second argument must be a number or pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Compile the main pattern
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements)) {
+        error("E130", "n() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t n_count = call_counters_["n"]++;
+    push_path("n#" + std::to_string(n_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Get compiled events and sample mappings
+    auto sequence_events = compiler.sequence_events();
+    auto sample_mappings = compiler.sample_mappings();
+    float cycle_length = static_cast<float>(std::max(1u, num_elements));
+
+    if (is_fixed_variant) {
+        // Case 1: Fixed variant - set on all sample mappings
+        for (auto& mapping : sample_mappings) {
+            mapping.variant = static_cast<std::uint8_t>(fixed_variant);
+        }
+    } else {
+        // Case 2: Per-event variant from pattern
+        // Compile the variant pattern to get its events
+        SequenceCompiler variant_compiler(ast_->arena, sample_registry_);
+        NodeIndex variant_pattern_node = NULL_NODE;
+        std::uint32_t variant_num_elements = 1;
+
+        if (compile_pattern_for_transform(*this, *ast_, variant_arg, sample_registry_,
+                                          variant_compiler, variant_pattern_node, variant_num_elements)) {
+            // Get variant pattern events
+            auto variant_events = variant_compiler.sequence_events();
+
+            // Match events: for each sample event in the main pattern,
+            // look up the corresponding variant value from the variant pattern.
+            // If the variant pattern has fewer events, cycle through them.
+            if (!variant_events.empty() && !variant_events[0].empty()) {
+                std::size_t variant_idx = 0;
+                std::size_t variant_count = variant_events[0].size();
+
+                for (auto& mapping : sample_mappings) {
+                    // Get the variant value from the variant pattern
+                    const auto& variant_evt = variant_events[0][variant_idx % variant_count];
+                    if (variant_evt.type == cedar::EventType::DATA && variant_evt.num_values > 0) {
+                        // Use the first value as the variant index
+                        int var_val = static_cast<int>(variant_evt.values[0]);
+                        if (var_val >= 0) {
+                            mapping.variant = static_cast<std::uint8_t>(var_val);
+                        }
+                    }
+                    variant_idx++;
+                }
+            }
+        }
+    }
+
+    // Collect required samples
+    compiler.collect_samples(required_samples_);
+
+    bool is_sample_pattern = compiler.is_sample_pattern();
+
+    // Allocate buffers for outputs
+    std::uint16_t value_buf = buffers_.allocate();
+    std::uint16_t velocity_buf = buffers_.allocate();
+    std::uint16_t trigger_buf = buffers_.allocate();
+
+    if (value_buf == BufferAllocator::BUFFER_UNUSED ||
+        velocity_buf == BufferAllocator::BUFFER_UNUSED ||
+        trigger_buf == BufferAllocator::BUFFER_UNUSED) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Emit SEQPAT_QUERY instruction
+    cedar::Instruction query_inst{};
+    query_inst.opcode = cedar::Opcode::SEQPAT_QUERY;
+    query_inst.out_buffer = 0xFFFF;
+    query_inst.inputs[0] = 0xFFFF;
+    query_inst.inputs[1] = 0xFFFF;
+    query_inst.inputs[2] = 0xFFFF;
+    query_inst.inputs[3] = 0xFFFF;
+    query_inst.inputs[4] = 0xFFFF;
+    query_inst.state_id = state_id;
+    emit(query_inst);
+
+    // Emit SEQPAT_STEP
+    cedar::Instruction step_inst{};
+    step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
+    step_inst.out_buffer = value_buf;
+    step_inst.inputs[0] = velocity_buf;
+    step_inst.inputs[1] = trigger_buf;
+    step_inst.inputs[2] = 0;
+    step_inst.inputs[3] = 0xFFFF;
+    step_inst.inputs[4] = 0xFFFF;
+    step_inst.state_id = state_id;
+    emit(step_inst);
+
+    // Store sequence program initialization data
+    StateInitData seq_init;
+    seq_init.state_id = state_id;
+    seq_init.type = StateInitData::Type::SequenceProgram;
+    seq_init.cycle_length = cycle_length;
+    seq_init.sequences = compiler.sequences();
+    seq_init.sequence_events = std::move(sequence_events);
+    seq_init.total_events = compiler.total_events();
+    seq_init.is_sample_pattern = is_sample_pattern;
+    const Node& pattern = ast_->arena[pattern_node];
+    seq_init.pattern_location = pattern.location;
+    seq_init.sequence_sample_mappings = std::move(sample_mappings);  // Use updated mappings
+    state_inits_.push_back(std::move(seq_init));
+
+    // Add to extended samples with variant info
+    for (const auto& mapping : state_inits_.back().sequence_sample_mappings) {
+        RequiredSample req_sample;
+        req_sample.name = mapping.sample_name;
+        req_sample.bank = mapping.bank;
+        req_sample.variant = mapping.variant;
+
+        std::string key = req_sample.key();
+        if (required_samples_extended_keys_.find(key) == required_samples_extended_keys_.end()) {
+            required_samples_extended_keys_.insert(key);
+            required_samples_extended_.push_back(std::move(req_sample));
+        }
+    }
+
+    // Store pattern field buffers for %.field access
+    std::unordered_map<std::string, std::uint16_t> pattern_fields;
+    pattern_fields["freq"] = value_buf;
+    pattern_fields["vel"] = velocity_buf;
     pattern_fields["trig"] = trigger_buf;
     record_fields_[node] = std::move(pattern_fields);
 

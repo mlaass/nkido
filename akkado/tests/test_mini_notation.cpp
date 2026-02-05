@@ -196,12 +196,12 @@ TEST_CASE("Mini lexer basic tokens", "[mini_lexer]") {
         CHECK(tokens[1].as_sample().variant == 1);
     }
 
-    SECTION("rest tokens") {
+    SECTION("rest and elongate tokens") {
         auto [tokens, diags] = lex_mini("~ _ ~");
         REQUIRE(diags.empty());
         REQUIRE(tokens.size() == 4);
         CHECK(tokens[0].type == MiniTokenType::Rest);
-        CHECK(tokens[1].type == MiniTokenType::Rest);
+        CHECK(tokens[1].type == MiniTokenType::Elongate);  // _ is Elongate, not Rest
         CHECK(tokens[2].type == MiniTokenType::Rest);
     }
 
@@ -293,6 +293,14 @@ TEST_CASE("Mini parser basic patterns", "[mini_parser]") {
         REQUIRE(diags.empty());
         NodeIndex atom = arena[root].first_child;
         CHECK(arena[atom].as_mini_atom().kind == Node::MiniAtomKind::Rest);
+    }
+
+    SECTION("elongate") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("_", arena);
+        REQUIRE(diags.empty());
+        NodeIndex atom = arena[root].first_child;
+        CHECK(arena[atom].as_mini_atom().kind == Node::MiniAtomKind::Elongate);
     }
 
     SECTION("group subdivision") {
@@ -652,6 +660,93 @@ TEST_CASE("Pattern evaluation", "[pattern_eval]") {
         CHECK(events.events[0].type == PatternEventType::Pitch);
         CHECK(events.events[1].type == PatternEventType::Rest);
         CHECK(events.events[2].type == PatternEventType::Pitch);
+    }
+
+    SECTION("elongate extends previous note (Tidal-compatible)") {
+        // c4 _ e4 → c4 takes 2/3 of cycle (elongated), e4 takes 1/3
+        AstArena arena;
+        auto [root, diags] = parse_mini("c4 _ e4", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 2);  // c4 and e4 only (no elongate event)
+
+        // c4 starts at 0, duration extended from 1/3 to 2/3
+        CHECK(events.events[0].type == PatternEventType::Pitch);
+        CHECK(events.events[0].midi_note == 60);  // C4
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));
+        CHECK_THAT(events.events[0].duration, WithinRel(0.667f, 0.01f));  // 2/3 of cycle
+
+        // e4 at 2/3, normal 1/3 duration
+        CHECK(events.events[1].type == PatternEventType::Pitch);
+        CHECK(events.events[1].midi_note == 64);  // E4
+        CHECK_THAT(events.events[1].time, WithinRel(0.667f, 0.01f));
+        CHECK_THAT(events.events[1].duration, WithinRel(0.333f, 0.01f));
+    }
+
+    SECTION("multiple elongates extend further") {
+        // c4 _ _ e4 → c4 takes 3/4, e4 takes 1/4
+        AstArena arena;
+        auto [root, diags] = parse_mini("c4 _ _ e4", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 2);  // c4 and e4 only
+
+        CHECK(events.events[0].midi_note == 60);  // C4
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));
+        CHECK_THAT(events.events[0].duration, WithinRel(0.75f, 0.01f));  // 3/4
+
+        CHECK(events.events[1].midi_note == 64);  // E4
+        CHECK_THAT(events.events[1].time, WithinRel(0.75f, 0.01f));
+        CHECK_THAT(events.events[1].duration, WithinRel(0.25f, 0.01f));  // 1/4
+    }
+
+    SECTION("elongate at start is ignored") {
+        // _ c4 e4 → elongate at start has nothing to extend, treated as gap
+        AstArena arena;
+        auto [root, diags] = parse_mini("_ c4 e4", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 2);  // c4 and e4 only
+
+        CHECK(events.events[0].midi_note == 60);
+        CHECK_THAT(events.events[0].time, WithinRel(0.333f, 0.01f));
+
+        CHECK(events.events[1].midi_note == 64);
+        CHECK_THAT(events.events[1].time, WithinRel(0.667f, 0.01f));
+    }
+
+    SECTION("elongate with samples") {
+        // bd _ sd → bd takes 2/3, sd takes 1/3
+        AstArena arena;
+        auto [root, diags] = parse_mini("bd _ sd", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 2);
+
+        CHECK(events.events[0].type == PatternEventType::Sample);
+        CHECK(events.events[0].sample_name == "bd");
+        CHECK_THAT(events.events[0].duration, WithinRel(0.667f, 0.01f));
+
+        CHECK(events.events[1].sample_name == "sd");
+        CHECK_THAT(events.events[1].duration, WithinRel(0.333f, 0.01f));
+    }
+
+    SECTION("rest does not extend (only tilde is rest)") {
+        // c4 ~ e4 → c4, rest, e4 all take 1/3 each
+        AstArena arena;
+        auto [root, diags] = parse_mini("c4 ~ e4", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 3);  // c4, rest, e4
+
+        CHECK_THAT(events.events[0].duration, WithinRel(0.333f, 0.01f));
+        CHECK(events.events[1].type == PatternEventType::Rest);
+        CHECK_THAT(events.events[2].duration, WithinRel(0.333f, 0.01f));
     }
 
     SECTION("sample events") {

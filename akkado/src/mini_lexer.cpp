@@ -204,10 +204,10 @@ MiniToken MiniLexer::lex_token() {
 
     char c = peek();
 
-    // Handle _ as rest (before alpha check since _ is in is_alpha)
+    // Handle _ as elongate (extends previous note - Tidal-compatible)
     if (c == '_') {
         advance();
-        return make_token(MiniTokenType::Rest);
+        return make_token(MiniTokenType::Elongate);
     }
 
     // In sample_only mode (chord patterns), skip pitch detection

@@ -13,13 +13,13 @@ This document provides a comprehensive reference for Akkado's mini-notation synt
 | `{a b}%n` | Polymeter | `{c4 e4}%3` | Fixed step count |
 | `*n` | Speed | `c4*2` | Repeat n times |
 | `/n` | Slow | `c4/2` | Stretch duration |
-| `:n` | Duration | `c4:2` | Hold for n units |
 | `@n` | Weight | `c4@2` | Temporal weight |
 | `!n` | Repeat | `c4!3` | Replicate n times |
 | `?n` | Chance | `c4?0.5` | Probability (0-1) |
 | `a\|b` | Choice | `c4\|e4` | Random selection |
 | `a(k,n)` | Euclidean | `bd(3,8)` | k hits in n steps |
-| `~` / `_` | Rest | `c4 ~ e4` | Silent step |
+| `~` | Rest | `c4 ~ e4` | Silent step |
+| `_` | Elongate | `c4 _ e4` | Extend previous note |
 
 ## Atoms
 
@@ -86,13 +86,29 @@ Esus4       // E suspended 4th
 
 | Symbol | Description |
 |--------|-------------|
-| `~` | Silent step (primary) |
-| `_` | Silent step (alternative) |
+| `~` | Silent step (rest) |
 
 **Example:**
 ```
 c4 ~ e4 ~   // C, rest, E, rest
 ```
+
+### Elongation (Tidal-compatible)
+
+| Symbol | Description |
+|--------|-------------|
+| `_` | Extend previous note's duration |
+
+The `_` symbol extends the duration of the previous note to cover its time slot, following Tidal Cycles behavior.
+
+**Example:**
+```
+c4 _ e4     // C takes 2/3 cycle (elongated), E takes 1/3
+c4 _ _ e4   // C takes 3/4 cycle, E takes 1/4
+bd _ _ sd   // bd extended, then sd
+```
+
+If `_` appears at the start (with no previous note), it has no effect.
 
 ## Grouping Constructs
 
@@ -159,15 +175,6 @@ Stretches the element to span n cycles.
 ```
 c4/2        // c4 spans 2 cycles
 c4/4        // c4 spans 4 cycles
-```
-
-### Duration `:n` (Akkado-specific)
-
-Holds the note for n time units. This is different from Strudel/Tidal where `:` selects sample variants.
-
-```
-c4:2        // Hold c4 for 2 units
-c4:0.5      // Hold c4 for half a unit
 ```
 
 ### Weight `@n`
@@ -296,26 +303,22 @@ pat("c4 e4 g4") as e |> osc("sin", e.freq) |> % * e.vel |> out(%, %)
 
 ## Strudel/Tidal Compatibility
 
-Akkado's mini-notation is inspired by Strudel and Tidal but has some differences:
+Akkado's mini-notation is designed to be compatible with Strudel and Tidal:
 
 | Feature | Akkado | Strudel/Tidal |
 |---------|--------|---------------|
-| Duration hold | `:n` modifier | Not available (`:` is sample variant) |
-| Rest symbols | `~` and `_` both = rest | `~` = rest, `_` = elongation |
-| `.` shorthand | Not supported | `][` equivalent |
+| Rest symbol | `~` | `~` (same) |
+| Elongation | `_` = extend previous note | `_` = extend previous note (same) |
+| Sample variant | `bd:2` | `bd:2` (same) |
 | Native chords | `Am` in pattern | `chord("Am")` function |
 | Uppercase pitch | Requires octave (`A4`) | Often defaults to octave 4 |
-| Sample variant | `bd:2` | `bd:2` (same) |
+| `.` shorthand | Not supported | `][` equivalent |
 
 ### Key Differences
 
-1. **`:n` modifier**: In Akkado, `:n` on a pitch holds the note for n time units. In Strudel/Tidal, `:n` selects a sample variant.
+1. **Chord notation**: Akkado parses `Am`, `C7`, `Fmaj7` directly in mini-notation. Strudel typically uses `chord("Am")` or similar functions.
 
-2. **`_` symbol**: In Akkado, `_` is equivalent to `~` (a rest). In Tidal, `_` extends the previous note's duration.
-
-3. **Chord notation**: Akkado parses `Am`, `C7`, `Fmaj7` directly in mini-notation. Strudel typically uses `chord("Am")` or similar functions.
-
-4. **Case handling**: Uppercase letters without octaves (`A`, `C`, `G`) are parsed as chords in Akkado. Add an octave (`A4`) to force pitch interpretation.
+2. **Case handling**: Uppercase letters without octaves (`A`, `C`, `G`) are parsed as chords in Akkado. Add an octave (`A4`) to force pitch interpretation.
 
 ## Examples
 

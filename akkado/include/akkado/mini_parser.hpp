@@ -82,6 +82,7 @@ private:
     NodeIndex parse_sample_atom(const MiniToken& token);
     NodeIndex parse_chord_atom(const MiniToken& token);
     NodeIndex parse_rest();
+    NodeIndex parse_elongate();
 
     // Helper to check if current token starts an atom
     [[nodiscard]] bool is_atom_start() const;

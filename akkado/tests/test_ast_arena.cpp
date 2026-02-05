@@ -567,14 +567,6 @@ TEST_CASE("Node::as_mini_modifier accessor", "[ast_arena]") {
         CHECK(mod.value == 2.0f);
     }
 
-    SECTION("duration modifier") {
-        NodeIndex idx = arena.alloc(NodeType::MiniModified, loc);
-        arena[idx].data = Node::MiniModifierData{Node::MiniModifierType::Duration, 1.5f};
-
-        const auto& mod = arena[idx].as_mini_modifier();
-        CHECK(mod.modifier_type == Node::MiniModifierType::Duration);
-        CHECK(mod.value == 1.5f);
-    }
 }
 
 TEST_CASE("Node::as_mini_polymeter accessor", "[ast_arena]") {

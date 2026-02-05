@@ -159,7 +159,8 @@ struct Node {
     enum class MiniAtomKind : std::uint8_t {
         Pitch,      // Note pitch (MIDI note number)
         Sample,     // Sample name with optional variant
-        Rest,       // Rest/silence (~, _)
+        Rest,       // Rest/silence (~)
+        Elongate,   // _ - extend previous note's duration (Tidal-compatible)
         Chord,      // Chord symbol (Am, C7, Fmaj7, etc.)
     };
 
@@ -167,7 +168,6 @@ struct Node {
     enum class MiniModifierType : std::uint8_t {
         Speed,      // *n - speed up by factor n
         Slow,       // /n - slow down by factor n
-        Duration,   // :n - hold for n steps
         Weight,     // @n - probability weight
         Repeat,     // !n - repeat n times
         Chance,     // ?n - probability of playing (0-1)
@@ -179,6 +179,7 @@ struct Node {
         std::uint8_t midi_note;     // For Pitch kind
         std::string sample_name;    // For Sample kind
         std::uint8_t sample_variant; // For Sample kind (e.g., bd:2)
+        std::string sample_bank;    // For Sample kind - bank name (empty = default)
         // Chord data (for Chord kind)
         std::string chord_root;             // Root note: "A", "C#", "Bb"
         std::string chord_quality;          // Quality: "", "m", "7", "maj7", etc.

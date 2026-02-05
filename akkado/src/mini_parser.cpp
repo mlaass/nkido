@@ -148,10 +148,10 @@ NodeIndex MiniParser::parse_element() {
         atom = parse_euclidean(atom);
     }
 
-    // Check for modifiers: *n, /n, :n, @n, !n, ?n
+    // Check for modifiers: *n, /n, @n, !n, ?n
     if (check(MiniTokenType::Star) || check(MiniTokenType::Slash) ||
-        check(MiniTokenType::Colon) || check(MiniTokenType::At) ||
-        check(MiniTokenType::Bang) || check(MiniTokenType::Question)) {
+        check(MiniTokenType::At) || check(MiniTokenType::Bang) ||
+        check(MiniTokenType::Question)) {
         atom = parse_modifiers(atom);
     }
 
@@ -163,6 +163,7 @@ bool MiniParser::is_atom_start() const {
     return type == MiniTokenType::PitchToken ||
            type == MiniTokenType::SampleToken ||
            type == MiniTokenType::Rest ||
+           type == MiniTokenType::Elongate ||
            type == MiniTokenType::LBracket ||
            type == MiniTokenType::LAngle ||
            type == MiniTokenType::LBrace;
@@ -185,6 +186,10 @@ NodeIndex MiniParser::parse_atom() {
 
     if (match(MiniTokenType::Rest)) {
         return parse_rest();
+    }
+
+    if (match(MiniTokenType::Elongate)) {
+        return parse_elongate();
     }
 
     if (check(MiniTokenType::LBracket)) {
@@ -230,6 +235,7 @@ NodeIndex MiniParser::parse_sample_atom(const MiniToken& token) {
         .midi_note = 0,
         .sample_name = sample.name,
         .sample_variant = sample.variant,
+        .sample_bank = sample.bank,
         .chord_root = "",
         .chord_quality = "",
         .chord_root_midi = 0,
@@ -262,6 +268,23 @@ NodeIndex MiniParser::parse_rest() {
 
     arena_[node].data = Node::MiniAtomData{
         .kind = Node::MiniAtomKind::Rest,
+        .midi_note = 0,
+        .sample_name = "",
+        .sample_variant = 0,
+        .chord_root = "",
+        .chord_quality = "",
+        .chord_root_midi = 0,
+        .chord_intervals = {}
+    };
+
+    return node;
+}
+
+NodeIndex MiniParser::parse_elongate() {
+    NodeIndex node = make_node(NodeType::MiniAtom, previous());
+
+    arena_[node].data = Node::MiniAtomData{
+        .kind = Node::MiniAtomKind::Elongate,
         .midi_note = 0,
         .sample_name = "",
         .sample_variant = 0,
@@ -436,9 +459,6 @@ NodeIndex MiniParser::parse_modifiers(NodeIndex atom) {
             has_modifier = true;
         } else if (match(MiniTokenType::Slash)) {
             mod_type = Node::MiniModifierType::Slow;
-            has_modifier = true;
-        } else if (match(MiniTokenType::Colon)) {
-            mod_type = Node::MiniModifierType::Duration;
             has_modifier = true;
         } else if (match(MiniTokenType::At)) {
             mod_type = Node::MiniModifierType::Weight;

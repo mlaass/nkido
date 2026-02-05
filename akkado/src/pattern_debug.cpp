@@ -28,7 +28,6 @@ const char* modifier_type_str(Node::MiniModifierType type) {
     switch (type) {
         case Node::MiniModifierType::Speed: return "Speed";
         case Node::MiniModifierType::Slow: return "Slow";
-        case Node::MiniModifierType::Duration: return "Duration";
         case Node::MiniModifierType::Weight: return "Weight";
         case Node::MiniModifierType::Repeat: return "Repeat";
         case Node::MiniModifierType::Chance: return "Chance";
@@ -42,6 +41,7 @@ const char* atom_kind_str(Node::MiniAtomKind kind) {
         case Node::MiniAtomKind::Pitch: return "Pitch";
         case Node::MiniAtomKind::Sample: return "Sample";
         case Node::MiniAtomKind::Rest: return "Rest";
+        case Node::MiniAtomKind::Elongate: return "Elongate";
         case Node::MiniAtomKind::Chord: return "Chord";
     }
     return "Unknown";

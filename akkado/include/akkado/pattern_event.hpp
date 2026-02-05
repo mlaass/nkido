@@ -21,6 +21,7 @@ enum class PatternEventType : std::uint8_t {
     Sample,     // Sample trigger (sample name + variant)
     Rest,       // Silence (no output)
     Chord,      // Chord (multiple MIDI notes)
+    Elongate,   // Internal marker: extends previous event's duration (filtered during post-processing)
 };
 
 /// A single event in an expanded pattern timeline

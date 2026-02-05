@@ -19,7 +19,8 @@ enum class MiniTokenType : std::uint8_t {
     PitchToken,     // c4, f#3, Bb5 (note with optional octave, defaults to 4)
     SampleToken,    // bd, sd, hh, cp:2 (sample name with optional variant)
     ChordToken,     // Am, C7, Fmaj7, G (chord symbol without octave)
-    Rest,           // ~ or _
+    Rest,           // ~ (silent step)
+    Elongate,       // _ (extend previous note - Tidal-compatible)
     Number,         // 0.5, 3, 4.0 (for modifiers and euclidean)
 
     // Groupings
@@ -36,7 +37,7 @@ enum class MiniTokenType : std::uint8_t {
     // Modifiers
     Star,           // *n (speed up)
     Slash,          // /n (slow down)
-    Colon,          // :n (duration) or :maj/:min (chord type)
+    Colon,          // :n (sample variant) - handled in lexer for samples
     At,             // @n (weight)
     Bang,           // !n (repeat)
     Question,       // ?n (chance)
@@ -57,6 +58,7 @@ constexpr std::string_view mini_token_type_name(MiniTokenType type) {
         case MiniTokenType::SampleToken: return "SampleToken";
         case MiniTokenType::ChordToken:  return "ChordToken";
         case MiniTokenType::Rest:        return "Rest";
+        case MiniTokenType::Elongate:    return "Elongate";
         case MiniTokenType::Number:      return "Number";
         case MiniTokenType::LBracket:    return "LBracket";
         case MiniTokenType::RBracket:    return "RBracket";
@@ -90,6 +92,7 @@ struct MiniPitchData {
 struct MiniSampleData {
     std::string name;          // Sample name (e.g., "bd", "sd")
     std::uint8_t variant = 0;  // Sample variant (e.g., 2 for "bd:2")
+    std::string bank;          // Bank name (empty = default)
 };
 
 /// Chord data for mini-notation (chord symbol like Am, C7, Fmaj7)

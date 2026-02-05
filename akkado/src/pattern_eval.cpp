@@ -67,6 +67,31 @@ PatternEventStream PatternEvaluator::evaluate(NodeIndex pattern_root,
     eval_node(pattern_root, ctx, stream);
     stream.sort_by_time();
 
+    // Post-process: merge Elongate markers with preceding events
+    // Elongate (_) extends the previous event's duration to cover its time slot
+    std::vector<PatternEvent> processed;
+    processed.reserve(stream.events.size());
+
+    for (const auto& event : stream.events) {
+        if (event.type == PatternEventType::Elongate) {
+            // Find the last non-rest, non-elongate event to extend
+            for (auto it = processed.rbegin(); it != processed.rend(); ++it) {
+                if (it->type != PatternEventType::Rest &&
+                    it->type != PatternEventType::Elongate) {
+                    // Extend its duration to cover this slot
+                    float new_end = event.time + event.duration;
+                    it->duration = new_end - it->time;
+                    break;
+                }
+            }
+            // Don't add Elongate to final output (it's a marker only)
+        } else {
+            processed.push_back(event);
+        }
+    }
+
+    stream.events = std::move(processed);
+
     // Calculate cycle_span from maximum event time
     float max_time = 0.0f;
     for (const auto& event : stream.events) {
@@ -200,6 +225,11 @@ void PatternEvaluator::eval_atom(NodeIndex node, const PatternEvalContext& ctx,
             break;
         case Node::MiniAtomKind::Rest:
             event.type = PatternEventType::Rest;
+            break;
+        case Node::MiniAtomKind::Elongate:
+            // Elongate is handled by post-processing in evaluate()
+            // Emit an internal marker event that will be merged later
+            event.type = PatternEventType::Elongate;
             break;
     }
 
@@ -362,11 +392,6 @@ void PatternEvaluator::eval_modified(NodeIndex node, const PatternEvalContext& c
 
         case Node::MiniModifierType::Slow:
             // Slow down: increase duration
-            new_ctx.duration = ctx.duration * mod_data.value;
-            break;
-
-        case Node::MiniModifierType::Duration:
-            // Set explicit duration
             new_ctx.duration = ctx.duration * mod_data.value;
             break;
 
