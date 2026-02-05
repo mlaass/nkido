@@ -226,6 +226,25 @@ inline void op_env_get(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// PROBE: Capture signal to ring buffer for visualization
+// The signal passes through unchanged (out = in)
+// State stores a ring buffer of recent samples for UI queries
+[[gnu::always_inline]]
+inline void op_probe(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    const float* in = ctx.buffers->get(inst.inputs[0]);
+
+    auto& state = ctx.states->get_or_create<ProbeState>(inst.state_id);
+
+    // Write input samples to ring buffer
+    state.write_block(in, BLOCK_SIZE);
+
+    // Pass signal through unchanged
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        out[i] = in[i];
+    }
+}
+
 // Helper: Create instruction with float constant stored in state_id
 inline Instruction make_const_instruction(Opcode op, std::uint16_t out, float value) {
     Instruction inst{};

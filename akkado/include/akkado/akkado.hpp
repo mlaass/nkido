@@ -22,6 +22,8 @@ struct Version {
     static constexpr std::string_view string() { return "0.1.0"; }
 };
 
+// RequiredSample is defined in codegen.hpp
+
 /// Compilation result
 struct CompileResult {
     bool success = false;
@@ -29,8 +31,10 @@ struct CompileResult {
     std::vector<SourceLocation> source_locations;  // Parallel to bytecode instructions, tracks origin
     std::vector<Diagnostic> diagnostics;
     std::vector<StateInitData> state_inits;  // State initialization data for patterns
-    std::vector<std::string> required_samples;  // Sample names used (for runtime loading)
+    std::vector<std::string> required_samples;  // Sample names used (for runtime loading) - legacy
+    std::vector<RequiredSample> required_samples_extended;  // Sample refs with bank/variant info
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
+    std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
 };
 
 /// Compile Akkado source code to Cedar bytecode

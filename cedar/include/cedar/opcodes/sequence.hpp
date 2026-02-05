@@ -39,6 +39,7 @@ struct Event {
     float chance;            // 0.0-1.0, 1.0 = always plays
     EventType type;
     std::uint8_t num_values; // For DATA type (max 4)
+    std::uint16_t type_id;   // Type identifier for routing (0 = no type, 1+ = sample types)
     std::uint16_t source_offset; // For UI highlighting
     std::uint16_t source_length;
     union {
@@ -47,7 +48,7 @@ struct Event {
     };
 
     Event() : time(0.0f), duration(1.0f), chance(1.0f),
-              type(EventType::DATA), num_values(0),
+              type(EventType::DATA), num_values(0), type_id(0),
               source_offset(0), source_length(0) {
         values[0] = 0.0f;
     }
@@ -93,6 +94,7 @@ struct OutputEvents {
         float duration;
         float values[MAX_VALUES_PER_EVENT];
         std::uint8_t num_values;
+        std::uint16_t type_id;        // Type identifier for routing
         std::uint16_t source_offset;
         std::uint16_t source_length;
     };
@@ -102,12 +104,13 @@ struct OutputEvents {
     std::uint32_t capacity = 0;       // Allocated event count
 
     void add(float time, float duration, const float* vals, std::uint8_t count,
-             std::uint16_t src_off = 0, std::uint16_t src_len = 0) {
+             std::uint16_t type_id = 0, std::uint16_t src_off = 0, std::uint16_t src_len = 0) {
         if (num_events < capacity) {
             auto& e = events[num_events++];
             e.time = time;
             e.duration = duration;
             e.num_values = std::min(count, static_cast<std::uint8_t>(MAX_VALUES_PER_EVENT));
+            e.type_id = type_id;
             e.source_offset = src_off;
             e.source_length = src_len;
             for (std::uint8_t i = 0; i < e.num_values; ++i) {
@@ -252,7 +255,7 @@ inline void process_event(SequenceState& state, const Event& e, std::uint64_t se
     if (e.type == EventType::DATA) {
         // Add concrete event
         out.add(time_offset, e.duration * time_scale,
-                e.values, e.num_values,
+                e.values, e.num_values, e.type_id,
                 e.source_offset, e.source_length);
     } else {
         // SUB_SEQ: recursively query the referenced sequence

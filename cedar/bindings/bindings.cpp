@@ -121,6 +121,12 @@ PYBIND11_MODULE(cedar_core, m) {
         .value("OSC_TRI_4X", cedar::Opcode::OSC_TRI_4X)
         .value("OSC_SQR_PWM_4X", cedar::Opcode::OSC_SQR_PWM_4X)
         .value("OSC_SAW_PWM_4X", cedar::Opcode::OSC_SAW_PWM_4X)
+        // Stereo Operations (170-179)
+        .value("PAN", cedar::Opcode::PAN)
+        .value("WIDTH", cedar::Opcode::WIDTH)
+        .value("MS_ENCODE", cedar::Opcode::MS_ENCODE)
+        .value("MS_DECODE", cedar::Opcode::MS_DECODE)
+        .value("DELAY_PINGPONG", cedar::Opcode::DELAY_PINGPONG)
         .export_values();
 
     // --- Instruction ---

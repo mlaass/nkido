@@ -658,7 +658,9 @@ TEST_CASE("SEQPAT voice index parameter", "[chord][seqpat]") {
         CHECK(voice_indices[2] == 2);  // Third voice
     }
 
-    SECTION("only first voice outputs velocity and trigger") {
+    SECTION("all voices output velocity and trigger for polyphonic access") {
+        // With polyphonic field access support, each voice gets its own vel/trig buffers
+        // This enables: pat("Am") |> osc("sin", %.freq) * %.vel |> sum(%)
         auto result = akkado::compile("chord(\"Am\")");
         REQUIRE(result.success);
 
@@ -668,18 +670,13 @@ TEST_CASE("SEQPAT voice index parameter", "[chord][seqpat]") {
         int voice_idx = 0;
         for (std::size_t i = 0; i < count; ++i) {
             if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) {
-                if (voice_idx == 0) {
-                    // First voice should have velocity and trigger outputs
-                    CHECK(insts[i].inputs[0] != 0xFFFF);  // velocity_buf
-                    CHECK(insts[i].inputs[1] != 0xFFFF);  // trigger_buf
-                } else {
-                    // Secondary voices should NOT output velocity/trigger
-                    CHECK(insts[i].inputs[0] == 0xFFFF);
-                    CHECK(insts[i].inputs[1] == 0xFFFF);
-                }
+                // All voices should have their own velocity and trigger outputs
+                CHECK(insts[i].inputs[0] != 0xFFFF);  // velocity_buf
+                CHECK(insts[i].inputs[1] != 0xFFFF);  // trigger_buf
                 voice_idx++;
             }
         }
+        CHECK(voice_idx == 3);  // Am triad = 3 voices
     }
 
     SECTION("all voices share same state_id") {
@@ -1055,5 +1052,105 @@ TEST_CASE("monophonic vs polyphonic pattern detection", "[chord][seqpat]") {
             if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
         }
         CHECK(seqpat_count == 1);  // Sample patterns are monophonic
+    }
+}
+
+// ============================================================================
+// Polyphonic Field Access Tests
+// ============================================================================
+
+TEST_CASE("polyphonic field access produces multi-buffer", "[polyphony][field_access]") {
+    SECTION("pat with chord expands to multiple oscillators via .freq") {
+        // pat("Am") creates a chord (A minor triad) - 3 voices
+        // .freq on a polyphonic pattern should return 3 frequency buffers
+        // which then expand the oscillator to 3 instances
+        auto result = akkado::compile(R"(
+            pat("Am") |> osc("sin", %.freq) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        int seqpat_step_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
+        }
+
+        // 3 SEQPAT_STEPs for 3-note chord (A, C, E)
+        CHECK(seqpat_step_count == 3);
+        // 3 oscillators expanded from the multi-buffer .freq
+        CHECK(osc_count == 3);
+    }
+
+    SECTION("chord() field access .freq produces multiple oscillators") {
+        // chord("Am") produces 3 voices (A, C, E)
+        // Accessing .freq should give 3 frequency buffers
+        auto result = akkado::compile(R"(
+            chord("Am") |> osc("tri", %.freq) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_TRI) osc_count++;
+        }
+
+        CHECK(osc_count == 3);  // 3 oscillators for Am triad
+    }
+
+    SECTION("polyphonic .vel produces multiple SEQPAT_STEP outputs") {
+        // Access .vel on a polyphonic pattern - should have per-voice velocity
+        auto result = akkado::compile(R"(
+            pat("Am") |> osc("sin", %.freq) * %.vel |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int seqpat_step_count = 0;
+        int mul_count = 0;
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
+            if (insts[i].opcode == cedar::Opcode::MUL) mul_count++;
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+
+        // 3 SEQPAT_STEPs, each outputting its own freq, vel, trig
+        CHECK(seqpat_step_count == 3);
+        // 3 oscillators
+        CHECK(osc_count == 3);
+        // 3 multiplications (one per voice: osc * vel)
+        CHECK(mul_count == 3);
+    }
+
+    SECTION("polyphonic .trig expands envelope per voice") {
+        // Access .trig on a polyphonic pattern for ADSR
+        auto result = akkado::compile(R"(
+            pat("Am") |> osc("sin", %.freq) * adsr(%.trig, 0.01, 0.1, 0.5, 0.3) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int adsr_count = 0;
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::ENV_ADSR) adsr_count++;
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+
+        // 3 ADSRs (one per voice)
+        CHECK(adsr_count == 3);
+        // 3 oscillators
+        CHECK(osc_count == 3);
     }
 }

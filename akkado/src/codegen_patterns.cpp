@@ -324,6 +324,8 @@ private:
             // Always collect sample name for runtime resolution
             if (!atom_data.sample_name.empty()) {
                 sample_names_.insert(atom_data.sample_name);
+                // Assign type_id for per-type routing (e.g., match e.type { 1: kick, 2: snare })
+                e.type_id = get_or_assign_type_id(atom_data.sample_name);
                 // Record mapping for deferred resolution in WASM
                 // Use current event count as index (before adding)
                 std::uint16_t event_idx = static_cast<std::uint16_t>(
@@ -654,12 +656,26 @@ private:
         return 1;
     }
 
+    // Get or assign a type_id for a sample name (for per-type routing)
+    std::uint16_t get_or_assign_type_id(const std::string& sample_name) {
+        auto it = sample_type_ids_.find(sample_name);
+        if (it != sample_type_ids_.end()) {
+            return it->second;
+        }
+        // Assign new type_id (starting from 1, 0 = no type)
+        std::uint16_t type_id = next_type_id_++;
+        sample_type_ids_[sample_name] = type_id;
+        return type_id;
+    }
+
     const AstArena& arena_;
     SampleRegistry* sample_registry_ = nullptr;
     std::vector<cedar::Sequence> sequences_;
     std::vector<std::vector<cedar::Event>> sequence_events_;  // Event storage for each sequence
     std::set<std::string> sample_names_;
     std::vector<SequenceSampleMapping> sample_mappings_;
+    std::unordered_map<std::string, std::uint16_t> sample_type_ids_;  // Sample name → type_id
+    std::uint16_t next_type_id_ = 1;  // Start at 1, 0 = no type (pitch patterns)
     bool is_sample_pattern_ = false;
     std::uint32_t pattern_base_offset_ = 0;
     std::uint16_t current_seq_idx_ = 0;  // Track current sequence index for sample mappings
@@ -743,17 +759,23 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
     std::vector<std::uint16_t> voice_freq_buffers;
     std::vector<std::uint16_t> voice_vel_buffers;
     std::vector<std::uint16_t> voice_trig_buffers;
+    std::vector<std::uint16_t> voice_gate_buffers;
+    std::vector<std::uint16_t> voice_type_buffers;
 
-    // Emit SEQPAT_STEP for each voice
-    // For polyphonic patterns, each voice gets its own freq, vel, and trig buffers
+    // Emit SEQPAT_STEP, SEQPAT_GATE, and SEQPAT_TYPE for each voice
+    // For polyphonic patterns, each voice gets its own freq, vel, trig, gate, and type buffers
     for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
         std::uint16_t voice_value_buf = (voice == 0) ? value_buf : buffers_.allocate();
         std::uint16_t voice_vel_buf = (voice == 0) ? velocity_buf : buffers_.allocate();
         std::uint16_t voice_trig_buf = (voice == 0) ? trigger_buf : buffers_.allocate();
+        std::uint16_t voice_gate_buf = buffers_.allocate();
+        std::uint16_t voice_type_buf = buffers_.allocate();
 
         if (voice_value_buf == BufferAllocator::BUFFER_UNUSED ||
             voice_vel_buf == BufferAllocator::BUFFER_UNUSED ||
-            voice_trig_buf == BufferAllocator::BUFFER_UNUSED) {
+            voice_trig_buf == BufferAllocator::BUFFER_UNUSED ||
+            voice_gate_buf == BufferAllocator::BUFFER_UNUSED ||
+            voice_type_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return BufferAllocator::BUFFER_UNUSED;
@@ -771,9 +793,35 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
         step_inst.state_id = state_id;
         emit(step_inst);
 
+        // Emit SEQPAT_GATE for sustained gate signal
+        cedar::Instruction gate_inst{};
+        gate_inst.opcode = cedar::Opcode::SEQPAT_GATE;
+        gate_inst.out_buffer = voice_gate_buf;
+        gate_inst.inputs[0] = voice;  // Voice index
+        gate_inst.inputs[1] = 0xFFFF;
+        gate_inst.inputs[2] = 0xFFFF;
+        gate_inst.inputs[3] = 0xFFFF;
+        gate_inst.inputs[4] = 0xFFFF;
+        gate_inst.state_id = state_id;
+        emit(gate_inst);
+
+        // Emit SEQPAT_TYPE for per-type routing (match e.type)
+        cedar::Instruction type_inst{};
+        type_inst.opcode = cedar::Opcode::SEQPAT_TYPE;
+        type_inst.out_buffer = voice_type_buf;
+        type_inst.inputs[0] = voice;  // Voice index
+        type_inst.inputs[1] = 0xFFFF;
+        type_inst.inputs[2] = 0xFFFF;
+        type_inst.inputs[3] = 0xFFFF;
+        type_inst.inputs[4] = 0xFFFF;
+        type_inst.state_id = state_id;
+        emit(type_inst);
+
         voice_freq_buffers.push_back(voice_value_buf);
         voice_vel_buffers.push_back(voice_vel_buf);
         voice_trig_buffers.push_back(voice_trig_buf);
+        voice_gate_buffers.push_back(voice_gate_buf);
+        voice_type_buffers.push_back(voice_type_buf);
     }
 
     // Store sequence program initialization data
@@ -869,6 +917,7 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
     pattern_fields["freq"] = value_buf;
     pattern_fields["vel"] = velocity_buf;
     pattern_fields["trig"] = trigger_buf;
+    pattern_fields["gate"] = voice_gate_buffers.empty() ? BufferAllocator::BUFFER_UNUSED : voice_gate_buffers[0];
     record_fields_[node] = std::move(pattern_fields);
 
     // Register polyphonic fields and multi-buffer for polyphonic patterns (chords)
@@ -878,6 +927,8 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
         poly_fields.freq_buffers = voice_freq_buffers;
         poly_fields.vel_buffers = voice_vel_buffers;
         poly_fields.trig_buffers = voice_trig_buffers;
+        poly_fields.gate_buffers = voice_gate_buffers;
+        poly_fields.type_buffers = voice_type_buffers;
         poly_fields.num_voices = max_voices;
         polyphonic_fields_[node] = std::move(poly_fields);
 

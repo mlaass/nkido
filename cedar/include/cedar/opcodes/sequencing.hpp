@@ -490,4 +490,130 @@ inline void op_seqpat_step(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// ============================================================================
+// SEQPAT_TYPE - Type ID signal for event routing
+// ============================================================================
+// out_buffer: type_id output (float representation of event's type_id)
+// inputs[0]: voice index for polyphonic patterns (0-7, default 0 if 0xFFFF)
+// state_id: must match the SEQPAT_QUERY that populated the SequenceState
+//
+// Outputs the type_id of the current event as a float.
+// Used with match() for per-type routing (e.g., kick vs snare synthesis).
+[[gnu::always_inline]]
+inline void op_seqpat_type(ExecutionContext& ctx, const Instruction& inst) {
+    float* out_type = ctx.buffers->get(inst.out_buffer);
+    auto& state = ctx.states->get_or_create<SequenceState>(inst.state_id);
+
+    // Voice index for polyphonic patterns
+    std::uint8_t voice_index = (inst.inputs[0] != BUFFER_UNUSED)
+        ? static_cast<std::uint8_t>(inst.inputs[0]) : 0;
+
+    if (state.output.num_events == 0) {
+        std::fill_n(out_type, BLOCK_SIZE, 0.0f);
+        return;
+    }
+
+    const float spb = ctx.samples_per_beat();
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        // Current beat position within cycle
+        float beat_pos = std::fmod(
+            static_cast<float>(ctx.global_sample_counter + i) / spb,
+            state.cycle_length
+        );
+
+        // Find the current event (same logic as SEQPAT_STEP)
+        std::uint32_t event_index = 0;
+        for (std::uint32_t e = 0; e < state.output.num_events; ++e) {
+            if (state.output.events[e].time <= beat_pos) {
+                event_index = e;
+            } else {
+                break;
+            }
+        }
+
+        // If beat_pos is before first event, use the last event (wrap-around)
+        if (state.output.num_events > 0 && beat_pos < state.output.events[0].time) {
+            event_index = state.output.num_events - 1;
+        }
+
+        const auto& evt = state.output.events[event_index];
+
+        // Check if this voice has a value for this event
+        if (voice_index < evt.num_values) {
+            out_type[i] = static_cast<float>(evt.type_id);
+        } else {
+            out_type[i] = 0.0f;  // Voice is silent for this event
+        }
+    }
+}
+
+// ============================================================================
+// SEQPAT_GATE - Sustained gate signal for sequence events
+// ============================================================================
+// out_buffer: gate output (1.0 while inside event duration, 0.0 otherwise)
+// inputs[0]: voice index for polyphonic patterns (0-7, default 0 if 0xFFFF)
+// state_id: must match the SEQPAT_QUERY that populated the SequenceState
+//
+// Gate is high when beat_pos is in [event.time, event.time + event.duration)
+// This allows ADSR envelopes to sustain during the event's duration.
+[[gnu::always_inline]]
+inline void op_seqpat_gate(ExecutionContext& ctx, const Instruction& inst) {
+    float* out_gate = ctx.buffers->get(inst.out_buffer);
+    auto& state = ctx.states->get_or_create<SequenceState>(inst.state_id);
+
+    // Voice index for polyphonic patterns
+    std::uint8_t voice_index = (inst.inputs[0] != BUFFER_UNUSED)
+        ? static_cast<std::uint8_t>(inst.inputs[0]) : 0;
+
+    if (state.output.num_events == 0) {
+        std::fill_n(out_gate, BLOCK_SIZE, 0.0f);
+        return;
+    }
+
+    const float spb = ctx.samples_per_beat();
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        // Current beat position within cycle
+        float beat_pos = std::fmod(
+            static_cast<float>(ctx.global_sample_counter + i) / spb,
+            state.cycle_length
+        );
+
+        // Find the most recent event that started before or at beat_pos
+        // Search backwards from current_index for efficiency
+        float gate_val = 0.0f;
+
+        // Linear scan through events to find if we're inside any event's duration
+        for (std::uint32_t e = 0; e < state.output.num_events; ++e) {
+            const auto& evt = state.output.events[e];
+
+            // Check if this voice has a value for this event
+            if (voice_index >= evt.num_values) {
+                continue;  // This voice is silent for this event
+            }
+
+            float event_start = evt.time;
+            float event_end = evt.time + evt.duration;
+
+            // Handle wrap-around: if event_end > cycle_length
+            if (event_end > state.cycle_length) {
+                // Event wraps around cycle boundary
+                if (beat_pos >= event_start || beat_pos < (event_end - state.cycle_length)) {
+                    gate_val = 1.0f;
+                    break;
+                }
+            } else {
+                // Normal case: event is contained within cycle
+                if (beat_pos >= event_start && beat_pos < event_end) {
+                    gate_val = 1.0f;
+                    break;
+                }
+            }
+        }
+
+        out_gate[i] = gate_val;
+    }
+}
+
 }  // namespace cedar

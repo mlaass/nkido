@@ -539,6 +539,14 @@ void VM::execute(const Instruction& inst) {
             op_seqpat_step(ctx_, inst);
             break;
 
+        case Opcode::SEQPAT_GATE:
+            op_seqpat_gate(ctx_, inst);
+            break;
+
+        case Opcode::SEQPAT_TYPE:
+            op_seqpat_type(ctx_, inst);
+            break;
+
         // === Envelopes ===
         case Opcode::ENV_ADSR:
             op_env_adsr(ctx_, inst);
@@ -755,6 +763,11 @@ void VM::execute(const Instruction& inst) {
 
         case Opcode::DELAY_PINGPONG:
             op_delay_pingpong(ctx_, inst);
+            break;
+
+        // === Visualization ===
+        case Opcode::PROBE:
+            op_probe(ctx_, inst);
             break;
 
         // === Invalid ===

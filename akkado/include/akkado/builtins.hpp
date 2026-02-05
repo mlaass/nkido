@@ -680,6 +680,12 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                    {NAN, NAN, NAN},
                    "Scale array to [lo, hi] range"}},
 
+    // Polyphony control
+    {"spread",    {cedar::Opcode::NOP, 2, 0, false,
+                   {"n", "source", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Force source to specific voice count (pad/truncate)"}},
+
     // Array generation operations
     {"linspace",  {cedar::Opcode::NOP, 3, 0, false,
                    {"start", "end", "n", "", "", ""},
@@ -739,6 +745,14 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"pattern", "vel", "", "", "", ""},
                  {NAN, NAN, NAN},
                  "Set velocity on pattern events (0-1)."}},
+    {"bank",    {cedar::Opcode::NOP, 2, 0, false,
+                 {"pattern", "bank_name", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Set sample bank for pattern events."}},
+    {"n",       {cedar::Opcode::NOP, 2, 0, false,
+                 {"pattern", "variant", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Set sample variant for pattern events."}},
 
     // Parameter exposure builtins (handled specially by codegen)
     // These extract metadata at compile time for UI generation

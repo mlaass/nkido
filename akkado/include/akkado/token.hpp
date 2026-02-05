@@ -77,6 +77,9 @@ enum class TokenType : std::uint8_t {
     // Mini-notation specific (lexed inside pattern strings)
     MiniString,     // The raw mini-notation string content
 
+    // Directives
+    Directive,      // $name (compiler directive like $polyphony)
+
     // Error token (lexer encountered invalid input)
     Error,
 };
@@ -130,6 +133,7 @@ constexpr std::string_view token_type_name(TokenType type) {
         case TokenType::Tilde:        return "Tilde";
         case TokenType::Underscore:   return "Underscore";
         case TokenType::MiniString:   return "MiniString";
+        case TokenType::Directive:    return "Directive";
         case TokenType::Error:        return "Error";
     }
     return "Unknown";

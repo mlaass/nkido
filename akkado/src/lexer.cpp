@@ -186,6 +186,9 @@ Token Lexer::lex_token() {
 
     // Single and multi-character tokens
     switch (c) {
+        // Directives
+        case '$': return lex_directive();
+
         // Single character tokens
         case '(': return make_token(TokenType::LParen);
         case ')': return make_token(TokenType::RParen);
@@ -423,6 +426,22 @@ TokenType Lexer::identifier_type(std::string_view text) const {
         return it->second;
     }
     return TokenType::Identifier;
+}
+
+Token Lexer::lex_directive() {
+    // We've already consumed '$', now read the directive name
+    if (!is_alpha(peek())) {
+        return make_error_token("Expected directive name after '$'");
+    }
+
+    // Read identifier characters
+    while (is_alphanumeric(peek())) {
+        advance();
+    }
+
+    // Extract directive name (skip the '$')
+    std::string_view text = source_.substr(start_ + 1, current_ - start_ - 1);
+    return make_token(TokenType::Directive, std::string(text));
 }
 
 std::optional<Token> Lexer::try_lex_pitch_or_chord() {

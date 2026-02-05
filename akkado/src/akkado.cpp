@@ -150,9 +150,18 @@ CompileResult compile(std::string_view source, std::string_view filename,
 
     // Copy required sample names for runtime loading
     result.required_samples = std::move(gen.required_samples);
+    result.required_samples_extended = std::move(gen.required_samples_extended);
 
     // Copy parameter declarations for UI generation
     result.param_decls = std::move(gen.param_decls);
+
+    // Copy visualization declarations for UI generation, adjusting offsets for stdlib
+    result.viz_decls = std::move(gen.viz_decls);
+    for (auto& viz : result.viz_decls) {
+        if (viz.source_offset >= stdlib_byte_offset) {
+            viz.source_offset -= static_cast<std::uint32_t>(stdlib_byte_offset);
+        }
+    }
 
     result.success = true;
     return result;

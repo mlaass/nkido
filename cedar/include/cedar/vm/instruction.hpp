@@ -153,6 +153,8 @@ enum class Opcode : std::uint8_t {
     // Lazy Queryable Patterns (150-159)
     SEQPAT_QUERY = 152,      // Query sequence system at block boundaries
     SEQPAT_STEP = 153,       // Step through sequence results: out=value, in[0]=velocity, in[1]=trigger
+    SEQPAT_TYPE = 154,       // Type ID signal for routing: out=type_id, in[0]=voice_idx
+    SEQPAT_GATE = 155,       // Gate signal (1 during event, 0 otherwise): out=gate, in[0]=voice_idx
 
     // Array Operations (160-169)
     // Arrays reuse existing BufferPool buffers - elements stored at indices 0..length-1
@@ -175,6 +177,9 @@ enum class Opcode : std::uint8_t {
     MS_ENCODE = 172,         // Mid/side encode: out=M, out+1=S, in0=L, in1=R
     MS_DECODE = 173,         // Mid/side decode: out=L, out+1=R, in0=M, in1=S
     DELAY_PINGPONG = 174,    // Ping-pong delay: out=L', out+1=R', in0=L, in1=R, in2=time, in3=fb, in4=pan_width
+
+    // Visualization/Debug (180-189)
+    PROBE = 180,             // Capture signal to ring buffer for visualization: out=passthrough, in0=signal
 
     INVALID = 255
 };

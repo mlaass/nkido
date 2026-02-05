@@ -118,6 +118,7 @@ private:
     NodeIndex parse_assignment(const Token& name_token);
     NodeIndex parse_post_stmt();
     NodeIndex parse_fn_def();
+    NodeIndex parse_directive();
 
     // Program parsing
     NodeIndex parse_program();

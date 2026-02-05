@@ -642,6 +642,75 @@ std::uint16_t CodeGenerator::handle_repeat_call(NodeIndex node, const Node& n) {
     return first_buf;
 }
 
+// spread(n, source) - force specific voice count (pad with zeros or truncate)
+std::uint16_t CodeGenerator::handle_spread_call(NodeIndex node, const Node& n) {
+    auto args = extract_call_args(ast_->arena, n.first_child, 2);
+    if (!args.valid) {
+        error("E178", "spread() requires 2 arguments: spread(n, source)", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // First argument (n) must be a compile-time constant
+    const Node& n_val = ast_->arena[args.nodes[0]];
+    if (n_val.type != NodeType::NumberLit) {
+        error("E179", "spread() first argument must be a number literal", n_val.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    int target_count = static_cast<int>(n_val.as_number());
+    if (target_count < 1 || target_count > 128) {
+        error("E180", "spread() count must be between 1 and 128", n_val.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Visit the source to get its buffers
+    std::uint16_t source_buf = visit(args.nodes[1]);
+
+    // Get source buffers (multi-buffer or single)
+    std::vector<std::uint16_t> source_buffers;
+    if (is_multi_buffer(args.nodes[1])) {
+        source_buffers = get_multi_buffers(args.nodes[1]);
+    } else {
+        source_buffers.push_back(source_buf);
+    }
+
+    std::size_t target = static_cast<std::size_t>(target_count);
+    std::vector<std::uint16_t> result_buffers;
+    result_buffers.reserve(target);
+
+    if (source_buffers.size() >= target) {
+        // Truncate: take first target_count elements
+        for (std::size_t i = 0; i < target; ++i) {
+            result_buffers.push_back(source_buffers[i]);
+        }
+    } else {
+        // Pad: copy all source buffers, then pad with zeros
+        for (auto buf : source_buffers) {
+            result_buffers.push_back(buf);
+        }
+        // Pad remaining slots with zero buffers
+        for (std::size_t i = source_buffers.size(); i < target; ++i) {
+            std::uint16_t zero_buf = emit_zero(buffers_, instructions_);
+            if (zero_buf == BufferAllocator::BUFFER_UNUSED) {
+                error("E101", "Buffer pool exhausted", n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+            result_buffers.push_back(zero_buf);
+        }
+    }
+
+    // If single result, just return it
+    if (result_buffers.size() == 1) {
+        node_buffers_[node] = result_buffers[0];
+        return result_buffers[0];
+    }
+
+    // Register as multi-buffer result
+    std::uint16_t first_buf = register_multi_buffer(node, std::move(result_buffers));
+    node_buffers_[node] = first_buf;
+    return first_buf;
+}
+
 // Handles len(arr) calls - returns compile-time array length
 std::uint16_t CodeGenerator::handle_len_call(NodeIndex node, const Node& n) {
     // Get the argument

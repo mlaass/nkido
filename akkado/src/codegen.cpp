@@ -37,7 +37,10 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     diagnostics_.clear();
     state_inits_.clear();
     required_samples_.clear();
+    required_samples_extended_keys_.clear();
+    required_samples_extended_.clear();
     param_decls_.clear();
+    viz_decls_.clear();
     filename_ = std::string(filename);
     path_stack_.clear();
     anonymous_counter_ = 0;
@@ -46,13 +49,14 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     multi_buffers_.clear();
     array_lengths_.clear();
     current_source_loc_ = {};
+    options_ = CompilerOptions{};  // Reset compiler options
 
     // Start with "main" path
     push_path("main");
 
     if (!ast.valid()) {
         error("E100", "Invalid AST", {});
-        return {{}, {}, std::move(diagnostics_), {}, {}, {}, false};
+        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, false};
     }
 
     // Visit root (Program node)
@@ -66,7 +70,8 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     std::vector<std::string> required_samples_vec(required_samples_.begin(), required_samples_.end());
 
     return {std::move(instructions_), std::move(source_locations_), std::move(diagnostics_),
-            std::move(state_inits_), std::move(required_samples_vec), std::move(param_decls_), success};
+            std::move(state_inits_), std::move(required_samples_vec), std::move(required_samples_extended_),
+            std::move(param_decls_), std::move(viz_decls_), success};
 }
 
 std::uint16_t CodeGenerator::visit(NodeIndex node) {
@@ -531,12 +536,15 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"reverse", &CodeGenerator::handle_reverse_call},
                 {"range",   &CodeGenerator::handle_range_call},
                 {"repeat",  &CodeGenerator::handle_repeat_call},
+                {"spread",  &CodeGenerator::handle_spread_call},
                 // Pattern transformation builtins
                 {"slow",      &CodeGenerator::handle_slow_call},
                 {"fast",      &CodeGenerator::handle_fast_call},
                 {"rev",       &CodeGenerator::handle_rev_call},
                 {"transpose", &CodeGenerator::handle_transpose_call},
                 {"velocity",  &CodeGenerator::handle_velocity_call},
+                {"bank",      &CodeGenerator::handle_bank_call},
+                {"n",         &CodeGenerator::handle_n_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},
@@ -577,6 +585,11 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"ms_encode", &CodeGenerator::handle_ms_encode_call},
                 {"ms_decode", &CodeGenerator::handle_ms_decode_call},
                 {"pingpong", &CodeGenerator::handle_pingpong_call},
+                // Visualization builtins
+                {"pianoroll", &CodeGenerator::handle_pianoroll_call},
+                {"oscilloscope", &CodeGenerator::handle_oscilloscope_call},
+                {"waveform", &CodeGenerator::handle_waveform_call},
+                {"spectrum", &CodeGenerator::handle_spectrum_call},
             };
 
             auto handler_it = special_handlers.find(func_name);
@@ -711,11 +724,30 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 }
 
                 // Look for first multi-buffer argument
+                // Also check if an identifier references a parameter bound to multi-buffer source
                 for (std::size_t i = 0; i < arg_nodes.size(); ++i) {
+                    // Direct multi-buffer check
                     if (is_multi_buffer(arg_nodes[i])) {
                         expansion_arg_idx = static_cast<int>(i);
                         expansion_buffers = get_multi_buffers(arg_nodes[i]);
                         break;
+                    }
+
+                    // Check if identifier references a parameter with multi-buffer source
+                    const Node& arg_n = ast_->arena[arg_nodes[i]];
+                    if (arg_n.type == NodeType::Identifier) {
+                        const std::string& name = arg_n.as_identifier();
+                        std::uint32_t param_hash = fnv1a_hash(name);
+                        auto it = param_multi_buffer_sources_.find(param_hash);
+                        if (it != param_multi_buffer_sources_.end()) {
+                            // This parameter was bound to a multi-buffer argument
+                            NodeIndex source_node = it->second;
+                            if (is_multi_buffer(source_node)) {
+                                expansion_arg_idx = static_cast<int>(i);
+                                expansion_buffers = get_multi_buffers(source_node);
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -1019,6 +1051,9 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
         case NodeType::PipeBinding:
             return handle_pipe_binding(node, n);
 
+        case NodeType::Directive:
+            return handle_directive(node, n);
+
         default:
             error("E199", "Unsupported node type", n.location);
             return BufferAllocator::BUFFER_UNUSED;
@@ -1196,9 +1231,38 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
 
     // Case 1b: Pattern literal (MiniLiteral) - patterns have .freq, .vel, .trig fields
     if (expr.type == NodeType::MiniLiteral) {
-        // Visit to generate code and populate record_fields_
+        // Visit to generate code and populate record_fields_ / polyphonic_fields_
         visit(expr_node);
 
+        // Check for polyphonic pattern - return multi-buffer for field access
+        auto poly_it = polyphonic_fields_.find(expr_node);
+        if (poly_it != polyphonic_fields_.end()) {
+            const auto& poly = poly_it->second;
+            std::vector<std::uint16_t> field_buffers;
+
+            // Map field name to the appropriate buffer vector
+            if (field_name == "freq" || field_name == "f" || field_name == "pitch") {
+                field_buffers = poly.freq_buffers;
+            } else if (field_name == "vel" || field_name == "v" || field_name == "velocity") {
+                field_buffers = poly.vel_buffers;
+            } else if (field_name == "trig" || field_name == "t" || field_name == "trigger") {
+                field_buffers = poly.trig_buffers;
+            } else if (field_name == "gate" || field_name == "g") {
+                field_buffers = poly.gate_buffers;
+            } else if (field_name == "type") {
+                field_buffers = poly.type_buffers;
+            } else {
+                error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+
+            // Register as multi-buffer for downstream polyphonic expansion
+            std::uint16_t first_buf = register_multi_buffer(node, std::move(field_buffers));
+            node_buffers_[node] = first_buf;
+            return first_buf;
+        }
+
+        // Fallback: monophonic pattern - return single buffer
         auto it = record_fields_.find(expr_node);
         if (it != record_fields_.end()) {
             auto field_it = it->second.find(field_name);
@@ -1208,7 +1272,7 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
                 return field_buffer;
             }
         }
-        error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig", n.location);
+        error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
@@ -1253,7 +1317,55 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Case 3: Chained field access (a.b.c) - the expr is a FieldAccess
+    // Case 3: Call expression - check for pattern-producing calls (chord, pat, etc.)
+    if (expr.type == NodeType::Call) {
+        // Visit to generate code and populate polyphonic_fields_ / record_fields_
+        visit(expr_node);
+
+        // Check for polyphonic pattern - return multi-buffer for field access
+        auto poly_it = polyphonic_fields_.find(expr_node);
+        if (poly_it != polyphonic_fields_.end()) {
+            const auto& poly = poly_it->second;
+            std::vector<std::uint16_t> field_buffers;
+
+            // Map field name to the appropriate buffer vector
+            if (field_name == "freq" || field_name == "f" || field_name == "pitch") {
+                field_buffers = poly.freq_buffers;
+            } else if (field_name == "vel" || field_name == "v" || field_name == "velocity") {
+                field_buffers = poly.vel_buffers;
+            } else if (field_name == "trig" || field_name == "t" || field_name == "trigger") {
+                field_buffers = poly.trig_buffers;
+            } else if (field_name == "gate" || field_name == "g") {
+                field_buffers = poly.gate_buffers;
+            } else if (field_name == "type") {
+                field_buffers = poly.type_buffers;
+            } else {
+                error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+
+            // Register as multi-buffer for downstream polyphonic expansion
+            std::uint16_t first_buf = register_multi_buffer(node, std::move(field_buffers));
+            node_buffers_[node] = first_buf;
+            return first_buf;
+        }
+
+        // Fallback: check for record_fields_ (monophonic pattern result)
+        auto it = record_fields_.find(expr_node);
+        if (it != record_fields_.end()) {
+            auto field_it = it->second.find(field_name);
+            if (field_it != it->second.end()) {
+                std::uint16_t field_buffer = field_it->second;
+                node_buffers_[node] = field_buffer;
+                return field_buffer;
+            }
+        }
+
+        error("E137", "Field access not supported on this call result", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Case 4: Chained field access (a.b.c) - the expr is a FieldAccess
     if (expr.type == NodeType::FieldAccess) {
         // The expr_buffer contains the result of the nested field access
         // For nested records, we need to look up the field on the nested record type
@@ -1263,7 +1375,7 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Case 4: Other expression types - not supported for field access in MVP
+    // Case 5: Other expression types - not supported for field access in MVP
     error("E135", "Field access on expression type not supported", n.location);
     return BufferAllocator::BUFFER_UNUSED;
 }
@@ -1339,6 +1451,44 @@ std::uint16_t CodeGenerator::handle_pipe_binding(NodeIndex node, const Node& n) 
     // Return the expression buffer
     node_buffers_[node] = expr_buffer;
     return expr_buffer;
+}
+
+// ============================================================================
+// Directive handling
+// ============================================================================
+
+std::uint16_t CodeGenerator::handle_directive(NodeIndex node, const Node& n) {
+    const auto& dir_data = n.as_directive();
+    const std::string& dir_name = dir_data.name;
+
+    if (dir_name == "polyphony") {
+        // $polyphony(n) - set default voice count
+        NodeIndex arg = n.first_child;
+        if (arg == NULL_NODE) {
+            error("E150", "$polyphony requires an argument", n.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+
+        const Node& arg_node = ast_->arena[arg];
+        if (arg_node.type != NodeType::NumberLit) {
+            error("E151", "$polyphony argument must be a number literal", n.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+
+        int value = static_cast<int>(arg_node.as_number());
+        if (value < 1 || value > 32) {
+            error("E152", "$polyphony value must be between 1 and 32", n.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+
+        options_.default_polyphony = static_cast<std::uint8_t>(value);
+    } else {
+        warn("W150", "Unknown directive '$" + dir_name + "'", n.location);
+    }
+
+    // Directives don't produce values
+    node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
+    return BufferAllocator::BUFFER_UNUSED;
 }
 
 } // namespace akkado

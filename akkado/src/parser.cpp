@@ -185,6 +185,11 @@ NodeIndex Parser::parse_program() {
 // Statement parsing
 
 NodeIndex Parser::parse_statement() {
+    // Check for directive
+    if (check(TokenType::Directive)) {
+        return parse_directive();
+    }
+
     // Check for function definition
     if (match(TokenType::Fn)) {
         return parse_fn_def();
@@ -1172,6 +1177,32 @@ NodeIndex Parser::parse_fn_def() {
     // Add body as last child
     if (body != NULL_NODE) {
         arena_.add_child(node, body);
+    }
+
+    return node;
+}
+
+// Directive parsing: $name(args)
+NodeIndex Parser::parse_directive() {
+    Token dir_tok = advance();  // consume Directive token
+    NodeIndex node = make_node(NodeType::Directive, dir_tok);
+
+    // Get directive name from token value
+    const std::string& dir_name = dir_tok.as_string();
+    arena_[node].data = Node::DirectiveData{dir_name};
+
+    // Parse arguments if present
+    if (match(TokenType::LParen)) {
+        if (!check(TokenType::RParen)) {
+            // Parse arguments (as children)
+            do {
+                NodeIndex arg = parse_expression();
+                if (arg != NULL_NODE) {
+                    arena_.add_child(node, arg);
+                }
+            } while (match(TokenType::Comma));
+        }
+        consume(TokenType::RParen, "Expected ')' after directive arguments");
     }
 
     return node;

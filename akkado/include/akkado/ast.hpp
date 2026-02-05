@@ -67,6 +67,9 @@ enum class NodeType : std::uint8_t {
     FieldAccess,    // expr.field - field access on record
     PipeBinding,    // expr as name - named binding in pipe chain
 
+    // Directives
+    Directive,      // $name(args) - compiler directive
+
     // Program
     Program,        // Root node containing statements
 };
@@ -108,6 +111,7 @@ constexpr const char* node_type_name(NodeType type) {
         case NodeType::RecordLit:   return "RecordLit";
         case NodeType::FieldAccess: return "FieldAccess";
         case NodeType::PipeBinding: return "PipeBinding";
+        case NodeType::Directive:   return "Directive";
         case NodeType::Program:     return "Program";
     }
     return "Unknown";
@@ -244,6 +248,11 @@ struct Node {
         std::optional<std::string> field_name;  // Field name if %.field, nullopt for bare %
     };
 
+    // Data for directives ($name(args))
+    struct DirectiveData {
+        std::string name;  // Directive name (e.g., "polyphony")
+    };
+
     std::variant<
         std::monostate,
         NumberData,
@@ -265,7 +274,8 @@ struct Node {
         RecordFieldData,
         FieldAccessData,
         PipeBindingData,
-        HoleData
+        HoleData,
+        DirectiveData
     > data;
 
     // Type-safe accessors
@@ -347,6 +357,10 @@ struct Node {
 
     [[nodiscard]] const HoleData& as_hole() const {
         return std::get<HoleData>(data);
+    }
+
+    [[nodiscard]] const DirectiveData& as_directive() const {
+        return std::get<DirectiveData>(data);
     }
 };
 

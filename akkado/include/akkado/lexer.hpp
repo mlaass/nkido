@@ -59,6 +59,7 @@ private:
     Token lex_number();
     Token lex_string(char quote);
     Token lex_identifier();
+    Token lex_directive();
     std::optional<Token> try_lex_pitch_or_chord();  // Try to lex pitch literals: 'c4', 'f#3', etc.
     std::optional<Token> try_lex_strudel_chord();   // Try to lex Strudel-style chords: C4', F#m3', etc.
 

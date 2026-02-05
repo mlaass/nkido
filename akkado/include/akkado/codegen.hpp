@@ -14,6 +14,15 @@
 namespace akkado {
 
 // ============================================================================
+// Compiler Options (set by directives like $polyphony)
+// ============================================================================
+
+/// Compiler options that can be configured via directives
+struct CompilerOptions {
+    std::uint8_t default_polyphony = 4;  // Default voice count for polyphonic patterns
+};
+
+// ============================================================================
 // Parameter Exposure System
 // ============================================================================
 
@@ -42,6 +51,35 @@ struct ParamDecl {
 };
 
 // ============================================================================
+// Visualization Exposure System
+// ============================================================================
+
+/// Type of visualization widget for UI generation
+enum class VisualizationType : std::uint8_t {
+    PianoRoll = 0,   // Musical pattern display with notes/events
+    Oscilloscope = 1, // Time-domain waveform (short window, real-time)
+    Waveform = 2,     // Time-domain waveform (longer window)
+    Spectrum = 3      // Frequency-domain FFT display
+};
+
+/// Declaration of a visualization widget extracted at compile time
+/// Used for generating UI visualization blocks below source lines
+struct VisualizationDecl {
+    std::string name;              // Display name
+    VisualizationType type = VisualizationType::PianoRoll;
+    std::uint32_t state_id = 0;    // For probe-based visualizations (oscilloscope, etc.)
+    std::string options_json;      // Optional JSON configuration string
+
+    // Source location for placing widget below the correct line
+    std::uint32_t source_offset = 0;
+    std::uint32_t source_length = 0;
+
+    // For PianoRoll: link to the pattern's state_init index
+    // (allows widget to access pattern events without duplication)
+    std::int32_t pattern_state_init_index = -1;
+};
+
+// ============================================================================
 // State Initialization Data
 // ============================================================================
 
@@ -51,6 +89,8 @@ struct SequenceSampleMapping {
     std::uint16_t seq_idx;    // Index into sequences vector
     std::uint16_t event_idx;  // Index into sequence's events array
     std::string sample_name;  // Sample name to resolve
+    std::string bank;         // Bank name (empty = default)
+    std::uint8_t variant = 0; // Variant index (0 = first variant)
 };
 
 /// State initialization data for SEQ_STEP, TIMELINE, and SEQPAT_QUERY opcodes
@@ -90,14 +130,40 @@ struct StateInitData {
     std::string ast_json;
 };
 
+/// Required sample with bank context
+/// Used for runtime sample resolution with bank support
+struct RequiredSample {
+    std::string bank;      // Bank name (empty = default)
+    std::string name;      // Sample name (e.g., "bd", "snare")
+    int variant = 0;       // Variant index (0 = first variant)
+
+    /// Get a unique key for deduplication
+    [[nodiscard]] std::string key() const {
+        if (bank.empty()) {
+            return variant > 0 ? name + ":" + std::to_string(variant) : name;
+        }
+        return bank + "/" + name + ":" + std::to_string(variant);
+    }
+
+    /// Get the qualified sample name for Cedar (e.g., "TR808_bd_0")
+    [[nodiscard]] std::string qualified_name() const {
+        if (bank.empty() || bank == "default") {
+            return variant > 0 ? name + ":" + std::to_string(variant) : name;
+        }
+        return bank + "_" + name + "_" + std::to_string(variant);
+    }
+};
+
 /// Result of code generation
 struct CodeGenResult {
     std::vector<cedar::Instruction> instructions;
     std::vector<SourceLocation> source_locations;  // Parallel to instructions, tracks origin
     std::vector<Diagnostic> diagnostics;
     std::vector<StateInitData> state_inits;  // State initialization data
-    std::vector<std::string> required_samples;  // Unique sample names used
+    std::vector<std::string> required_samples;  // Unique sample names used - legacy
+    std::vector<RequiredSample> required_samples_extended;  // Sample refs with bank/variant info
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
+    std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
     bool success = false;
 };
 
@@ -250,6 +316,12 @@ private:
     /// Handle velocity(pattern, vel) - set velocity on all events
     std::uint16_t handle_velocity_call(NodeIndex node, const Node& n);
 
+    /// Handle bank(pattern, bank_name) - set sample bank for all events
+    std::uint16_t handle_bank_call(NodeIndex node, const Node& n);
+
+    /// Handle n(pattern, variant) - set sample variant for all events
+    std::uint16_t handle_n_call(NodeIndex node, const Node& n);
+
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     std::uint16_t handle_tap_delay_call(NodeIndex node, const Node& n);
@@ -298,7 +370,33 @@ private:
     /// Handle select(name, opt1, opt2, ...) - selection dropdown parameter
     std::uint16_t handle_select_call(NodeIndex node, const Node& n);
 
+    // ============================================================================
+    // Visualization exposure handlers
+    // ============================================================================
+
+    /// Handle pianoroll(signal, name?) - attach piano roll visualization
+    std::uint16_t handle_pianoroll_call(NodeIndex node, const Node& n);
+
+    /// Handle oscilloscope(signal, name?) - attach oscilloscope visualization
+    std::uint16_t handle_oscilloscope_call(NodeIndex node, const Node& n);
+
+    /// Handle waveform(signal, name?) - attach waveform visualization
+    std::uint16_t handle_waveform_call(NodeIndex node, const Node& n);
+
+    /// Handle spectrum(signal, name?) - attach spectrum visualization
+    std::uint16_t handle_spectrum_call(NodeIndex node, const Node& n);
+
+    // ============================================================================
+    // Directive handlers
+    // ============================================================================
+
+    /// Handle compiler directives ($polyphony, etc.)
+    /// Processes the directive and updates compiler options.
+    /// @return BUFFER_UNUSED (directives don't produce values)
+    std::uint16_t handle_directive(NodeIndex node, const Node& n);
+
     // Context
+    CompilerOptions options_;  // Compiler options set by directives
     const Ast* ast_ = nullptr;
     SymbolTable* symbols_ = nullptr;
     SampleRegistry* sample_registry_ = nullptr;
@@ -308,6 +406,7 @@ private:
     std::vector<Diagnostic> diagnostics_;
     std::vector<StateInitData> state_inits_;  // State initialization data
     std::vector<ParamDecl> param_decls_;      // Declared parameters
+    std::vector<VisualizationDecl> viz_decls_;  // Declared visualizations
     std::string filename_;
     SourceLocation current_source_loc_;  // Current source location for emitted instructions
 
@@ -318,8 +417,11 @@ private:
     // Track call counts per stateful function for unique state_ids
     std::unordered_map<std::string, std::uint32_t> call_counters_;
 
-    // Track unique sample names used (for runtime loading)
+    // Track unique sample names used (for runtime loading) - legacy
     std::set<std::string> required_samples_;
+    // Track samples with bank/variant info for extended sample resolution
+    std::set<std::string> required_samples_extended_keys_;  // For deduplication
+    std::vector<RequiredSample> required_samples_extended_;
 
     // Map from AST node index to output buffer index
     std::unordered_map<NodeIndex, std::uint16_t> node_buffers_;
@@ -327,6 +429,11 @@ private:
     // Map from parameter name hash to literal AST node (for inline match resolution)
     // Only populated during user function calls when the argument is a literal
     std::unordered_map<std::uint32_t, NodeIndex> param_literals_;
+
+    // Map from parameter name hash to argument node index (for multi-buffer propagation)
+    // When a multi-buffer argument is passed to a function, this maps the parameter name
+    // to the original argument node so that multi-buffer info can be looked up later.
+    std::unordered_map<std::uint32_t, NodeIndex> param_multi_buffer_sources_;
 
     // ============================================================================
     // Multi-buffer support for polyphonic arrays (map/sum)
@@ -423,6 +530,9 @@ private:
     /// Handle repeat(value, n) call - repeat value n times
     std::uint16_t handle_repeat_call(NodeIndex node, const Node& n);
 
+    /// Handle spread(n, source) call - force specific voice count
+    std::uint16_t handle_spread_call(NodeIndex node, const Node& n);
+
     // ============================================================================
     // Array reduction operations
     // ============================================================================
@@ -500,6 +610,21 @@ private:
     // Map from record node to field name -> buffer index
     // Used to track field buffers for record literals
     std::unordered_map<NodeIndex, std::unordered_map<std::string, std::uint16_t>> record_fields_;
+
+    // ============================================================================
+    // Polyphonic pattern support
+    // ============================================================================
+    // Track per-voice buffers for polyphonic patterns (chords, arrays)
+    // Each field (freq, vel, trig) has one buffer per voice
+    struct PolyphonicFields {
+        std::vector<std::uint16_t> freq_buffers;   // Per-voice frequency
+        std::vector<std::uint16_t> vel_buffers;    // Per-voice velocity
+        std::vector<std::uint16_t> trig_buffers;   // Per-voice trigger
+        std::vector<std::uint16_t> gate_buffers;   // Per-voice gate (sustained signal)
+        std::vector<std::uint16_t> type_buffers;   // Per-voice type_id (for sample routing)
+        std::uint8_t num_voices = 0;
+    };
+    std::unordered_map<NodeIndex, PolyphonicFields> polyphonic_fields_;
 
     // ============================================================================
     // Array length tracking (compile-time)

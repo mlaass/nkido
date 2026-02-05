@@ -26,9 +26,11 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         arg = ast_->arena[arg].next_sibling;
     }
 
-    // Save param_literals for this scope
+    // Save param_literals and param_multi_buffer_sources for this scope
     auto saved_param_literals = std::move(param_literals_);
+    auto saved_param_multi_buffer_sources = std::move(param_multi_buffer_sources_);
     param_literals_.clear();
+    param_multi_buffer_sources_.clear();
 
     // IMPORTANT: Visit arguments BEFORE pushing scope to evaluate them in caller's context
     // This allows nested function calls like double(double(x)) to work correctly.
@@ -48,6 +50,12 @@ std::uint16_t CodeGenerator::handle_user_function_call(
 
             // Visit argument in caller's scope
             param_buf = visit(args[i]);
+
+            // Track multi-buffer arguments for polyphonic propagation
+            if (is_multi_buffer(args[i])) {
+                std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+                param_multi_buffer_sources_[param_hash] = args[i];
+            }
         } else if (func.params[i].default_value.has_value()) {
             // Use default value
             param_buf = buffers_.allocate();
@@ -104,9 +112,10 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         }
     }
 
-    // Pop scope and restore param_literals
+    // Pop scope and restore param_literals and param_multi_buffer_sources
     symbols_->pop_scope();
     param_literals_ = std::move(saved_param_literals);
+    param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
 
     node_buffers_[node] = result;
     return result;
