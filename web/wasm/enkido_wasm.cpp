@@ -1032,8 +1032,15 @@ WASM_EXPORT uint32_t akkado_query_pattern_preview(uint32_t pattern_index, float 
     // Query the pattern for the full cycle
     cedar::query_pattern(temp_state, cycle, init.cycle_length);
 
-    // Copy results to preview buffer (shallow copy - points to same static memory)
-    g_preview_output = temp_state.output;
+    // Copy results to preview buffer, filtering out rest events (num_values == 0)
+    g_preview_output.events = g_preview_output_events;
+    g_preview_output.capacity = static_cast<std::uint32_t>(PREVIEW_MAX_OUTPUT_EVENTS);
+    g_preview_output.num_events = 0;
+    for (uint32_t i = 0; i < temp_state.output.num_events; ++i) {
+        if (temp_state.output.events[i].num_values > 0) {
+            g_preview_output.events[g_preview_output.num_events++] = temp_state.output.events[i];
+        }
+    }
 
     return g_preview_output.num_events;
 }

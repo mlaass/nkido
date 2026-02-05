@@ -173,7 +173,10 @@ std::string serialize_sequences_json(
             if (j > 0) json << ",";
             const auto& e = events[j];
             json << "{";
-            json << "\"type\":\"" << (e.type == cedar::EventType::DATA ? "DATA" : "SUB_SEQ") << "\"";
+            const char* type_str = (e.type == cedar::EventType::DATA)
+                ? (e.num_values == 0 ? "REST" : "DATA")
+                : "SUB_SEQ";
+            json << "\"type\":\"" << type_str << "\"";
             json << ",\"time\":" << e.time;
             json << ",\"duration\":" << e.duration;
             json << ",\"chance\":" << e.chance;

@@ -452,12 +452,15 @@ inline void op_seqpat_step(ExecutionContext& ctx, const Instruction& inst) {
         float trigger_val = 0.0f;
         while (state.current_index < state.output.num_events &&
                beat_pos >= state.output.events[state.current_index].time) {
-            trigger_val = 1.0f;
-            // Update active step for UI highlighting (only for voice 0)
+            const auto& crossed_evt = state.output.events[state.current_index];
+            // Only fire trigger for non-rest events (rest = num_values 0)
+            if (crossed_evt.num_values > 0) {
+                trigger_val = 1.0f;
+            }
+            // Update active step for UI highlighting (including rests)
             if (voice_index == 0) {
-                const auto& evt = state.output.events[state.current_index];
-                state.active_source_offset = evt.source_offset;
-                state.active_source_length = evt.source_length;
+                state.active_source_offset = crossed_evt.source_offset;
+                state.active_source_length = crossed_evt.source_length;
             }
             state.current_index++;
         }

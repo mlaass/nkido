@@ -284,10 +284,6 @@ private:
                             float time_offset, float time_span) {
         const auto& atom_data = n.as_mini_atom();
 
-        if (atom_data.kind == Node::MiniAtomKind::Rest) {
-            return;  // Rest = no event
-        }
-
         cedar::Event e;
         e.type = cedar::EventType::DATA;
         e.time = time_offset;
@@ -297,6 +293,13 @@ private:
         // Use pattern-relative offset for UI highlighting
         e.source_offset = static_cast<std::uint16_t>(n.location.offset - pattern_base_offset_);
         e.source_length = static_cast<std::uint16_t>(n.location.length);
+
+        if (atom_data.kind == Node::MiniAtomKind::Rest) {
+            // Rest: emit event with num_values=0 for UI highlighting (no trigger/sound)
+            e.num_values = 0;
+            add_event_to_sequence(seq_idx, e);
+            return;
+        }
 
         if (atom_data.kind == Node::MiniAtomKind::Pitch) {
             // Convert MIDI note to frequency
