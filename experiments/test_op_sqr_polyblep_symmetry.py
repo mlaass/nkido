@@ -50,8 +50,8 @@ print(f"Sum of corrections after discontinuity: {sum(after_disc):.10f}")
 print(f"Difference: {sum(before_disc) + sum(after_disc):.10f}")
 
 # The integral of PolyBLEP over the discontinuity should be zero for symmetry
-integral_before = np.trapz(before_disc, np.linspace(1-dt, 1.0, 100))
-integral_after = np.trapz(after_disc, np.linspace(0, dt, 100))
+integral_before = np.trapezoid(before_disc, np.linspace(1-dt, 1.0, 100))
+integral_after = np.trapezoid(after_disc, np.linspace(0, dt, 100))
 print(f"\nIntegral before: {integral_before:.10f}")
 print(f"Integral after: {integral_after:.10f}")
 print(f"Total integral: {integral_before + integral_after:.10f}")

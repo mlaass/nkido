@@ -37,7 +37,7 @@ def test_basic_sine_outputs():
         vm.load_program(program)
 
         signal = []
-        num_blocks = max(1, int((duration * sr) / cedar.BLOCK_SIZE))
+        num_blocks = max(1, -(-int(duration * sr) // cedar.BLOCK_SIZE))
         for _ in range(num_blocks):
             left, right = vm.process()
             signal.append(left)
@@ -103,7 +103,7 @@ def test_high_frequency_sine():
         vm.load_program(program)
 
         signal = []
-        num_blocks = max(1, int((duration * sr) / cedar.BLOCK_SIZE))
+        num_blocks = max(1, -(-int(duration * sr) // cedar.BLOCK_SIZE))
         for _ in range(num_blocks):
             left, right = vm.process()
             signal.append(left)
@@ -216,7 +216,7 @@ def test_simple_fm():
         vm.load_program(program)
 
         signal = []
-        num_blocks = max(1, int((duration * sr) / cedar.BLOCK_SIZE))
+        num_blocks = max(1, -(-int(duration * sr) // cedar.BLOCK_SIZE))
         for _ in range(num_blocks):
             left, right = vm.process()
             signal.append(left)
@@ -278,7 +278,7 @@ def test_compare_with_reference():
         vm.load_program(program)
 
         signal = []
-        num_blocks = max(1, int((duration * sr) / cedar.BLOCK_SIZE))
+        num_blocks = max(1, -(-int(duration * sr) // cedar.BLOCK_SIZE))
         for _ in range(num_blocks):
             left, right = vm.process()
             signal.append(left)

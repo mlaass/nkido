@@ -15,9 +15,9 @@ failures=()
 for f in test_op_*.py; do
     echo "=== $f ==="
     if uv run python "$f"; then
-        ((passed++))
+        ((passed++)) || true
     else
-        ((failed++))
+        ((failed++)) || true
         failures+=("$f")
         if $stop_on_error; then
             echo "STOPPED: $f failed"
