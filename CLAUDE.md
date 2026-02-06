@@ -182,6 +182,9 @@ bun run check
 
 # Rebuild WASM module (requires Emscripten)
 bun run build:wasm
+
+# Debug WASM build with assertions (for debugging WASM crashes)
+cd web/wasm && ./build_debug.sh
 ```
 
 ### Web Architecture
@@ -259,19 +262,35 @@ The pattern debugging system serializes AST and events as JSON:
 
 ## Python Experiments
 
-The `experiments/` directory contains Python scripts for testing Cedar opcodes. Always use `uv run python` to run scripts:
-
-```bash
-cd experiments
-uv run python test_filters.py
-uv run python test_effects.py
-```
+The `experiments/` directory contains Python scripts for testing Cedar opcodes via the `cedar_core` bindings. Each opcode has its own test file following the pattern `test_op_<codename>.py`. For the full testing philosophy, see [DSP Experiment Methodology](docs/dsp-experiment-methodology.md).
 
 The Python bindings (`cedar_core`) are built to `experiments/cedar_core.cpython-*.so` by the `cedar_core` CMake target.
 
-### Creating Opcode Experiments
+### Running Experiments
 
-**Purpose**: Experiments evaluate whether DSP algorithm implementations are correct. They require human feedback (listening to WAV files) and may reveal bugs that need fixing in the C++ implementation.
+```bash
+cd experiments
+
+# Run a single opcode test
+uv run python test_op_lp.py
+uv run python test_op_chorus.py
+
+# Run all tests
+./run_all.sh
+./run_all.sh --stop-on-error
+```
+
+### File Structure
+
+- `test_op_<codename>.py` — one file per opcode (e.g., `test_op_lp.py`, `test_op_fold.py`, `test_op_adsr.py`)
+- `cedar_testing.py` — `CedarTestHost` class and `output_dir()` helper
+- `filter_helpers.py` — `analyze_filter()`, `get_bode_data()`, `get_impulse()` for filter tests
+- `visualize.py` — `save_figure()` for consistent PNG output
+- `utils.py` — general utilities
+- `run_all.sh` — runs all `test_op_*.py` files and reports pass/fail summary
+- `output/op_<codename>/` — WAV and PNG output per opcode (gitignored)
+
+### Creating Opcode Experiments
 
 **Critical Guidelines**:
 
@@ -279,28 +298,35 @@ The Python bindings (`cedar_core`) are built to `experiments/cedar_core.cpython-
 2. **Never adjust tests to fit data** - If a test fails, investigate the implementation, don't change the test to pass
 3. **Always output WAV files** - Human ears are the ultimate judge of audio quality. Save WAV files for every test:
    ```python
-   scipy.io.wavfile.write(f"output/{test_name}.wav", sr, output)
-   print(f"  Saved output/{test_name}.wav - [describe what to listen for]")
+   wav_path = os.path.join(OUT, "test_something.wav")
+   scipy.io.wavfile.write(wav_path, host.sr, output)
+   print(f"  Saved {wav_path} - Listen for [describe what to listen for]")
    ```
 4. **Report pass/fail clearly** - Use ✓/✗/⚠ symbols and explain what the expected vs actual behavior is
 5. **Document acceptance criteria** - Each test should have clear, measurable criteria in the docstring
 
 **Test Structure**:
 ```python
-def test_filter_something():
+from cedar_testing import CedarTestHost, output_dir
+
+OUT = output_dir("op_<codename>")
+
+def test_something():
     """
-    Test FILTER_SOMETHING for [behavior].
+    Test OPCODE for [behavior].
 
     Expected behavior (per implementation):
     - [specific measurable criterion 1]
     - [specific measurable criterion 2]
 
-    If this test fails, check the implementation in cedar/include/cedar/opcodes/filters.hpp
+    If this test fails, check the implementation in cedar/include/cedar/opcodes/<file>.hpp
     """
-    # ... test code ...
+    host = CedarTestHost()
+    # ... set up instructions, process blocks ...
 
     # Save WAV for human evaluation
-    scipy.io.wavfile.write(wav_path, sr, output)
+    wav_path = os.path.join(OUT, "test_something.wav")
+    scipy.io.wavfile.write(wav_path, host.sr, output)
     print(f"  Saved {wav_path} - Listen for [specific thing]")
 
     # Report results with clear pass/fail

@@ -37,6 +37,9 @@ _deps/
 *.cedar
 docs/bytecode_*.md
 
+# Experiment output (WAV, PNG)
+experiments/output/
+
 # Generated WASM
 web/static/wasm/enkido.js
 web/static/wasm/enkido.wasm

@@ -213,15 +213,15 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 
 | Category | Tested | Partial/Bug | Untested | Notes |
 |----------|--------|-------------|----------|-------|
-| Oscillators | 11 | - | 9 | Via test_oscillators.py, test_fm_aliasing.py |
-| Filters | 7 | - | 0 | Via test_filters.py; all filters now tested |
-| Effects | 8 | - | 5 | Via test_effects.py; DISTORT_FOLD ADAA tested |
-| Delays & Reverbs | 2 | - | 2 | Via test_effects.py |
-| Samplers | 2 | - | 0 | Via test_sampler.py |
-| Envelopes | 3 | - | 0 | Via test_envelopes.py |
-| Sequencers & Timing | 4 | - | 2 | Via test_sequencers.py |
-| Dynamics | 3 | - | 0 | Via test_dynamics.py |
-| Utility | 5 | - | 1 | Via test_utility.py |
+| Oscillators | 11 | - | 9 | `test_op_osc.py`, `test_op_osc_fm.py`, `test_op_sqr_*.py` |
+| Filters | 7 | - | 0 | `test_op_lp.py`, `test_op_hp.py`, `test_op_bp.py`, `test_op_moog.py`, etc. |
+| Effects | 8 | - | 5 | `test_op_chorus.py`, `test_op_flanger.py`, `test_op_phaser.py`, `test_op_fold.py`, etc. |
+| Delays & Reverbs | 2 | - | 2 | `test_op_delay.py`, `test_op_dattorro.py` |
+| Samplers | 2 | - | 0 | `test_op_sample.py` |
+| Envelopes | 3 | - | 0 | `test_op_adsr.py`, `test_op_ar.py`, `test_op_env_follower.py` |
+| Sequencers & Timing | 4 | - | 2 | `test_op_clock.py`, `test_op_lfo.py`, `test_op_euclid.py`, `test_op_trigger.py` |
+| Dynamics | 3 | - | 0 | `test_op_comp.py`, `test_op_limiter.py`, `test_op_gate.py` |
+| Utility | 5 | - | 1 | `test_op_noise.py`, `test_op_mtof.py`, `test_op_sah.py`, `test_op_slew.py` |
 | **Total** | **45** | **-** | **16** | 74% tested |
 
 ---
@@ -290,26 +290,30 @@ These opcodes are not yet implemented but may be added in the future.
 
 ### Creating New Tests
 
-Tests should be added to `cedar/tests/experiments/` following the existing pattern:
+Tests are Python scripts in `experiments/` following the one-file-per-opcode pattern. See [DSP Experiment Methodology](dsp-experiment-methodology.md) for the full guide.
 
-```cpp
-TEST_CASE("OPCODE_NAME quality test", "[opcode][category]") {
-    // 1. Setup: Create VM, load program
-    // 2. Generate: Run for sufficient samples (e.g., 48000 for 1 second)
-    // 3. Analyze: FFT, statistics, timing measurements
-    // 4. Assert: Compare against expected values with tolerances
-    // 5. (Optional) Export WAV for manual inspection
-}
+```bash
+# Create a new test
+experiments/test_op_<codename>.py
+
+# Run it
+cd experiments && uv run python test_op_<codename>.py
+
+# Run all tests
+cd experiments && ./run_all.sh
 ```
 
+Each test file uses `CedarTestHost` from `cedar_testing.py` and writes output to `experiments/output/op_<codename>/`.
+
 ### Analysis Tools Available
-- FFT spectrum analysis
+- FFT spectrum analysis (numpy/scipy)
 - DC offset measurement
 - RMS level calculation
-- Zero-crossing frequency detection
+- Frequency response / Bode plots (`filter_helpers.py`)
+- Spectrograms and transfer curves (`visualize.py`)
 - WAV file export for auditory verification
 
 ### Naming Convention
-- Test files: `test_<category>_<opcode>.cpp`
-- Test cases: `"<OPCODE> <aspect> test"`
-- Tags: `[opcode]`, `[oscillator]`, `[filter]`, `[effect]`, etc.
+- Test files: `test_op_<codename>.py` (e.g., `test_op_lp.py`, `test_op_fold.py`)
+- Output dirs: `output/op_<codename>/`
+- Test functions: `test_<aspect>()` (e.g., `test_svf_lp_cutoff_sweep()`)
