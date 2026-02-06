@@ -18,6 +18,7 @@ export const PRESET_THEMES: Theme[] = [
 			accentSecondary: '#3fb950',
 			accentWarning: '#d29922',
 			accentError: '#f85149',
+			accentViz: '#4ade80',
 			borderDefault: '#30363d',
 			borderMuted: '#21262d'
 		}
@@ -39,6 +40,7 @@ export const PRESET_THEMES: Theme[] = [
 			accentSecondary: '#1a7f37',
 			accentWarning: '#9a6700',
 			accentError: '#cf222e',
+			accentViz: '#16a34a',
 			borderDefault: '#d0d7de',
 			borderMuted: '#ebeef1'
 		}
@@ -60,6 +62,7 @@ export const PRESET_THEMES: Theme[] = [
 			accentSecondary: '#a6e22e',
 			accentWarning: '#e6db74',
 			accentError: '#f92672',
+			accentViz: '#a6e22e',
 			borderDefault: '#49483e',
 			borderMuted: '#3e3d32'
 		}
@@ -81,6 +84,7 @@ export const PRESET_THEMES: Theme[] = [
 			accentSecondary: '#50fa7b',
 			accentWarning: '#ffb86c',
 			accentError: '#ff5555',
+			accentViz: '#50fa7b',
 			borderDefault: '#44475a',
 			borderMuted: '#343746'
 		}
@@ -102,6 +106,7 @@ export const PRESET_THEMES: Theme[] = [
 			accentSecondary: '#859900',
 			accentWarning: '#b58900',
 			accentError: '#dc322f',
+			accentViz: '#2aa198',
 			borderDefault: '#094352',
 			borderMuted: '#073642'
 		}
@@ -123,6 +128,7 @@ export const PRESET_THEMES: Theme[] = [
 			accentSecondary: '#a3be8c',
 			accentWarning: '#ebcb8b',
 			accentError: '#bf616a',
+			accentViz: '#a3be8c',
 			borderDefault: '#4c566a',
 			borderMuted: '#434c5e'
 		}
@@ -144,6 +150,7 @@ export const PRESET_THEMES: Theme[] = [
 			accentSecondary: '#00ff00',
 			accentWarning: '#ffff00',
 			accentError: '#ff0000',
+			accentViz: '#00ff00',
 			borderDefault: '#444444',
 			borderMuted: '#333333'
 		}

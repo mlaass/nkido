@@ -48,6 +48,19 @@
 		hasChanges = false;
 	}
 
+	function handleUpdate() {
+		const theme = themeStore.activeTheme;
+		if (theme.isBuiltin) return;
+		const updated: Theme = {
+			...theme,
+			colors: { ...editingColors }
+		};
+		themeStore.saveCustomTheme(updated);
+		themeStore.applyColors(editingColors);
+		originalColors = { ...editingColors };
+		hasChanges = false;
+	}
+
 	function handleReset() {
 		editingColors = { ...originalColors };
 		hasChanges = false;
@@ -130,6 +143,7 @@
 				colors={editingColors}
 				onchange={handleColorChange}
 				onSave={handleSave}
+				onUpdate={!themeStore.activeTheme.isBuiltin ? handleUpdate : undefined}
 				onReset={handleReset}
 				onDelete={handleDelete}
 				canDelete={!themeStore.activeTheme.isBuiltin}

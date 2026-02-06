@@ -2,7 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
 	import { EditorState } from '@codemirror/state';
-	import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+	import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment, moveLineUp, moveLineDown, copyLineDown } from '@codemirror/commands';
 	import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
 	import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 	import { editorStore } from '$stores/editor.svelte';
@@ -87,8 +87,8 @@
 			backgroundColor: 'rgba(88, 166, 255, 0.35)'
 		},
 		'.cm-matchingBracket': {
-			backgroundColor: 'rgba(88, 166, 255, 0.2)',
-			outline: '1px solid var(--accent-primary)'
+			backgroundColor: 'transparent',
+			borderBottom: '2px solid var(--accent-primary)'
 		}
 	}, { dark: true });
 
@@ -151,7 +151,14 @@
 				rectangularSelection(),
 				crosshairCursor(),
 				highlightActiveLine(),
+				EditorState.languageData.of(() => [{ commentTokens: { line: '//' } }]),
 				evaluateKeymap,
+				keymap.of([
+					{ key: 'Ctrl-/', mac: 'Cmd-/', run: toggleComment },
+					{ key: 'Ctrl-Alt-ArrowUp', run: moveLineUp },
+					{ key: 'Ctrl-Alt-ArrowDown', run: moveLineDown },
+					{ key: 'Ctrl-d', mac: 'Cmd-d', run: copyLineDown },
+				]),
 				keymap.of([
 					...closeBracketsKeymap,
 					...defaultKeymap,

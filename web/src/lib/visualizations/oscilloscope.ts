@@ -19,11 +19,22 @@ interface OscilloscopeState {
 
 const stateMap = new WeakMap<HTMLElement, OscilloscopeState>();
 
+// Default dimensions for visualization widgets
+const DEFAULT_WIDTH = 200;
+const DEFAULT_HEIGHT = 50;
+const LABEL_HEIGHT = 18;
+
 /**
  * Oscilloscope Renderer
  */
 const oscilloscopeRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
+		// Extract dimensions from options
+		const opts = viz.options || {};
+		const width = (opts.width as number) ?? DEFAULT_WIDTH;
+		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const canvasHeight = height - LABEL_HEIGHT;
+
 		const container = document.createElement('div');
 		container.className = 'viz-oscilloscope';
 		container.style.cssText = `
@@ -32,8 +43,8 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: 200px;
-			height: 50px;
+			width: ${width}px;
+			height: ${height}px;
 			vertical-align: top;
 		`;
 
@@ -49,17 +60,17 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 		`;
 		container.appendChild(label);
 
-		// Add canvas
+		// Add canvas (2x for retina)
 		const canvas = document.createElement('canvas');
-		canvas.width = 400;  // 2x for retina
-		canvas.height = 64;
-		canvas.style.cssText = 'display: block; width: 200px; height: 32px;';
+		canvas.width = width * 2;
+		canvas.height = canvasHeight * 2;
+		canvas.style.cssText = `display: block; width: ${width}px; height: ${canvasHeight}px;`;
 		container.appendChild(canvas);
 
 		const ctx = canvas.getContext('2d');
 		if (ctx) {
 			// Initial empty state
-			drawOscilloscope(ctx, canvas.width, canvas.height, null);
+			drawOscilloscope(canvas, ctx, canvas.width, canvas.height, null);
 		}
 
 		// Store state
@@ -83,14 +94,14 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 		state.lastUpdateTime = now;
 
 		if (!isPlaying || !viz.stateId) {
-			drawOscilloscope(state.ctx, state.canvas.width, state.canvas.height, null);
+			drawOscilloscope(state.canvas, state.ctx, state.canvas.width, state.canvas.height, null);
 			return;
 		}
 
 		// Fetch probe data asynchronously
 		audioEngine.getProbeData(viz.stateId).then(samples => {
 			if (samples) {
-				drawOscilloscope(state.ctx, state.canvas.width, state.canvas.height, samples);
+				drawOscilloscope(state.canvas, state.ctx, state.canvas.width, state.canvas.height, samples);
 			}
 		});
 	},
@@ -108,17 +119,25 @@ const oscilloscopeRenderer: VisualizationRenderer = {
  * Draw oscilloscope waveform
  */
 function drawOscilloscope(
+	canvas: HTMLCanvasElement,
 	ctx: CanvasRenderingContext2D,
 	width: number,
 	height: number,
 	samples: Float32Array | null
 ): void {
+	// Read theme colors from CSS
+	const style = getComputedStyle(canvas);
+	const bgColor = style.getPropertyValue('--bg-secondary').trim() || '#1a1a1a';
+	const gridColor = style.getPropertyValue('--border-muted').trim() || '#333';
+	const vizColor = style.getPropertyValue('--accent-viz').trim() || '#4ade80';
+	const mutedColor = style.getPropertyValue('--text-muted').trim() || '#444';
+
 	// Clear background
-	ctx.fillStyle = '#1a1a1a';
+	ctx.fillStyle = bgColor;
 	ctx.fillRect(0, 0, width, height);
 
 	// Draw center line
-	ctx.strokeStyle = '#333';
+	ctx.strokeStyle = gridColor;
 	ctx.lineWidth = 1;
 	ctx.beginPath();
 	ctx.moveTo(0, height / 2);
@@ -127,7 +146,7 @@ function drawOscilloscope(
 
 	if (!samples || samples.length === 0) {
 		// No data - show placeholder
-		ctx.fillStyle = '#444';
+		ctx.fillStyle = mutedColor;
 		ctx.font = '11px monospace';
 		ctx.textAlign = 'center';
 		ctx.fillText('No signal', width / 2, height / 2 + 4);
@@ -135,7 +154,7 @@ function drawOscilloscope(
 	}
 
 	// Draw waveform with anti-aliasing
-	ctx.strokeStyle = '#4ade80';  // Green
+	ctx.strokeStyle = vizColor;
 	ctx.lineWidth = 1.5;
 	ctx.lineCap = 'round';
 	ctx.lineJoin = 'round';
@@ -163,7 +182,7 @@ function drawOscilloscope(
 	ctx.stroke();
 
 	// Draw grid markers for amplitude reference
-	ctx.strokeStyle = '#333';
+	ctx.strokeStyle = gridColor;
 	ctx.lineWidth = 0.5;
 	ctx.setLineDash([2, 4]);
 

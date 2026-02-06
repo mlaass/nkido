@@ -13,6 +13,7 @@ export interface ThemeColors {
 	accentSecondary: string;
 	accentWarning: string;
 	accentError: string;
+	accentViz: string;
 	borderDefault: string;
 	borderMuted: string;
 }
@@ -52,6 +53,7 @@ export const COLOR_KEYS: (keyof ThemeColors)[] = [
 	'accentSecondary',
 	'accentWarning',
 	'accentError',
+	'accentViz',
 	'borderDefault',
 	'borderMuted'
 ];
@@ -70,7 +72,7 @@ export const COLOR_GROUPS: { label: string; keys: (keyof ThemeColors)[] }[] = [
 	},
 	{
 		label: 'Accent',
-		keys: ['accentPrimary', 'accentSecondary', 'accentWarning', 'accentError']
+		keys: ['accentPrimary', 'accentSecondary', 'accentWarning', 'accentError', 'accentViz']
 	},
 	{
 		label: 'Border',
@@ -93,6 +95,7 @@ export const COLOR_LABELS: Record<keyof ThemeColors, string> = {
 	accentSecondary: 'Secondary',
 	accentWarning: 'Warning',
 	accentError: 'Error',
+	accentViz: 'Visualization',
 	borderDefault: 'Default',
 	borderMuted: 'Muted'
 };
@@ -113,6 +116,7 @@ export function colorKeyToCssVar(key: keyof ThemeColors): string {
 		accentSecondary: '--accent-secondary',
 		accentWarning: '--accent-warning',
 		accentError: '--accent-error',
+		accentViz: '--accent-viz',
 		borderDefault: '--border-default',
 		borderMuted: '--border-muted'
 	};

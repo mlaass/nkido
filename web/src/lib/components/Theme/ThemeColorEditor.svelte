@@ -7,6 +7,7 @@
 		colors: ThemeColors;
 		onchange: (key: keyof ThemeColors, value: string) => void;
 		onSave: () => void;
+		onUpdate?: () => void;
 		onReset: () => void;
 		onDelete?: () => void;
 		canDelete?: boolean;
@@ -17,6 +18,7 @@
 		colors,
 		onchange,
 		onSave,
+		onUpdate,
 		onReset,
 		onDelete,
 		canDelete = false,
@@ -41,8 +43,19 @@
 	{/each}
 
 	<div class="actions">
+		{#if onUpdate}
+			<button
+				class="action-button save"
+				onclick={onUpdate}
+				disabled={!hasChanges}
+			>
+				Save
+			</button>
+		{/if}
 		<button
-			class="action-button save"
+			class="action-button"
+			class:save={!onUpdate}
+			class:secondary={!!onUpdate}
 			onclick={onSave}
 			disabled={!hasChanges}
 		>
@@ -115,6 +128,22 @@
 	}
 
 	.action-button.save:disabled {
+		opacity: 0.5;
+		cursor: not-allowed;
+	}
+
+	.action-button.secondary {
+		background-color: var(--bg-tertiary);
+		color: var(--text-secondary);
+		border: 1px solid var(--border-default);
+	}
+
+	.action-button.secondary:hover:not(:disabled) {
+		background-color: var(--bg-hover);
+		color: var(--text-primary);
+	}
+
+	.action-button.secondary:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
 	}

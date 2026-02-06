@@ -18,11 +18,22 @@ interface WaveformState {
 
 const stateMap = new WeakMap<HTMLElement, WaveformState>();
 
+// Default dimensions for visualization widgets
+const DEFAULT_WIDTH = 200;
+const DEFAULT_HEIGHT = 50;
+const LABEL_HEIGHT = 18;
+
 /**
  * Waveform Renderer
  */
 const waveformRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
+		// Extract dimensions from options
+		const opts = viz.options || {};
+		const width = (opts.width as number) ?? DEFAULT_WIDTH;
+		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const canvasHeight = height - LABEL_HEIGHT;
+
 		const container = document.createElement('div');
 		container.className = 'viz-waveform';
 		container.style.cssText = `
@@ -31,8 +42,8 @@ const waveformRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: 200px;
-			height: 50px;
+			width: ${width}px;
+			height: ${height}px;
 			vertical-align: top;
 		`;
 
@@ -48,16 +59,16 @@ const waveformRenderer: VisualizationRenderer = {
 		`;
 		container.appendChild(label);
 
-		// Add canvas
+		// Add canvas (2x for retina)
 		const canvas = document.createElement('canvas');
-		canvas.width = 400;
-		canvas.height = 64;
-		canvas.style.cssText = 'display: block; width: 200px; height: 32px;';
+		canvas.width = width * 2;
+		canvas.height = canvasHeight * 2;
+		canvas.style.cssText = `display: block; width: ${width}px; height: ${canvasHeight}px;`;
 		container.appendChild(canvas);
 
 		const ctx = canvas.getContext('2d');
 		if (ctx) {
-			drawWaveform(ctx, canvas.width, canvas.height, null);
+			drawWaveform(canvas, ctx, canvas.width, canvas.height, null);
 		}
 
 		stateMap.set(container, {
@@ -79,13 +90,13 @@ const waveformRenderer: VisualizationRenderer = {
 		state.lastUpdateTime = now;
 
 		if (!isPlaying || !viz.stateId) {
-			drawWaveform(state.ctx, state.canvas.width, state.canvas.height, null);
+			drawWaveform(state.canvas, state.ctx, state.canvas.width, state.canvas.height, null);
 			return;
 		}
 
 		audioEngine.getProbeData(viz.stateId).then(samples => {
 			if (samples) {
-				drawWaveform(state.ctx, state.canvas.width, state.canvas.height, samples);
+				drawWaveform(state.canvas, state.ctx, state.canvas.width, state.canvas.height, samples);
 			}
 		});
 	},
@@ -96,20 +107,38 @@ const waveformRenderer: VisualizationRenderer = {
 };
 
 /**
+ * Convert a hex color (#rrggbb) to rgba string with given alpha
+ */
+function hexToRgba(hex: string, alpha: number): string {
+	const r = parseInt(hex.slice(1, 3), 16);
+	const g = parseInt(hex.slice(3, 5), 16);
+	const b = parseInt(hex.slice(5, 7), 16);
+	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/**
  * Draw waveform with min/max envelope style
  */
 function drawWaveform(
+	canvas: HTMLCanvasElement,
 	ctx: CanvasRenderingContext2D,
 	width: number,
 	height: number,
 	samples: Float32Array | null
 ): void {
+	// Read theme colors from CSS
+	const style = getComputedStyle(canvas);
+	const bgColor = style.getPropertyValue('--bg-secondary').trim() || '#1a1a1a';
+	const gridColor = style.getPropertyValue('--border-muted').trim() || '#333';
+	const vizColor = style.getPropertyValue('--accent-viz').trim() || '#4ade80';
+	const mutedColor = style.getPropertyValue('--text-muted').trim() || '#444';
+
 	// Clear background
-	ctx.fillStyle = '#1a1a1a';
+	ctx.fillStyle = bgColor;
 	ctx.fillRect(0, 0, width, height);
 
 	// Draw center line
-	ctx.strokeStyle = '#333';
+	ctx.strokeStyle = gridColor;
 	ctx.lineWidth = 1;
 	ctx.beginPath();
 	ctx.moveTo(0, height / 2);
@@ -117,7 +146,7 @@ function drawWaveform(
 	ctx.stroke();
 
 	if (!samples || samples.length === 0) {
-		ctx.fillStyle = '#444';
+		ctx.fillStyle = mutedColor;
 		ctx.font = '11px monospace';
 		ctx.textAlign = 'center';
 		ctx.fillText('No signal', width / 2, height / 2 + 4);
@@ -131,7 +160,7 @@ function drawWaveform(
 	const samplesPerPixel = samples.length / width;
 
 	// Fill envelope (filled area between min/max)
-	ctx.fillStyle = 'rgba(74, 222, 128, 0.3)';  // Semi-transparent green
+	ctx.fillStyle = hexToRgba(vizColor, 0.3);
 	ctx.beginPath();
 
 	// Draw top half (max values)
@@ -171,7 +200,7 @@ function drawWaveform(
 	ctx.fill();
 
 	// Draw outline
-	ctx.strokeStyle = '#4ade80';
+	ctx.strokeStyle = vizColor;
 	ctx.lineWidth = 1;
 
 	// Top outline

@@ -23,11 +23,22 @@ const stateMap = new WeakMap<HTMLElement, SpectrumState>();
 // Number of frequency bins to display
 const NUM_BINS = 64;
 
+// Default dimensions for visualization widgets
+const DEFAULT_WIDTH = 200;
+const DEFAULT_HEIGHT = 50;
+const LABEL_HEIGHT = 18;
+
 /**
  * Spectrum Renderer
  */
 const spectrumRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
+		// Extract dimensions from options
+		const opts = viz.options || {};
+		const width = (opts.width as number) ?? DEFAULT_WIDTH;
+		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const canvasHeight = height - LABEL_HEIGHT;
+
 		const container = document.createElement('div');
 		container.className = 'viz-spectrum';
 		container.style.cssText = `
@@ -36,8 +47,8 @@ const spectrumRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: 200px;
-			height: 50px;
+			width: ${width}px;
+			height: ${height}px;
 			vertical-align: top;
 		`;
 
@@ -53,16 +64,16 @@ const spectrumRenderer: VisualizationRenderer = {
 		`;
 		container.appendChild(label);
 
-		// Add canvas
+		// Add canvas (2x for retina)
 		const canvas = document.createElement('canvas');
-		canvas.width = 400;
-		canvas.height = 64;
-		canvas.style.cssText = 'display: block; width: 200px; height: 32px;';
+		canvas.width = width * 2;
+		canvas.height = canvasHeight * 2;
+		canvas.style.cssText = `display: block; width: ${width}px; height: ${canvasHeight}px;`;
 		container.appendChild(canvas);
 
 		const ctx = canvas.getContext('2d');
 		if (ctx) {
-			drawSpectrum(ctx, canvas.width, canvas.height, null);
+			drawSpectrum(canvas, ctx, canvas.width, canvas.height, null);
 		}
 
 		stateMap.set(container, {
@@ -89,7 +100,7 @@ const spectrumRenderer: VisualizationRenderer = {
 			for (let i = 0; i < NUM_BINS; i++) {
 				state.smoothedMagnitudes[i] *= 0.9;
 			}
-			drawSpectrum(state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
+			drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
 			return;
 		}
 
@@ -103,7 +114,7 @@ const spectrumRenderer: VisualizationRenderer = {
 					state.smoothedMagnitudes[i] = state.smoothedMagnitudes[i] * 0.7 + magnitudes[i] * 0.3;
 				}
 
-				drawSpectrum(state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
+				drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
 			}
 		});
 	},
@@ -156,17 +167,26 @@ function computeSpectrum(samples: Float32Array, numBins: number): Float32Array {
  * Draw spectrum bars
  */
 function drawSpectrum(
+	canvas: HTMLCanvasElement,
 	ctx: CanvasRenderingContext2D,
 	width: number,
 	height: number,
 	magnitudes: Float32Array | null
 ): void {
+	// Read theme colors from CSS
+	const style = getComputedStyle(canvas);
+	const bgColor = style.getPropertyValue('--bg-secondary').trim() || '#1a1a1a';
+	const vizColor = style.getPropertyValue('--accent-viz').trim() || '#4ade80';
+	const warningColor = style.getPropertyValue('--accent-warning').trim() || '#d29922';
+	const errorColor = style.getPropertyValue('--accent-error').trim() || '#f85149';
+	const mutedColor = style.getPropertyValue('--text-muted').trim() || '#444';
+
 	// Clear background
-	ctx.fillStyle = '#1a1a1a';
+	ctx.fillStyle = bgColor;
 	ctx.fillRect(0, 0, width, height);
 
 	if (!magnitudes || magnitudes.length === 0) {
-		ctx.fillStyle = '#444';
+		ctx.fillStyle = mutedColor;
 		ctx.font = '11px monospace';
 		ctx.textAlign = 'center';
 		ctx.fillText('No signal', width / 2, height / 2 + 4);
@@ -176,12 +196,11 @@ function drawSpectrum(
 	const barWidth = width / magnitudes.length;
 	const maxHeight = height * 0.95;
 
-	// Create gradient for bars
+	// Create theme-aware gradient for bars
 	const gradient = ctx.createLinearGradient(0, height, 0, 0);
-	gradient.addColorStop(0, '#22c55e');    // Green at bottom
-	gradient.addColorStop(0.5, '#84cc16');  // Yellow-green
-	gradient.addColorStop(0.8, '#eab308');  // Yellow
-	gradient.addColorStop(1, '#ef4444');    // Red at top
+	gradient.addColorStop(0, vizColor);        // Viz color at bottom
+	gradient.addColorStop(0.7, warningColor);  // Warning in upper range
+	gradient.addColorStop(1, errorColor);      // Error at top
 
 	for (let i = 0; i < magnitudes.length; i++) {
 		// Convert to dB scale (with floor at -60dB)
@@ -198,7 +217,7 @@ function drawSpectrum(
 	}
 
 	// Draw frequency markers
-	ctx.fillStyle = '#555';
+	ctx.fillStyle = mutedColor;
 	ctx.font = '9px monospace';
 	ctx.textAlign = 'center';
 
