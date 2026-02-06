@@ -3,7 +3,8 @@
 	import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightSpecialChars, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightActiveLine } from '@codemirror/view';
 	import { EditorState } from '@codemirror/state';
 	import { defaultKeymap, history, historyKeymap, indentWithTab, toggleComment, moveLineUp, moveLineDown, copyLineDown } from '@codemirror/commands';
-	import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
+	import { bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
+	import { akkadoLanguage } from '$lib/editor/akkado-language';
 	import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 	import { editorStore } from '$stores/editor.svelte';
 	import { audioEngine } from '$stores/audio.svelte';
@@ -88,7 +89,7 @@
 		},
 		'.cm-matchingBracket': {
 			backgroundColor: 'transparent',
-			borderBottom: '2px solid var(--accent-primary)'
+			borderBottom: '1px solid var(--accent-primary)'
 		}
 	}, { dark: true });
 
@@ -140,7 +141,7 @@
 				drawSelection(),
 				dropCursor(),
 				EditorState.allowMultipleSelections.of(true),
-				syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+				...akkadoLanguage(),
 				bracketMatching(),
 				closeBrackets(),
 				autocompletion({
