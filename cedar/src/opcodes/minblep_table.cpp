@@ -29,9 +29,9 @@ std::array<float, MINBLEP_TABLE_SIZE> generate_minblep_table() {
         float sinc_val = (std::abs(t) < 1e-7f) ? cutoff
                        : (std::sin(pi * cutoff * t) / (pi * t));
 
-        // Hann window
+        // Blackman window (-58dB sidelobes vs Hann's -31.5dB)
         float n = static_cast<float>(i) / static_cast<float>(sinc_len - 1);
-        float window = 0.5f * (1.0f - std::cos(2.0f * pi * n));
+        float window = 0.42f - 0.5f * std::cos(2.0f * pi * n) + 0.08f * std::cos(4.0f * pi * n);
 
         sinc[i] = sinc_val * window;
     }

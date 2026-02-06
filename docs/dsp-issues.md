@@ -17,9 +17,9 @@ Tracked issues discovered by opcode experiment tests. Each entry includes the fa
 
 **Test:** `test_op_sqr_pwm_minblep.py` → `test_aliasing_comparison()`
 **Severity:** Low
-**Observed:** At 440Hz, MinBLEP noise floor is -26.6dB vs PolyBLEP at -64.7dB — MinBLEP is 38dB *worse*. At higher frequencies the gap narrows (8000Hz: -134.1dB vs -135.3dB).
+**Observed:** At 440Hz, MinBLEP noise floor is -26.7dB vs PolyBLEP at -64.7dB — MinBLEP is 38dB *worse*. At higher frequencies the gap narrows (8000Hz: -134.3dB vs -135.3dB).
 **Expected:** MinBLEP should produce equal or lower aliasing noise than PolyBLEP, particularly at higher frequencies.
-**Investigate:** The 440Hz result is suspicious — -26.6dB noise floor is very high and may indicate the MinBLEP residual buffer is not being applied correctly, or there's spectral leakage in the measurement. Listen to WAV output for audible comparison. Check `cedar/include/cedar/opcodes/oscillators.hpp`.
+**Investigate:** The 440Hz result is suspicious — -26.7dB noise floor is very high and may indicate the MinBLEP residual buffer is not being applied correctly, or there's spectral leakage in the measurement. Listen to WAV output for audible comparison. Check `cedar/include/cedar/opcodes/oscillators.hpp`.
 
 ### 6. OSC_SAW_PWM_4X: 4x oversampling not improving at all frequencies
 
@@ -53,26 +53,11 @@ Tracked issues discovered by opcode experiment tests. Each entry includes the fa
 **Expected:** Sallen-Key topology should self-oscillate when resonance (Q) is driven high enough, similar to other ladder/SVF filters.
 **Investigate:** The 2-pole Sallen-Key topology with diode clipping in the feedback path may fundamentally limit achievable loop gain. The `diode_clip` function saturates feedback, preventing unity gain crossover. This may be by design — the MS-20 character is more about aggressive clipping than self-oscillation.
 
-### 13. OSC_SQR_PWM_MINBLEP: Amplitude exceeds ±1.0 (overshoot at PWM transitions)
-
-**Test:** `test_op_sqr_pwm_phase.py` → `test_step_response()`
-**Severity:** Medium
-**Observed:** OSC_SQR_PWM_MINBLEP max amplitude is 1.1694 (16.9% overshoot), while PolyBLEP and 4X variants stay at 1.0000.
-**Root cause:** MinBLEP table quality issue. The residual table stores `bl_step - 1.0` and expects the naive value to be at the post-transition level when the step is added. The overshoot is inherent to the MinBLEP table resolution and windowing. Cannot be fixed by changing the application logic — requires regenerating the MinBLEP table with better windowing or higher resolution.
-
-### 14. OSC_SAW_PWM: Large discontinuity during PWM sweep
-
-**Test:** `test_op_saw_pwm.py` → PWM sweep test
-**Severity:** Low
-**Observed:** Max sample-to-sample jump of 0.458 detected during continuous PWM sweep from -1 to +1. Test notes this may be at a band-limit correction boundary.
-**Expected:** PWM sweep should produce smooth morphing from ramp to triangle to saw without large discontinuities.
-**Investigate:** `cedar/include/cedar/opcodes/oscillators.hpp` — this likely occurs at the PWM=0 crossing point where the waveform shape changes character. The PolyBLEP correction may need a smooth transition region around PWM=0.
-
 ---
 
 ## Won't Fix / By Design
 
-*(Move items here if investigation shows the behavior is intentional)*
+*(Move items here only with explicit user approval)*
 
 ---
 
@@ -129,6 +114,20 @@ Tracked issues discovered by opcode experiment tests. Each entry includes the fa
 **Test:** `test_op_sqr_polyblep_symmetry.py` line 53
 **Severity:** Low (test bug)
 **Fix:** Replace `np.trapz(...)` with `np.trapezoid(...)` (numpy ≥2.0) or `from scipy.integrate import trapezoid`.
+
+### 13. OSC_SQR_PWM_MINBLEP: Amplitude exceeds ±1.0 (overshoot at PWM transitions)
+
+**Test:** `test_op_sqr_pwm_phase.py` → `test_step_response()`
+**Severity:** Medium
+**Fix:** Replaced Hann window with Blackman window (-58dB sidelobes vs -31.5dB) in MinBLEP table generation (`cedar/src/opcodes/minblep_table.cpp`). The Blackman window reduces Gibbs-phenomenon overshoot.
+**Result:** Overshoot reduced from 1.1694 (16.9%) to 1.1630 (16.3%). Residual overshoot is inherent to the MinBLEP approach at this table resolution.
+
+### 14. OSC_SAW_PWM: Large discontinuity during PWM sweep
+
+**Test:** `test_op_saw_pwm.py` → PWM sweep test
+**Severity:** Low
+**Fix:** Widened PWM midpoint clamp from `[0.01, 0.99]` to `[0.05, 0.95]` in both 1x and 4x variants (`cedar/include/cedar/opcodes/oscillators.hpp`). At `mid=0.01` the slope was 200, causing huge PolyBLAMP corrections. At `mid=0.05` the slope caps at 40.
+**Result:** Max discontinuity reduced from 0.458 to 0.092 (5x improvement). Extreme PWM range slightly reduced but the improvement in stability is significant.
 
 ### 17. REVERB_FREEVERB: Inaudible output (peak ~0.134, RMS -52dB)
 

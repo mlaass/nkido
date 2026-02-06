@@ -53,13 +53,13 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | `OSC_SAW_PWM` | ✅ Tested | Waveform shapes, frequency accuracy, PWM sweep spectrogram | PolyBLAMP, dedicated test file |
 | `OSC_SAW_PWM_4X` | ✅ Tested | Aliasing comparison vs 1x, high-frequency quality | 4x oversampled, dedicated test file |
 | `OSC_SQR_PWM_MINBLEP` | ✅ Tested | Duty cycle sweep, aliasing vs PolyBLEP, high-frequency quality | MinBLEP sub-sample accuracy |
+| `OSC_RAMP` | ✅ Tested | Waveform shape, frequency accuracy, DC offset, PolyBLEP aliasing, inverted-SAW equivalence | Descending ramp with PolyBLEP |
+| `OSC_PHASOR` | ✅ Tested | Range [0,1), linearity (R²=1.0), frequency accuracy, phase increment, waveshaping | Raw phase output |
 
 ### Untested
 
 | Opcode | Priority | Suggested Tests |
 |--------|----------|-----------------|
-| `OSC_RAMP` | Medium | Frequency accuracy, DC offset, comparison with SAW |
-| `OSC_PHASOR` | Medium | Linearity, wraparound behavior, sync compatibility |
 | `OSC_SAW_2X` | Low | 2x oversampling quality vs 1x/4x |
 | `OSC_SQR_2X` | Low | 2x oversampling quality vs 1x/4x |
 | `OSC_TRI_2X` | Low | 2x oversampling quality vs 1x/4x |
@@ -197,7 +197,7 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 
 | Category | Tested | Partial | Untested | Notes |
 |----------|--------|---------|----------|-------|
-| Oscillators | 12 | - | 8 | Added `test_op_saw_pwm.py`, `test_op_saw_pwm_4x.py`, `test_op_sqr_pwm_minblep.py` |
+| Oscillators | 14 | - | 6 | Added `test_op_ramp.py`, `test_op_phasor.py` |
 | Filters | 7 | - | 0 | `test_op_lp.py`, `test_op_hp.py`, `test_op_bp.py`, `test_op_moog.py`, etc. |
 | Effects | 13 | - | 0 | Added `test_op_smooth.py`, `test_op_tape.py`, `test_op_xfmr.py`, `test_op_excite.py`, `test_op_comb.py` |
 | Delays & Reverbs | 5 | - | 0 | Added `test_op_freeverb.py`, `test_op_fdn.py`, `test_op_tap_delay.py` |
@@ -206,7 +206,7 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | Sequencers & Timing | 4 | 2 | 0 | Added `test_op_seq_step.py`, `test_op_timeline.py` (partial: no state API) |
 | Dynamics | 3 | - | 0 | `test_op_comp.py`, `test_op_limiter.py`, `test_op_gate.py` |
 | Utility | 5 | - | 1 | `test_op_noise.py`, `test_op_mtof.py`, `test_op_sah.py`, `test_op_slew.py` |
-| **Total** | **54** | **2** | **9** | 88% tested (up from 74%) |
+| **Total** | **56** | **2** | **7** | 90% tested |
 
 ---
 
@@ -215,9 +215,6 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 ### High Priority - Extend Python Bindings
 1. `SEQ_STEP` - Add Python API to populate `SeqStepState` for full testing
 2. `TIMELINE` - Add Python API to populate `TimelineState` for full testing
-
-### Medium Priority (Remaining Untested Opcodes)
-1. `OSC_RAMP`, `OSC_PHASOR` - Modulation sources (opcodes exist, need tests)
 
 ### Low Priority (Completeness)
 1. 2x oversampling oscillator variants (already have 1x and 4x)

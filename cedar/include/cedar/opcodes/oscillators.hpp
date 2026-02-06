@@ -510,9 +510,9 @@ inline void op_osc_saw_pwm(ExecutionContext& ctx, const Instruction& inst) {
 
         float dt = freq[i] * ctx.inv_sample_rate;
 
-        // Map PWM to midpoint position: [-1,+1] -> [0.01, 0.99]
+        // Map PWM to midpoint position: [-1,+1] -> [0.05, 0.95]
         float mid = (1.0f + std::clamp(pwm[i], -1.0f, 1.0f)) * 0.5f;
-        mid = std::clamp(mid, 0.01f, 0.99f);
+        mid = std::clamp(mid, 0.05f, 0.95f);
 
         // Piecewise linear waveform:
         // Phase [0, mid]: rise from -1 to +1
@@ -1111,7 +1111,7 @@ inline void op_osc_saw_pwm_4x(ExecutionContext& ctx, const Instruction& inst) {
 
         // Map PWM to midpoint position
         float mid = (1.0f + std::clamp(pwm_val, -1.0f, 1.0f)) * 0.5f;
-        mid = std::clamp(mid, 0.01f, 0.99f);
+        mid = std::clamp(mid, 0.05f, 0.95f);
 
         float samples[4];
 
