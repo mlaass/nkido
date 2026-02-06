@@ -775,20 +775,21 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
 
     // Visualization builtins (handled specially by codegen)
     // These create visualization widgets in the editor and pass signal through
-    {"pianoroll", {cedar::Opcode::COPY, 1, 1, false,
-                   {"signal", "name", "", "", "", ""},
+    // Signature: viz(signal, name?, options?) where options is a record {width, height, ...}
+    {"pianoroll", {cedar::Opcode::COPY, 1, 2, false,
+                   {"signal", "name", "options", "", "", ""},
                    {NAN, NAN, NAN, NAN, NAN},
                    "Attach piano roll visualization. Signal passes through unchanged."}},
-    {"oscilloscope", {cedar::Opcode::COPY, 1, 1, true,
-                      {"signal", "name", "", "", "", ""},
+    {"oscilloscope", {cedar::Opcode::COPY, 1, 2, true,
+                      {"signal", "name", "options", "", "", ""},
                       {NAN, NAN, NAN, NAN, NAN},
                       "Attach oscilloscope visualization. Signal passes through unchanged."}},
-    {"waveform", {cedar::Opcode::COPY, 1, 1, true,
-                  {"signal", "name", "", "", "", ""},
+    {"waveform", {cedar::Opcode::COPY, 1, 2, true,
+                  {"signal", "name", "options", "", "", ""},
                   {NAN, NAN, NAN, NAN, NAN},
                   "Attach waveform visualization. Signal passes through unchanged."}},
-    {"spectrum", {cedar::Opcode::COPY, 1, 1, true,
-                  {"signal", "name", "", "", "", ""},
+    {"spectrum", {cedar::Opcode::COPY, 1, 2, true,
+                  {"signal", "name", "options", "", "", ""},
                   {NAN, NAN, NAN, NAN, NAN},
                   "Attach spectrum analyzer visualization. Signal passes through unchanged."}},
 };

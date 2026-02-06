@@ -97,9 +97,17 @@ std::uint16_t CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
         NodeIndex mono_node = args.nodes[0];
         std::uint16_t mono_buf = visit(mono_node);
 
-        if (is_stereo(mono_node)) {
+        // Check stereo by both node and buffer (buffer fallback for pipe chains)
+        bool input_is_stereo = is_stereo(mono_node) || is_stereo_buffer(mono_buf);
+
+        if (input_is_stereo) {
             // Already stereo - just propagate
-            auto stereo = get_stereo_buffers(mono_node);
+            StereoBuffers stereo;
+            if (is_stereo(mono_node)) {
+                stereo = get_stereo_buffers(mono_node);
+            } else {
+                stereo = get_stereo_buffers_by_buffer(mono_buf);
+            }
             register_stereo(node, stereo.left, stereo.right);
             node_buffers_[node] = stereo.left;
             return stereo.left;
@@ -139,23 +147,25 @@ std::uint16_t CodeGenerator::handle_left_call(NodeIndex node, const Node& n) {
     }
 
     NodeIndex stereo_node = args.nodes[0];
-    visit(stereo_node);
+    std::uint16_t buf = visit(stereo_node);
 
-    if (is_stereo(stereo_node)) {
-        auto stereo = get_stereo_buffers(stereo_node);
+    // Check stereo by both node and buffer (buffer fallback for pipe chains)
+    bool input_is_stereo = is_stereo(stereo_node) || is_stereo_buffer(buf);
+
+    if (input_is_stereo) {
+        StereoBuffers stereo;
+        if (is_stereo(stereo_node)) {
+            stereo = get_stereo_buffers(stereo_node);
+        } else {
+            stereo = get_stereo_buffers_by_buffer(buf);
+        }
         node_buffers_[node] = stereo.left;
         return stereo.left;
     }
 
     // Not stereo - return the mono signal as-is
-    auto it = node_buffers_.find(stereo_node);
-    if (it != node_buffers_.end()) {
-        node_buffers_[node] = it->second;
-        return it->second;
-    }
-
-    error("E162", "left() argument is not a signal", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    node_buffers_[node] = buf;
+    return buf;
 }
 
 // right(stereo) -> extract right channel
@@ -168,23 +178,25 @@ std::uint16_t CodeGenerator::handle_right_call(NodeIndex node, const Node& n) {
     }
 
     NodeIndex stereo_node = args.nodes[0];
-    visit(stereo_node);
+    std::uint16_t buf = visit(stereo_node);
 
-    if (is_stereo(stereo_node)) {
-        auto stereo = get_stereo_buffers(stereo_node);
+    // Check stereo by both node and buffer (buffer fallback for pipe chains)
+    bool input_is_stereo = is_stereo(stereo_node) || is_stereo_buffer(buf);
+
+    if (input_is_stereo) {
+        StereoBuffers stereo;
+        if (is_stereo(stereo_node)) {
+            stereo = get_stereo_buffers(stereo_node);
+        } else {
+            stereo = get_stereo_buffers_by_buffer(buf);
+        }
         node_buffers_[node] = stereo.right;
         return stereo.right;
     }
 
     // Not stereo - return the mono signal as-is
-    auto it = node_buffers_.find(stereo_node);
-    if (it != node_buffers_.end()) {
-        node_buffers_[node] = it->second;
-        return it->second;
-    }
-
-    error("E164", "right() argument is not a signal", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    node_buffers_[node] = buf;
+    return buf;
 }
 
 // pan(mono, position) -> create stereo from mono with panning
@@ -466,11 +478,20 @@ std::uint16_t CodeGenerator::handle_pingpong_call(NodeIndex node, const Node& n)
 
     // Check first argument to determine form
     NodeIndex first_node = args.nodes[0];
-    visit(first_node);
+    std::uint16_t first_buf = visit(first_node);
 
-    if (is_stereo(first_node)) {
+    // Check stereo by both node and buffer
+    bool first_is_stereo = is_stereo(first_node) || is_stereo_buffer(first_buf);
+
+    if (first_is_stereo) {
         // pingpong(stereo, time, fb, width?)
-        auto stereo = get_stereo_buffers(first_node);
+        StereoBuffers stereo;
+        if (is_stereo(first_node)) {
+            stereo = get_stereo_buffers(first_node);
+        } else {
+            // Fall back to buffer-based lookup
+            stereo = get_stereo_buffers_by_buffer(first_buf);
+        }
         left_buf = stereo.left;
         right_buf = stereo.right;
 

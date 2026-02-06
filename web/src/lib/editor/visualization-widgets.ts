@@ -51,11 +51,12 @@ class VisualizationContainerWidget extends WidgetType {
 
 	toDOM(): HTMLElement {
 		// Outer wrapper with display:block for proper CodeMirror measurement
+		// Left padding aligns widgets with code content (past line numbers and gutter)
 		const wrapper = document.createElement('div');
 		wrapper.className = 'viz-wrapper';
 		wrapper.style.cssText = `
 			display: block;
-			padding: 8px 0;
+			padding: 8px 0 8px 52px;
 			line-height: 0;
 		`;
 

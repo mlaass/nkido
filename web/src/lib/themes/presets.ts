@@ -20,7 +20,13 @@ export const PRESET_THEMES: Theme[] = [
 			accentError: '#f85149',
 			accentViz: '#4ade80',
 			borderDefault: '#30363d',
-			borderMuted: '#21262d'
+			borderMuted: '#21262d',
+			syntaxKeyword: '#ff7b72',
+			syntaxString: '#a5d6ff',
+			syntaxNumber: '#79c0ff',
+			syntaxComment: '#8b949e',
+			syntaxFunction: '#d2a8ff',
+			syntaxOperator: '#ff7b72'
 		}
 	},
 	{
@@ -42,7 +48,13 @@ export const PRESET_THEMES: Theme[] = [
 			accentError: '#cf222e',
 			accentViz: '#16a34a',
 			borderDefault: '#d0d7de',
-			borderMuted: '#ebeef1'
+			borderMuted: '#ebeef1',
+			syntaxKeyword: '#cf222e',
+			syntaxString: '#0a3069',
+			syntaxNumber: '#0550ae',
+			syntaxComment: '#6e7681',
+			syntaxFunction: '#8250df',
+			syntaxOperator: '#cf222e'
 		}
 	},
 	{
@@ -64,7 +76,13 @@ export const PRESET_THEMES: Theme[] = [
 			accentError: '#f92672',
 			accentViz: '#a6e22e',
 			borderDefault: '#49483e',
-			borderMuted: '#3e3d32'
+			borderMuted: '#3e3d32',
+			syntaxKeyword: '#f92672',
+			syntaxString: '#e6db74',
+			syntaxNumber: '#ae81ff',
+			syntaxComment: '#75715e',
+			syntaxFunction: '#66d9ef',
+			syntaxOperator: '#f92672'
 		}
 	},
 	{
@@ -86,7 +104,13 @@ export const PRESET_THEMES: Theme[] = [
 			accentError: '#ff5555',
 			accentViz: '#50fa7b',
 			borderDefault: '#44475a',
-			borderMuted: '#343746'
+			borderMuted: '#343746',
+			syntaxKeyword: '#ff79c6',
+			syntaxString: '#f1fa8c',
+			syntaxNumber: '#bd93f9',
+			syntaxComment: '#6272a4',
+			syntaxFunction: '#8be9fd',
+			syntaxOperator: '#ff79c6'
 		}
 	},
 	{
@@ -108,7 +132,13 @@ export const PRESET_THEMES: Theme[] = [
 			accentError: '#dc322f',
 			accentViz: '#2aa198',
 			borderDefault: '#094352',
-			borderMuted: '#073642'
+			borderMuted: '#073642',
+			syntaxKeyword: '#859900',
+			syntaxString: '#2aa198',
+			syntaxNumber: '#d33682',
+			syntaxComment: '#586e75',
+			syntaxFunction: '#268bd2',
+			syntaxOperator: '#859900'
 		}
 	},
 	{
@@ -130,7 +160,13 @@ export const PRESET_THEMES: Theme[] = [
 			accentError: '#bf616a',
 			accentViz: '#a3be8c',
 			borderDefault: '#4c566a',
-			borderMuted: '#434c5e'
+			borderMuted: '#434c5e',
+			syntaxKeyword: '#81a1c1',
+			syntaxString: '#a3be8c',
+			syntaxNumber: '#b48ead',
+			syntaxComment: '#616e88',
+			syntaxFunction: '#88c0d0',
+			syntaxOperator: '#81a1c1'
 		}
 	},
 	{
@@ -152,7 +188,13 @@ export const PRESET_THEMES: Theme[] = [
 			accentError: '#ff0000',
 			accentViz: '#00ff00',
 			borderDefault: '#444444',
-			borderMuted: '#333333'
+			borderMuted: '#333333',
+			syntaxKeyword: '#ff6b6b',
+			syntaxString: '#69ff94',
+			syntaxNumber: '#d6acff',
+			syntaxComment: '#888888',
+			syntaxFunction: '#6be5fd',
+			syntaxOperator: '#ff6b6b'
 		}
 	}
 ];

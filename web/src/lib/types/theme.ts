@@ -16,6 +16,12 @@ export interface ThemeColors {
 	accentViz: string;
 	borderDefault: string;
 	borderMuted: string;
+	syntaxKeyword: string;
+	syntaxString: string;
+	syntaxNumber: string;
+	syntaxComment: string;
+	syntaxFunction: string;
+	syntaxOperator: string;
 }
 
 /**
@@ -55,7 +61,13 @@ export const COLOR_KEYS: (keyof ThemeColors)[] = [
 	'accentError',
 	'accentViz',
 	'borderDefault',
-	'borderMuted'
+	'borderMuted',
+	'syntaxKeyword',
+	'syntaxString',
+	'syntaxNumber',
+	'syntaxComment',
+	'syntaxFunction',
+	'syntaxOperator'
 ];
 
 /**
@@ -77,6 +89,10 @@ export const COLOR_GROUPS: { label: string; keys: (keyof ThemeColors)[] }[] = [
 	{
 		label: 'Border',
 		keys: ['borderDefault', 'borderMuted']
+	},
+	{
+		label: 'Syntax',
+		keys: ['syntaxKeyword', 'syntaxString', 'syntaxNumber', 'syntaxComment', 'syntaxFunction', 'syntaxOperator']
 	}
 ];
 
@@ -97,7 +113,13 @@ export const COLOR_LABELS: Record<keyof ThemeColors, string> = {
 	accentError: 'Error',
 	accentViz: 'Visualization',
 	borderDefault: 'Default',
-	borderMuted: 'Muted'
+	borderMuted: 'Muted',
+	syntaxKeyword: 'Keyword',
+	syntaxString: 'String',
+	syntaxNumber: 'Number',
+	syntaxComment: 'Comment',
+	syntaxFunction: 'Function',
+	syntaxOperator: 'Operator'
 };
 
 /**
@@ -118,7 +140,13 @@ export function colorKeyToCssVar(key: keyof ThemeColors): string {
 		accentError: '--accent-error',
 		accentViz: '--accent-viz',
 		borderDefault: '--border-default',
-		borderMuted: '--border-muted'
+		borderMuted: '--border-muted',
+		syntaxKeyword: '--syntax-keyword',
+		syntaxString: '--syntax-string',
+		syntaxNumber: '--syntax-number',
+		syntaxComment: '--syntax-comment',
+		syntaxFunction: '--syntax-function',
+		syntaxOperator: '--syntax-operator'
 	};
 	return map[key];
 }

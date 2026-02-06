@@ -1,6 +1,6 @@
 #include "akkado/diagnostics.hpp"
-#include <sstream>
 #include <algorithm>
+#include <cstdio>  // snprintf - locale-free alternative to ostringstream
 
 namespace akkado {
 
@@ -75,68 +75,128 @@ std::string_view get_line(std::string_view source, std::uint32_t line_num) {
 } // namespace
 
 std::string format_diagnostic(const Diagnostic& diag, std::string_view source) {
-    std::ostringstream out;
+    std::string out;
+    out.reserve(512);  // Reasonable initial capacity
+    char num_buf[32];
 
     // Header: filename:line:column: severity[code]: message
-    out << BOLD << diag.filename << ":"
-        << diag.location.line << ":"
-        << diag.location.column << ": " << RESET;
+    out += BOLD;
+    out += diag.filename;
+    out += ':';
+    std::snprintf(num_buf, sizeof(num_buf), "%u", diag.location.line);
+    out += num_buf;
+    out += ':';
+    std::snprintf(num_buf, sizeof(num_buf), "%u", diag.location.column);
+    out += num_buf;
+    out += ": ";
+    out += RESET;
 
-    out << severity_color(diag.severity) << severity_string(diag.severity);
+    out += severity_color(diag.severity);
+    out += severity_string(diag.severity);
     if (!diag.code.empty()) {
-        out << "[" << diag.code << "]";
+        out += '[';
+        out += diag.code;
+        out += ']';
     }
-    out << RESET << ": " << BOLD << diag.message << RESET << "\n";
+    out += RESET;
+    out += ": ";
+    out += BOLD;
+    out += diag.message;
+    out += RESET;
+    out += '\n';
 
     // Source line with caret
     if (!source.empty() && diag.location.line > 0) {
         auto line = get_line(source, diag.location.line);
         if (!line.empty()) {
             // Line number gutter
-            out << "    " << diag.location.line << " | " << line << "\n";
+            out += "    ";
+            std::snprintf(num_buf, sizeof(num_buf), "%u", diag.location.line);
+            out += num_buf;
+            out += " | ";
+            out += line;
+            out += '\n';
 
             // Caret line
-            out << "      | ";
+            out += "      | ";
             for (std::uint32_t i = 1; i < diag.location.column; ++i) {
-                out << ' ';
+                out += ' ';
             }
-            out << severity_color(diag.severity) << "^";
+            out += severity_color(diag.severity);
+            out += '^';
             for (std::uint32_t i = 1; i < diag.location.length && i < 80; ++i) {
-                out << "~";
+                out += '~';
             }
-            out << RESET << "\n";
+            out += RESET;
+            out += '\n';
         }
     }
 
     // Related information
     for (const auto& rel : diag.related) {
-        out << BOLD << rel.filename << ":"
-            << rel.location.line << ":"
-            << rel.location.column << ": " << RESET
-            << "note: " << rel.message << "\n";
+        out += BOLD;
+        out += rel.filename;
+        out += ':';
+        std::snprintf(num_buf, sizeof(num_buf), "%u", rel.location.line);
+        out += num_buf;
+        out += ':';
+        std::snprintf(num_buf, sizeof(num_buf), "%u", rel.location.column);
+        out += num_buf;
+        out += ": ";
+        out += RESET;
+        out += "note: ";
+        out += rel.message;
+        out += '\n';
     }
 
     // Suggested fix
     if (diag.fix) {
-        out << "  = help: " << diag.fix->description << "\n";
+        out += "  = help: ";
+        out += diag.fix->description;
+        out += '\n';
     }
 
-    return out.str();
+    return out;
 }
 
 std::string format_diagnostic_json(const Diagnostic& diag) {
-    std::ostringstream out;
+    std::string out;
+    out.reserve(256);
+    char num_buf[32];
 
-    out << R"({"severity":")" << severity_string(diag.severity) << R"(",)";
-    out << R"("code":")" << escape_json(diag.code) << R"(",)";
-    out << R"("message":")" << escape_json(diag.message) << R"(",)";
-    out << R"("file":")" << escape_json(diag.filename) << R"(",)";
-    out << R"("range":{"start":{"line":)" << (diag.location.line - 1)
-        << R"(,"character":)" << (diag.location.column - 1) << R"(},)";
-    out << R"("end":{"line":)" << (diag.location.line - 1)
-        << R"(,"character":)" << (diag.location.column - 1 + diag.location.length) << R"(}}})";
+    out += R"({"severity":")";
+    out += severity_string(diag.severity);
+    out += R"(",)";
 
-    return out.str();
+    out += R"("code":")";
+    out += escape_json(diag.code);
+    out += R"(",)";
+
+    out += R"("message":")";
+    out += escape_json(diag.message);
+    out += R"(",)";
+
+    out += R"("file":")";
+    out += escape_json(diag.filename);
+    out += R"(",)";
+
+    out += R"("range":{"start":{"line":)";
+    std::snprintf(num_buf, sizeof(num_buf), "%u", diag.location.line - 1);
+    out += num_buf;
+    out += R"(,"character":)";
+    std::snprintf(num_buf, sizeof(num_buf), "%u", diag.location.column - 1);
+    out += num_buf;
+    out += R"(},)";
+
+    out += R"("end":{"line":)";
+    std::snprintf(num_buf, sizeof(num_buf), "%u", diag.location.line - 1);
+    out += num_buf;
+    out += R"(,"character":)";
+    std::snprintf(num_buf, sizeof(num_buf), "%u", diag.location.column - 1 + diag.location.length);
+    out += num_buf;
+    out += R"(}}})";
+
+    return out;
 }
 
 bool has_errors(const std::vector<Diagnostic>& diagnostics) {

@@ -40,6 +40,13 @@
 
 	--border-default: #30363d;
 	--border-muted: #21262d;
+
+	--syntax-keyword: #ff7b72;
+	--syntax-string: #a5d6ff;
+	--syntax-number: #79c0ff;
+	--syntax-comment: #8b949e;
+	--syntax-function: #d2a8ff;
+	--syntax-operator: #ff7b72;
 }
 
 /* Reset */

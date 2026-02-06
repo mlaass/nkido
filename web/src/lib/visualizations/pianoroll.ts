@@ -152,11 +152,22 @@ function render(
 	}
 }
 
+// Default dimensions for visualization widgets
+const DEFAULT_WIDTH = 200;
+const DEFAULT_HEIGHT = 50;
+const LABEL_HEIGHT = 18;
+
 /**
  * Piano Roll Renderer
  */
 const pianoRollRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
+		// Extract dimensions from options
+		const opts = viz.options || {};
+		const width = (opts.width as number) ?? DEFAULT_WIDTH;
+		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const canvasHeight = height - LABEL_HEIGHT;
+
 		const container = document.createElement('div');
 		container.className = 'viz-pianoroll';
 		container.style.cssText = `
@@ -165,8 +176,8 @@ const pianoRollRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: 200px;
-			height: 50px;
+			width: ${width}px;
+			height: ${height}px;
 			vertical-align: top;
 		`;
 
@@ -182,11 +193,11 @@ const pianoRollRenderer: VisualizationRenderer = {
 		`;
 		container.appendChild(label);
 
-		// Add canvas
+		// Add canvas (2x for retina)
 		const canvas = document.createElement('canvas');
-		canvas.width = 400;
-		canvas.height = 64;
-		canvas.style.cssText = 'display: block; width: 200px; height: 32px;';
+		canvas.width = width * 2;
+		canvas.height = canvasHeight * 2;
+		canvas.style.cssText = `display: block; width: ${width}px; height: ${canvasHeight}px;`;
 		container.appendChild(canvas);
 
 		// Store viz data on element for updates

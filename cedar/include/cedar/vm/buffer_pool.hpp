@@ -4,6 +4,7 @@
 #include <array>
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 
 namespace cedar {
 
@@ -14,10 +15,21 @@ struct BufferPool {
 
     // Get pointer to buffer by index
     [[nodiscard]] float* get(std::uint16_t index) noexcept {
+        if (index >= MAX_BUFFERS) {
+            std::printf("[CEDAR BUG] BufferPool::get(%u) out of bounds (MAX_BUFFERS=%zu)\n",
+                        static_cast<unsigned>(index), MAX_BUFFERS);
+            // Return buffer 0 to avoid crash, but log the error
+            return buffers[0].data();
+        }
         return buffers[index].data();
     }
 
     [[nodiscard]] const float* get(std::uint16_t index) const noexcept {
+        if (index >= MAX_BUFFERS) {
+            std::printf("[CEDAR BUG] BufferPool::get(%u) const out of bounds (MAX_BUFFERS=%zu)\n",
+                        static_cast<unsigned>(index), MAX_BUFFERS);
+            return buffers[0].data();
+        }
         return buffers[index].data();
     }
 

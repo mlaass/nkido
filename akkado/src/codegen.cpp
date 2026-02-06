@@ -690,9 +690,17 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     NodeIndex arg_value = (arg_node.type == NodeType::Argument) ?
                                          arg_node.first_child : first_arg;
 
-                    if (is_stereo(arg_value)) {
+                    // Check stereo by both node and buffer (buffer fallback for pipe chains)
+                    bool arg_is_stereo = is_stereo(arg_value) || is_stereo_buffer(arg_buffers[0]);
+
+                    if (arg_is_stereo) {
                         // Stereo input - use both channels
-                        auto stereo = get_stereo_buffers(arg_value);
+                        StereoBuffers stereo;
+                        if (is_stereo(arg_value)) {
+                            stereo = get_stereo_buffers(arg_value);
+                        } else {
+                            stereo = get_stereo_buffers_by_buffer(arg_buffers[0]);
+                        }
                         arg_buffers[0] = stereo.left;
                         arg_buffers.push_back(stereo.right);
                     } else {
