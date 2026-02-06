@@ -37,8 +37,6 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
     const float* room_offset_in = ctx.buffers->get(inst.inputs[4]);
     auto& state = ctx.states->get_or_create<FreeverbState>(inst.state_id);
 
-    float mix = static_cast<float>(inst.rate) / 255.0f;
-
     // Ensure buffers are allocated from arena
     state.ensure_buffers(ctx.arena);
 
@@ -73,8 +71,8 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
             comb_sum += delayed;
         }
 
-        // Normalize comb output
-        float y = comb_sum * 0.125f;  // 1/8
+        // Comb output — allpass chain provides ~16x peak reduction
+        float y = comb_sum;
 
         // Series allpass filters for diffusion
         constexpr float ALLPASS_GAIN = 0.5f;
@@ -90,8 +88,7 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
             y = output;
         }
 
-        // Wet/dry mix
-        out[i] = x * (1.0f - mix) + y * mix;
+        out[i] = y;
     }
 }
 
@@ -298,7 +295,7 @@ inline void op_reverb_fdn(ExecutionContext& ctx, const Instruction& inst) {
             output_sum += delayed[d];
         }
 
-        // Output is average of all delay taps
+        // Output is sum of all delay taps, normalized by number of delays
         out[i] = output_sum * 0.25f;
     }
 }
