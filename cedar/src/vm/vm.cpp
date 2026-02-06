@@ -70,9 +70,8 @@ void VM::process_block(float* output_left, float* output_right) {
     // Get current program slot
     const ProgramSlot* current = swap_controller_.current_slot();
     if (!current || current->instruction_count == 0) {
-        // No program - output silence
-        ctx_.global_sample_counter += BLOCK_SIZE;
-        ctx_.block_counter++;
+        // Don't advance clock when no program is loaded.
+        // This ensures the first program starts from beat 0.
         return;
     }
 

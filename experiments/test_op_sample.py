@@ -1486,6 +1486,135 @@ def test_timing_drift():
 
 
 # =============================================================================
+# Test 9: First Trigger After Idle Blocks
+# =============================================================================
+
+def test_first_trigger_after_idle():
+    """
+    Test that the first sample trigger fires correctly even after many idle blocks.
+
+    Expected behavior:
+    - Processing blocks with no program loaded should NOT advance the clock
+    - When a program is finally loaded, the sequencer should start from beat 0
+    - The first trigger should produce output starting from sample position 0
+
+    This catches the bug where global_sample_counter ticks during initialization
+    (before any program is loaded), causing the sequencer to start mid-cycle and
+    miss the first event.
+
+    If this test fails, check cedar/src/vm/vm.cpp — the no-program early return
+    path must NOT advance global_sample_counter or block_counter.
+    """
+    print("\nTest 9: First Trigger After Idle Blocks")
+    print("=" * 60)
+
+    sr = 48000
+    bpm = 120.0
+
+    # Create a distinctive sample: a short impulse that's easy to detect
+    click_length = 200
+    click = np.zeros(click_length, dtype=np.float32)
+    # Ramp up over 10 samples to survive any anti-click fade
+    click[0:10] = np.linspace(0.0, 1.0, 10)
+    click[10:30] = 1.0
+    click[30:50] = np.linspace(1.0, 0.0, 20)
+
+    # --- Scenario A: Load program immediately, no idle blocks ---
+    host_immediate = SamplerTestHost(sr)
+    host_immediate.vm.set_bpm(bpm)
+    host_immediate.load_custom_sample("click", click, sample_rate=sr)
+    sample_id = host_immediate.sample_ids["click"]
+
+    host_immediate.create_sampler_program(sample_id, pitch=1.0, loop=False)
+
+    # Trigger on the very first sample of the first block
+    trigger_block = np.zeros(cedar.BLOCK_SIZE, dtype=np.float32)
+    trigger_block[0] = 1.0
+    host_immediate.vm.set_buffer(0, trigger_block)
+    left_immediate, _ = host_immediate.vm.process()
+
+    # --- Scenario B: Process 200 idle blocks (no program), then load ---
+    host_delayed = SamplerTestHost(sr)
+    host_delayed.vm.set_bpm(bpm)
+    host_delayed.load_custom_sample("click", click, sample_rate=sr)
+    sample_id_delayed = host_delayed.sample_ids["click"]
+
+    # Simulate WASM init: process many blocks with no program loaded
+    idle_blocks = 200  # ~53ms of idle time
+    for _ in range(idle_blocks):
+        host_delayed.vm.process()
+
+    # Now load the program (simulates first compilation completing)
+    host_delayed.create_sampler_program(sample_id_delayed, pitch=1.0, loop=False)
+
+    # Trigger on the very first sample of the first block with program
+    host_delayed.vm.set_buffer(0, trigger_block)
+    left_delayed, _ = host_delayed.vm.process()
+
+    # --- Analysis ---
+    # Both scenarios should produce identical output on the first block
+    peak_immediate = np.max(np.abs(left_immediate))
+    peak_delayed = np.max(np.abs(left_delayed))
+
+    # Find first non-zero sample in each
+    nonzero_immediate = np.nonzero(np.abs(left_immediate) > 0.001)[0]
+    nonzero_delayed = np.nonzero(np.abs(left_delayed) > 0.001)[0]
+
+    first_sample_immediate = nonzero_immediate[0] if len(nonzero_immediate) > 0 else -1
+    first_sample_delayed = nonzero_delayed[0] if len(nonzero_delayed) > 0 else -1
+
+    print(f"  Idle blocks before program load: {idle_blocks}")
+    print(f"  Scenario A (immediate): peak={peak_immediate:.4f}, first_nonzero={first_sample_immediate}")
+    print(f"  Scenario B (delayed):   peak={peak_delayed:.4f}, first_nonzero={first_sample_delayed}")
+
+    # Save WAV for both scenarios
+    save_wav("first_trigger_immediate.wav", left_immediate, sr)
+    save_wav("first_trigger_after_idle.wav", left_delayed, sr)
+
+    # Verify: both should have audio output
+    passed = True
+
+    if peak_immediate < 0.1:
+        print(f"  ✗ FAIL: Immediate scenario produced no output (peak={peak_immediate:.4f})")
+        passed = False
+    else:
+        print(f"  ✓ PASS: Immediate scenario produced output")
+
+    if peak_delayed < 0.1:
+        print(f"  ✗ FAIL: Delayed scenario produced no output (peak={peak_delayed:.4f})")
+        print(f"         → Clock likely advanced during idle blocks, missing first trigger")
+        passed = False
+    else:
+        print(f"  ✓ PASS: Delayed scenario produced output")
+
+    # The first non-zero sample should be at the same position in both
+    if first_sample_immediate >= 0 and first_sample_delayed >= 0:
+        pos_diff = abs(first_sample_delayed - first_sample_immediate)
+        if pos_diff == 0:
+            print(f"  ✓ PASS: First sample position matches (sample {first_sample_immediate})")
+        else:
+            print(f"  ✗ FAIL: First sample position differs by {pos_diff} samples")
+            print(f"         → Immediate: sample {first_sample_immediate}, Delayed: sample {first_sample_delayed}")
+            passed = False
+
+    # Compare waveform correlation
+    if peak_immediate > 0.01 and peak_delayed > 0.01:
+        correlation = np.corrcoef(left_immediate, left_delayed)[0, 1]
+        if correlation > 0.99:
+            print(f"  ✓ PASS: Output waveforms match (correlation={correlation:.6f})")
+        else:
+            print(f"  ✗ FAIL: Output waveforms differ (correlation={correlation:.6f})")
+            passed = False
+
+    if passed:
+        print(f"\n  ✓ All checks passed: idle blocks do not affect first trigger timing")
+    else:
+        print(f"\n  ✗ FAILED: Check cedar/src/vm/vm.cpp — no-program path must not advance clock")
+
+    return passed
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
@@ -1506,6 +1635,7 @@ if __name__ == "__main__":
     test_sample_perfect_loop()
     test_sequencer_timing()
     test_timing_drift()
+    test_first_trigger_after_idle()
 
     print()
     print("=" * 60)
