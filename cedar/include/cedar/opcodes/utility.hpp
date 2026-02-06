@@ -47,8 +47,13 @@ inline void op_output(ExecutionContext& ctx, const Instruction& inst) {
         : left;  // mono: use left for both
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        ctx.output_left[i] += left[i];
-        ctx.output_right[i] += right[i];
+        float l = left[i];
+        float r = right[i];
+        // Sanitize NaN/Inf to prevent one chain from killing all audio
+        if (!std::isfinite(l)) l = 0.0f;
+        if (!std::isfinite(r)) r = 0.0f;
+        ctx.output_left[i] += l;
+        ctx.output_right[i] += r;
     }
 }
 

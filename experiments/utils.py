@@ -48,6 +48,14 @@ def gen_impulse(duration, sr):
     return x
 
 
+def gen_noise_pulse(duration, sr, pulse_ms=10):
+    """Short noise burst followed by silence — excites all modes for RT60 measurement."""
+    x = np.zeros(int(duration * sr), dtype=np.float32)
+    pulse_len = int(pulse_ms * sr / 1000)
+    x[:pulse_len] = np.random.default_rng(42).uniform(-0.5, 0.5, pulse_len).astype(np.float32)
+    return x
+
+
 def gen_linear_ramp(samples=1024):
     """Linear ramp from -1 to 1 for transfer curve plotting."""
     return np.linspace(-1, 1, samples, dtype=np.float32)

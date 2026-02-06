@@ -104,7 +104,9 @@
 	// Opcode pairs that intentionally share state (cooperative opcodes)
 	const COOPERATIVE_OPCODE_PAIRS = new Set([
 		'SEQPAT_QUERY,SEQPAT_STEP', // Query populates state, Step reads from it
-		'SEQPAT_STEP,SEQPAT_QUERY'
+		'SEQPAT_STEP,SEQPAT_QUERY',
+		'DELAY_TAP,DELAY_WRITE', // Tap reads from delay line, Write writes to it
+		'DELAY_WRITE,DELAY_TAP'
 	]);
 
 	function isCooperativePair(opcodes: string[]): boolean {

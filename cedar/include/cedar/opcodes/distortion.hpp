@@ -243,33 +243,53 @@ inline void op_distort_smooth(ExecutionContext& ctx, const Instruction& inst) {
         float x = input[i] * d;
 
         // Antiderivative of tanh(x) is log(cosh(x))
-        // For numerical stability, use: log(cosh(x)) = |x| + log(1 + exp(-2|x|)) - log(2)
+        // Use numerically stable formula valid for all x without branching:
+        // log(cosh(x)) = |x| + log(1 + exp(-2|x|)) - log(2)
+        // log1p avoids precision loss when exp(-2|x|) is small
         float abs_x = std::abs(x);
-        float ad;
-        if (abs_x > 10.0f) {
-            // For large values, log(cosh(x)) ≈ |x| - log(2)
-            ad = abs_x - 0.693147f;
-        } else {
-            ad = std::log(std::cosh(x));
-        }
+        float ad = abs_x + std::log1p(std::exp(-2.0f * abs_x)) - 0.693147f;
 
-        // ADAA formula: y[n] = (F₁(x[n]) - F₁(x[n-1])) / (x[n] - x[n-1])
-        float diff = x - state.x_prev;
         float y;
 
-        if (std::abs(diff) < 1e-5f) {
-            // When samples are very close, use fallback: f((x + x_prev) / 2)
-            y = std::tanh((x + state.x_prev) * 0.5f);
+        if (!state.initialized) {
+            // First sample: use direct tanh to avoid ADAA startup discontinuity
+            // (state starts at x_prev=0, ad_prev=0 which is far from actual input)
+            y = std::tanh(x);
+            state.initialized = true;
         } else {
-            y = (ad - state.ad_prev) / diff;
+            // ADAA formula: y[n] = (F₁(x[n]) - F₁(x[n-1])) / (x[n] - x[n-1])
+            float diff = x - state.x_prev;
+
+            if (std::abs(diff) < 1e-4f) {
+                // When samples are very close, use direct evaluation (midpoint rule)
+                y = std::tanh((x + state.x_prev) * 0.5f);
+            } else {
+                // Compute antiderivative difference with precision guard:
+                // F₁(x) = |x| + log1p(exp(-2|x|)) - ln2
+                // When both samples have the same sign and are in saturation,
+                // the |x| terms dominate and partially cancel, causing precision loss.
+                // Split: F₁(x) - F₁(x_prev) = (|x|-|x_prev|) + (log1p terms diff)
+                float ad_diff;
+                float abs_xp = std::abs(state.x_prev);
+                if (abs_x > 0.5f && abs_xp > 0.5f && (x > 0) == (state.x_prev > 0)) {
+                    // Same sign: |x| - |x_prev| = sign(x) * (x - x_prev) = sign(x) * diff
+                    float abs_diff = (x > 0) ? diff : -diff;
+                    float log_diff = std::log1p(std::exp(-2.0f * abs_x))
+                                   - std::log1p(std::exp(-2.0f * abs_xp));
+                    ad_diff = abs_diff + log_diff;
+                } else {
+                    ad_diff = ad - state.ad_prev;
+                }
+                y = ad_diff / diff;
+            }
         }
 
         // Update state for next sample
         state.x_prev = x;
         state.ad_prev = ad;
 
-        // Normalize output (ADAA can affect amplitude slightly)
-        out[i] = std::clamp(y, -1.0f, 1.0f);
+        // tanh output is naturally bounded to [-1,1]; ADAA preserves this
+        out[i] = y;
     }
 }
 

@@ -54,18 +54,17 @@ class EnvelopeTestHost:
         # Buffer 4: release
         # Buffer 10: output
 
-        # Truncate hash to 16-bit for state_id
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 1, cedar.hash("attack") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 1, cedar.hash("attack"))
         )
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 2, cedar.hash("decay") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 2, cedar.hash("decay"))
         )
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 3, cedar.hash("sustain") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 3, cedar.hash("sustain"))
         )
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 4, cedar.hash("release") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 4, cedar.hash("release"))
         )
 
         # ENV_ADSR: gate, attack, decay, sustain, release -> output
@@ -101,12 +100,11 @@ class EnvelopeTestHost:
         # Buffer 2: release
         # Buffer 10: output
 
-        # Truncate hash to 16-bit for state_id
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 1, cedar.hash("attack") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 1, cedar.hash("attack"))
         )
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 2, cedar.hash("release") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 2, cedar.hash("release"))
         )
 
         # ENV_AR: trigger, attack, release -> output
@@ -140,12 +138,11 @@ class EnvelopeTestHost:
         # Buffer 2: release
         # Buffer 10: output
 
-        # Truncate hash to 16-bit for state_id
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 1, cedar.hash("attack") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 1, cedar.hash("attack"))
         )
         self.program.append(
-            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 2, cedar.hash("release") & 0xFFFF)
+            cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, 2, cedar.hash("release"))
         )
 
         # ENV_FOLLOWER: input, attack, release -> output

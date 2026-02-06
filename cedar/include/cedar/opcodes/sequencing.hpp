@@ -208,11 +208,11 @@ inline std::uint32_t compute_euclidean_pattern(std::uint32_t hits, std::uint32_t
         }
     }
 
-    // Apply rotation (shift pattern right)
+    // Apply rotation (shift pattern left — each hit moves to the next step)
     if (rotation > 0 && steps > 0) {
         rotation = rotation % steps;
         std::uint32_t mask = (1u << steps) - 1;
-        pattern = ((pattern >> rotation) | (pattern << (steps - rotation))) & mask;
+        pattern = ((pattern << rotation) | (pattern >> (steps - rotation))) & mask;
     }
 
     return pattern;

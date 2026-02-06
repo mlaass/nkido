@@ -13,6 +13,7 @@ namespace cedar {
 // Audio signals should never exceed ±10 in normal operation
 [[gnu::always_inline]]
 inline float clamp_audio(float val) {
+    if (val != val) return 0.0f;  // NaN check (NaN != NaN is true)
     if (val > 10.0f) return 10.0f;
     if (val < -10.0f) return -10.0f;
     return val;
@@ -292,16 +293,16 @@ inline void op_filter_diode(ExecutionContext& ctx, const Instruction& inst) {
             state.k = std::clamp(resonance, 0.0f, 4.0f);
         }
 
-        // Get feedback from output with diode nonlinearity
-        // The diode creates exponential response at extremes
-        // fb_gain compensates for VT attenuation to enable proper self-oscillation
+        // Diode ladder feedback: the diode nonlinearity provides natural limiting
+        // For small signals: diode_sinh(v/vt) * vt ≈ v (linear), so feedback ≈ k * cap[3] * fb_gain
+        // For large signals: sinh grows exponentially, providing the nonlinear character
         float fb_voltage = state.cap[3] * vt_inv;
         float feedback = state.k * diode_sinh(fb_voltage) * vt * fb_gain;
 
         // Input with feedback
         float x = input[i] - feedback;
 
-        // Apply soft saturation at input (prevents harsh clipping)
+        // Soft saturation at input
         x = std::tanh(x * 0.5f) * 2.0f;
 
         // Calculate G for trapezoidal integration
@@ -313,24 +314,25 @@ inline void op_filter_diode(ExecutionContext& ctx, const Instruction& inst) {
             float v_in = (j == 0) ? x : state.cap[j - 1];
 
             // Diode-coupled stage: the coupling is nonlinear
-            // Approximate with one Newton-Raphson iteration
             float v_est = state.cap[j];
-            float v_diff = v_in - v_est;
+            for (int nr = 0; nr < 1; ++nr) {
+                float v_diff = v_in - v_est;
 
-            // Nonlinear transfer through diode
-            float diode_v = v_diff * vt_inv;
-            float i_diode = diode_sinh(diode_v);
-            float di_diode = diode_cosh(diode_v) * vt_inv;
+                // Nonlinear transfer through diode
+                float diode_v = v_diff * vt_inv;
+                float i_diode = diode_sinh(diode_v);
+                float di_diode = diode_cosh(diode_v) * vt_inv;
 
-            // Newton-Raphson update: v_new = v_old - f(v)/f'(v)
-            // f(v) = v - G * i_diode - (1-G) * v_cap
-            float f_v = v_est - G * i_diode * vt - (1.0f - G) * state.cap[j];
-            float df_v = 1.0f + G * di_diode * vt;
+                // Newton-Raphson update: v_new = v_old - f(v)/f'(v)
+                // f(v) = v - G * i_diode - (1-G) * v_cap
+                float f_v = v_est - G * i_diode * vt - (1.0f - G) * state.cap[j];
+                float df_v = 1.0f + G * di_diode * vt;
 
-            float v_new = v_est - f_v / df_v;
+                v_est = v_est - f_v / df_v;
+            }
 
             // Clamp to prevent blowup
-            state.cap[j] = clamp_audio(v_new);
+            state.cap[j] = clamp_audio(v_est);
         }
 
         // Output is the 4-pole lowpass
@@ -429,11 +431,19 @@ inline void op_filter_formant(ExecutionContext& ctx, const Instruction& inst) {
 
         float x = input[i];
 
-        // Chamberlin SVF coefficients
-        // f_coef = 2 * sin(pi * freq / sample_rate)
-        float f1_coef = 2.0f * std::sin(PI * state.f1 / ctx.sample_rate);
-        float f2_coef = 2.0f * std::sin(PI * state.f2 / ctx.sample_rate);
-        float f3_coef = 2.0f * std::sin(PI * state.f3 / ctx.sample_rate);
+        // Chamberlin SVF coefficients with bilinear pre-warping
+        // Standard formula 2*sin(π*f/sr) warps resonant peaks downward above ~3kHz.
+        // Pre-warp the cutoff: f_warped = (sr/π)*tan(π*f/sr), then use 2*sin(π*f_warped/sr).
+        // This simplifies to: f_coef = 2*sin(atan(tan(π*f/sr))) but more stable as:
+        auto prewarp_coef = [&](float freq) -> float {
+            float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
+            // tan-based coefficient: exact pre-warping for Chamberlin SVF
+            // Clamped to <1.9 for stability (Chamberlin requires f_coef < 2)
+            return std::min(1.9f, 2.0f * std::tan(w));
+        };
+        float f1_coef = prewarp_coef(state.f1);
+        float f2_coef = prewarp_coef(state.f2);
+        float f3_coef = prewarp_coef(state.f3);
         float q_coef = 1.0f / q;
 
         // Bandpass 1 (F1 - first formant)
@@ -477,15 +487,16 @@ inline float diode_clip(float x, float& state, float threshold) {
     // Asymmetric soft diode clipping
     // Positive: gentle soft knee
     // Negative: sharper knee (like silicon diode)
+    // Headroom scaled with threshold to allow self-oscillation at high resonance
     constexpr float POS_SLOPE = SALLENKEY_CLIP_POS_SLOPE_DEFAULT;
     constexpr float NEG_SLOPE = SALLENKEY_CLIP_NEG_SLOPE_DEFAULT;
 
     float clipped;
     if (x > threshold) {
-        clipped = threshold + std::tanh((x - threshold) * POS_SLOPE) * 0.3f;
+        clipped = threshold + std::tanh((x - threshold) * POS_SLOPE) * 0.8f;
     } else if (x < -threshold) {
         // Sharper negative clipping
-        clipped = -threshold + std::tanh((x + threshold) * NEG_SLOPE) * 0.2f;
+        clipped = -threshold + std::tanh((x + threshold) * NEG_SLOPE) * 0.6f;
     } else {
         clipped = x;
     }
