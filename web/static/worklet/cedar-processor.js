@@ -1203,58 +1203,103 @@ class CedarProcessor extends AudioWorkletProcessor {
 		const outRight = output[1];
 
 		if (!this.isInitialized || !this.module) {
-			// Output silence if not ready
-			outLeft.fill(0);
-			outRight.fill(0);
 			return true;
 		}
 
-		try {
-			// Periodic diagnostic logging (every 1000 blocks = ~2.7s at 48kHz)
-			this.blockCount = (this.blockCount || 0) + 1;
-			if (this.blockCount % 1000 === 0) {
-				const hasProgram = this.module._cedar_has_program();
-				const isCrossfading = this.module._cedar_is_crossfading();
-				const hasPendingSwap = this.module._cedar_debug_has_pending_swap?.() ?? 'N/A';
-				const swapCount = this.module._cedar_debug_swap_count?.() ?? 'N/A';
-				const currentInst = this.module._cedar_debug_current_slot_instruction_count?.() ?? 'N/A';
-				console.log(`[CedarProcessor] block=${this.blockCount} hasProgram=${hasProgram} crossfading=${isCrossfading} pendingSwap=${hasPendingSwap} swaps=${swapCount} instructions=${currentInst}`);
+		// Initialize diagnostic counters
+		if (!this._diagInit) {
+			this._diagInit = true;
+			this._silentBlocks = 0;
+			this._wasSilent = false;
+			this._nanCount = 0;
+			this._nanLogged = false;
+		}
+
+		// Periodic diagnostic logging (every 1000 blocks = ~2.7s at 48kHz)
+		this.blockCount = (this.blockCount || 0) + 1;
+		if (this.blockCount % 1000 === 0) {
+			const hasProgram = this.module._cedar_has_program();
+			const isCrossfading = this.module._cedar_is_crossfading();
+			const hasPendingSwap = this.module._cedar_debug_has_pending_swap?.() ?? 'N/A';
+			const swapCount = this.module._cedar_debug_swap_count?.() ?? 'N/A';
+			const currentInst = this.module._cedar_debug_current_slot_instruction_count?.() ?? 'N/A';
+			console.log(`[CedarProcessor] block=${this.blockCount} hasProgram=${hasProgram} crossfading=${isCrossfading} pendingSwap=${hasPendingSwap} swaps=${swapCount} instructions=${currentInst} peakLevel=${this._lastPeak?.toFixed(4) ?? '?'} nanCount=${this._nanCount} silentBlocks=${this._silentBlocks}`);
+		}
+
+		// Process one block with Cedar VM
+		// Cedar handles crossfade internally when programs are swapped
+		this.module._cedar_process_block();
+
+		// Copy output from WASM memory
+		// outputLeftPtr and outputRightPtr are byte offsets, convert to float index
+		const leftFloatIdx = this.outputLeftPtr / 4;
+		const rightFloatIdx = this.outputRightPtr / 4;
+
+		let blockNanCount = 0;
+
+		if (this.module.wasmMemory) {
+			// Always get fresh heap view - stale views cause corruption after memory growth
+			const heap = new Float32Array(this.module.wasmMemory.buffer);
+			for (let i = 0; i < this.blockSize && i < outLeft.length; i++) {
+				let l = heap[leftFloatIdx + i];
+				let r = heap[rightFloatIdx + i];
+				if (!isFinite(l)) { blockNanCount++; l = 0; }
+				if (!isFinite(r)) { blockNanCount++; r = 0; }
+				outLeft[i] = l;
+				outRight[i] = r;
 			}
-
-			// Process one block with Cedar VM
-			// Cedar handles crossfade internally when programs are swapped
-			this.module._cedar_process_block();
-
-			// Copy output from WASM memory
-			// outputLeftPtr and outputRightPtr are byte offsets, convert to float index
-			const leftFloatIdx = this.outputLeftPtr / 4;
-			const rightFloatIdx = this.outputRightPtr / 4;
-
-			if (this.module.wasmMemory) {
-				// Always get fresh heap view - stale views cause corruption after memory growth
-				const heap = new Float32Array(this.module.wasmMemory.buffer);
-				for (let i = 0; i < this.blockSize && i < outLeft.length; i++) {
-					outLeft[i] = heap[leftFloatIdx + i] || 0;
-					outRight[i] = heap[rightFloatIdx + i] || 0;
-				}
-			} else if (this.module.HEAPF32) {
-				for (let i = 0; i < this.blockSize && i < outLeft.length; i++) {
-					outLeft[i] = this.module.HEAPF32[leftFloatIdx + i] || 0;
-					outRight[i] = this.module.HEAPF32[rightFloatIdx + i] || 0;
-				}
-			} else if (this.module.getValue) {
-				for (let i = 0; i < this.blockSize && i < outLeft.length; i++) {
-					outLeft[i] = this.module.getValue(this.outputLeftPtr + i * 4, 'float') || 0;
-					outRight[i] = this.module.getValue(this.outputRightPtr + i * 4, 'float') || 0;
-				}
-			} else {
-				outLeft.fill(0);
-				outRight.fill(0);
+		} else if (this.module.HEAPF32) {
+			for (let i = 0; i < this.blockSize && i < outLeft.length; i++) {
+				let l = this.module.HEAPF32[leftFloatIdx + i];
+				let r = this.module.HEAPF32[rightFloatIdx + i];
+				if (!isFinite(l)) { blockNanCount++; l = 0; }
+				if (!isFinite(r)) { blockNanCount++; r = 0; }
+				outLeft[i] = l;
+				outRight[i] = r;
 			}
-		} catch (err) {
-			// On error, output silence
-			outLeft.fill(0);
-			outRight.fill(0);
+		} else if (this.module.getValue) {
+			for (let i = 0; i < this.blockSize && i < outLeft.length; i++) {
+				let l = this.module.getValue(this.outputLeftPtr + i * 4, 'float');
+				let r = this.module.getValue(this.outputRightPtr + i * 4, 'float');
+				if (!isFinite(l)) { blockNanCount++; l = 0; }
+				if (!isFinite(r)) { blockNanCount++; r = 0; }
+				outLeft[i] = l;
+				outRight[i] = r;
+			}
+		}
+
+		// NaN/Inf detection
+		if (blockNanCount > 0) {
+			this._nanCount += blockNanCount;
+			if (!this._nanLogged) {
+				this._nanLogged = true;
+				console.warn(`[CedarProcessor] NaN/Inf detected in output (${blockNanCount} samples in block ${this.blockCount})`);
+			}
+		}
+
+		// Silence detection: track peak level and consecutive silent blocks
+		let peak = 0;
+		for (let i = 0; i < outLeft.length; i++) {
+			const absL = Math.abs(outLeft[i]);
+			const absR = Math.abs(outRight[i]);
+			if (absL > peak) peak = absL;
+			if (absR > peak) peak = absR;
+		}
+		this._lastPeak = peak;
+
+		if (peak < 1e-10) {
+			this._silentBlocks++;
+			if (this._silentBlocks === 100 && !this._wasSilent) {
+				this._wasSilent = true;
+				console.warn(`[CedarProcessor] Output silent for ${this._silentBlocks} blocks (started at block ${this.blockCount - 100}). nanCount=${this._nanCount}`);
+			}
+		} else {
+			if (this._wasSilent) {
+				console.log(`[CedarProcessor] Audio recovered after ${this._silentBlocks} silent blocks (block ${this.blockCount})`);
+			}
+			this._silentBlocks = 0;
+			this._wasSilent = false;
+			this._nanLogged = false; // Reset so we log again on next NaN burst
 		}
 
 		return true;

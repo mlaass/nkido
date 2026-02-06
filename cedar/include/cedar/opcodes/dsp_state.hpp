@@ -331,6 +331,7 @@ struct BitcrushState {
 struct SmoothSatState {
     float x_prev = 0.0f;      // Previous input sample
     float ad_prev = 0.0f;     // Previous antiderivative value F₁(x_prev)
+    bool initialized = false;  // First sample uses direct tanh to avoid ADAA startup discontinuity
 };
 
 // Tube saturation state (with oversampling)
@@ -551,6 +552,10 @@ struct FreeverbState {
     std::size_t comb_pos[NUM_COMBS] = {};
     float comb_filter_state[NUM_COMBS] = {};
 
+    // DC blocker state per comb (in feedback path)
+    float dc_x1[NUM_COMBS] = {};
+    float dc_y1[NUM_COMBS] = {};
+
     float* allpass_buffers[NUM_ALLPASSES] = {};
     std::size_t allpass_pos[NUM_ALLPASSES] = {};
 
@@ -574,6 +579,8 @@ struct FreeverbState {
                 std::memset(comb_buffers[i], 0, COMB_SIZES[i] * sizeof(float));
                 comb_pos[i] = 0;
                 comb_filter_state[i] = 0.0f;
+                dc_x1[i] = 0.0f;
+                dc_y1[i] = 0.0f;
             }
         }
         for (std::size_t i = 0; i < NUM_ALLPASSES; ++i) {
@@ -613,6 +620,10 @@ struct DattorroState {
 
     // Damping filters
     float damp_state[2] = {};
+
+    // DC blocker state per branch (in feedback path)
+    float dc_x1[2] = {};
+    float dc_y1[2] = {};
 
     // Tank feedback (for figure-8 topology)
     float tank_feedback[2] = {};
@@ -661,6 +672,8 @@ struct DattorroState {
                 delay_pos[i] = 0;
             }
             damp_state[i] = 0.0f;
+            dc_x1[i] = 0.0f;
+            dc_y1[i] = 0.0f;
             tank_feedback[i] = 0.0f;
         }
         mod_phase = 0.0f;
@@ -680,6 +693,10 @@ struct FDNState {
     std::size_t write_pos[NUM_DELAYS] = {};
     float damp_state[NUM_DELAYS] = {};
 
+    // DC blocker state per delay line (in feedback path)
+    float dc_x1[NUM_DELAYS] = {};
+    float dc_y1[NUM_DELAYS] = {};
+
     void ensure_buffers(AudioArena* arena) {
         if (!arena) return;
         for (std::size_t i = 0; i < NUM_DELAYS; ++i) {
@@ -696,6 +713,8 @@ struct FDNState {
             }
             write_pos[i] = 0;
             damp_state[i] = 0.0f;
+            dc_x1[i] = 0.0f;
+            dc_y1[i] = 0.0f;
         }
     }
 };

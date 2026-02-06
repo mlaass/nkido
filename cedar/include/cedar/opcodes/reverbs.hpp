@@ -10,6 +10,10 @@
 
 namespace cedar {
 
+// DC blocker coefficient: R ≈ 0.997 gives ~23Hz cutoff at 48kHz
+// y[n] = x[n] - x[n-1] + R * y[n-1]
+constexpr float DC_BLOCKER_R = 0.997f;
+
 // Default constants for Freeverb
 constexpr float FREEVERB_ROOM_SCALE_DEFAULT = 0.28f;
 constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
@@ -64,8 +68,14 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
             // Lowpass filter in feedback path (damping)
             state.comb_filter_state[c] = delayed * (1.0f - damp) + state.comb_filter_state[c] * damp;
 
+            // DC blocker in feedback path to prevent low-frequency buildup
+            float dc_in = state.comb_filter_state[c];
+            float dc_out = dc_in - state.dc_x1[c] + DC_BLOCKER_R * state.dc_y1[c];
+            state.dc_x1[c] = dc_in;
+            state.dc_y1[c] = dc_out;
+
             // Write with feedback
-            buffer[state.comb_pos[c]] = x + feedback * state.comb_filter_state[c];
+            buffer[state.comb_pos[c]] = x + feedback * dc_out;
             state.comb_pos[c] = (state.comb_pos[c] + 1) % size;
 
             comb_sum += delayed;
@@ -196,6 +206,12 @@ inline void op_reverb_dattorro(ExecutionContext& ctx, const Instruction& inst) {
             state.damp_state[0] = left_in * (1.0f - damping) + state.damp_state[0] * damping;
             left_in = state.damp_state[0];
 
+            // DC blocker in feedback path
+            float dc_out_l = left_in - state.dc_x1[0] + DC_BLOCKER_R * state.dc_y1[0];
+            state.dc_x1[0] = left_in;
+            state.dc_y1[0] = dc_out_l;
+            left_in = dc_out_l;
+
             state.tank_feedback[0] = left_in;
         }
 
@@ -223,6 +239,12 @@ inline void op_reverb_dattorro(ExecutionContext& ctx, const Instruction& inst) {
             // Damping filter
             state.damp_state[1] = right_in * (1.0f - damping) + state.damp_state[1] * damping;
             right_in = state.damp_state[1];
+
+            // DC blocker in feedback path
+            float dc_out_r = right_in - state.dc_x1[1] + DC_BLOCKER_R * state.dc_y1[1];
+            state.dc_x1[1] = right_in;
+            state.dc_y1[1] = dc_out_r;
+            right_in = dc_out_r;
 
             state.tank_feedback[1] = right_in;
         }
@@ -277,7 +299,13 @@ inline void op_reverb_fdn(ExecutionContext& ctx, const Instruction& inst) {
 
             // Apply damping (lowpass)
             state.damp_state[d] = delayed[d] * (1.0f - damp) + state.damp_state[d] * damp;
-            delayed[d] = state.damp_state[d];
+
+            // DC blocker in feedback path
+            float dc_in = state.damp_state[d];
+            float dc_out = dc_in - state.dc_x1[d] + DC_BLOCKER_R * state.dc_y1[d];
+            state.dc_x1[d] = dc_in;
+            state.dc_y1[d] = dc_out;
+            delayed[d] = dc_out;
         }
 
         // Hadamard mixing matrix
