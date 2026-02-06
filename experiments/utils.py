@@ -5,8 +5,52 @@ DSP Utility Functions
 Helper functions for common DSP operations.
 """
 
+import json
+import os
+
 import numpy as np
+from scipy.io import wavfile
 from typing import Tuple
+
+
+class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        return super().default(obj)
+
+
+def save_wav(filepath: str, data: np.ndarray, sample_rate: int = 48000):
+    """Save audio data to WAV file (int16)."""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    data_clipped = np.clip(data, -1.0, 1.0)
+    data_int16 = (data_clipped * 32767).astype(np.int16)
+    wavfile.write(filepath, sample_rate, data_int16)
+    print(f"    Saved: {filepath}")
+
+
+def gen_white_noise(duration, sr):
+    """White noise for spectral analysis."""
+    return np.random.uniform(-0.5, 0.5, int(duration * sr)).astype(np.float32)
+
+
+def gen_impulse(duration, sr):
+    """Kronecker delta for reverb tails."""
+    x = np.zeros(int(duration * sr), dtype=np.float32)
+    x[0] = 1.0
+    return x
+
+
+def gen_linear_ramp(samples=1024):
+    """Linear ramp from -1 to 1 for transfer curve plotting."""
+    return np.linspace(-1, 1, samples, dtype=np.float32)
 
 
 def db_to_linear(db: float | np.ndarray) -> float | np.ndarray:

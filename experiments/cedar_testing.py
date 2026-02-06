@@ -4,8 +4,17 @@ Cedar Test Host Module
 Shared test harness for running Cedar VM tests.
 """
 
+import os
+
 import cedar_core as cedar
 import numpy as np
+
+
+def output_dir(name: str) -> str:
+    """Get/create output directory for a test: output/<name>/"""
+    path = os.path.join(os.path.dirname(__file__), "output", name)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 class CedarTestHost:
@@ -36,7 +45,8 @@ class CedarTestHost:
         self.param_counter += 1
 
         # Instruction to fetch param into buffer
-        name_hash = cedar.hash(name) & 0xFFFF  # Truncate to 16-bit
+        # Use full 32-bit hash (state_id is uint32)
+        name_hash = cedar.hash(name)
         self.program.append(
             cedar.Instruction.make_nullary(cedar.Opcode.ENV_GET, buf_idx, name_hash)
         )
@@ -73,6 +83,44 @@ class CedarTestHost:
             output_left.append(l)
 
         return np.concatenate(output_left)[:n_samples]
+
+    def process_stereo(self, input_left: np.ndarray, input_right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Run the program on stereo input signals.
+        Returns (output_left, output_right).
+        """
+        # Load program into VM
+        self.vm.load_program(self.program)
+
+        # Pad inputs to block boundary
+        n_samples = len(input_left)
+        n_blocks = (n_samples + cedar.BLOCK_SIZE - 1) // cedar.BLOCK_SIZE
+        padded_len = n_blocks * cedar.BLOCK_SIZE
+
+        left_padded = np.zeros(padded_len, dtype=np.float32)
+        left_padded[:n_samples] = input_left
+
+        right_padded = np.zeros(padded_len, dtype=np.float32)
+        right_padded[:n_samples] = input_right
+
+        output_left = []
+        output_right = []
+
+        # Process block by block
+        for i in range(n_blocks):
+            start = i * cedar.BLOCK_SIZE
+            end = start + cedar.BLOCK_SIZE
+
+            # Inject stereo input into Buffers 0 and 1
+            self.vm.set_buffer(0, left_padded[start:end])
+            self.vm.set_buffer(1, right_padded[start:end])
+
+            # Run VM
+            l, r = self.vm.process()
+            output_left.append(l)
+            output_right.append(r)
+
+        return np.concatenate(output_left)[:n_samples], np.concatenate(output_right)[:n_samples]
 
     def reset(self):
         """Reset the host for a new test."""
