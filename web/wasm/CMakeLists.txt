@@ -7,6 +7,12 @@ project(enkido_wasm LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Disable thread-safe statics for WASM - AudioWorklet doesn't support pthreads
+# properly and __cxa_guard_acquire aborts when trying to acquire mutex
+if(EMSCRIPTEN)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-threadsafe-statics")
+endif()
+
 # Find parent project libraries
 # When building standalone, these paths need to be set
 set(ENKIDO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
@@ -120,17 +126,20 @@ if(EMSCRIPTEN)
         -sALLOW_MEMORY_GROWTH=1
         -sMAXIMUM_MEMORY=536870912  # 512MB max
 
+        # Stack size - default 64KB is too small for deep AST recursion in codegen
+        -sSTACK_SIZE=1048576    # 1MB
+
         # No filesystem needed
         -sNO_FILESYSTEM=1
 
         # Module settings
         -sMODULARIZE=1
         "-sEXPORT_NAME=createEnkidoModule"
-        "-sENVIRONMENT=web,worker"
+        -sENVIRONMENT=web,worker,shell
 
-        # For AudioWorklet support
-        -sAUDIO_WORKLET=1
-        -sWASM_WORKERS=1
+        # Note: Not using Emscripten's built-in AudioWorklet support (-sAUDIO_WORKLET=1)
+        # because we manually load WASM in cedar-processor.js. Those flags enable
+        # pthreads which conflict with AudioWorklet's limited threading model.
 
         # Single file output (inline WASM as base64)
         # Uncomment for single-file distribution:
@@ -143,7 +152,7 @@ if(EMSCRIPTEN)
             -O1
             -g
             -gsource-map
-            # Keep assertions off to avoid pthread environment checks
+
             -sASSERTIONS=0
         )
     else()
