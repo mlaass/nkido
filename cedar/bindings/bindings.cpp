@@ -84,6 +84,8 @@ PYBIND11_MODULE(cedar_core, m) {
         .value("REVERB_FREEVERB", cedar::Opcode::REVERB_FREEVERB)
         .value("REVERB_DATTORRO", cedar::Opcode::REVERB_DATTORRO)
         .value("REVERB_FDN", cedar::Opcode::REVERB_FDN)
+        .value("DELAY_TAP", cedar::Opcode::DELAY_TAP)
+        .value("DELAY_WRITE", cedar::Opcode::DELAY_WRITE)
         // Effects - Modulation (80-83)
         .value("EFFECT_CHORUS", cedar::Opcode::EFFECT_CHORUS)
         .value("EFFECT_FLANGER", cedar::Opcode::EFFECT_FLANGER)

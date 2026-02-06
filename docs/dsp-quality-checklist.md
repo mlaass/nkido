@@ -50,8 +50,9 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | `OSC_SQR_MINBLEP` | ✅ Tested | Compared against PolyBLEP | Higher quality, more CPU |
 | `OSC_SQR_PWM` | ✅ Tested | Duty cycle accuracy (10%-90%) | PWM range verified |
 | `OSC_SQR_PWM_4X` | ✅ Tested | PWM + FM aliasing | 4x oversampling |
-| `OSC_SAW_PWM` | ✅ Tested | Variable slope | PolyBLEP PWM variant |
-| `OSC_SAW_PWM_4X` | ✅ Tested | PWM + FM, 4x oversampling | High quality |
+| `OSC_SAW_PWM` | ✅ Tested | Waveform shapes, frequency accuracy, PWM sweep spectrogram | PolyBLAMP, dedicated test file |
+| `OSC_SAW_PWM_4X` | ✅ Tested | Aliasing comparison vs 1x, high-frequency quality | 4x oversampled, dedicated test file |
+| `OSC_SQR_PWM_MINBLEP` | ✅ Tested | Duty cycle sweep, aliasing vs PolyBLEP, high-frequency quality | MinBLEP sub-sample accuracy |
 
 ### Untested
 
@@ -59,7 +60,6 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 |--------|----------|-----------------|
 | `OSC_RAMP` | Medium | Frequency accuracy, DC offset, comparison with SAW |
 | `OSC_PHASOR` | Medium | Linearity, wraparound behavior, sync compatibility |
-| `OSC_SQR_PWM_MINBLEP` | Low | Compare MinBLEP vs PolyBLEP PWM quality |
 | `OSC_SAW_2X` | Low | 2x oversampling quality vs 1x/4x |
 | `OSC_SQR_2X` | Low | 2x oversampling quality vs 1x/4x |
 | `OSC_TRI_2X` | Low | 2x oversampling quality vs 1x/4x |
@@ -101,16 +101,11 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | `EFFECT_PHASER` | ✅ Tested | Spectrogram sweep | 6-stage phaser |
 | `EFFECT_CHORUS` | ✅ Tested | Spectral spread, sideband analysis | 0.71 spread ratio |
 | `EFFECT_FLANGER` | ✅ Tested | Spectrogram sweep pattern | Comb filter notches |
-
-### Untested
-
-| Opcode | Priority | Suggested Tests |
-|--------|----------|-----------------|
-| `DISTORT_SMOOTH` | Medium | Transfer curve, harmonic content |
-| `DISTORT_TAPE` | Medium | Saturation curve, hysteresis |
-| `DISTORT_XFMR` | Low | Transformer saturation character |
-| `DISTORT_EXCITE` | Low | Harmonic enhancement spectrum |
-| `EFFECT_COMB` | Medium | Delay time accuracy, feedback |
+| `DISTORT_SMOOTH` | ✅ Tested | Transfer curve (tanh shape), drive sweep THD, ADAA antialiasing comparison | ADAA first-order |
+| `DISTORT_TAPE` | ✅ Tested | Saturation curve, warmth HF rolloff (spectral centroid), drive scaling | 2x oversampled |
+| `DISTORT_XFMR` | ✅ Tested | Bass emphasis THD comparison, bass_freq crossover, drive harmonics | Transformer bass saturation |
+| `DISTORT_EXCITE` | ✅ Tested | Passthrough at amount=0, harmonic generation above freq, odd/even balance | Aural exciter |
+| `EFFECT_COMB` | ✅ Tested | Resonance frequency peaks, positive/negative feedback, damping | Feedback comb filter |
 
 ---
 
@@ -122,13 +117,9 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 |--------|--------|---------------|-------|
 | `DELAY` | ✅ Tested | Delay time accuracy (0.00% error), feedback decay (-6dB/echo) | 4800 samples @ 100ms |
 | `REVERB_DATTORRO` | ✅ Tested | Impulse response, decay analysis | Long tail reverb |
-
-### Untested
-
-| Opcode | Priority | Suggested Tests |
-|--------|----------|-----------------|
-| `REVERB_FREEVERB` | High | Impulse response, room size, damping |
-| `REVERB_FDN` | Medium | Feedback delay network, decay, diffusion |
+| `REVERB_FREEVERB` | ✅ Tested | Impulse response, room_size RT60 scaling, damping spectral centroid | Schroeder-Moorer |
+| `REVERB_FDN` | ✅ Tested | Impulse response, decay RT60 scaling, damping HF rolloff | 4x4 Hadamard FDN |
+| `DELAY_TAP/WRITE` | ✅ Tested | Timing accuracy (ms), feedback decay, time unit modes (s/ms/samples) | Shared-state tap delay pair |
 
 ---
 
@@ -139,9 +130,7 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | Opcode | Status | Test Coverage | Notes |
 |--------|--------|---------------|-------|
 | `SAMPLE_PLAY` | ✅ Tested | Pitch accuracy, interpolation, timing | One-shot playback |
-| `SAMPLE_PLAY_LOOP` | ✅ Tested | Loop discontinuity, timing drift | Looping mode |
-
-*All implemented sampler opcodes have been tested.*
+| `SAMPLE_PLAY_LOOP` | ✅ Tested | Seamless looping, pitch shifting, gate control, loop boundary analysis | Dedicated looping test file |
 
 ---
 
@@ -167,13 +156,8 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | `LFO` | ✅ Tested | All shapes, frequency sync, PWM duty, zero-crossing precision | Direct phase calculation, 0 drift |
 | `EUCLID` | ✅ Tested | Pattern accuracy, step timing precision | 0 samples timing error |
 | `TRIGGER` | ✅ Tested | Division accuracy, long-term precision, cross-opcode alignment | ≤1 sample error over 1000 beats |
-
-### Untested
-
-| Opcode | Priority | Suggested Tests |
-|--------|----------|-----------------|
-| `SEQ_STEP` | High | Step timing, value interpolation |
-| `TIMELINE` | Medium | Event scheduling accuracy |
+| `SEQ_STEP` | ⚠ Partial | Zero-event fallback, stability (no state population API in Python) | Needs bindings extension |
+| `TIMELINE` | ⚠ Partial | Zero-breakpoint fallback, stability (no state population API in Python) | Needs bindings extension |
 
 ---
 
@@ -211,33 +195,29 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 
 ## Test Coverage Summary
 
-| Category | Tested | Partial/Bug | Untested | Notes |
-|----------|--------|-------------|----------|-------|
-| Oscillators | 11 | - | 9 | `test_op_osc.py`, `test_op_osc_fm.py`, `test_op_sqr_*.py` |
+| Category | Tested | Partial | Untested | Notes |
+|----------|--------|---------|----------|-------|
+| Oscillators | 12 | - | 8 | Added `test_op_saw_pwm.py`, `test_op_saw_pwm_4x.py`, `test_op_sqr_pwm_minblep.py` |
 | Filters | 7 | - | 0 | `test_op_lp.py`, `test_op_hp.py`, `test_op_bp.py`, `test_op_moog.py`, etc. |
-| Effects | 8 | - | 5 | `test_op_chorus.py`, `test_op_flanger.py`, `test_op_phaser.py`, `test_op_fold.py`, etc. |
-| Delays & Reverbs | 2 | - | 2 | `test_op_delay.py`, `test_op_dattorro.py` |
-| Samplers | 2 | - | 0 | `test_op_sample.py` |
+| Effects | 13 | - | 0 | Added `test_op_smooth.py`, `test_op_tape.py`, `test_op_xfmr.py`, `test_op_excite.py`, `test_op_comb.py` |
+| Delays & Reverbs | 5 | - | 0 | Added `test_op_freeverb.py`, `test_op_fdn.py`, `test_op_tap_delay.py` |
+| Samplers | 2 | - | 0 | Added dedicated `test_op_sample_loop.py` |
 | Envelopes | 3 | - | 0 | `test_op_adsr.py`, `test_op_ar.py`, `test_op_env_follower.py` |
-| Sequencers & Timing | 4 | - | 2 | `test_op_clock.py`, `test_op_lfo.py`, `test_op_euclid.py`, `test_op_trigger.py` |
+| Sequencers & Timing | 4 | 2 | 0 | Added `test_op_seq_step.py`, `test_op_timeline.py` (partial: no state API) |
 | Dynamics | 3 | - | 0 | `test_op_comp.py`, `test_op_limiter.py`, `test_op_gate.py` |
 | Utility | 5 | - | 1 | `test_op_noise.py`, `test_op_mtof.py`, `test_op_sah.py`, `test_op_slew.py` |
-| **Total** | **45** | **-** | **16** | 74% tested |
+| **Total** | **54** | **2** | **9** | 88% tested (up from 74%) |
 
 ---
 
 ## Priority Action Items
 
-### High Priority - Write Tests (Opcodes Available)
-1. `SEQ_STEP` - Step sequencer timing (opcode exists)
-2. `TIMELINE` - Event scheduling (opcode exists)
-3. `REVERB_FREEVERB` - Impulse response testing
+### High Priority - Extend Python Bindings
+1. `SEQ_STEP` - Add Python API to populate `SeqStepState` for full testing
+2. `TIMELINE` - Add Python API to populate `TimelineState` for full testing
 
-### Medium Priority (Extended Functionality)
+### Medium Priority (Remaining Untested Opcodes)
 1. `OSC_RAMP`, `OSC_PHASOR` - Modulation sources (opcodes exist, need tests)
-2. `REVERB_FDN` - Feedback delay network testing
-3. Remaining distortion types (`DISTORT_SMOOTH`, `DISTORT_TAPE`, `DISTORT_XFMR`, `DISTORT_EXCITE`)
-4. `EFFECT_COMB` - Comb filter testing
 
 ### Low Priority (Completeness)
 1. 2x oversampling oscillator variants (already have 1x and 4x)
