@@ -50,18 +50,6 @@ struct MinBLEPOscState {
     }
 };
 
-// Oversampled oscillator state (2x)
-// For alias-free FM synthesis - runs oscillator at 2x rate, downsamples output
-struct OscState2x {
-    OscState osc;           // Base oscillator state
-
-    // Simple averaging downsample (provides ~6dB attenuation at Nyquist)
-    // For better performance, a proper FIR halfband filter could be used
-    float downsample(float s0, float s1) {
-        return (s0 + s1) * 0.5f;
-    }
-};
-
 // Oversampled oscillator state (4x)
 // For even cleaner FM synthesis at high modulation indices
 struct OscState4x {
@@ -851,7 +839,6 @@ using DSPState = std::variant<
     std::monostate,
     OscState,
     MinBLEPOscState,
-    OscState2x,
     OscState4x,
     SVFState,
     NoiseState,

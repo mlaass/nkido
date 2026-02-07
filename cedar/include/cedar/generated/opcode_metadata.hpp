@@ -88,13 +88,9 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::DYNAMICS_COMP: return "DYNAMICS_COMP";
         case Opcode::DYNAMICS_LIMITER: return "DYNAMICS_LIMITER";
         case Opcode::DYNAMICS_GATE: return "DYNAMICS_GATE";
-        case Opcode::OSC_SIN_2X: return "OSC_SIN_2X";
         case Opcode::OSC_SIN_4X: return "OSC_SIN_4X";
-        case Opcode::OSC_SAW_2X: return "OSC_SAW_2X";
         case Opcode::OSC_SAW_4X: return "OSC_SAW_4X";
-        case Opcode::OSC_SQR_2X: return "OSC_SQR_2X";
         case Opcode::OSC_SQR_4X: return "OSC_SQR_4X";
-        case Opcode::OSC_TRI_2X: return "OSC_TRI_2X";
         case Opcode::OSC_TRI_4X: return "OSC_TRI_4X";
         case Opcode::OSC_SQR_PWM_4X: return "OSC_SQR_PWM_4X";
         case Opcode::OSC_SAW_PWM_4X: return "OSC_SAW_PWM_4X";
@@ -198,13 +194,9 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::DYNAMICS_COMP:
         case Opcode::DYNAMICS_LIMITER:
         case Opcode::DYNAMICS_GATE:
-        case Opcode::OSC_SIN_2X:
         case Opcode::OSC_SIN_4X:
-        case Opcode::OSC_SAW_2X:
         case Opcode::OSC_SAW_4X:
-        case Opcode::OSC_SQR_2X:
         case Opcode::OSC_SQR_4X:
-        case Opcode::OSC_TRI_2X:
         case Opcode::OSC_TRI_4X:
         case Opcode::OSC_SQR_PWM_4X:
         case Opcode::OSC_SAW_PWM_4X:

@@ -476,7 +476,7 @@ public:
                 json << R"({"type":"FDNState")";
                 json << "}";
             }
-            else if constexpr (std::is_same_v<T, OscState2x> || std::is_same_v<T, OscState4x>) {
+            else if constexpr (std::is_same_v<T, OscState4x>) {
                 json << R"({"type":"OscStateOversampled")";
                 json << R"(,"phase":)" << state.osc.phase;
                 json << R"(,"prev_phase":)" << state.osc.prev_phase;

@@ -113,13 +113,10 @@ enum class Opcode : std::uint8_t {
     DYNAMICS_GATE = 102,     // Noise gate with hysteresis
 
     // Oversampled Oscillators (110-119) - for alias-free FM synthesis
-    OSC_SIN_2X = 110,        // 2x oversampled sine
+    // Note: 2x variants (110, 112, 114, 116) removed — FM detection upgrades 1x directly to 4x
     OSC_SIN_4X = 111,        // 4x oversampled sine
-    OSC_SAW_2X = 112,        // 2x oversampled saw with PolyBLEP
     OSC_SAW_4X = 113,        // 4x oversampled saw with PolyBLEP
-    OSC_SQR_2X = 114,        // 2x oversampled square with PolyBLEP
     OSC_SQR_4X = 115,        // 4x oversampled square with PolyBLEP
-    OSC_TRI_2X = 116,        // 2x oversampled triangle
     OSC_TRI_4X = 117,        // 4x oversampled triangle
     OSC_SQR_PWM_4X = 118,    // 4x oversampled PWM square
     OSC_SAW_PWM_4X = 119,    // 4x oversampled variable-slope saw

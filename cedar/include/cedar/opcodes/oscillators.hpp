@@ -624,49 +624,6 @@ inline void op_osc_sqr_pwm_minblep(ExecutionContext& ctx, const Instruction& ins
 // Oversampled Oscillators - For alias-free FM synthesis
 // ============================================================================
 
-// SIN_2X: 2x oversampled sine oscillator
-// in0: frequency (Hz)
-// in1: phase offset (0-1, optional)
-// in2: trigger (reset phase on rising edge, optional)
-// Interpolates frequency input for true sample-accurate FM
-[[gnu::always_inline]]
-inline void op_osc_sin_2x(ExecutionContext& ctx, const Instruction& inst) {
-    float* out = ctx.buffers->get(inst.out_buffer);
-    const float* freq = ctx.buffers->get(inst.inputs[0]);
-    const float* phase_offset = get_input_or_zero(ctx, inst.inputs[1]);
-    const float* trigger = get_input_or_zero(ctx, inst.inputs[2]);
-    auto& state = ctx.states->get_or_create<OscState2x>(inst.state_id);
-
-    float inv_sr_2x = ctx.inv_sample_rate * 0.5f;
-
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        // Check for phase reset trigger
-        check_phase_reset(state.osc.phase, state.osc.prev_trigger, state.osc.initialized,
-                          trigger[i], phase_offset[i]);
-
-        // Interpolate frequency between this sample and next
-        float freq_curr = freq[i];
-        float freq_next = (i + 1 < BLOCK_SIZE) ? freq[i + 1] : freq[i];
-
-        float samples[2];
-
-        // Generate 2 samples at 2x rate with interpolated frequency
-        for (int j = 0; j < 2; ++j) {
-            // Linear interpolation: j=0 -> freq_curr, j=1 -> midpoint to next
-            float t = static_cast<float>(j) * 0.5f;
-            float freq_interp = freq_curr + t * (freq_next - freq_curr);
-            float dt = freq_interp * inv_sr_2x;
-
-            samples[j] = std::sin(state.osc.phase * TWO_PI);
-            state.osc.phase += dt;
-            if (state.osc.phase >= 1.0f) state.osc.phase -= 1.0f;
-            else if (state.osc.phase < 0.0f) state.osc.phase += 1.0f;
-        }
-
-        out[i] = state.downsample(samples[0], samples[1]);
-    }
-}
-
 // SIN_4X: 4x oversampled sine oscillator
 // in0: frequency (Hz)
 // in1: phase offset (0-1, optional)
@@ -707,55 +664,6 @@ inline void op_osc_sin_4x(ExecutionContext& ctx, const Instruction& inst) {
         }
 
         out[i] = state.downsample(samples[0], samples[1], samples[2], samples[3]);
-    }
-}
-
-// SAW_2X: 2x oversampled sawtooth with PolyBLEP at higher rate
-// in0: frequency (Hz)
-// in1: phase offset (0-1, optional)
-// in2: trigger (reset phase on rising edge, optional)
-// Interpolates frequency input for true sample-accurate FM
-[[gnu::always_inline]]
-inline void op_osc_saw_2x(ExecutionContext& ctx, const Instruction& inst) {
-    float* out = ctx.buffers->get(inst.out_buffer);
-    const float* freq = ctx.buffers->get(inst.inputs[0]);
-    const float* phase_offset = get_input_or_zero(ctx, inst.inputs[1]);
-    const float* trigger = get_input_or_zero(ctx, inst.inputs[2]);
-    auto& state = ctx.states->get_or_create<OscState2x>(inst.state_id);
-
-    float inv_sr_2x = ctx.inv_sample_rate * 0.5f;
-
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        // Check for phase reset trigger
-        check_phase_reset(state.osc.phase, state.osc.prev_trigger, state.osc.initialized,
-                          trigger[i], phase_offset[i]);
-
-        float freq_curr = freq[i];
-        float freq_next = (i + 1 < BLOCK_SIZE) ? freq[i + 1] : freq[i];
-
-        float samples[2];
-
-        for (int j = 0; j < 2; ++j) {
-            float t = static_cast<float>(j) * 0.5f;
-            float freq_interp = freq_curr + t * (freq_next - freq_curr);
-            float dt = freq_interp * inv_sr_2x;
-
-            float value = 2.0f * state.osc.phase - 1.0f;
-
-            if (state.osc.initialized) {
-                value -= poly_blep(state.osc.phase, dt);
-            }
-
-            samples[j] = value;
-
-            state.osc.prev_phase = state.osc.phase;
-            state.osc.phase += dt;
-            if (state.osc.phase >= 1.0f) state.osc.phase -= 1.0f;
-            else if (state.osc.phase < 0.0f) state.osc.phase += 1.0f;
-            state.osc.initialized = true;
-        }
-
-        out[i] = state.downsample(samples[0], samples[1]);
     }
 }
 
@@ -808,58 +716,6 @@ inline void op_osc_saw_4x(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
-// SQR_2X: 2x oversampled square with PolyBLEP
-// in0: frequency (Hz)
-// in1: phase offset (0-1, optional)
-// in2: trigger (reset phase on rising edge, optional)
-// Interpolates frequency input for true sample-accurate FM
-[[gnu::always_inline]]
-inline void op_osc_sqr_2x(ExecutionContext& ctx, const Instruction& inst) {
-    float* out = ctx.buffers->get(inst.out_buffer);
-    const float* freq = ctx.buffers->get(inst.inputs[0]);
-    const float* phase_offset = get_input_or_zero(ctx, inst.inputs[1]);
-    const float* trigger = get_input_or_zero(ctx, inst.inputs[2]);
-    auto& state = ctx.states->get_or_create<OscState2x>(inst.state_id);
-
-    float inv_sr_2x = ctx.inv_sample_rate * 0.5f;
-
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        // Check for phase reset trigger
-        check_phase_reset(state.osc.phase, state.osc.prev_trigger, state.osc.initialized,
-                          trigger[i], phase_offset[i]);
-
-        float freq_curr = freq[i];
-        float freq_next = (i + 1 < BLOCK_SIZE) ? freq[i + 1] : freq[i];
-
-        float samples[2];
-
-        for (int j = 0; j < 2; ++j) {
-            float t = static_cast<float>(j) * 0.5f;
-            float freq_interp = freq_curr + t * (freq_next - freq_curr);
-            float dt = freq_interp * inv_sr_2x;
-
-            float value = (state.osc.phase < 0.5f) ? 1.0f : -1.0f;
-
-            if (state.osc.initialized) {
-                value += poly_blep(state.osc.phase, dt);
-                float phase_half = state.osc.phase + 0.5f;
-                if (phase_half >= 1.0f) phase_half -= 1.0f;
-                value -= poly_blep(phase_half, dt);
-            }
-
-            samples[j] = value;
-
-            state.osc.prev_phase = state.osc.phase;
-            state.osc.phase += dt;
-            if (state.osc.phase >= 1.0f) state.osc.phase -= 1.0f;
-            else if (state.osc.phase < 0.0f) state.osc.phase += 1.0f;
-            state.osc.initialized = true;
-        }
-
-        out[i] = state.downsample(samples[0], samples[1]);
-    }
-}
-
 // SQR_4X: 4x oversampled square
 // in0: frequency (Hz)
 // in1: phase offset (0-1, optional)
@@ -909,59 +765,6 @@ inline void op_osc_sqr_4x(ExecutionContext& ctx, const Instruction& inst) {
         }
 
         out[i] = state.downsample(samples[0], samples[1], samples[2], samples[3]);
-    }
-}
-
-// TRI_2X: 2x oversampled triangle with PolyBLAMP
-// in0: frequency (Hz)
-// in1: phase offset (0-1, optional)
-// in2: trigger (reset phase on rising edge, optional)
-// Interpolates frequency input for true sample-accurate FM
-[[gnu::always_inline]]
-inline void op_osc_tri_2x(ExecutionContext& ctx, const Instruction& inst) {
-    float* out = ctx.buffers->get(inst.out_buffer);
-    const float* freq = ctx.buffers->get(inst.inputs[0]);
-    const float* phase_offset = get_input_or_zero(ctx, inst.inputs[1]);
-    const float* trigger = get_input_or_zero(ctx, inst.inputs[2]);
-    auto& state = ctx.states->get_or_create<OscState2x>(inst.state_id);
-
-    float inv_sr_2x = ctx.inv_sample_rate * 0.5f;
-
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        // Check for phase reset trigger
-        check_phase_reset(state.osc.phase, state.osc.prev_trigger, state.osc.initialized,
-                          trigger[i], phase_offset[i]);
-
-        float freq_curr = freq[i];
-        float freq_next = (i + 1 < BLOCK_SIZE) ? freq[i + 1] : freq[i];
-
-        float samples[2];
-
-        for (int j = 0; j < 2; ++j) {
-            float t = static_cast<float>(j) * 0.5f;
-            float freq_interp = freq_curr + t * (freq_next - freq_curr);
-            float dt = freq_interp * inv_sr_2x;
-
-            float value = 4.0f * std::abs(state.osc.phase - 0.5f) - 1.0f;
-
-            if (state.osc.initialized) {
-                float blamp = poly_blamp(state.osc.phase, dt);
-                float phase_half = state.osc.phase + 0.5f;
-                if (phase_half >= 1.0f) phase_half -= 1.0f;
-                blamp -= poly_blamp(phase_half, dt);
-                value += 4.0f * dt * blamp;
-            }
-
-            samples[j] = value;
-
-            state.osc.prev_phase = state.osc.phase;
-            state.osc.phase += dt;
-            if (state.osc.phase >= 1.0f) state.osc.phase -= 1.0f;
-            else if (state.osc.phase < 0.0f) state.osc.phase += 1.0f;
-            state.osc.initialized = true;
-        }
-
-        out[i] = state.downsample(samples[0], samples[1]);
     }
 }
 

@@ -322,33 +322,17 @@ void VM::execute(const Instruction& inst) {
             op_osc_sqr_pwm_minblep(ctx_, inst);
             break;
 
-        // === Oversampled Oscillators ===
-        case Opcode::OSC_SIN_2X:
-            op_osc_sin_2x(ctx_, inst);
-            break;
-
+        // === Oversampled Oscillators (4x only, 2x variants removed) ===
         case Opcode::OSC_SIN_4X:
             op_osc_sin_4x(ctx_, inst);
-            break;
-
-        case Opcode::OSC_SAW_2X:
-            op_osc_saw_2x(ctx_, inst);
             break;
 
         case Opcode::OSC_SAW_4X:
             op_osc_saw_4x(ctx_, inst);
             break;
 
-        case Opcode::OSC_SQR_2X:
-            op_osc_sqr_2x(ctx_, inst);
-            break;
-
         case Opcode::OSC_SQR_4X:
             op_osc_sqr_4x(ctx_, inst);
-            break;
-
-        case Opcode::OSC_TRI_2X:
-            op_osc_tri_2x(ctx_, inst);
             break;
 
         case Opcode::OSC_TRI_4X:

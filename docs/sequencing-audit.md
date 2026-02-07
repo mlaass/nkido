@@ -20,7 +20,7 @@ The Akkado pattern/sequencing API has accumulated redundant and non-functional f
 | `lfo()` | **Keep** | Beat-synced LFO. Unique. |
 | Pattern transforms (`slow`, `fast`, `rev`, `transpose`, `velocity`, `bank`, `n`) | **Keep** | Compile-time pattern transformations. Work with `pat()`. |
 
-## Unreachable Opcodes (11)
+## Unreachable Opcodes (6)
 
 These opcodes exist in the Cedar VM but are never emitted by the Akkado compiler.
 
@@ -29,13 +29,6 @@ These opcodes exist in the Cedar VM but are never emitted by the Akkado compiler
 `ARRAY_CONCAT`, `ARRAY_FILL`, `ARRAY_LEN`, `ARRAY_REVERSE`, `ARRAY_SLICE`, `ARRAY_SUM`
 
 Array ops were implemented in Cedar but the Akkado compiler never gained codegen for them. No builtin entries map to these opcodes.
-
-
-### 2x oscillator variants (4)
-
-`OSC_SIN_2X`, `OSC_SAW_2X`, `OSC_SQR_2X`, `OSC_TRI_2X`
-
-The FM detection logic in codegen jumps directly from 1x to 4x variants. The 2x variants are never selected.
 
 ## Legacy State Structs
 

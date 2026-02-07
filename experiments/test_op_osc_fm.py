@@ -114,11 +114,10 @@ def test_moderate_fm():
 
     oscillators = [
         ('SIN (1x)', cedar.Opcode.OSC_SIN),
-        ('SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 9))
+    fig, axes = plt.subplots(len(oscillators), 1, figsize=(14, 9))
     noise_floors = []
 
     # Expected sideband frequencies (for analysis)
@@ -157,11 +156,10 @@ def test_extreme_fm():
 
     oscillators = [
         ('SIN (1x)', cedar.Opcode.OSC_SIN),
-        ('SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 9))
+    fig, axes = plt.subplots(len(oscillators), 1, figsize=(14, 9))
     noise_floors = []
 
     expected_sidebands = [carrier + n * mod for n in range(-12, 13)]
@@ -199,11 +197,10 @@ def test_classic_bell():
 
     oscillators = [
         ('SIN (1x)', cedar.Opcode.OSC_SIN),
-        ('SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 9))
+    fig, axes = plt.subplots(len(oscillators), 1, figsize=(14, 9))
     noise_floors = []
 
     # Bell has many sidebands
@@ -238,7 +235,6 @@ def test_comparison_overlay():
 
     oscillators = [
         ('SIN (1x)', cedar.Opcode.OSC_SIN, 'red'),
-        ('SIN_2X', cedar.Opcode.OSC_SIN_2X, 'blue'),
         ('SIN_4X', cedar.Opcode.OSC_SIN_4X, 'green'),
     ]
 
@@ -382,11 +378,10 @@ def test_irrational_ratio_fm():
 
     oscillators = [
         ('SIN (1x)', cedar.Opcode.OSC_SIN),
-        ('SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
-    fig, axes = plt.subplots(3, 1, figsize=(14, 9))
+    fig, axes = plt.subplots(len(oscillators), 1, figsize=(14, 9))
 
     for idx, (name, opcode) in enumerate(oscillators):
         signal = generate_fm_signal(carrier, mod, index, duration, sr, opcode)
@@ -573,7 +568,6 @@ def export_fm_wav_files():
 
     oscillators = [
         ('1x', cedar.Opcode.OSC_SIN),
-        ('2x', cedar.Opcode.OSC_SIN_2X),
         ('4x', cedar.Opcode.OSC_SIN_4X),
     ]
 
@@ -587,8 +581,8 @@ def export_fm_wav_files():
             filename = os.path.join(wav_dir, f"fm_{test['name']}_{osc_name}.wav")
             export_wav(filename, signal, sr)
 
-    # Also create comparison files with all three variants in sequence
-    print("\n  Creating comparison files (1x -> 2x -> 4x sequences):")
+    # Also create comparison files with both variants in sequence
+    print("\n  Creating comparison files (1x -> 4x sequences):")
     for test in tests:
         signals = []
         silence = np.zeros(int(0.5 * sr))  # 0.5s silence between variants
@@ -606,8 +600,8 @@ def export_fm_wav_files():
         export_wav(filename, combined, sr)
 
     print(f"\n  WAV files exported to {wav_dir}/")
-    print("  Individual files: fm_<test>_<1x|2x|4x>.wav")
-    print("  Comparison files: fm_<test>_comparison.wav (plays 1x, 2x, 4x in sequence)")
+    print("  Individual files: fm_<test>_<1x|4x>.wav")
+    print("  Comparison files: fm_<test>_comparison.wav (plays 1x, 4x in sequence)")
 
 
 def summarize_results(test_results):
@@ -619,10 +613,10 @@ def summarize_results(test_results):
     print("="*60)
 
     test_names = ['Moderate FM', 'Extreme FM', 'Classic Bell']
-    osc_names = ['SIN (1x)', 'SIN_2X', 'SIN_4X']
+    osc_names = ['SIN (1x)', 'SIN_4X']
 
-    print(f"\n{'Test':<20} | {'SIN (1x)':<12} | {'SIN_2X':<12} | {'SIN_4X':<12}")
-    print("-" * 60)
+    print(f"\n{'Test':<20} | {'SIN (1x)':<12} | {'SIN_4X':<12}")
+    print("-" * 48)
 
     for test_name, noise_floors in zip(test_names, test_results):
         if noise_floors:

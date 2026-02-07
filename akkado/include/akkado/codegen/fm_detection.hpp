@@ -15,16 +15,12 @@ inline bool is_audio_rate_producer(cedar::Opcode op) {
     switch (op) {
         // All oscillators produce audio-rate signals
         case cedar::Opcode::OSC_SIN:
-        case cedar::Opcode::OSC_SIN_2X:
         case cedar::Opcode::OSC_SIN_4X:
         case cedar::Opcode::OSC_TRI:
-        case cedar::Opcode::OSC_TRI_2X:
         case cedar::Opcode::OSC_TRI_4X:
         case cedar::Opcode::OSC_SAW:
-        case cedar::Opcode::OSC_SAW_2X:
         case cedar::Opcode::OSC_SAW_4X:
         case cedar::Opcode::OSC_SQR:
-        case cedar::Opcode::OSC_SQR_2X:
         case cedar::Opcode::OSC_SQR_4X:
         case cedar::Opcode::OSC_RAMP:
         case cedar::Opcode::OSC_PHASOR:

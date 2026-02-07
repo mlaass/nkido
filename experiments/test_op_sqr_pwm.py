@@ -170,13 +170,12 @@ def test_oversampled_oscillators():
     sr = 48000
     duration = 0.5
 
-    # Compare standard vs 2x vs 4x sine at high frequency
+    # Compare standard vs 4x sine at high frequency
     freq = 10000.0  # 10 kHz - high frequency where aliasing is more visible
 
-    fig, axes = plt.subplots(3, 1, figsize=(12, 6))
+    fig, axes = plt.subplots(2, 1, figsize=(12, 4))
     oscillators = [
         ('SIN (1x)', cedar.Opcode.OSC_SIN),
-        ('SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
@@ -223,7 +222,6 @@ def test_fm_aliasing():
 
     oscillators = [
         ('SIN (1x)', cedar.Opcode.OSC_SIN),
-        ('SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 

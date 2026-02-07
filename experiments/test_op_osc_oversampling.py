@@ -18,7 +18,6 @@ def test_basic_sine_outputs():
 
     oscillators = [
         ('OSC_SIN', cedar.Opcode.OSC_SIN),
-        ('OSC_SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('OSC_SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
@@ -84,7 +83,6 @@ def test_high_frequency_sine():
 
     oscillators = [
         ('OSC_SIN', cedar.Opcode.OSC_SIN),
-        ('OSC_SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('OSC_SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
@@ -259,7 +257,6 @@ def test_compare_with_reference():
 
     oscillators = [
         ('OSC_SIN', cedar.Opcode.OSC_SIN),
-        ('OSC_SIN_2X', cedar.Opcode.OSC_SIN_2X),
         ('OSC_SIN_4X', cedar.Opcode.OSC_SIN_4X),
     ]
 
