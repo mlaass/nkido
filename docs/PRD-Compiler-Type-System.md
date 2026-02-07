@@ -336,7 +336,7 @@ match mode {
 ## Non-Goals
 
 - **User-defined types.** The type system is fixed to the eight built-in types. Users cannot define new types or interfaces.
-- **Type inference across functions.** Akkado has no user-defined functions — all "functions" are builtins. No need for Hindley-Milner or similar.
+- **Type inference across functions.** User-defined functions and the standard library are inlined at call sites. Type propagation through function bodies is handled by visiting the inlined AST — no need for Hindley-Milner or function-level type signatures.
 - **Runtime type tags.** Types exist only at compile time. No runtime type checking — the Cedar VM is untyped.
 - **Stereo as a type.** Stereo is orthogonal to ValueType. A Signal can be mono or stereo. `stereo_outputs_` remains a separate map for now; it may become a flag on TypedValue later, but TypedValue does not distinguish mono/stereo Signal.
 - **Changing the Cedar VM.** This is purely a compiler change. Same opcodes, same instruction format, same bytecode output.
