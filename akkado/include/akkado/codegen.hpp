@@ -93,21 +93,16 @@ struct SequenceSampleMapping {
     std::uint8_t variant = 0; // Variant index (0 = first variant)
 };
 
-/// State initialization data for SEQ_STEP, TIMELINE, and SEQPAT_QUERY opcodes
+/// State initialization data for TIMELINE and SEQPAT_QUERY opcodes
 struct StateInitData {
     std::uint32_t state_id;  // Must match Instruction::state_id (32-bit FNV-1a hash)
     enum class Type : std::uint8_t {
-        SeqStep,          // Initialize SeqStepState with timed events
-        Timeline,         // Initialize TimelineState with breakpoints
+        Timeline = 1,     // Initialize TimelineState with breakpoints
         SequenceProgram   // Initialize SequenceState with compiled sequences
     } type;
 
-    // For SeqStep: parallel arrays of event data
-    std::vector<float> times;       // Event times in beats
-    std::vector<float> values;      // Values (sample ID, pitch, etc.)
-    std::vector<float> velocities;  // Velocity per event (0.0-1.0)
-    std::vector<std::string> sample_names;  // Sample names (for deferred resolution)
-    float cycle_length = 4.0f;      // Cycle length in beats
+    // Cycle length in beats (used by SequenceProgram)
+    float cycle_length = 4.0f;
 
     // For Timeline: [time, value, curve, ...] triplets (existing usage)
 
@@ -278,7 +273,7 @@ private:
     std::uint16_t handle_match_expr(NodeIndex node, const Node& n);
 
     /// Handle pattern variable reference
-    /// Emits SEQ_STEP code for the stored pattern.
+    /// Emits pattern code for the stored pattern.
     /// @param name The pattern variable name (for path tracking)
     /// @param pattern_node The MiniLiteral node index
     /// @param loc Source location for error reporting

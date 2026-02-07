@@ -70,12 +70,13 @@ osc("sin", 55) * ar(euclid(3, 8, 1), 0.01, 0.15) |> out(%, %)
 
 ## Step Sequencing
 
-Use `seq_step` to create melodic patterns:
+Use `pat()` mini-notation to create melodic patterns:
 
 ```akk
-// 4-note pattern
-freq = mtof(48 + seq_step(2) * 5)
-osc("saw", freq) * ar(trigger(2)) |> lp(%, 800) |> out(%, %)
+// 4-note melodic pattern
+pat("c3 e3 g3 c4") |> ((f) ->
+    osc("saw", f) * ar(trigger(4)) |> lp(%, 800)
+) |> out(%, %)
 ```
 
 ## Combining Rhythm and Melody
@@ -84,13 +85,11 @@ Build a complete sequence:
 
 ```akk
 // Bass line with rhythm
-notes = 36 + seq_step(2) * 7  // MIDI notes
-freq = mtof(notes)
-
-osc("saw", freq)
-    |> moog(%, 400 + ar(trigger(2)) * 800, 2)
-    * ar(trigger(2), 0.01, 0.2)
-    |> out(%, %)
+pat("c2 g2 d#2 a#1") |> ((f) ->
+    osc("saw", f)
+        |> moog(%, 400 + ar(trigger(2)) * 800, 2)
+        * ar(trigger(2), 0.01, 0.2)
+) |> out(%, %)
 ```
 
 ## LFO for Movement

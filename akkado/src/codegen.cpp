@@ -414,7 +414,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             }
 
             if (sym->kind == SymbolKind::Pattern) {
-                // Pattern variable - emit SEQ_STEP for this pattern
+                // Pattern variable - generate code for this pattern
                 // Use the stored pattern_node to generate code
                 return handle_pattern_reference(name, sym->pattern.pattern_node, n.location);
             }

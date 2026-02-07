@@ -513,10 +513,6 @@ void VM::execute(const Instruction& inst) {
             op_lfo(ctx_, inst);
             break;
 
-        case Opcode::SEQ_STEP:
-            op_seq_step(ctx_, inst);
-            break;
-
         case Opcode::EUCLID:
             op_euclid(ctx_, inst);
             break;
@@ -940,7 +936,7 @@ void VM::reconstruct_deterministic_states([[maybe_unused]] std::uint64_t target_
     // The actual reconstruction happens when each opcode executes,
     // using the current parameters at that time.
 
-    // Key insight: Most sequencing opcodes (LFO, SeqStep, Euclid, Trigger)
+    // Key insight: Most sequencing opcodes (LFO, Euclid, Trigger)
     // derive their phase from global_sample_counter, which we've already updated.
     // When these opcodes run, they will calculate the correct phase for the
     // new position.

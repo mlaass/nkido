@@ -123,7 +123,6 @@ function inferStatefulOpcodes(opcodes: Map<string, number>, fromBuiltins: Set<st
     "SLEW",      // Tracks current value
     "SAH",       // Sample and hold
     "LFO",       // Phase state
-    "SEQ_STEP",  // Step position
     "EUCLID",    // Pattern state
     "TRIGGER",   // Trigger tracking
     "TIMELINE",  // Breakpoint automation

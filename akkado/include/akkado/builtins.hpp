@@ -590,10 +590,6 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"hits", "steps", "rot", "", "", ""},
                  {0.0f, NAN, NAN},
                  "Euclidean rhythm generator"}},
-    {"seq_step", {cedar::Opcode::SEQ_STEP, 1, 0, true,
-                 {"speed", "", "", "", "", ""},
-                 {NAN, NAN, NAN},
-                 "Step sequencer"}},
     {"timeline", {cedar::Opcode::TIMELINE, 0, 0, true,
                  {"", "", "", "", "", ""},
                  {NAN, NAN, NAN},
@@ -714,15 +710,6 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"pattern", "", "", "", "", ""},
                  {NAN, NAN, NAN},
                  "Mini-notation pattern. Returns values based on cycle position."}},
-    {"seq",     {cedar::Opcode::PUSH_CONST, 1, 1, false,
-                 {"pattern", "closure", "", "", "", ""},
-                 {NAN, NAN, NAN},
-                 "Sequence with optional closure (t, v, p) -> expr."}},
-    {"note",    {cedar::Opcode::PUSH_CONST, 1, 0, false,
-                 {"pattern", "", "", "", "", ""},
-                 {NAN, NAN, NAN},
-                 "Note pattern. Returns MIDI note values."}},
-
     // Pattern transformation builtins (handled specially by codegen)
     // These transform pattern events at compile time
     {"slow",    {cedar::Opcode::NOP, 2, 0, false,

@@ -132,14 +132,6 @@ public:
     [[nodiscard]] SampleBank& sample_bank() { return sample_bank_; }
     [[nodiscard]] const SampleBank& sample_bank() const { return sample_bank_; }
 
-    // Initialize a SEQ_STEP state with timed events
-    // Used by compiler to set up sequence data before program execution
-    void init_seq_step_state(std::uint32_t state_id,
-                             const float* times, const float* values, const float* velocities,
-                             std::size_t count, float cycle_length) {
-        state_pool_.init_seq_step(state_id, times, values, velocities, count, cycle_length);
-    }
-
     // Initialize a SequenceState with compiled sequences (arena-allocated)
     // Used by compiler to set up the simplified sequence-based patterns
     // @param total_events Total event count across all sequences (for output buffer sizing)

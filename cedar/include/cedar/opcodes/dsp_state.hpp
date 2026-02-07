@@ -192,24 +192,6 @@ struct LFOState {
     float prev_value = 0.0f;   // For SAH mode (last sampled value)
 };
 
-// Step sequencer state - time-based event sequencing
-struct SeqStepState {
-    static constexpr std::size_t MAX_EVENTS = 32;
-
-    // Event data (parallel arrays for cache efficiency)
-    float times[MAX_EVENTS] = {};       // Trigger times in beats
-    float values[MAX_EVENTS] = {};      // Values (sample ID, pitch, etc.)
-    float velocities[MAX_EVENTS] = {};  // Velocity per event (0.0-1.0)
-
-    // Sequence parameters
-    float cycle_length = 4.0f;          // Cycle length in beats
-    std::uint32_t num_events = 0;       // Number of events in sequence
-
-    // Playback state
-    std::uint32_t current_index = 0;    // Current event index
-    float last_beat_pos = -1.0f;        // For edge detection / cycle wrap
-};
-
 // Euclidean rhythm generator state
 struct EuclidState {
     std::uint32_t prev_step = UINT32_MAX;  // Previous step for change detection (UINT32_MAX = uninitialized)
@@ -879,7 +861,6 @@ using DSPState = std::variant<
     EnvState,
     // Sequencing states
     LFOState,
-    SeqStepState,
     EuclidState,
     TriggerState,
     TimelineState,

@@ -1257,8 +1257,8 @@ static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
 
     if (n.type == NodeType::Call) {
         const std::string& func_name = n.as_identifier();
-        return func_name == "pat" || func_name == "seq" || func_name == "timeline" ||
-               func_name == "note" || func_name == "slow" || func_name == "fast" ||
+        return func_name == "pat" || func_name == "timeline" ||
+               func_name == "slow" || func_name == "fast" ||
                func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
                func_name == "bank" || func_name == "n";
     }

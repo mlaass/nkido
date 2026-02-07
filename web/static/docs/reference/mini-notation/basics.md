@@ -179,22 +179,6 @@ Basic pattern playback:
 pat("c4 e4 g4") |> ((f) -> osc("sin", f)) |> out(%, %)
 ```
 
-### seq()
-
-Sequence with explicit timing:
-
-```akk
-seq("c4 e4 g4 c5")
-```
-
-### note()
-
-Single note with full control:
-
-```akk
-note("c4")
-```
-
 ## Practical Examples
 
 ```akk

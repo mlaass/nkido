@@ -1,6 +1,6 @@
 # Mini-Notation Reference
 
-This document provides a comprehensive reference for Akkado's mini-notation syntax, used in pattern functions like `pat()`, `seq()`, `note()`, and `timeline()`.
+This document provides a comprehensive reference for Akkado's mini-notation syntax, used in pattern functions like `pat()` and `timeline()`.
 
 ## Quick Reference
 

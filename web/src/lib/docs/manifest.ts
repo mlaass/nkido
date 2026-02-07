@@ -685,12 +685,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "euclid",
 		"anchor": "euclid"
 	},
-	"seq_step": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "seq_step",
-		"anchor": "seq-step"
-	},
 	"timeline": {
 		"slug": "sequencing",
 		"category": "builtins",

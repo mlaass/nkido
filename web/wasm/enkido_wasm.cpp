@@ -548,16 +548,7 @@ WASM_EXPORT void akkado_resolve_sample_ids() {
     if (!g_vm) return;
 
     for (auto& init : g_compile_result.state_inits) {
-        // Handle SeqStep type (legacy path)
-        for (size_t i = 0; i < init.sample_names.size(); ++i) {
-            const auto& name = init.sample_names[i];
-            if (!name.empty()) {
-                auto id = g_vm->sample_bank().get_sample_id(name);
-                init.values[i] = static_cast<float>(id);
-            }
-        }
-
-        // Handle SequenceProgram type (new path with sample mappings)
+        // Handle SequenceProgram type (sample mappings)
         // Events are stored in sequence_events vectors
         for (const auto& mapping : init.sequence_sample_mappings) {
             if (mapping.seq_idx < init.sequence_events.size()) {
@@ -604,53 +595,13 @@ WASM_EXPORT uint32_t akkado_get_state_init_id(uint32_t index) {
 }
 
 /**
- * Get type for a state initialization (0=SeqStep, 1=Timeline)
+ * Get type for a state initialization (1=Timeline, 2=SequenceProgram)
  * @param index State init index
  * @return type
  */
 WASM_EXPORT int akkado_get_state_init_type(uint32_t index) {
     if (index >= g_compile_result.state_inits.size()) return -1;
     return static_cast<int>(g_compile_result.state_inits[index].type);
-}
-
-/**
- * Get values count for a state initialization
- * @param index State init index
- * @return Number of values
- */
-WASM_EXPORT uint32_t akkado_get_state_init_values_count(uint32_t index) {
-    if (index >= g_compile_result.state_inits.size()) return 0;
-    return static_cast<uint32_t>(g_compile_result.state_inits[index].values.size());
-}
-
-/**
- * Get values pointer for a state initialization
- * @param index State init index
- * @return Pointer to float array of values
- */
-WASM_EXPORT const float* akkado_get_state_init_values(uint32_t index) {
-    if (index >= g_compile_result.state_inits.size()) return nullptr;
-    return g_compile_result.state_inits[index].values.data();
-}
-
-/**
- * Get times pointer for a state initialization
- * @param index State init index
- * @return Pointer to float array of times
- */
-WASM_EXPORT const float* akkado_get_state_init_times(uint32_t index) {
-    if (index >= g_compile_result.state_inits.size()) return nullptr;
-    return g_compile_result.state_inits[index].times.data();
-}
-
-/**
- * Get velocities pointer for a state initialization
- * @param index State init index
- * @return Pointer to float array of velocities
- */
-WASM_EXPORT const float* akkado_get_state_init_velocities(uint32_t index) {
-    if (index >= g_compile_result.state_inits.size()) return nullptr;
-    return g_compile_result.state_inits[index].velocities.data();
 }
 
 /**
@@ -664,51 +615,6 @@ WASM_EXPORT float akkado_get_state_init_cycle_length(uint32_t index) {
 }
 
 /**
- * Get number of sample names for a state initialization
- * @param index State init index
- * @return Number of sample names
- */
-WASM_EXPORT uint32_t akkado_get_state_init_sample_names_count(uint32_t index) {
-    if (index >= g_compile_result.state_inits.size()) return 0;
-    return static_cast<uint32_t>(g_compile_result.state_inits[index].sample_names.size());
-}
-
-/**
- * Get sample name by index for a state initialization
- * @param index State init index
- * @param value_index Sample name index within the state init
- * @return Pointer to null-terminated sample name, or nullptr if empty/invalid
- */
-WASM_EXPORT const char* akkado_get_state_init_sample_name(uint32_t index, uint32_t value_index) {
-    if (index >= g_compile_result.state_inits.size()) return nullptr;
-    const auto& init = g_compile_result.state_inits[index];
-    if (value_index >= init.sample_names.size()) return nullptr;
-    if (init.sample_names[value_index].empty()) return nullptr;
-    return init.sample_names[value_index].c_str();
-}
-
-/**
- * Apply a state initialization to the VM
- * @param state_id State ID to initialize (32-bit FNV-1a hash)
- * @param times Pointer to float array of event times (in beats)
- * @param values Pointer to float array of values
- * @param velocities Pointer to float array of velocities
- * @param count Number of events
- * @param cycle_length Cycle length in beats
- * @return 1 on success, 0 on failure
- */
-WASM_EXPORT int cedar_init_seq_step_state(uint32_t state_id,
-                                           const float* times,
-                                           const float* values,
-                                           const float* velocities,
-                                           uint32_t count,
-                                           float cycle_length) {
-    if (!g_vm || !times || !values || !velocities) return 0;
-    g_vm->init_seq_step_state(state_id, times, values, velocities, count, cycle_length);
-    return 1;
-}
-
-/**
  * Apply all state initializations from compile result to the VM
  * Should be called after cedar_load_program for correct pattern playback
  * @return Number of states initialized
@@ -718,17 +624,7 @@ WASM_EXPORT uint32_t cedar_apply_state_inits() {
 
     uint32_t count = 0;
     for (const auto& init : g_compile_result.state_inits) {
-        if (init.type == akkado::StateInitData::Type::SeqStep) {
-            g_vm->init_seq_step_state(
-                init.state_id,
-                init.times.data(),
-                init.values.data(),
-                init.velocities.data(),
-                init.values.size(),
-                init.cycle_length
-            );
-            count++;
-        } else if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+        if (init.type == akkado::StateInitData::Type::SequenceProgram) {
             // Set up sequence event pointers before passing to VM
             // The sequences need their event pointers to point to the sequence_events data
             std::vector<cedar::Sequence> seq_copy = init.sequences;

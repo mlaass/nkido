@@ -2,7 +2,7 @@
 
 ## Summary
 
-The Akkado pattern/sequencing API has accumulated redundant and non-functional functions. Only `pat()` is a true parser keyword that produces working patterns. Several other functions exist in builtins but are non-functional or legacy. Additionally, 11 Cedar opcodes are completely unreachable from the compiler. This document records the audit findings and deprecation decisions.
+The Akkado pattern/sequencing API has accumulated redundant and non-functional functions. Only `pat()` is a true parser keyword that produces working patterns. Several other functions exist in builtins but are non-functional or legacy. Additionally, Cedar opcodes are completely unreachable from the compiler. This document records the audit findings and deprecation decisions to only remove opcodes and code directly related to the pattern/sequencing API.
 
 ## Function Status
 
@@ -30,9 +30,6 @@ These opcodes exist in the Cedar VM but are never emitted by the Akkado compiler
 
 Array ops were implemented in Cedar but the Akkado compiler never gained codegen for them. No builtin entries map to these opcodes.
 
-### DISTORT_FOLD (1)
-
-Shadowed by the array `fold()` builtin. The builtins map has two entries for `"fold"` — the array fold (later in the map) overwrites the distortion fold, making `DISTORT_FOLD` unreachable.
 
 ### 2x oscillator variants (4)
 
@@ -53,14 +50,8 @@ The FM detection logic in codegen jumps directly from 1x to 4x variants. The 2x 
 - `akkado/src/codegen_patterns.cpp` — remove `"seq"`, `"note"` from `is_pattern_expr()` and `compile_pattern_for_transform()` (keep `"timeline"`)
 
 ### Part 2: Remove unreachable opcodes
-
-- `cedar/include/cedar/vm/instruction.hpp` — remove 11 opcodes from enum
-- `cedar/include/cedar/opcodes/arrays.hpp` — remove array op implementations
-- `cedar/include/cedar/opcodes/distortion.hpp` — remove DISTORT_FOLD case
-- `cedar/include/cedar/opcodes/oscillators.hpp` — remove 2x variant cases
 - `cedar/include/cedar/opcodes/sequencing.hpp` — remove SEQ_STEP implementation (keep TIMELINE)
-- `cedar/include/cedar/opcodes/dsp_state.hpp` — remove SeqStepState, TimelineState
-- `akkado/include/akkado/builtins.hpp` — remove duplicate `fold` entry mapping to DISTORT_FOLD
+
 
 ### Part 3: Regenerate & rebuild
 

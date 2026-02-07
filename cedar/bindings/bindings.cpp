@@ -104,7 +104,6 @@ PYBIND11_MODULE(cedar_core, m) {
         // Sequencers & Timing (90-95)
         .value("CLOCK", cedar::Opcode::CLOCK)
         .value("LFO", cedar::Opcode::LFO)
-        .value("SEQ_STEP", cedar::Opcode::SEQ_STEP)
         .value("EUCLID", cedar::Opcode::EUCLID)
         .value("TRIGGER", cedar::Opcode::TRIGGER)
         .value("TIMELINE", cedar::Opcode::TIMELINE)

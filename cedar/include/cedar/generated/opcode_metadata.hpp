@@ -79,7 +79,6 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::DISTORT_SMOOTH: return "DISTORT_SMOOTH";
         case Opcode::CLOCK: return "CLOCK";
         case Opcode::LFO: return "LFO";
-        case Opcode::SEQ_STEP: return "SEQ_STEP";
         case Opcode::EUCLID: return "EUCLID";
         case Opcode::TRIGGER: return "TRIGGER";
         case Opcode::TIMELINE: return "TIMELINE";
@@ -121,6 +120,8 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::LOGIC_NOT: return "LOGIC_NOT";
         case Opcode::SEQPAT_QUERY: return "SEQPAT_QUERY";
         case Opcode::SEQPAT_STEP: return "SEQPAT_STEP";
+        case Opcode::SEQPAT_TYPE: return "SEQPAT_TYPE";
+        case Opcode::SEQPAT_GATE: return "SEQPAT_GATE";
         case Opcode::ARRAY_PACK: return "ARRAY_PACK";
         case Opcode::ARRAY_INDEX: return "ARRAY_INDEX";
         case Opcode::ARRAY_UNPACK: return "ARRAY_UNPACK";
@@ -136,6 +137,7 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::MS_ENCODE: return "MS_ENCODE";
         case Opcode::MS_DECODE: return "MS_DECODE";
         case Opcode::DELAY_PINGPONG: return "DELAY_PINGPONG";
+        case Opcode::PROBE: return "PROBE";
         case Opcode::INVALID: return "INVALID";
         default: return "UNKNOWN";
     }
@@ -147,6 +149,7 @@ inline const char* opcode_to_string(Opcode op) {
  */
 inline bool opcode_is_stateful(Opcode op) {
     switch (op) {
+        case Opcode::COPY:
         case Opcode::OSC_SIN:
         case Opcode::OSC_TRI:
         case Opcode::OSC_SAW:
@@ -186,7 +189,6 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::DISTORT_TUBE:
         case Opcode::DISTORT_SMOOTH:
         case Opcode::LFO:
-        case Opcode::SEQ_STEP:
         case Opcode::EUCLID:
         case Opcode::TRIGGER:
         case Opcode::TIMELINE:
@@ -208,6 +210,8 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::OSC_SAW_PWM_4X:
         case Opcode::SEQPAT_QUERY:
         case Opcode::SEQPAT_STEP:
+        case Opcode::SEQPAT_TYPE:
+        case Opcode::SEQPAT_GATE:
         case Opcode::DELAY_PINGPONG:
             return true;
         default:

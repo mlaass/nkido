@@ -2,7 +2,7 @@
 title: Sequencing & Timing
 category: builtins
 order: 4
-keywords: [sequencing, timing, lfo, trigger, euclid, euclidean, seq_step, timeline, clock, rhythm, pattern]
+keywords: [sequencing, timing, lfo, trigger, euclid, euclidean, timeline, clock, rhythm, pattern]
 ---
 
 # Sequencing & Timing
@@ -80,7 +80,7 @@ osc("noise") |> hp(%, 8000) * ar(trigger(2), 0.001, 0.05) |> out(%, %)
 
 ```akk
 // Fast arpeggio triggers
-osc("saw", mtof(48 + seq_step(1) * 12)) * ar(trigger(8)) |> out(%, %)
+pat("c4 e4 g4 c5") |> ((f) -> osc("saw", f) * ar(trigger(8))) |> out(%, %)
 ```
 
 Related: [euclid](#euclid), [lfo](#lfo)
@@ -114,31 +114,7 @@ osc("noise") |> hp(%, 6000) * ar(euclid(5, 8), 0.001, 0.03) |> out(%, %)
 osc("saw", 110) * ar(euclid(5, 16, 2)) |> lp(%, 800) |> out(%, %)
 ```
 
-Related: [trigger](#trigger), [seq_step](#seq_step)
-
----
-
-## seq_step
-
-**Step Sequencer** - Returns current step index.
-
-| Param | Type   | Default | Description |
-|-------|--------|---------|-------------|
-| speed | number | -       | Steps per beat |
-
-Returns the current step position as an integer, useful for indexing into arrays or creating melodic patterns.
-
-```akk
-// 4-note pattern
-osc("saw", mtof(48 + seq_step(2) * 3)) * ar(trigger(2)) |> out(%, %)
-```
-
-```akk
-// Fast arpeggio
-osc("tri", mtof(36 + seq_step(8) * 7)) * ar(trigger(8)) |> out(%, %)
-```
-
-Related: [trigger](#trigger), [euclid](#euclid), [timeline](#timeline)
+Related: [trigger](#trigger), [timeline](#timeline)
 
 ---
 
@@ -157,4 +133,4 @@ Creates smooth automation curves between breakpoints. Used for complex parameter
 osc("saw", 220) * timeline() |> out(%, %)
 ```
 
-Related: [lfo](#lfo), [seq_step](#seq_step)
+Related: [lfo](#lfo), [trigger](#trigger)

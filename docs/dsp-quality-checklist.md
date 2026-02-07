@@ -156,7 +156,6 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | `LFO` | ✅ Tested | All shapes, frequency sync, PWM duty, zero-crossing precision | Direct phase calculation, 0 drift |
 | `EUCLID` | ✅ Tested | Pattern accuracy, step timing precision | 0 samples timing error |
 | `TRIGGER` | ✅ Tested | Division accuracy, long-term precision, cross-opcode alignment | ≤1 sample error over 1000 beats |
-| `SEQ_STEP` | ⚠ Partial | Zero-event fallback, stability (no state population API in Python) | Needs bindings extension |
 | `TIMELINE` | ⚠ Partial | Zero-breakpoint fallback, stability (no state population API in Python) | Needs bindings extension |
 
 ---
@@ -203,7 +202,7 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | Delays & Reverbs | 5 | - | 0 | Added `test_op_freeverb.py`, `test_op_fdn.py`, `test_op_tap_delay.py` |
 | Samplers | 2 | - | 0 | Added dedicated `test_op_sample_loop.py` |
 | Envelopes | 3 | - | 0 | `test_op_adsr.py`, `test_op_ar.py`, `test_op_env_follower.py` |
-| Sequencers & Timing | 4 | 2 | 0 | Added `test_op_seq_step.py`, `test_op_timeline.py` (partial: no state API) |
+| Sequencers & Timing | 4 | 1 | 0 | Added `test_op_timeline.py` (partial: no state API) |
 | Dynamics | 3 | - | 0 | `test_op_comp.py`, `test_op_limiter.py`, `test_op_gate.py` |
 | Utility | 5 | - | 1 | `test_op_noise.py`, `test_op_mtof.py`, `test_op_sah.py`, `test_op_slew.py` |
 | **Total** | **56** | **2** | **7** | 90% tested |
@@ -213,8 +212,7 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 ## Priority Action Items
 
 ### High Priority - Extend Python Bindings
-1. `SEQ_STEP` - Add Python API to populate `SeqStepState` for full testing
-2. `TIMELINE` - Add Python API to populate `TimelineState` for full testing
+1. `TIMELINE` - Add Python API to populate `TimelineState` for full testing
 
 ### Low Priority (Completeness)
 1. 2x oversampling oscillator variants (already have 1x and 4x)

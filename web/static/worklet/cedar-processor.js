@@ -418,36 +418,11 @@ class CedarProcessor extends AudioWorkletProcessor {
 		for (let i = 0; i < count; i++) {
 			const stateId = this.module._akkado_get_state_init_id(i);
 			const type = this.module._akkado_get_state_init_type(i);
-			const valuesCount = this.module._akkado_get_state_init_values_count(i);
 			const cycleLength = this.module._akkado_get_state_init_cycle_length(i);
-
-			// Extract times array
-			const timesPtr = this.module._akkado_get_state_init_times(i);
-			const times = this.extractFloatArray(timesPtr, valuesCount);
-
-			// Extract values array
-			const valuesPtr = this.module._akkado_get_state_init_values(i);
-			const values = this.extractFloatArray(valuesPtr, valuesCount);
-
-			// Extract velocities array
-			const velocitiesPtr = this.module._akkado_get_state_init_velocities(i);
-			const velocities = this.extractFloatArray(velocitiesPtr, valuesCount);
-
-			// Extract sample names (for later resolution)
-			const sampleNamesCount = this.module._akkado_get_state_init_sample_names_count(i);
-			const sampleNames = [];
-			for (let j = 0; j < sampleNamesCount; j++) {
-				const namePtr = this.module._akkado_get_state_init_sample_name(i, j);
-				sampleNames.push(namePtr ? this.module.UTF8ToString(namePtr) : null);
-			}
 
 			stateInits.push({
 				stateId,
 				type,
-				times,
-				values,
-				velocities,
-				sampleNames,
 				cycleLength
 			});
 		}
@@ -668,7 +643,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 			// Apply state initializations using WASM function
 			// First resolve sample names to IDs (uses samples already loaded in sample bank)
 			this.module._akkado_resolve_sample_ids();
-			// Then apply all state inits (handles both SeqStep and SequenceProgram types)
+			// Then apply all state inits (SequenceProgram types)
 			const stateInitsApplied = this.module._cedar_apply_state_inits();
 			if (stateInitsApplied > 0) {
 				console.log('[CedarProcessor] Applied', stateInitsApplied, 'state initializations');

@@ -320,14 +320,6 @@ public:
                 json << R"(,"prev_value":)" << state.prev_value;
                 json << "}";
             }
-            else if constexpr (std::is_same_v<T, SeqStepState>) {
-                json << R"({"type":"SeqStepState")";
-                json << R"(,"num_events":)" << state.num_events;
-                json << R"(,"cycle_length":)" << state.cycle_length;
-                json << R"(,"current_index":)" << state.current_index;
-                json << R"(,"last_beat_pos":)" << state.last_beat_pos;
-                json << "}";
-            }
             else if constexpr (std::is_same_v<T, EuclidState>) {
                 json << R"({"type":"EuclidState")";
                 json << R"(,"prev_step":)" << state.prev_step;
@@ -524,27 +516,6 @@ public:
         }, entry.state);
 
         return json.str();
-    }
-
-    // =========================================================================
-    // State Initialization (for SEQ_STEP and other stateful opcodes)
-    // =========================================================================
-
-    // Initialize a SeqStepState with timed events
-    // Used by compiler to set up sequence data before program execution
-    void init_seq_step(std::uint32_t state_id,
-                       const float* times, const float* values, const float* velocities,
-                       std::size_t count, float cycle_length) {
-        auto& state = get_or_create<SeqStepState>(state_id);
-        state.num_events = static_cast<std::uint32_t>(std::min(count, SeqStepState::MAX_EVENTS));
-        state.cycle_length = cycle_length;
-        state.current_index = 0;
-        state.last_beat_pos = -1.0f;
-        for (std::size_t i = 0; i < state.num_events; ++i) {
-            state.times[i] = times[i];
-            state.values[i] = values[i];
-            state.velocities[i] = velocities[i];
-        }
     }
 
     // =========================================================================
