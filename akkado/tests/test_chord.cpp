@@ -1059,6 +1059,116 @@ TEST_CASE("monophonic vs polyphonic pattern detection", "[chord][seqpat]") {
 // Polyphonic Field Access Tests
 // ============================================================================
 
+// ============================================================================
+// Multi-buffer propagation through variables and bindings
+// ============================================================================
+
+TEST_CASE("multi-buffer through variable assignment", "[polyphony][variable]") {
+    SECTION("array assigned to variable preserves multi-buffer for map") {
+        auto result = akkado::compile(R"(
+            x = [440, 550, 660]
+            map(x, (f) -> osc("sin", f)) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+        CHECK(osc_count == 3);
+    }
+
+    SECTION("chord through variable preserves multi-buffer") {
+        auto result = akkado::compile(R"(
+            ch = chord("Am")
+            map(ch, (f) -> osc("sin", f)) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+        CHECK(osc_count == 3);
+    }
+}
+
+TEST_CASE("polyphonic field access through pipe binding", "[polyphony][pipe_binding]") {
+    SECTION("pat with chord via pipe binding expands oscillators") {
+        auto result = akkado::compile(R"(
+            pat("C") as e |> osc("sin", e.freq) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+        CHECK(osc_count == 3);  // C major triad = 3 oscillators
+    }
+
+    SECTION("chord() via pipe binding preserves polyphonic fields") {
+        auto result = akkado::compile(R"(
+            chord("Am") as e |> osc("sin", e.freq) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+        CHECK(osc_count == 3);  // Am triad = 3 oscillators
+    }
+}
+
+TEST_CASE("polyphonic field access through pattern variable", "[polyphony][pattern_var]") {
+    SECTION("pattern variable with chord accesses .freq polyphonically") {
+        auto result = akkado::compile(R"(
+            e = pat("C")
+            osc("sin", e.freq) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+        CHECK(osc_count == 3);  // C major triad = 3 oscillators
+    }
+
+    SECTION("pattern variable with monophonic pattern accesses .freq") {
+        auto result = akkado::compile(R"(
+            e = pat("c4 e4 g4")
+            osc("sin", e.freq) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
+        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        int osc_count = 0;
+        for (std::size_t i = 0; i < count; ++i) {
+            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
+        }
+        CHECK(osc_count == 1);  // Monophonic = 1 oscillator
+    }
+}
+
 TEST_CASE("polyphonic field access produces multi-buffer", "[polyphony][field_access]") {
     SECTION("pat with chord expands to multiple oscillators via .freq") {
         // pat("Am") creates a chord (A minor triad) - 3 voices

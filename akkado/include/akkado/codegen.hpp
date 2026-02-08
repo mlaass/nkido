@@ -292,6 +292,23 @@ private:
     /// Handle MiniLiteral (pattern) nodes - pat("c4 e4 g4"), etc.
     std::uint16_t handle_mini_literal(NodeIndex node, const Node& n);
 
+    /// Emit per-voice SEQPAT_STEP/GATE/TYPE instructions and register polyphonic fields
+    /// Shared helper used by handle_mini_literal and handle_pattern_reference
+    /// @param node The node to register polyphonic fields / multi-buffers on
+    /// @param state_id The state_id for the SEQPAT instructions
+    /// @param max_voices Number of voices to emit
+    /// @param value_buf Pre-allocated buffer for voice 0 value
+    /// @param velocity_buf Pre-allocated buffer for voice 0 velocity
+    /// @param trigger_buf Pre-allocated buffer for voice 0 trigger
+    /// @param is_sample_pattern Whether this is a sample pattern (skips polyphonic registration)
+    /// @param loc Source location for error reporting
+    /// @return true on success, false on buffer exhaustion
+    bool emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id,
+                               std::uint8_t max_voices,
+                               std::uint16_t value_buf, std::uint16_t velocity_buf,
+                               std::uint16_t trigger_buf,
+                               bool is_sample_pattern, SourceLocation loc);
+
     // ============================================================================
     // Pattern transformation handlers
     // ============================================================================
@@ -620,6 +637,15 @@ private:
         std::uint8_t num_voices = 0;
     };
     std::unordered_map<NodeIndex, PolyphonicFields> polyphonic_fields_;
+
+    /// Resolve a polyphonic field name to its buffer vector
+    /// @param poly The polyphonic fields for the pattern
+    /// @param field_name The field name to resolve (freq, vel, trig, gate, type + aliases)
+    /// @param out_buffers Output: the buffer vector for the resolved field
+    /// @return true if field was found, false otherwise
+    [[nodiscard]] bool resolve_polyphonic_field(const PolyphonicFields& poly,
+                                                const std::string& field_name,
+                                                std::vector<std::uint16_t>& out_buffers) const;
 
     // ============================================================================
     // Array length tracking (compile-time)

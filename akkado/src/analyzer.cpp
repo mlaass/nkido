@@ -1004,7 +1004,8 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                             }
                             error("E060", "Unknown field '" + field_name + "' on record. Available: " + available, n.location);
                         }
-                    } else if (sym && sym->kind != SymbolKind::Record) {
+                    } else if (sym && sym->kind != SymbolKind::Record
+                             && sym->kind != SymbolKind::Pattern) {
                         error("E061", "Cannot access field '" + field_name + "' on non-record value", n.location);
                     }
                 }
@@ -1064,6 +1065,27 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                     field_node = output_arena_[field_node].next_sibling;
                 }
                 symbols_.define_record(binding_name, record_type);
+            } else if (expr_node.type == NodeType::MiniLiteral) {
+                // Pattern literal bound to name - define as Pattern for field access
+                PatternInfo pat_info{};
+                pat_info.pattern_node = bound_expr;
+                pat_info.is_sample_pattern = false;
+                symbols_.define_pattern(binding_name, pat_info);
+            } else if (expr_node.type == NodeType::Call) {
+                // Check if this is a pattern-producing call (chord, pat, etc.)
+                std::string call_name;
+                if (std::holds_alternative<Node::IdentifierData>(expr_node.data)) {
+                    call_name = expr_node.as_identifier();
+                }
+                if (call_name == "chord" || call_name == "pat" || call_name == "seq") {
+                    // Pattern-producing call - define as Pattern for field access
+                    PatternInfo pat_info{};
+                    pat_info.pattern_node = bound_expr;
+                    pat_info.is_sample_pattern = false;
+                    symbols_.define_pattern(binding_name, pat_info);
+                } else {
+                    symbols_.define_variable(binding_name, 0xFFFF);
+                }
             } else {
                 // For other expression types, treat as a simple variable
                 symbols_.define_variable(binding_name, 0xFFFF);

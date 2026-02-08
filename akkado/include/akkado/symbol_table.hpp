@@ -118,6 +118,11 @@ struct Symbol {
     std::string name;              // Original name (for error messages)
     std::uint16_t buffer_index;    // Allocated buffer for variables/params
 
+    // Multi-buffer support: all buffers if value is multi-buffer (empty = single)
+    std::vector<std::uint16_t> multi_buffers;
+    // Source node with polyphonic_fields_ entry (NULL_NODE = not polyphonic)
+    NodeIndex polyphonic_source = NULL_NODE;
+
     // Only valid if kind == Builtin
     BuiltinInfo builtin;
 
