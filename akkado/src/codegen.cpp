@@ -571,6 +571,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"velocity",  &CodeGenerator::handle_velocity_call},
                 {"bank",      &CodeGenerator::handle_bank_call},
                 {"n",         &CodeGenerator::handle_n_call},
+                {"transport", &CodeGenerator::handle_transport_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},

@@ -4,6 +4,7 @@
 #include "../vm/instruction.hpp"
 #include "../dsp/constants.hpp"
 #include "dsp_state.hpp"
+#include <bit>
 #include <cmath>
 #include <algorithm>
 
@@ -299,6 +300,62 @@ inline void op_timeline(ExecutionContext& ctx, const Instruction& inst) {
 }
 
 // ============================================================================
+// SEQPAT_TRANSPORT - Trigger-driven clock for pattern playback
+// ============================================================================
+// out_buffer: beat_pos output (audio-rate)
+// inputs[0]: trigger signal (rising edge advances position)
+// inputs[1]: step size (default 1.0; negative = reverse)
+// inputs[2]: reset trigger (rising edge resets to 0; 0xFFFF = unused)
+// inputs[3]: low 16 bits of bit_cast<uint32_t>(cycle_length)
+// inputs[4]: high 16 bits of bit_cast<uint32_t>(cycle_length)
+[[gnu::always_inline]]
+inline void op_seqpat_transport(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    const float* trig = ctx.buffers->get(inst.inputs[0]);
+    const float* step = (inst.inputs[1] != BUFFER_UNUSED)
+        ? ctx.buffers->get(inst.inputs[1]) : nullptr;
+    const float* reset = (inst.inputs[2] != BUFFER_UNUSED)
+        ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+
+    auto& state = ctx.states->get_or_create<TransportState>(inst.state_id);
+
+    // Reconstruct cycle_length from two uint16_t halves
+    std::uint32_t cl_bits = static_cast<std::uint32_t>(inst.inputs[3])
+                          | (static_cast<std::uint32_t>(inst.inputs[4]) << 16);
+    float cycle_length = std::bit_cast<float>(cl_bits);
+    state.cycle_length = cycle_length;
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        float step_val = step ? step[i] : 1.0f;
+
+        // Reset on rising edge
+        if (reset) {
+            float r = reset[i];
+            if (r > 0.0f && state.last_reset <= 0.0f) {
+                state.beat_pos = 0.0f;
+            }
+            state.last_reset = r;
+        }
+
+        // Advance on trigger rising edge
+        float t = trig[i];
+        if (t > 0.0f && state.last_trig <= 0.0f) {
+            state.beat_pos += step_val;
+            // Wrap at cycle_length
+            if (cycle_length > 0.0f) {
+                state.beat_pos = std::fmod(state.beat_pos, cycle_length);
+                if (state.beat_pos < 0.0f) {
+                    state.beat_pos += cycle_length;
+                }
+            }
+        }
+        state.last_trig = t;
+
+        out[i] = state.beat_pos;
+    }
+}
+
+// ============================================================================
 // SEQPAT_QUERY - Query new sequence system at block boundaries
 // ============================================================================
 // Fills SequenceState.output[] for current cycle
@@ -309,16 +366,24 @@ inline void op_timeline(ExecutionContext& ctx, const Instruction& inst) {
 inline void op_seqpat_query(ExecutionContext& ctx, const Instruction& inst) {
     auto& state = ctx.states->get_or_create<SequenceState>(inst.state_id);
 
-    const float spb = ctx.samples_per_beat();
+    float beat_start;
+    bool external_clock = (inst.inputs[0] != BUFFER_UNUSED);
 
-    // Calculate current beat position (start of block)
-    float beat_start = static_cast<float>(ctx.global_sample_counter) / spb;
+    if (external_clock) {
+        // External clock: read beat_pos from transport buffer (start of block)
+        const float* ext_beat_pos = ctx.buffers->get(inst.inputs[0]);
+        beat_start = ext_beat_pos[0];
+    } else {
+        const float spb = ctx.samples_per_beat();
+        // Calculate current beat position (start of block)
+        beat_start = static_cast<float>(ctx.global_sample_counter) / spb;
+    }
 
     // Determine which cycle we're currently in
     float current_cycle = std::floor(beat_start / state.cycle_length);
 
-    // Only re-query if we've entered a new cycle
-    if (current_cycle == state.last_queried_cycle && state.output.num_events > 0) {
+    // For external clock, always re-query (non-monotonic clock)
+    if (!external_clock && current_cycle == state.last_queried_cycle && state.output.num_events > 0) {
         return;  // Use cached results from this cycle
     }
 
@@ -373,16 +438,26 @@ inline void op_seqpat_step(ExecutionContext& ctx, const Instruction& inst) {
         state.active_source_length = state.output.events[0].source_length;
     }
 
-    const float spb = ctx.samples_per_beat();
+    // External clock override: inputs[3] contains beat_pos buffer
+    bool external_clock = (inst.inputs[3] != BUFFER_UNUSED);
+    const float* ext_beat_pos = external_clock ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+
+    const float spb = external_clock ? 1.0f : ctx.samples_per_beat();
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         // Current beat position within cycle
-        float beat_pos = std::fmod(
-            static_cast<float>(ctx.global_sample_counter + i) / spb,
-            state.cycle_length
-        );
+        float beat_pos;
+        if (external_clock) {
+            beat_pos = std::fmod(ext_beat_pos[i], state.cycle_length);
+            if (beat_pos < 0.0f) beat_pos += state.cycle_length;
+        } else {
+            beat_pos = std::fmod(
+                static_cast<float>(ctx.global_sample_counter + i) / spb,
+                state.cycle_length
+            );
+        }
 
-        // Detect cycle wrap
+        // Detect cycle wrap (or external clock direction change)
         bool wrapped = (state.last_beat_pos >= 0.0f && beat_pos < state.last_beat_pos - 0.5f);
         if (wrapped) {
             state.current_index = 0;
@@ -456,14 +531,24 @@ inline void op_seqpat_type(ExecutionContext& ctx, const Instruction& inst) {
         return;
     }
 
-    const float spb = ctx.samples_per_beat();
+    // External clock override: inputs[1] contains beat_pos buffer
+    bool external_clock = (inst.inputs[1] != BUFFER_UNUSED);
+    const float* ext_beat_pos = external_clock ? ctx.buffers->get(inst.inputs[1]) : nullptr;
+
+    const float spb = external_clock ? 1.0f : ctx.samples_per_beat();
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         // Current beat position within cycle
-        float beat_pos = std::fmod(
-            static_cast<float>(ctx.global_sample_counter + i) / spb,
-            state.cycle_length
-        );
+        float beat_pos;
+        if (external_clock) {
+            beat_pos = std::fmod(ext_beat_pos[i], state.cycle_length);
+            if (beat_pos < 0.0f) beat_pos += state.cycle_length;
+        } else {
+            beat_pos = std::fmod(
+                static_cast<float>(ctx.global_sample_counter + i) / spb,
+                state.cycle_length
+            );
+        }
 
         // Find the current event (same logic as SEQPAT_STEP)
         std::uint32_t event_index = 0;
@@ -514,14 +599,24 @@ inline void op_seqpat_gate(ExecutionContext& ctx, const Instruction& inst) {
         return;
     }
 
-    const float spb = ctx.samples_per_beat();
+    // External clock override: inputs[1] contains beat_pos buffer
+    bool external_clock = (inst.inputs[1] != BUFFER_UNUSED);
+    const float* ext_beat_pos = external_clock ? ctx.buffers->get(inst.inputs[1]) : nullptr;
+
+    const float spb = external_clock ? 1.0f : ctx.samples_per_beat();
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         // Current beat position within cycle
-        float beat_pos = std::fmod(
-            static_cast<float>(ctx.global_sample_counter + i) / spb,
-            state.cycle_length
-        );
+        float beat_pos;
+        if (external_clock) {
+            beat_pos = std::fmod(ext_beat_pos[i], state.cycle_length);
+            if (beat_pos < 0.0f) beat_pos += state.cycle_length;
+        } else {
+            beat_pos = std::fmod(
+                static_cast<float>(ctx.global_sample_counter + i) / spb,
+                state.cycle_length
+            );
+        }
 
         // Find the most recent event that started before or at beat_pos
         // Search backwards from current_index for efficiency

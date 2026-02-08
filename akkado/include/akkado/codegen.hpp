@@ -307,7 +307,8 @@ private:
                                std::uint8_t max_voices,
                                std::uint16_t value_buf, std::uint16_t velocity_buf,
                                std::uint16_t trigger_buf,
-                               bool is_sample_pattern, SourceLocation loc);
+                               bool is_sample_pattern, SourceLocation loc,
+                               std::uint16_t clock_override = 0xFFFF);
 
     // ============================================================================
     // Pattern transformation handlers
@@ -333,6 +334,9 @@ private:
 
     /// Handle n(pattern, variant) - set sample variant for all events
     std::uint16_t handle_n_call(NodeIndex node, const Node& n);
+
+    /// Handle transport(pattern, trig, step?, reset?) - trigger-driven pattern clock
+    std::uint16_t handle_transport_call(NodeIndex node, const Node& n);
 
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE

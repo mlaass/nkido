@@ -198,6 +198,14 @@ struct TriggerState {
     float prev_phase = 1.0f;  // Previous phase for wrap detection (init to 1.0 to detect first trigger)
 };
 
+// Transport state for trigger-driven pattern clock
+struct TransportState {
+    float beat_pos = 0.0f;
+    float cycle_length = 4.0f;
+    float last_trig = 0.0f;
+    float last_reset = 0.0f;
+};
+
 // Timeline/breakpoint automation state
 struct TimelineState {
     static constexpr std::size_t MAX_BREAKPOINTS = 64;
@@ -850,6 +858,7 @@ using DSPState = std::variant<
     LFOState,
     EuclidState,
     TriggerState,
+    TransportState,
     TimelineState,
     SequenceState,      // Lazy queryable patterns (sequence system)
     // Filter states

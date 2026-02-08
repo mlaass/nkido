@@ -152,6 +152,7 @@ enum class Opcode : std::uint8_t {
     SEQPAT_STEP = 153,       // Step through sequence results: out=value, in[0]=velocity, in[1]=trigger
     SEQPAT_TYPE = 154,       // Type ID signal for routing: out=type_id, in[0]=voice_idx
     SEQPAT_GATE = 155,       // Gate signal (1 during event, 0 otherwise): out=gate, in[0]=voice_idx
+    SEQPAT_TRANSPORT = 156,  // Trigger-driven clock: out=beat_pos, in[0]=trig, in[1]=step, in[2]=reset, cycle_length packed in in[3]+in[4]
 
     // Array Operations (160-169)
     // Arrays reuse existing BufferPool buffers - elements stored at indices 0..length-1

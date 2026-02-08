@@ -340,6 +340,12 @@ public:
                 json << R"(,"loop_length":)" << state.loop_length;
                 json << "}";
             }
+            else if constexpr (std::is_same_v<T, TransportState>) {
+                json << R"({"type":"TransportState")";
+                json << R"(,"beat_pos":)" << state.beat_pos;
+                json << R"(,"cycle_length":)" << state.cycle_length;
+                json << "}";
+            }
             else if constexpr (std::is_same_v<T, SequenceState>) {
                 json << R"({"type":"SequenceState")";
                 json << R"(,"num_sequences":)" << state.num_sequences;
