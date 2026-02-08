@@ -26,11 +26,13 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         arg = ast_->arena[arg].next_sibling;
     }
 
-    // Save param_literals and param_multi_buffer_sources for this scope
+    // Save param_literals, param_multi_buffer_sources, and param_function_refs for this scope
     auto saved_param_literals = std::move(param_literals_);
     auto saved_param_multi_buffer_sources = std::move(param_multi_buffer_sources_);
+    auto saved_param_function_refs = std::move(param_function_refs_);
     param_literals_.clear();
     param_multi_buffer_sources_.clear();
+    param_function_refs_.clear();
 
     // IMPORTANT: Visit arguments BEFORE pushing scope to evaluate them in caller's context
     // This allows nested function calls like double(double(x)) to work correctly.
@@ -39,22 +41,31 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         std::uint16_t param_buf;
 
         if (i < args.size()) {
-            // Check if the argument is a literal - record for match resolution
-            const Node& arg_node = ast_->arena[args[i]];
-            if (arg_node.type == NodeType::StringLit ||
-                arg_node.type == NodeType::NumberLit ||
-                arg_node.type == NodeType::BoolLit) {
+            // Check if the argument is a closure or function reference
+            auto func_ref = resolve_function_arg(args[i]);
+            if (func_ref) {
+                // Store as function ref — don't visit (would eagerly compile with unbound params)
                 std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
-                param_literals_[param_hash] = args[i];
-            }
+                param_function_refs_[param_hash] = *func_ref;
+                param_buf = BufferAllocator::BUFFER_UNUSED;  // placeholder — never used as audio
+            } else {
+                // Check if the argument is a literal - record for match resolution
+                const Node& arg_node = ast_->arena[args[i]];
+                if (arg_node.type == NodeType::StringLit ||
+                    arg_node.type == NodeType::NumberLit ||
+                    arg_node.type == NodeType::BoolLit) {
+                    std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+                    param_literals_[param_hash] = args[i];
+                }
 
-            // Visit argument in caller's scope
-            param_buf = visit(args[i]);
+                // Visit argument in caller's scope
+                param_buf = visit(args[i]);
 
-            // Track multi-buffer arguments for polyphonic propagation
-            if (is_multi_buffer(args[i])) {
-                std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
-                param_multi_buffer_sources_[param_hash] = args[i];
+                // Track multi-buffer arguments for polyphonic propagation
+                if (is_multi_buffer(args[i])) {
+                    std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+                    param_multi_buffer_sources_[param_hash] = args[i];
+                }
             }
         } else if (func.params[i].default_value.has_value()) {
             // Use default value
@@ -90,7 +101,14 @@ std::uint16_t CodeGenerator::handle_user_function_call(
     // NOW push scope for function parameters and bind them
     symbols_->push_scope();
     for (std::size_t i = 0; i < func.params.size(); ++i) {
-        symbols_->define_variable(func.params[i].name, param_bufs[i]);
+        std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+        auto fref_it = param_function_refs_.find(param_hash);
+        if (fref_it != param_function_refs_.end()) {
+            // Bind as FunctionValue so call dispatch routes to handle_function_value_call
+            symbols_->define_function_value(func.params[i].name, fref_it->second);
+        } else {
+            symbols_->define_variable(func.params[i].name, param_bufs[i]);
+        }
     }
 
     // Save node_buffers_ state before visiting body.
@@ -112,10 +130,11 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         }
     }
 
-    // Pop scope and restore param_literals and param_multi_buffer_sources
+    // Pop scope and restore param_literals, param_multi_buffer_sources, and param_function_refs
     symbols_->pop_scope();
     param_literals_ = std::move(saved_param_literals);
     param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
+    param_function_refs_ = std::move(saved_param_function_refs);
 
     node_buffers_[node] = result;
     return result;
@@ -196,25 +215,33 @@ std::uint16_t CodeGenerator::handle_function_value_call(
         symbols_->define_variable(func.params[i].name, param_bufs[i]);
     }
 
-    // Find the body node from the closure
-    // The closure structure is: [param1, param2, ..., body]
-    const Node& closure_node = ast_->arena[func.closure_node];
+    // Find the body node
     NodeIndex body = NULL_NODE;
-    NodeIndex child = closure_node.first_child;
-    std::size_t param_count = 0;
+    if (func.is_user_function) {
+        // For user functions, closure_node IS the body directly
+        body = func.closure_node;
+    } else {
+        // For closures, the structure is: [param1, param2, ..., body]
+        const Node& closure_node = ast_->arena[func.closure_node];
+        NodeIndex child = closure_node.first_child;
 
-    while (child != NULL_NODE) {
-        const Node& child_node = ast_->arena[child];
-        if (child_node.type == NodeType::Identifier) {
-            // This is a parameter
-            param_count++;
-        } else {
-            // This is the body
-            body = child;
-            break;
+        while (child != NULL_NODE) {
+            const Node& child_node = ast_->arena[child];
+            if (child_node.type == NodeType::Identifier) {
+                // This is a parameter — skip
+            } else {
+                // This is the body
+                body = child;
+                break;
+            }
+            child = ast_->arena[child].next_sibling;
         }
-        child = ast_->arena[child].next_sibling;
     }
+
+    // Push semantic path for unique state IDs in closure bodies
+    const std::string& callee_name = n.as_identifier();
+    std::uint32_t count = call_counters_[callee_name]++;
+    push_path(callee_name + "#" + std::to_string(count));
 
     // Save node_buffers_ state before visiting body
     auto saved_node_buffers = std::move(node_buffers_);
@@ -233,7 +260,8 @@ std::uint16_t CodeGenerator::handle_function_value_call(
         }
     }
 
-    // Pop scope and restore param_literals
+    // Pop semantic path, scope, and restore param_literals
+    pop_path();
     symbols_->pop_scope();
     param_literals_ = std::move(saved_param_literals);
 

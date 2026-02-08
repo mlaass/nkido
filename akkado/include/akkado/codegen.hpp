@@ -442,6 +442,11 @@ private:
     // Only populated during user function calls when the argument is a literal
     std::unordered_map<std::uint32_t, NodeIndex> param_literals_;
 
+    // Map from parameter name hash to FunctionRef (for closure parameters in user functions)
+    // When a closure or function reference is passed as an argument to a user function,
+    // this map stores the FunctionRef so it can be bound as FunctionValue in the function scope.
+    std::unordered_map<std::uint32_t, FunctionRef> param_function_refs_;
+
     // Map from parameter name hash to argument node index (for multi-buffer propagation)
     // When a multi-buffer argument is passed to a function, this maps the parameter name
     // to the original argument node so that multi-buffer info can be looked up later.

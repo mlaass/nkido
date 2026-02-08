@@ -46,6 +46,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     anonymous_counter_ = 0;
     node_buffers_.clear();
     call_counters_.clear();
+    param_function_refs_.clear();
     multi_buffers_.clear();
     array_lengths_.clear();
     current_source_loc_ = {};

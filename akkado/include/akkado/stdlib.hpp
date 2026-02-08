@@ -32,6 +32,10 @@ fn osc(type, freq, pwm = 0.5, phase = 0.0, trig = 0.0) -> match(type) {
     "sqr_pwm_minblep": sqr_pwm_minblep(freq, pwm, phase, trig)
     _: sine_osc(freq, phase, trig)
 }
+
+fn multiband3fx(sig, f1, f2, fx_lo, fx_mid, fx_hi) -> {
+    fx_lo(lp(lp(sig, f1), f1)) + fx_mid(lp(lp(hp(hp(sig, f1), f1), f2), f2)) + fx_hi(hp(hp(sig, f2), f2))
+}
 )akkado";
 
 /// Line count for diagnostic offset calculation (computed at compile time)

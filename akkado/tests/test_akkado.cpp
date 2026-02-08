@@ -1323,3 +1323,151 @@ TEST_CASE("Pipes in functions and closures", "[akkado][pipe]") {
         CHECK(find_opcode(result.bytecode, cedar::Opcode::OUTPUT));
     }
 }
+
+TEST_CASE("Closure parameters in user functions", "[akkado][fn][closure-params]") {
+    SECTION("simple closure parameter") {
+        // fn apply(sig, fx) -> fx(sig) with inline closure
+        auto result = akkado::compile(R"(
+            fn apply(sig, fx) -> fx(sig)
+            apply(saw(440), (x) -> x * 0.5)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+    }
+
+    SECTION("multiple closure parameters") {
+        // fn dual(sig, fx1, fx2) -> fx1(sig) + fx2(sig)
+        auto result = akkado::compile(R"(
+            fn dual(sig, fx1, fx2) -> fx1(sig) + fx2(sig)
+            dual(saw(440), (x) -> x * 0.5, (x) -> x * 0.3)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+
+    SECTION("mixed scalar and closure parameters") {
+        auto result = akkado::compile(R"(
+            fn process(sig, amount, fx) -> fx(sig) * amount
+            process(saw(440), 0.7, (x) -> x * 2)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+    }
+
+    SECTION("named function as closure parameter") {
+        auto result = akkado::compile(R"(
+            fn my_gain(x) -> x * 0.5
+            fn apply(sig, fx) -> fx(sig)
+            apply(saw(440), my_gain)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+    }
+
+    SECTION("closure passthrough through nested function") {
+        auto result = akkado::compile(R"(
+            fn inner(sig, fx) -> fx(sig)
+            fn outer(sig, fx) -> inner(sig, fx)
+            outer(saw(440), (x) -> x * 0.5)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+    }
+
+    SECTION("closure with stateful builtin") {
+        // Closure that calls a stateful builtin (lp filter)
+        auto result = akkado::compile(R"(
+            fn apply(sig, fx) -> fx(sig)
+            apply(saw(440), (x) -> lp(x, 1000))
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+    }
+
+    SECTION("multiple closures with stateful builtins get independent state IDs") {
+        // Each closure should have a distinct semantic path
+        auto result = akkado::compile(R"(
+            fn dual(sig, fx1, fx2) -> fx1(sig) + fx2(sig)
+            dual(saw(440), (x) -> lp(x, 500), (x) -> lp(x, 2000))
+        )");
+
+        REQUIRE(result.success);
+
+        // Should have two FILTER_SVF_LP instructions with different state_ids
+        cedar::Instruction* inst = reinterpret_cast<cedar::Instruction*>(
+            const_cast<std::uint8_t*>(result.bytecode.data()));
+        size_t num_inst = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        std::vector<std::uint32_t> lp_state_ids;
+        for (size_t i = 0; i < num_inst; ++i) {
+            if (inst[i].opcode == cedar::Opcode::FILTER_SVF_LP) {
+                lp_state_ids.push_back(inst[i].state_id);
+            }
+        }
+        REQUIRE(lp_state_ids.size() == 2);
+        CHECK(lp_state_ids[0] != lp_state_ids[1]);
+    }
+
+    SECTION("multiband3fx stdlib function") {
+        auto result = akkado::compile(R"(
+            multiband3fx(saw(110), 200, 2000,
+                (x) -> x * 0.8,
+                (x) -> x,
+                (x) -> x * 0.5
+            )
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        // Should have cascaded lp/hp filters
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_HP));
+        // And addition to recombine bands
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+
+    SECTION("multiband3fx with stateful effects") {
+        auto result = akkado::compile(R"(
+            multiband3fx(saw(110), 200, 2000,
+                (x) -> lp(x, 100),
+                (x) -> lp(x, 1000),
+                (x) -> lp(x, 4000)
+            )
+        )");
+
+        REQUIRE(result.success);
+
+        // All three effect lp() filters should have distinct state_ids from each other
+        // and from the band-splitting filters
+        cedar::Instruction* inst = reinterpret_cast<cedar::Instruction*>(
+            const_cast<std::uint8_t*>(result.bytecode.data()));
+        size_t num_inst = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        std::vector<std::uint32_t> lp_state_ids;
+        for (size_t i = 0; i < num_inst; ++i) {
+            if (inst[i].opcode == cedar::Opcode::FILTER_SVF_LP) {
+                lp_state_ids.push_back(inst[i].state_id);
+            }
+        }
+        // 4 band-splitting lp() + 3 effect lp() = 7 total
+        // But multiband3fx uses lp(lp(sig,f1),f1) for lo and lp(lp(...),f2) for mid = 4 splitting lp
+        // Plus 3 effect lp calls = 7
+        REQUIRE(lp_state_ids.size() == 7);
+
+        // All state_ids should be unique
+        std::set<std::uint32_t> unique_ids(lp_state_ids.begin(), lp_state_ids.end());
+        CHECK(unique_ids.size() == lp_state_ids.size());
+    }
+}

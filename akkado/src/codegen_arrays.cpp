@@ -115,8 +115,18 @@ std::optional<FunctionRef> CodeGenerator::resolve_function_arg(NodeIndex func_no
         ref.closure_node = func_node;
         ref.is_user_function = false;
 
+        // Count total children to know how many are params (all except last = body)
+        std::size_t child_count = 0;
         NodeIndex child = n.first_child;
         while (child != NULL_NODE) {
+            child_count++;
+            child = ast_->arena[child].next_sibling;
+        }
+
+        // All children except the last one are parameters
+        std::size_t param_count = child_count > 0 ? child_count - 1 : 0;
+        child = n.first_child;
+        for (std::size_t i = 0; i < param_count && child != NULL_NODE; ++i) {
             const Node& child_node = ast_->arena[child];
             if (child_node.type == NodeType::Identifier) {
                 FunctionParamInfo param;
@@ -125,13 +135,8 @@ std::optional<FunctionRef> CodeGenerator::resolve_function_arg(NodeIndex func_no
                     param.default_value = child_node.as_closure_param().default_value;
                 } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
                     param.name = child_node.as_identifier();
-                    param.default_value = std::nullopt;
-                } else {
-                    break;
                 }
                 ref.params.push_back(std::move(param));
-            } else {
-                break;
             }
             child = ast_->arena[child].next_sibling;
         }
