@@ -957,8 +957,6 @@ TEST_CASE("Codegen: Complex expressions", "[codegen][integration]") {
     }
 
     SECTION("polyphonic oscillator inline") {
-        // NOTE: Variable assignment doesn't fully propagate multi-buffers currently
-        // Testing inline version without variable
         auto result = akkado::compile("sum(map(mtof(chord(\"Am\")), (f) -> saw(f)))");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
@@ -1820,7 +1818,7 @@ TEST_CASE("Codegen: HOF error paths", "[codegen][errors]") {
     }
 
     SECTION("take() non-literal first arg - E148") {
-        auto result = akkado::compile("n = 2\ntake(n, [1, 2, 3])");
+        auto result = akkado::compile("count = 2\ntake(count, [1, 2, 3])");
         REQUIRE_FALSE(result.success);
         bool found = false;
         for (const auto& d : result.diagnostics) {
@@ -1870,7 +1868,7 @@ TEST_CASE("Codegen: HOF error paths", "[codegen][errors]") {
     }
 
     SECTION("range() non-literal args - E153") {
-        auto result = akkado::compile("n = 5\nrange(0, n)");
+        auto result = akkado::compile("count = 5\nrange(0, count)");
         REQUIRE_FALSE(result.success);
         bool found = false;
         for (const auto& d : result.diagnostics) {
@@ -1890,7 +1888,7 @@ TEST_CASE("Codegen: HOF error paths", "[codegen][errors]") {
     }
 
     SECTION("repeat() non-literal count - E155") {
-        auto result = akkado::compile("n = 3\nrepeat(42, n)");
+        auto result = akkado::compile("count = 3\nrepeat(42, count)");
         REQUIRE_FALSE(result.success);
         bool found = false;
         for (const auto& d : result.diagnostics) {
@@ -2392,7 +2390,7 @@ TEST_CASE("Codegen: UGen auto-expansion", "[codegen][arrays]") {
 
     SECTION("filter expansion with array input") {
         // Filters also expand when given array inputs
-        auto result = akkado::compile("n = noise()\nfreqs = [1000, 2000, 3000]\nfreqs |> lp(n, %)");
+        auto result = akkado::compile("ns = noise()\nfreqs = [1000, 2000, 3000]\nfreqs |> lp(ns, %)");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
         // Should have 3 SVF_LP instructions
@@ -3004,5 +3002,33 @@ TEST_CASE("Pattern function: bank and n chaining", "[codegen][patterns][bank][n]
             }
         }
         CHECK(all_have_bank);
+    }
+}
+
+// =============================================================================
+// Pattern String Prefix (p"...")
+// =============================================================================
+
+TEST_CASE("Codegen: Pattern string prefix", "[codegen][pattern-prefix]") {
+    SECTION("p\"...\" produces same bytecode as pat(\"...\")") {
+        auto prefix_result = akkado::compile(R"(p"c4 e4 g4")");
+        auto call_result = akkado::compile(R"(pat("c4 e4 g4"))");
+
+        REQUIRE(prefix_result.success);
+        REQUIRE(call_result.success);
+        CHECK(prefix_result.bytecode == call_result.bytecode);
+    }
+
+    SECTION("p\"...\" works in pipeline") {
+        auto result = akkado::compile(R"(p"c4 e4 g4" |> osc("sin", %.freq))");
+        REQUIRE(result.success);
+
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::OSC_SIN) != nullptr);
+    }
+
+    SECTION("pat() with parens still works") {
+        auto result = akkado::compile(R"(pat("c4 e4 g4"))");
+        REQUIRE(result.success);
     }
 }

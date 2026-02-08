@@ -738,6 +738,34 @@ TEST_CASE("Lexer keywords", "[lexer]") {
         CHECK(tokens[0].type == TokenType::Pat);
     }
 
+    SECTION("pattern string prefix p\"...\"") {
+        auto [tokens, diags] = lex(R"(p"c4 e4")");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens.size() == 3); // Pat, String, Eof
+
+        CHECK(tokens[0].type == TokenType::Pat);
+        CHECK(tokens[1].type == TokenType::String);
+        CHECK(tokens[1].as_string() == "c4 e4");
+    }
+
+    SECTION("pattern string prefix p`...`") {
+        auto [tokens, diags] = lex("p`c4 e4`");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens.size() == 3); // Pat, String, Eof
+
+        CHECK(tokens[0].type == TokenType::Pat);
+        CHECK(tokens[1].type == TokenType::String);
+        CHECK(tokens[1].as_string() == "c4 e4");
+    }
+
+    SECTION("p followed by non-quote is identifier") {
+        auto [tokens, diags] = lex("p + 1");
+        REQUIRE(diags.empty());
+
+        CHECK(tokens[0].type == TokenType::Identifier);
+        CHECK(tokens[0].as_string() == "p");
+    }
+
     SECTION("post keyword") {
         auto [tokens, diags] = lex("post");
         REQUIRE(diags.empty());

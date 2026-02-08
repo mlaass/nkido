@@ -406,6 +406,14 @@ Token Lexer::lex_identifier() {
         return *chord;
     }
 
+    // Check for pattern string prefix: p"..." or p`...`
+    if (source_[start_] == 'p' && current_ == start_ + 1) {
+        char next = peek();
+        if (next == '"' || next == '`') {
+            return make_token(TokenType::Pat);
+        }
+    }
+
     while (is_alphanumeric(peek())) {
         advance();
     }

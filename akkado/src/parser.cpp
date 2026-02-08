@@ -957,7 +957,10 @@ NodeIndex Parser::parse_mini_literal() {
 
     NodeIndex node = make_node(NodeType::MiniLiteral, kw_tok);
 
-    consume(TokenType::LParen, "Expected '(' after 'pat'");
+    bool has_parens = check(TokenType::LParen);
+    if (has_parens) {
+        advance(); // consume '('
+    }
 
     // First argument: the mini-notation string
     if (!check(TokenType::String)) {
@@ -989,18 +992,21 @@ NodeIndex Parser::parse_mini_literal() {
         arena_.add_child(node, pattern_ast);
     }
 
-    // Optional second argument: closure
-    if (match(TokenType::Comma)) {
-        if (check(TokenType::LParen)) {
-            advance();  // consume '('
-            NodeIndex closure = parse_closure();
-            arena_.add_child(node, closure);
-        } else {
-            error("Expected closure after comma in pattern");
+    if (has_parens) {
+        // Optional second argument: closure (only in function-call form)
+        if (match(TokenType::Comma)) {
+            if (check(TokenType::LParen)) {
+                advance();  // consume '('
+                NodeIndex closure = parse_closure();
+                arena_.add_child(node, closure);
+            } else {
+                error("Expected closure after comma in pattern");
+            }
         }
+
+        consume(TokenType::RParen, "Expected ')' after pattern arguments");
     }
 
-    consume(TokenType::RParen, "Expected ')' after pattern arguments");
     return node;
 }
 
