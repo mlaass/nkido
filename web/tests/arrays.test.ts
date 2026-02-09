@@ -75,9 +75,9 @@ describe('Array Compilation', () => {
 
 	it('compiles array with UGen auto-expansion', () => {
 		// Array through oscillator should expand to multiple oscillators
-		// Note: osc() routes through stdlib match, so use sine_osc directly
+		// Note: osc() routes through stdlib match, so use sine directly
 		const source = `
-			[220, 330, 440] |> sine_osc(%) |> sum(%) |> out(%, %)
+			[220, 330, 440] |> sine(%) |> sum(%) |> out(%, %)
 		`;
 		const result = enkido.akkado_compile(source);
 		expect(result).toBe(1);
@@ -133,7 +133,7 @@ describe('Array Compilation', () => {
 
 	it('compiles harmonics() for additive synthesis', () => {
 		const source = `
-			harmonics(110, 4) |> sine_osc(%) |> sum(%) * 0.25 |> out(%, %)
+			harmonics(110, 4) |> sine(%) |> sum(%) * 0.25 |> out(%, %)
 		`;
 		const result = enkido.akkado_compile(source);
 		expect(result).toBe(1);
@@ -177,9 +177,9 @@ describe('Array Audio Processing', () => {
 	});
 
 	it('produces audio from chord (array of frequencies)', () => {
-		// Note: use sine_osc directly and sum(%) for proper multi-buffer piping
+		// Note: use sine directly and sum(%) for proper multi-buffer piping
 		const source = `
-			[220, 330, 440] |> sine_osc(%) |> sum(%) * 0.3 |> out(%, %)
+			[220, 330, 440] |> sine(%) |> sum(%) * 0.3 |> out(%, %)
 		`;
 		const compileResult = enkido.akkado_compile(source);
 		expect(compileResult).toBe(1);
