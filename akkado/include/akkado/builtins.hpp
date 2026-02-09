@@ -71,22 +71,8 @@ struct BuiltinInfo {
 
 /// Static mapping of Akkado function names to Cedar opcodes
 /// Used by semantic analyzer to resolve function calls
-///
-/// NOTE: The `osc(type, freq)` function is handled specially by codegen.
-/// It resolves the string type ("sin", "sine", "saw", etc.) at compile-time
-/// to the appropriate OSC_* opcode. See codegen.cpp for the implementation.
 inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS = {
-    // Strudel-style unified oscillator function: osc(type, freq, pwm, phase, trig)
-    // Type is resolved at compile-time from a string literal.
-    // Examples: osc("sin", 440), osc("saw", freq), osc("sqr_pwm", freq, 0.5)
-    // The opcode here is a placeholder - actual opcode is determined by type string in codegen.
-    {"osc",     {cedar::Opcode::OSC_SIN, 2, 3, true,
-                 {"type", "freq", "pwm", "phase", "trig", ""},
-                 {0.5f, NAN, NAN, NAN, NAN},
-                 "Band-limited oscillator (sin, saw, sqr, tri, ramp, phasor)"}},
-
-    // Basic Oscillators - kept for backwards compatibility and direct access
-    // For Strudel-style syntax, use osc("type", freq) instead
+    // Basic Oscillators
     // All oscillators now support optional phase offset and trigger for phase reset.
     // Phase/trig default to BUFFER_UNUSED, which falls back to BUFFER_ZERO (always 0.0).
     // This avoids emitting PUSH_CONST instructions for the common case.
@@ -114,8 +100,7 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"freq", "phase", "trig", "", "", ""},
                  {NAN, NAN, NAN, NAN, NAN},
                  "MinBLEP anti-aliased square wave"}},
-    // Sine oscillator renamed to avoid conflict with sin() math function
-    {"sine_osc", {cedar::Opcode::OSC_SIN,   1, 2, true,
+    {"sine",    {cedar::Opcode::OSC_SIN,   1, 2, true,
                  {"freq", "phase", "trig", "", "", ""},
                  {NAN, NAN, NAN, NAN, NAN},
                  "Sine wave oscillator"}},
@@ -696,6 +681,12 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                    {NAN, NAN, NAN},
                    "Generate harmonic series: f, 2f, 3f, ..., nf"}},
 
+    // Function composition (handled specially by codegen)
+    {"compose",   {cedar::Opcode::NOP, 2, 0, false,
+                   {"f", "g", "", "", "", ""},
+                   {NAN, NAN, NAN},
+                   "Compose functions: compose(f, g)(x) = g(f(x))"}},
+
     // Chord function (handled specially by codegen)
     // chord("Am") -> array of MIDI notes (root note only for now)
     // chord("Am C7 F G") -> pattern of chord progressions
@@ -784,13 +775,6 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
 /// Alias mappings for convenience syntax
 /// e.g., "sine" -> "sin", "lowpass" -> "lp"
 inline const std::unordered_map<std::string_view, std::string_view> BUILTIN_ALIASES = {
-    // Oscillator aliases - now use osc() function with type string
-    // e.g., osc("sine", 440) or osc("triangle", freq)
-    {"triangle",  "tri"},
-    {"sawtooth",  "saw"},
-    {"square",    "sqr"},
-    // Note: "sine" no longer aliases to oscillator - use osc("sine", freq)
-    // sin(x) is now the mathematical sine function
     {"lowpass",   "lp"},
     {"highpass",  "hp"},
     {"bandpass",  "bp"},

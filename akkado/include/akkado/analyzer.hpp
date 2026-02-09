@@ -86,6 +86,11 @@ private:
     bool reorder_named_arguments(NodeIndex call_node, const BuiltinInfo& builtin,
                                  const std::string& func_name);
 
+    // Helper: Reorder named arguments to match user function signature
+    bool reorder_named_arguments(NodeIndex call_node,
+                                 const std::vector<std::string>& param_names,
+                                 const std::string& func_name);
+
     // Helper: Check for variable captures in closure body
     void check_closure_captures(NodeIndex node, const std::set<std::string>& params,
                                 SourceLocation closure_loc);

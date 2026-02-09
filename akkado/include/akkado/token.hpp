@@ -72,7 +72,8 @@ enum class TokenType : std::uint8_t {
     Bang,           // ! (for repeat modifier)
     Question,       // ? (for chance modifier)
     Tilde,          // ~ (rest in mini-notation)
-    Underscore,     // _ (rest in mini-notation)
+    Underscore,     // _ (rest in mini-notation / partial application placeholder)
+    DotDotDot,      // ... (variadic rest parameter prefix)
 
     // Mini-notation specific (lexed inside pattern strings)
     MiniString,     // The raw mini-notation string content
@@ -132,6 +133,7 @@ constexpr std::string_view token_type_name(TokenType type) {
         case TokenType::Question:     return "Question";
         case TokenType::Tilde:        return "Tilde";
         case TokenType::Underscore:   return "Underscore";
+        case TokenType::DotDotDot:    return "DotDotDot";
         case TokenType::MiniString:   return "MiniString";
         case TokenType::Directive:    return "Directive";
         case TokenType::Error:        return "Error";

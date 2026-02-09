@@ -12,8 +12,8 @@ constexpr std::string_view STDLIB_SOURCE = R"akkado(
 // User definitions can shadow these.
 
 fn osc(type, freq, pwm = 0.5, phase = 0.0, trig = 0.0) -> match(type) {
-    "sin": sine_osc(freq, phase, trig)
-    "sine": sine_osc(freq, phase, trig)
+    "sin": sine(freq, phase, trig)
+    "sine": sine(freq, phase, trig)
     "tri": tri(freq, phase, trig)
     "triangle": tri(freq, phase, trig)
     "saw": saw(freq, phase, trig)
@@ -30,7 +30,9 @@ fn osc(type, freq, pwm = 0.5, phase = 0.0, trig = 0.0) -> match(type) {
     "var_saw": saw_pwm(freq, pwm, phase, trig)
     "sqr_minblep": sqr_minblep(freq, phase, trig)
     "sqr_pwm_minblep": sqr_pwm_minblep(freq, pwm, phase, trig)
-    _: sine_osc(freq, phase, trig)
+    "sqr_pwm_4x": sqr_pwm_4x(freq, pwm, phase, trig)
+    "saw_pwm_4x": saw_pwm_4x(freq, pwm, phase, trig)
+    _: sine(freq, phase, trig)
 }
 
 fn multiband3fx(sig, f1, f2, fx_lo, fx_mid, fx_hi) -> {

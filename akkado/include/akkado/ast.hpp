@@ -157,7 +157,12 @@ struct Node {
     struct ArgumentData { std::optional<std::string> name; };  // Named arg
     struct PitchData { std::uint8_t midi_note; };
     struct ChordData { std::uint8_t root_midi; std::vector<std::int8_t> intervals; };
-    struct ClosureParamData { std::string name; std::optional<double> default_value; };  // Closure param with optional default
+    struct ClosureParamData {
+        std::string name;
+        std::optional<double> default_value;
+        std::optional<std::string> default_string;  // String default for match dispatch
+        bool is_rest = false;  // true for ...param (variadic rest parameter)
+    };  // Closure param with optional default
 
     // Mini-notation atom types
     enum class MiniAtomKind : std::uint8_t {
@@ -213,6 +218,7 @@ struct Node {
     struct FunctionDefData {
         std::string name;
         std::size_t param_count;  // Number of Identifier children before body
+        bool has_rest_param = false;  // true if last param is ...rest
     };
 
     // Data for match arms (pattern: body, or pattern && guard: body)

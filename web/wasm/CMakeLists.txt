@@ -72,7 +72,6 @@ if(EMSCRIPTEN)
         _cedar_clear_samples
         _cedar_get_sample_count
         # State initialization
-        _cedar_init_seq_step_state
         _cedar_apply_state_inits
         # Akkado compiler
         _akkado_compile
@@ -92,8 +91,6 @@ if(EMSCRIPTEN)
         _akkado_get_state_init_count
         _akkado_get_state_init_id
         _akkado_get_state_init_type
-        _akkado_get_state_init_values_count
-        _akkado_get_state_init_values
         # Visualization declarations
         _akkado_get_viz_count
         _akkado_get_viz_name

@@ -377,6 +377,13 @@ NodeIndex Parser::parse_prefix() {
             return parse_match_expr();
         case TokenType::Bang:
             return parse_unary_not();
+        case TokenType::Underscore: {
+            // Placeholder for partial application: add(3, _)
+            Token tok = advance();
+            NodeIndex node = make_node(NodeType::Identifier, tok);
+            arena_[node].data = Node::IdentifierData{"_"};
+            return node;
+        }
         default:
             error("Expected expression");
             return NULL_NODE;
@@ -563,17 +570,33 @@ NodeIndex Parser::parse_grouping() {
         }
         current_idx_ = saved;
     }
-    // Check if it's identifier(s) followed by ) ->
-    else if (check(TokenType::Identifier)) {
+    // Check if it's identifier(s) (with optional defaults and rest params) followed by ) ->
+    else if (check(TokenType::Identifier) || check(TokenType::DotDotDot)) {
         std::size_t saved = current_idx_;
         bool looks_like_params = true;
 
         while (!is_at_end() && looks_like_params) {
+            // Allow ... prefix for rest params
+            if (check(TokenType::DotDotDot)) {
+                advance();
+            }
+
             if (!check(TokenType::Identifier)) {
                 looks_like_params = false;
                 break;
             }
             advance();
+
+            // Skip optional default value: = <literal>
+            if (check(TokenType::Equals)) {
+                advance();  // consume '='
+                if (check(TokenType::Number) || check(TokenType::String)) {
+                    advance();  // consume the literal
+                } else {
+                    looks_like_params = false;
+                    break;
+                }
+            }
 
             if (check(TokenType::Comma)) {
                 advance();
@@ -623,7 +646,7 @@ NodeIndex Parser::parse_closure() {
     }
 
     // Store params as children before body
-    // Use Identifier for simple params, ClosureParamData for params with defaults
+    // Use ClosureParamData for params with defaults/rest, IdentifierData for simple params
     if (!params.empty()) {
         NodeIndex first_param = NULL_NODE;
         NodeIndex prev_param = NULL_NODE;
@@ -631,9 +654,10 @@ NodeIndex Parser::parse_closure() {
         for (const auto& param : params) {
             NodeIndex param_node = arena_.alloc(NodeType::Identifier, start_tok.location);
 
-            if (param.default_value.has_value()) {
-                // Parameter with default value - use ClosureParamData
-                arena_[param_node].data = Node::ClosureParamData{param.name, param.default_value};
+            if (param.default_value.has_value() || param.default_string.has_value() || param.is_rest) {
+                // Parameter with default value, string default, or rest flag
+                arena_[param_node].data = Node::ClosureParamData{
+                    param.name, param.default_value, param.default_string, param.is_rest};
             } else {
                 // Simple parameter - use IdentifierData
                 arena_[param_node].data = Node::IdentifierData{param.name};
@@ -669,6 +693,9 @@ std::vector<ParsedParam> Parser::parse_param_list() {
     bool seen_default = false;
 
     do {
+        // Check for variadic rest parameter: ...name
+        bool is_rest = match(TokenType::DotDotDot);
+
         if (!check(TokenType::Identifier)) {
             error("Expected parameter name");
             break;
@@ -677,22 +704,43 @@ std::vector<ParsedParam> Parser::parse_param_list() {
         std::string name = std::string(name_tok.lexeme);
 
         std::optional<double> default_value;
+        std::optional<std::string> default_string;
+
+        if (is_rest) {
+            // Rest parameter: no default allowed, must be last
+            if (seen_default) {
+                // Rest after default is OK - rest collects remaining args
+            }
+            params.push_back(ParsedParam{std::move(name), std::nullopt, std::nullopt, NULL_NODE, true});
+            // Rest param must be last - break out of loop
+            break;
+        }
+
+        NodeIndex default_node_idx = NULL_NODE;
         if (match(TokenType::Equals)) {
-            // Parse default value (must be a number literal)
-            if (!check(TokenType::Number)) {
-                error("Default parameter value must be a number literal");
+            // Parse default value (number or string literal)
+            if (check(TokenType::Number)) {
+                Token num_tok = advance();
+                default_value = std::get<NumericValue>(num_tok.value).value;
+                seen_default = true;
+            } else if (check(TokenType::String)) {
+                Token str_tok = advance();
+                default_string = str_tok.as_string();
+                seen_default = true;
+                // Allocate StringLit node in AST arena for codegen param_literals_
+                default_node_idx = arena_.alloc(NodeType::StringLit, str_tok.location);
+                arena_[default_node_idx].data = Node::StringData{*default_string};
+            } else {
+                error("Default parameter value must be a number or string literal");
                 break;
             }
-            Token num_tok = advance();
-            default_value = std::get<NumericValue>(num_tok.value).value;
-            seen_default = true;
         } else if (seen_default) {
             // Required param after optional - error
             error("Required parameter cannot follow optional parameter");
             break;
         }
 
-        params.push_back(ParsedParam{std::move(name), default_value});
+        params.push_back(ParsedParam{std::move(name), default_value, default_string, default_node_idx, false});
     } while (match(TokenType::Comma));
 
     return params;
@@ -1160,19 +1208,24 @@ NodeIndex Parser::parse_fn_def() {
         body = parse_expression();
     }
 
+    // Check if last param is rest
+    bool has_rest = !params.empty() && params.back().is_rest;
+
     // Create FunctionDef node
     NodeIndex node = make_node(NodeType::FunctionDef, fn_tok);
     arena_[node].data = Node::FunctionDefData{
         std::string(name_tok.lexeme),
-        params.size()
+        params.size(),
+        has_rest
     };
 
-    // Add parameters as Identifier children (using ClosureParamData for those with defaults)
+    // Add parameters as Identifier children (using ClosureParamData for those with defaults/rest)
     for (const auto& param : params) {
         NodeIndex param_node = arena_.alloc(NodeType::Identifier, name_tok.location);
 
-        if (param.default_value.has_value()) {
-            arena_[param_node].data = Node::ClosureParamData{param.name, param.default_value};
+        if (param.default_value.has_value() || param.default_string.has_value() || param.is_rest) {
+            arena_[param_node].data = Node::ClosureParamData{
+                param.name, param.default_value, param.default_string, param.is_rest};
         } else {
             arena_[param_node].data = Node::IdentifierData{param.name};
         }

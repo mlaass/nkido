@@ -402,6 +402,9 @@ private:
     /// Handle spectrum(signal, name?) - attach spectrum visualization
     std::uint16_t handle_spectrum_call(NodeIndex node, const Node& n);
 
+    /// Handle compose(f, g, ...) - function composition
+    std::uint16_t handle_compose_call(NodeIndex node, const Node& n);
+
     // ============================================================================
     // Directive handlers
     // ============================================================================
@@ -445,6 +448,15 @@ private:
     // Map from parameter name hash to literal AST node (for inline match resolution)
     // Only populated during user function calls when the argument is a literal
     std::unordered_map<std::uint32_t, NodeIndex> param_literals_;
+
+    // Map from parameter name hash to string default value (for compile-time match dispatch)
+    // Used when a string default parameter is not provided at call site
+    std::unordered_map<std::uint32_t, std::string> param_string_defaults_;
+
+    // Pending function ref from a closure-returning function call.
+    // Set by handle_user_function_call when body is a Closure node.
+    // Consumed by Assignment handler to bind as FunctionValue.
+    std::optional<FunctionRef> pending_function_ref_;
 
     // Map from parameter name hash to FunctionRef (for closure parameters in user functions)
     // When a closure or function reference is passed as an argument to a user function,

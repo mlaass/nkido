@@ -26,21 +26,37 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         arg = ast_->arena[arg].next_sibling;
     }
 
-    // Save param_literals, param_multi_buffer_sources, and param_function_refs for this scope
+    // Save param_literals, param_string_defaults, param_multi_buffer_sources, and param_function_refs for this scope
     auto saved_param_literals = std::move(param_literals_);
+    auto saved_param_string_defaults = std::move(param_string_defaults_);
     auto saved_param_multi_buffer_sources = std::move(param_multi_buffer_sources_);
     auto saved_param_function_refs = std::move(param_function_refs_);
     param_literals_.clear();
+    param_string_defaults_.clear();
     param_multi_buffer_sources_.clear();
     param_function_refs_.clear();
 
     // IMPORTANT: Visit arguments BEFORE pushing scope to evaluate them in caller's context
     // This allows nested function calls like double(double(x)) to work correctly.
     std::vector<std::uint16_t> param_bufs;
+    // Track rest param info separately
+    std::string rest_param_name;
+    std::vector<std::uint16_t> rest_buffers;
+
     for (std::size_t i = 0; i < func.params.size(); ++i) {
         std::uint16_t param_buf;
 
-        if (i < args.size()) {
+        if (func.params[i].is_rest) {
+            // Rest parameter: collect all remaining arguments
+            rest_param_name = func.params[i].name;
+            for (std::size_t j = i; j < args.size(); ++j) {
+                std::uint16_t buf = visit(args[j]);
+                rest_buffers.push_back(buf);
+            }
+            param_buf = rest_buffers.empty() ? BufferAllocator::BUFFER_UNUSED : rest_buffers[0];
+            param_bufs.push_back(param_buf);
+            break;  // Rest must be last param
+        } else if (i < args.size()) {
             // Check if the argument is a closure or function reference
             auto func_ref = resolve_function_arg(args[i]);
             if (func_ref) {
@@ -68,7 +84,7 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                 }
             }
         } else if (func.params[i].default_value.has_value()) {
-            // Use default value
+            // Use numeric default value
             param_buf = buffers_.allocate();
             if (param_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
@@ -87,11 +103,17 @@ std::uint16_t CodeGenerator::handle_user_function_call(
             float default_val = static_cast<float>(*func.params[i].default_value);
             encode_const_value(push_inst, default_val);
             emit(push_inst);
+        } else if (func.params[i].default_string.has_value()) {
+            // String default: doesn't produce audio — used for compile-time match dispatch
+            param_buf = BufferAllocator::BUFFER_UNUSED;
+            std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+            param_string_defaults_[param_hash] = *func.params[i].default_string;
         } else {
             // Missing required argument - should have been caught by analyzer
             error("E105", "Missing required argument for parameter '" +
                   func.params[i].name + "'", n.location);
             param_literals_ = std::move(saved_param_literals);
+            param_string_defaults_ = std::move(saved_param_string_defaults);
             return BufferAllocator::BUFFER_UNUSED;
         }
 
@@ -101,14 +123,58 @@ std::uint16_t CodeGenerator::handle_user_function_call(
     // NOW push scope for function parameters and bind them
     symbols_->push_scope();
     for (std::size_t i = 0; i < func.params.size(); ++i) {
-        std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
-        auto fref_it = param_function_refs_.find(param_hash);
-        if (fref_it != param_function_refs_.end()) {
-            // Bind as FunctionValue so call dispatch routes to handle_function_value_call
-            symbols_->define_function_value(func.params[i].name, fref_it->second);
+        if (func.params[i].is_rest) {
+            // Bind rest param as synthetic Array
+            ArrayInfo arr;
+            arr.source_node = NULL_NODE;
+            arr.buffer_indices = rest_buffers;
+            arr.element_count = rest_buffers.size();
+            symbols_->define_array(func.params[i].name, arr);
         } else {
-            symbols_->define_variable(func.params[i].name, param_bufs[i]);
+            std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+            auto fref_it = param_function_refs_.find(param_hash);
+            if (fref_it != param_function_refs_.end()) {
+                symbols_->define_function_value(func.params[i].name, fref_it->second);
+            } else {
+                symbols_->define_variable(func.params[i].name, param_bufs[i]);
+            }
         }
+    }
+
+    // Check if function was explicitly defined to return a closure
+    // (e.g. fn make_filter(cut) -> (sig) -> lp(sig, cut))
+    // Only triggers for source-level closures, not pipe-rewritten ones
+    if (func.returns_closure && func.body_node != NULL_NODE &&
+        ast_->arena[func.body_node].type == NodeType::Closure) {
+        // Build FunctionRef from the closure body
+        auto ref = resolve_function_arg(func.body_node);
+        if (ref) {
+            // Add captures for bound function parameters
+            for (std::size_t i = 0; i < func.params.size(); ++i) {
+                std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+                auto fref_it = param_function_refs_.find(param_hash);
+                if (fref_it != param_function_refs_.end()) {
+                    // Param is itself a function ref — add its captures transitively
+                    // (the closure body can reference the outer fn's function params)
+                    // For now, skip — function params are resolved via param_function_refs_
+                } else if (param_bufs[i] != BufferAllocator::BUFFER_UNUSED) {
+                    ref->captures.push_back({func.params[i].name, param_bufs[i]});
+                }
+                // Also propagate string defaults as captures won't help for strings,
+                // but the param_string_defaults_ will be set when the closure is later called
+            }
+            pending_function_ref_ = *ref;
+        }
+
+        // Pop scope and restore state
+        symbols_->pop_scope();
+        param_literals_ = std::move(saved_param_literals);
+        param_string_defaults_ = std::move(saved_param_string_defaults);
+        param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
+        param_function_refs_ = std::move(saved_param_function_refs);
+
+        node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
+        return BufferAllocator::BUFFER_UNUSED;
     }
 
     // Save node_buffers_ state before visiting body.
@@ -130,9 +196,10 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         }
     }
 
-    // Pop scope and restore param_literals, param_multi_buffer_sources, and param_function_refs
+    // Pop scope and restore param_literals, param_string_defaults, param_multi_buffer_sources, and param_function_refs
     symbols_->pop_scope();
     param_literals_ = std::move(saved_param_literals);
+    param_string_defaults_ = std::move(saved_param_string_defaults);
     param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
     param_function_refs_ = std::move(saved_param_function_refs);
 
@@ -157,9 +224,11 @@ std::uint16_t CodeGenerator::handle_function_value_call(
         arg = ast_->arena[arg].next_sibling;
     }
 
-    // Save param_literals for this scope
+    // Save param_literals and param_string_defaults for this scope
     auto saved_param_literals = std::move(param_literals_);
+    auto saved_param_string_defaults = std::move(param_string_defaults_);
     param_literals_.clear();
+    param_string_defaults_.clear();
 
     // Visit arguments BEFORE pushing scope to evaluate them in caller's context
     std::vector<std::uint16_t> param_bufs;
@@ -179,11 +248,12 @@ std::uint16_t CodeGenerator::handle_function_value_call(
             // Visit argument in caller's scope
             param_buf = visit(args[i]);
         } else if (func.params[i].default_value.has_value()) {
-            // Use default value
+            // Use numeric default value
             param_buf = buffers_.allocate();
             if (param_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
                 param_literals_ = std::move(saved_param_literals);
+                param_string_defaults_ = std::move(saved_param_string_defaults);
                 return BufferAllocator::BUFFER_UNUSED;
             }
 
@@ -198,47 +268,33 @@ std::uint16_t CodeGenerator::handle_function_value_call(
             float default_val = static_cast<float>(*func.params[i].default_value);
             encode_const_value(push_inst, default_val);
             emit(push_inst);
+        } else if (func.params[i].default_string.has_value()) {
+            // String default: doesn't produce audio — used for compile-time match dispatch
+            param_buf = BufferAllocator::BUFFER_UNUSED;
+            std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+            param_string_defaults_[param_hash] = *func.params[i].default_string;
         } else {
             // Missing required argument - should have been caught by analyzer
             error("E105", "Missing required argument for parameter '" +
                   func.params[i].name + "'", n.location);
             param_literals_ = std::move(saved_param_literals);
+            param_string_defaults_ = std::move(saved_param_string_defaults);
             return BufferAllocator::BUFFER_UNUSED;
         }
 
         param_bufs.push_back(param_buf);
     }
 
-    // Push scope for parameters and bind them
+    // Push scope for captures and parameters
     symbols_->push_scope();
+    for (const auto& capture : func.captures) {
+        symbols_->define_variable(capture.name, capture.buffer_index);
+    }
     for (std::size_t i = 0; i < func.params.size(); ++i) {
         symbols_->define_variable(func.params[i].name, param_bufs[i]);
     }
 
-    // Find the body node
-    NodeIndex body = NULL_NODE;
-    if (func.is_user_function) {
-        // For user functions, closure_node IS the body directly
-        body = func.closure_node;
-    } else {
-        // For closures, the structure is: [param1, param2, ..., body]
-        const Node& closure_node = ast_->arena[func.closure_node];
-        NodeIndex child = closure_node.first_child;
-
-        while (child != NULL_NODE) {
-            const Node& child_node = ast_->arena[child];
-            if (child_node.type == NodeType::Identifier) {
-                // This is a parameter — skip
-            } else {
-                // This is the body
-                body = child;
-                break;
-            }
-            child = ast_->arena[child].next_sibling;
-        }
-    }
-
-    // Push semantic path for unique state IDs in closure bodies
+    // Push semantic path for unique state IDs
     const std::string& callee_name = n.as_identifier();
     std::uint32_t count = call_counters_[callee_name]++;
     push_path(callee_name + "#" + std::to_string(count));
@@ -247,10 +303,42 @@ std::uint16_t CodeGenerator::handle_function_value_call(
     auto saved_node_buffers = std::move(node_buffers_);
     node_buffers_.clear();
 
-    // Visit closure body (inline expansion)
     std::uint16_t result = BufferAllocator::BUFFER_UNUSED;
-    if (body != NULL_NODE) {
-        result = visit(body);
+
+    // Handle composed functions: apply each function in the chain sequentially
+    if (!func.compose_chain.empty()) {
+        // First function gets the call argument(s)
+        if (!param_bufs.empty()) {
+            result = param_bufs[0];
+        }
+        for (const auto& chain_ref : func.compose_chain) {
+            result = apply_function_ref(chain_ref, result, n.location);
+        }
+    } else {
+        // Normal function value call
+        // Find the body node
+        NodeIndex body = NULL_NODE;
+        if (func.is_user_function) {
+            body = func.closure_node;
+        } else {
+            const Node& closure_node = ast_->arena[func.closure_node];
+            NodeIndex child = closure_node.first_child;
+            while (child != NULL_NODE) {
+                const Node& child_node = ast_->arena[child];
+                if (child_node.type == NodeType::Identifier) {
+                    // parameter — skip
+                } else {
+                    body = child;
+                    break;
+                }
+                child = ast_->arena[child].next_sibling;
+            }
+        }
+
+        // Visit closure body (inline expansion)
+        if (body != NULL_NODE) {
+            result = visit(body);
+        }
     }
 
     // Restore node_buffers_
@@ -260,13 +348,52 @@ std::uint16_t CodeGenerator::handle_function_value_call(
         }
     }
 
-    // Pop semantic path, scope, and restore param_literals
+    // Pop semantic path, scope, and restore param_literals and param_string_defaults
     pop_path();
     symbols_->pop_scope();
     param_literals_ = std::move(saved_param_literals);
+    param_string_defaults_ = std::move(saved_param_string_defaults);
 
     node_buffers_[node] = result;
     return result;
+}
+
+// Handle compose(f, g, ...) - create a composed function reference
+std::uint16_t CodeGenerator::handle_compose_call(NodeIndex node, const Node& n) {
+    // Collect function arguments
+    std::vector<FunctionRef> refs;
+    NodeIndex arg = n.first_child;
+    while (arg != NULL_NODE) {
+        const Node& arg_node = ast_->arena[arg];
+        NodeIndex arg_value = arg;
+        if (arg_node.type == NodeType::Argument) {
+            arg_value = arg_node.first_child;
+        }
+        auto ref = resolve_function_arg(arg_value);
+        if (!ref) {
+            error("E140", "compose() arguments must be functions or closures", arg_node.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+        refs.push_back(*ref);
+        arg = ast_->arena[arg].next_sibling;
+    }
+
+    if (refs.size() < 2) {
+        error("E141", "compose() requires at least 2 function arguments", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Build composed FunctionRef: first function's params, chain of all refs
+    FunctionRef composed{};
+    composed.params = refs[0].params;  // Same params as first function
+    composed.closure_node = refs[0].closure_node;
+    composed.is_user_function = false;
+    composed.captures = refs[0].captures;
+    composed.compose_chain = refs;  // Store entire chain
+
+    pending_function_ref_ = composed;
+    node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
+    return BufferAllocator::BUFFER_UNUSED;
 }
 
 // Handle Closure nodes - allocate buffers for parameters and generate body
@@ -356,7 +483,7 @@ bool CodeGenerator::is_compile_time_match(NodeIndex node, const Node& n) const {
 
     const Node* scrutinee_ptr = &ast_->arena[scrutinee];
 
-    // If scrutinee is an Identifier, check if it maps to a literal argument
+    // If scrutinee is an Identifier, check if it maps to a literal argument or string default
     if (scrutinee_ptr->type == NodeType::Identifier) {
         std::string param_name;
         if (std::holds_alternative<Node::ClosureParamData>(scrutinee_ptr->data)) {
@@ -370,14 +497,19 @@ bool CodeGenerator::is_compile_time_match(NodeIndex node, const Node& n) const {
             auto it = param_literals_.find(param_hash);
             if (it != param_literals_.end()) {
                 scrutinee_ptr = &ast_->arena[it->second];
+            } else if (param_string_defaults_.count(param_hash)) {
+                // String default found — compile-time match is possible
+                // (handled in handle_compile_time_match via param_string_defaults_)
+                scrutinee_ptr = nullptr;  // Signal: use string default path below
             } else {
                 return false;  // Variable without known literal -> runtime
             }
         }
     }
 
-    // Check if scrutinee is a literal
-    if (scrutinee_ptr->type != NodeType::StringLit &&
+    // Check if scrutinee is a literal (or string default)
+    if (scrutinee_ptr != nullptr &&
+        scrutinee_ptr->type != NodeType::StringLit &&
         scrutinee_ptr->type != NodeType::NumberLit &&
         scrutinee_ptr->type != NodeType::BoolLit) {
         return false;  // Non-literal scrutinee -> runtime
@@ -416,7 +548,7 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
         first_arm = ast_->arena[scrutinee].next_sibling;
         scrutinee_ptr = &ast_->arena[scrutinee];
 
-        // If scrutinee is an Identifier, check if it maps to a literal argument
+        // If scrutinee is an Identifier, check if it maps to a literal argument or string default
         if (scrutinee_ptr->type == NodeType::Identifier) {
             std::string param_name;
             if (std::holds_alternative<Node::ClosureParamData>(scrutinee_ptr->data)) {
@@ -430,17 +562,26 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
                 auto it = param_literals_.find(param_hash);
                 if (it != param_literals_.end()) {
                     scrutinee_ptr = &ast_->arena[it->second];
+                } else {
+                    auto str_it = param_string_defaults_.find(param_hash);
+                    if (str_it != param_string_defaults_.end()) {
+                        // String default — set key directly, no AST node needed
+                        scrutinee_key = "s:" + str_it->second;
+                        scrutinee_ptr = nullptr;  // Skip node-based key extraction below
+                    }
                 }
             }
         }
 
-        // Get scrutinee value for matching
-        if (scrutinee_ptr->type == NodeType::StringLit) {
-            scrutinee_key = "s:" + scrutinee_ptr->as_string();
-        } else if (scrutinee_ptr->type == NodeType::NumberLit) {
-            scrutinee_key = "n:" + std::to_string(scrutinee_ptr->as_number());
-        } else if (scrutinee_ptr->type == NodeType::BoolLit) {
-            scrutinee_key = "b:" + std::to_string(scrutinee_ptr->as_bool());
+        // Get scrutinee value for matching (skip if already set from string default)
+        if (scrutinee_ptr != nullptr) {
+            if (scrutinee_ptr->type == NodeType::StringLit) {
+                scrutinee_key = "s:" + scrutinee_ptr->as_string();
+            } else if (scrutinee_ptr->type == NodeType::NumberLit) {
+                scrutinee_key = "n:" + std::to_string(scrutinee_ptr->as_number());
+            } else if (scrutinee_ptr->type == NodeType::BoolLit) {
+                scrutinee_key = "b:" + std::to_string(scrutinee_ptr->as_bool());
+            }
         }
     }
 

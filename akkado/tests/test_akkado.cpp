@@ -706,6 +706,20 @@ static bool find_opcode(const std::vector<std::uint8_t>& bytecode, cedar::Opcode
     return false;
 }
 
+// Helper to count instructions with a specific opcode in bytecode
+static size_t count_opcode(const std::vector<std::uint8_t>& bytecode, cedar::Opcode target) {
+    cedar::Instruction* inst = reinterpret_cast<cedar::Instruction*>(
+        const_cast<std::uint8_t*>(bytecode.data()));
+    size_t num_inst = bytecode.size() / sizeof(cedar::Instruction);
+    size_t count = 0;
+    for (size_t i = 0; i < num_inst; ++i) {
+        if (inst[i].opcode == target) {
+            count++;
+        }
+    }
+    return count;
+}
+
 TEST_CASE("Akkado stdlib", "[akkado][stdlib]") {
     SECTION("stdlib osc() with sin type") {
         auto result = akkado::compile(R"(osc("sin", 440))");
@@ -1469,5 +1483,279 @@ TEST_CASE("Closure parameters in user functions", "[akkado][fn][closure-params]"
         // All state_ids should be unique
         std::set<std::uint32_t> unique_ids(lp_state_ids.begin(), lp_state_ids.end());
         CHECK(unique_ids.size() == lp_state_ids.size());
+    }
+}
+
+TEST_CASE("String default parameters", "[akkado][fn][string-defaults]") {
+    SECTION("string default used when arg omitted") {
+        auto result = akkado::compile(R"(
+            fn my_osc(type = "saw", freq = 440) -> match(type) {
+                "saw": saw(freq)
+                "tri": tri(freq)
+                _: saw(freq)
+            }
+            my_osc()
+        )");
+
+        REQUIRE(result.success);
+        // "saw" default should resolve match to saw branch
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK_FALSE(find_opcode(result.bytecode, cedar::Opcode::OSC_TRI));
+    }
+
+    SECTION("string default overridden by explicit arg") {
+        auto result = akkado::compile(R"(
+            fn my_osc(type = "saw", freq = 440) -> match(type) {
+                "saw": saw(freq)
+                "tri": tri(freq)
+                _: saw(freq)
+            }
+            my_osc("tri", 880)
+        )");
+
+        REQUIRE(result.success);
+        // "tri" argument should resolve match to tri branch
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_TRI));
+    }
+
+    SECTION("string default with numeric default") {
+        auto result = akkado::compile(R"(
+            fn synth(wave = "tri", freq = 220) -> match(wave) {
+                "tri": tri(freq)
+                "sqr": sqr(freq)
+                _: saw(freq)
+            }
+            synth()
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_TRI));
+    }
+}
+
+TEST_CASE("Named arguments for user functions", "[akkado][fn][named-args]") {
+    SECTION("named args reorder correctly") {
+        auto result = akkado::compile(R"(
+            fn add3(a, b, c) -> a + b + c
+            add3(1, c: 3, b: 2)
+        )");
+
+        REQUIRE(result.success);
+        // Should produce ADD instructions from inlining
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+
+    SECTION("named args with defaults") {
+        auto result = akkado::compile(R"(
+            fn f(a, b = 5, c = 10) -> a * b + c
+            f(2, c: 20)
+        )");
+
+        REQUIRE(result.success);
+        // a=2, b=5 (default), c=20
+        // Should have MUL and ADD
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+
+    SECTION("named args with string defaults") {
+        auto result = akkado::compile(R"(
+            fn my_osc(freq = 440, type = "tri") -> match(type) {
+                "tri": tri(freq)
+                "saw": saw(freq)
+                _: tri(freq)
+            }
+            my_osc(type: "saw", freq: 880)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+    }
+}
+
+TEST_CASE("Closures as return values", "[akkado][fn][closure-return]") {
+    SECTION("function returning closure") {
+        auto result = akkado::compile(R"(
+            fn make_gain(amt) -> (sig) -> sig * amt
+            g = make_gain(0.5)
+            g(saw(440))
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+    }
+
+    SECTION("closure return captures multiple params") {
+        auto result = akkado::compile(R"(
+            fn make_filter(cut, q) -> (sig) -> lp(sig, cut, q)
+            f = make_filter(1000, 0.7)
+            f(saw(440))
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+    }
+
+    SECTION("closure return used inline in pipe") {
+        auto result = akkado::compile(R"(
+            fn make_gain(amt) -> (sig) -> sig * amt
+            half = make_gain(0.5)
+            saw(440) |> half(%) |> out(%, %)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OUTPUT));
+    }
+}
+
+TEST_CASE("Variadic rest parameters", "[akkado][fn][variadic]") {
+    SECTION("rest param with sum") {
+        auto result = akkado::compile(R"(
+            fn mix(...sigs) -> sum(sigs)
+            mix(saw(440), saw(880))
+        )");
+
+        REQUIRE(result.success);
+        CHECK(count_opcode(result.bytecode, cedar::Opcode::OSC_SAW) == 2);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+
+    SECTION("rest param with len") {
+        auto result = akkado::compile(R"(
+            fn count(...items) -> len(items)
+            count(1, 2, 3)
+        )");
+
+        REQUIRE(result.success);
+        // len(items) should be compile-time constant 3
+        cedar::Instruction* insts = reinterpret_cast<cedar::Instruction*>(result.bytecode.data());
+        std::size_t num = result.bytecode.size() / sizeof(cedar::Instruction);
+
+        // Should have a PUSH_CONST(3) somewhere
+        bool found_three = false;
+        for (std::size_t i = 0; i < num; ++i) {
+            if (insts[i].opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(insts[i]) == 3.0f) {
+                found_three = true;
+                break;
+            }
+        }
+        CHECK(found_three);
+    }
+
+    SECTION("rest param with required params before it") {
+        auto result = akkado::compile(R"(
+            fn mix_with_gain(gain, ...sigs) -> sum(sigs) * gain
+            mix_with_gain(0.5, saw(440), saw(880))
+        )");
+
+        REQUIRE(result.success);
+        CHECK(count_opcode(result.bytecode, cedar::Opcode::OSC_SAW) == 2);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+    }
+
+    SECTION("single arg to rest param") {
+        auto result = akkado::compile(R"(
+            fn mix(...sigs) -> sum(sigs)
+            mix(saw(440))
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+    }
+}
+
+TEST_CASE("Partial application", "[akkado][fn][partial]") {
+    SECTION("partial application with underscore") {
+        auto result = akkado::compile(R"(
+            fn my_add(a, b) -> a + b
+            add3 = my_add(3, _)
+            add3(4)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+
+    SECTION("partial application first arg") {
+        auto result = akkado::compile(R"(
+            fn my_mul(a, b) -> a * b
+            double = my_mul(_, 2)
+            double(5)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+    }
+
+    SECTION("partial application of builtin") {
+        auto result = akkado::compile(R"(
+            low_pass = lp(_, 1000)
+            saw(440) |> low_pass(%) |> out(%, %)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OUTPUT));
+    }
+
+    SECTION("partial application with multiple placeholders") {
+        auto result = akkado::compile(R"(
+            fn combine(a, b, c) -> a + b + c
+            g = combine(_, 10, _)
+            g(1, 2)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+}
+
+TEST_CASE("Function composition", "[akkado][fn][compose]") {
+    SECTION("compose two functions") {
+        auto result = akkado::compile(R"(
+            fn double(x) -> x * 2
+            fn inc(x) -> x + 1
+            f = compose(double, inc)
+            f(5)
+        )");
+
+        REQUIRE(result.success);
+        // double(5) = 10, inc(10) = 11
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
+    }
+
+    SECTION("compose with partial application") {
+        auto result = akkado::compile(R"(
+            pipeline = compose(lp(_, 1000), hp(_, 200))
+            saw(440) |> pipeline(%) |> out(%, %)
+        )");
+
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_HP));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OUTPUT));
+    }
+
+    SECTION("compose three functions") {
+        auto result = akkado::compile(R"(
+            fn a(x) -> x * 2
+            fn b(x) -> x + 1
+            fn c(x) -> x * 3
+            f = compose(a, b, c)
+            f(5)
+        )");
+
+        REQUIRE(result.success);
+        // a(5)=10, b(10)=11, c(11)=33
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::MUL));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
     }
 }

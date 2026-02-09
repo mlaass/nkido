@@ -4,10 +4,10 @@
 using namespace akkado;
 
 TEST_CASE("BuiltinInfo methods", "[builtins]") {
-    SECTION("total_params for osc") {
-        const auto& osc = BUILTIN_FUNCTIONS.at("osc");
-        // osc has 2 required + 3 optional = 5
-        CHECK(osc.total_params() == 5);
+    SECTION("total_params for saw") {
+        const auto& saw = BUILTIN_FUNCTIONS.at("saw");
+        // saw has 1 required + 2 optional = 3
+        CHECK(saw.total_params() == 3);
     }
 
     SECTION("total_params for lp filter") {
@@ -22,14 +22,12 @@ TEST_CASE("BuiltinInfo methods", "[builtins]") {
         CHECK(add.total_params() == 2);
     }
 
-    SECTION("find_param by name - osc") {
-        const auto& osc = BUILTIN_FUNCTIONS.at("osc");
-        CHECK(osc.find_param("type") == 0);
-        CHECK(osc.find_param("freq") == 1);
-        CHECK(osc.find_param("pwm") == 2);
-        CHECK(osc.find_param("phase") == 3);
-        CHECK(osc.find_param("trig") == 4);
-        CHECK(osc.find_param("nonexistent") == -1);
+    SECTION("find_param by name - saw") {
+        const auto& saw = BUILTIN_FUNCTIONS.at("saw");
+        CHECK(saw.find_param("freq") == 0);
+        CHECK(saw.find_param("phase") == 1);
+        CHECK(saw.find_param("trig") == 2);
+        CHECK(saw.find_param("nonexistent") == -1);
     }
 
     SECTION("find_param by name - lp") {
@@ -47,17 +45,17 @@ TEST_CASE("BuiltinInfo methods", "[builtins]") {
     }
 
     SECTION("has_default for required params") {
-        const auto& osc = BUILTIN_FUNCTIONS.at("osc");
-        CHECK_FALSE(osc.has_default(0));  // type - required
-        CHECK_FALSE(osc.has_default(1));  // freq - required
+        const auto& saw = BUILTIN_FUNCTIONS.at("saw");
+        CHECK_FALSE(saw.has_default(0));  // freq - required
     }
 
     SECTION("has_default for optional params") {
-        const auto& osc = BUILTIN_FUNCTIONS.at("osc");
-        CHECK(osc.has_default(2));  // pwm - optional with default
+        const auto& sqr_pwm = BUILTIN_FUNCTIONS.at("sqr_pwm");
+        CHECK_FALSE(sqr_pwm.has_default(0));  // freq - required
+        CHECK_FALSE(sqr_pwm.has_default(1));  // pwm - required
         // phase and trig have NAN defaults
-        CHECK_FALSE(osc.has_default(3));  // phase - NAN means no default
-        CHECK_FALSE(osc.has_default(4));  // trig - NAN means no default
+        CHECK_FALSE(sqr_pwm.has_default(2));  // phase - NAN means no default
+        CHECK_FALSE(sqr_pwm.has_default(3));  // trig - NAN means no default
     }
 
     SECTION("has_default for lp filter") {
@@ -73,9 +71,9 @@ TEST_CASE("BuiltinInfo methods", "[builtins]") {
         CHECK_FALSE(lp.has_default(10));
     }
 
-    SECTION("get_default returns correct values - osc") {
-        const auto& osc = BUILTIN_FUNCTIONS.at("osc");
-        CHECK(osc.get_default(2) == 0.5f);  // pwm default is 0.5
+    SECTION("get_default returns correct values - moog") {
+        const auto& moog = BUILTIN_FUNCTIONS.at("moog");
+        CHECK(moog.get_default(2) == 1.0f);  // res default is 1.0
     }
 
     SECTION("get_default returns correct values - lp") {
@@ -92,8 +90,8 @@ TEST_CASE("BuiltinInfo methods", "[builtins]") {
     }
 
     SECTION("requires_state flag") {
-        const auto& osc = BUILTIN_FUNCTIONS.at("osc");
-        CHECK(osc.requires_state == true);
+        const auto& sine = BUILTIN_FUNCTIONS.at("sine");
+        CHECK(sine.requires_state == true);
 
         const auto& lp = BUILTIN_FUNCTIONS.at("lp");
         CHECK(lp.requires_state == true);
@@ -113,10 +111,10 @@ TEST_CASE("lookup_builtin", "[builtins]") {
         CHECK(lp->opcode == cedar::Opcode::FILTER_SVF_LP);
     }
 
-    SECTION("finds direct name - osc") {
-        const auto* osc = lookup_builtin("osc");
-        REQUIRE(osc != nullptr);
-        CHECK(osc->opcode == cedar::Opcode::OSC_SIN);  // placeholder opcode
+    SECTION("finds direct name - sine") {
+        const auto* sine = lookup_builtin("sine");
+        REQUIRE(sine != nullptr);
+        CHECK(sine->opcode == cedar::Opcode::OSC_SIN);
     }
 
     SECTION("resolves alias - lowpass") {
@@ -129,12 +127,6 @@ TEST_CASE("lookup_builtin", "[builtins]") {
         const auto* highpass = lookup_builtin("highpass");
         REQUIRE(highpass != nullptr);
         CHECK(highpass->opcode == cedar::Opcode::FILTER_SVF_HP);
-    }
-
-    SECTION("resolves alias - triangle") {
-        const auto* triangle = lookup_builtin("triangle");
-        REQUIRE(triangle != nullptr);
-        CHECK(triangle->opcode == cedar::Opcode::OSC_TRI);
     }
 
     SECTION("resolves alias - reverb to freeverb") {
@@ -165,12 +157,6 @@ TEST_CASE("canonical_name", "[builtins]") {
         CHECK(canonical_name("bandpass") == "bp");
     }
 
-    SECTION("resolves alias to canonical - oscillators") {
-        CHECK(canonical_name("triangle") == "tri");
-        CHECK(canonical_name("sawtooth") == "saw");
-        CHECK(canonical_name("square") == "sqr");
-    }
-
     SECTION("resolves alias to canonical - effects") {
         CHECK(canonical_name("reverb") == "freeverb");
         CHECK(canonical_name("plate") == "dattorro");
@@ -185,7 +171,7 @@ TEST_CASE("canonical_name", "[builtins]") {
 
     SECTION("returns input for non-alias") {
         CHECK(canonical_name("lp") == "lp");
-        CHECK(canonical_name("osc") == "osc");
+        CHECK(canonical_name("sine") == "sine");
         CHECK(canonical_name("unknown") == "unknown");
         CHECK(canonical_name("") == "");
     }

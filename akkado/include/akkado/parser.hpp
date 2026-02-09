@@ -29,6 +29,9 @@ enum class Precedence : std::uint8_t {
 struct ParsedParam {
     std::string name;
     std::optional<double> default_value;
+    std::optional<std::string> default_string;  // String default
+    NodeIndex default_node = NULL_NODE;          // AST node for default literal
+    bool is_rest = false;  // true for ...param (variadic rest)
 };
 
 /// Parser for the Akkado language

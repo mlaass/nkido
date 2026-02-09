@@ -1020,6 +1020,86 @@ TEST_CASE("Parser function definitions", "[parser]") {
     }
 }
 
+TEST_CASE("Parser string default parameters", "[parser][fn]") {
+    SECTION("function with string default") {
+        auto ast = parse_ok(R"(fn osc(type = "sin", freq = 440) -> freq)");
+        NodeIndex fn = ast.arena[ast.root].first_child;
+        REQUIRE(ast.arena[fn].type == NodeType::FunctionDef);
+
+        const auto& fn_data = ast.arena[fn].as_function_def();
+        CHECK(fn_data.param_count == 2);
+
+        // First param: string default
+        NodeIndex param1 = ast.arena[fn].first_child;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param1].data));
+        const auto& p1 = ast.arena[param1].as_closure_param();
+        CHECK(p1.name == "type");
+        REQUIRE(p1.default_string.has_value());
+        CHECK(*p1.default_string == "sin");
+        CHECK_FALSE(p1.default_value.has_value());
+
+        // Second param: numeric default
+        NodeIndex param2 = ast.arena[param1].next_sibling;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param2].data));
+        const auto& p2 = ast.arena[param2].as_closure_param();
+        CHECK(p2.name == "freq");
+        REQUIRE(p2.default_value.has_value());
+        CHECK_THAT(*p2.default_value, WithinRel(440.0));
+        CHECK_FALSE(p2.default_string.has_value());
+    }
+}
+
+TEST_CASE("Parser rest parameters", "[parser][fn]") {
+    SECTION("function with rest parameter") {
+        auto ast = parse_ok("fn mix(...sigs) -> sigs");
+        NodeIndex fn = ast.arena[ast.root].first_child;
+        REQUIRE(ast.arena[fn].type == NodeType::FunctionDef);
+
+        const auto& fn_data = ast.arena[fn].as_function_def();
+        CHECK(fn_data.has_rest_param);
+        CHECK(fn_data.param_count == 1);
+
+        NodeIndex param = ast.arena[fn].first_child;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param].data));
+        const auto& p = ast.arena[param].as_closure_param();
+        CHECK(p.name == "sigs");
+        CHECK(p.is_rest);
+    }
+
+    SECTION("rest param with required params before") {
+        auto ast = parse_ok("fn mix(gain, ...sigs) -> sigs");
+        NodeIndex fn = ast.arena[ast.root].first_child;
+        REQUIRE(ast.arena[fn].type == NodeType::FunctionDef);
+
+        const auto& fn_data = ast.arena[fn].as_function_def();
+        CHECK(fn_data.has_rest_param);
+        CHECK(fn_data.param_count == 2);
+
+        // First param: regular
+        NodeIndex param1 = ast.arena[fn].first_child;
+        // Second param: rest
+        NodeIndex param2 = ast.arena[param1].next_sibling;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param2].data));
+        CHECK(ast.arena[param2].as_closure_param().is_rest);
+    }
+}
+
+TEST_CASE("Parser underscore placeholder", "[parser]") {
+    SECTION("underscore in call arguments") {
+        auto ast = parse_ok("f(1, _, 3)");
+        NodeIndex call = ast.arena[ast.root].first_child;
+        REQUIRE(ast.arena[call].type == NodeType::Call);
+
+        // Second argument should be Argument wrapping Identifier("_")
+        NodeIndex arg1 = ast.arena[call].first_child;
+        NodeIndex arg2 = ast.arena[arg1].next_sibling;
+        REQUIRE(ast.arena[arg2].type == NodeType::Argument);
+        NodeIndex inner = ast.arena[arg2].first_child;
+        REQUIRE(ast.arena[inner].type == NodeType::Identifier);
+        CHECK(ast.arena[inner].as_identifier() == "_");
+    }
+}
+
 // ============================================================================
 // Record and field access tests
 // ============================================================================

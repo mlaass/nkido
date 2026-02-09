@@ -41,7 +41,7 @@ When a voice source flows into a stateful UGen, the UGen is **automatically expa
 
 ```akkado
 // 3 voices (C, E, G) → 3 oscillators
-pat("C4'") |> sine_osc(%.freq) |> sum(%) |> out(%, %)
+pat("C4'") |> sine(%.freq) |> sum(%) |> out(%, %)
 ```
 
 **Expansion Rules**:
@@ -56,7 +56,7 @@ Multiple voices are combined back to a single signal for shared processing:
 
 ```akkado
 pat("C4' Am7'")
-|> sine_osc(%.freq) * env(%.trig)  // per-voice: 4 oscillators, 4 envelopes
+|> sine(%.freq) * env(%.trig)  // per-voice: 4 oscillators, 4 envelopes
 |> sum(%)                           // consolidate: 4 → 1
 |> reverb(%)                        // shared: 1 reverb instance
 |> out(%, %)
@@ -75,7 +75,7 @@ For drum machines or multi-timbral setups, different voice types can route to di
 ```akkado
 pat("kick snare hihat kick snare")
 |> match(%.type) {
-    "kick": sine_osc(55) * env(%.trig, 0.01, 0.1)
+    "kick": sine(55) * env(%.trig, 0.01, 0.1)
     "snare": noise() * env(%.trig, 0.01, 0.2) |> hp(200, %)
     "hihat": noise() * env(%.trig, 0.001, 0.05) |> hp(8000, %)
     _: 0
@@ -121,7 +121,7 @@ spread(8, source)         // Force 8 voices from source
 
 ```akkado
 pat("C4' Am7'") as e |>
-    sine_osc(e.freq) *     // e.freq = multi-buffer of all voice frequencies
+    sine(e.freq) *     // e.freq = multi-buffer of all voice frequencies
     e.vel *                 // e.vel = multi-buffer of all voice velocities
     env(e.trig)             // e.trig = multi-buffer of all voice triggers
 |> sum(%)
@@ -132,16 +132,16 @@ pat("C4' Am7'") as e |>
 
 ```akkado
 // Per-voice: UGen inside voice expansion
-pat("C4'") |> sine_osc(%.freq) |> filter(1000, %) |> sum(%)
+pat("C4'") |> sine(%.freq) |> filter(1000, %) |> sum(%)
 //           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 3 oscs, 3 filters
 
 // Shared: UGen after consolidation
-pat("C4'") |> sine_osc(%.freq) |> sum(%) |> filter(1000, %)
+pat("C4'") |> sine(%.freq) |> sum(%) |> filter(1000, %)
 //                                          ^^^^^^^^^^^^^^^^ 1 filter
 
 // Mixed:
 pat("C4'")
-|> sine_osc(%.freq) * env(%.trig)   // per-voice
+|> sine(%.freq) * env(%.trig)   // per-voice
 |> sum(%) * 0.3                      // consolidate + scale
 |> reverb(%)                         // shared
 |> out(%, %)
@@ -392,7 +392,7 @@ std::uint16_t handle_spread_call(NodeIndex node, const Node& n) {
 ```akkado
 // ADSR envelope with proper release
 pat("C4' Am7'") as e |>
-    sine_osc(e.freq) * adsr(e.gate, 0.01, 0.1, 0.7, 0.3)
+    sine(e.freq) * adsr(e.gate, 0.01, 0.1, 0.7, 0.3)
 |> sum(%) |> out(%, %)
 ```
 
@@ -546,7 +546,7 @@ void cedar_set_polyphony(int max_voices) {
 ## 7. Implementation Phases
 
 ### Phase 1: Polyphonic Field Access (Foundation)
-**Goal**: `pat("C4'") |> sine_osc(%.freq) |> sum(%)` works
+**Goal**: `pat("C4'") |> sine(%.freq) |> sum(%)` works
 
 **Changes**:
 1. Add PolyphonicFields struct to codegen.hpp
@@ -623,7 +623,7 @@ void cedar_set_polyphony(int max_voices) {
 TEST_CASE("Polyphonic field access", "[polyphony]") {
     SECTION("%.freq on triad returns 3-element multi-buffer") {
         auto result = compile(R"(
-            pat("C4'") |> sine_osc(%.freq) |> sum(%) |> out(%, %)
+            pat("C4'") |> sine(%.freq) |> sum(%) |> out(%, %)
         )");
         REQUIRE(result.success);
         CHECK(count_instructions(result, OSC_SIN) == 3);
@@ -631,7 +631,7 @@ TEST_CASE("Polyphonic field access", "[polyphony]") {
 
     SECTION("%.trig on chord triggers all voices") {
         auto result = compile(R"(
-            pat("Am7'") |> sine_osc(%.freq) * env(%.trig) |> sum(%) |> out(%, %)
+            pat("Am7'") |> sine(%.freq) * env(%.trig) |> sum(%) |> out(%, %)
         )");
         REQUIRE(result.success);
         CHECK(count_instructions(result, OSC_SIN) == 4);
@@ -661,7 +661,7 @@ TEST_CASE("Directive system", "[directives]") {
 TEST_CASE("spread() function", "[polyphony]") {
     SECTION("spread pads to target count") {
         auto result = compile(R"(
-            spread(6, pat("C4'")) |> sine_osc(%.freq) |> sum(%) |> out(%, %)
+            spread(6, pat("C4'")) |> sine(%.freq) |> sum(%) |> out(%, %)
         )");
         REQUIRE(result.success);
         CHECK(count_instructions(result, OSC_SIN) == 6);  // 3 real + 3 padded
@@ -672,7 +672,7 @@ TEST_CASE("Per-type routing", "[polyphony][match]") {
     SECTION("match routes by type string") {
         auto result = compile(R"(
             pat("kick snare") |> match(%.type) {
-                "kick": sine_osc(55)
+                "kick": sine(55)
                 "snare": noise()
             } |> sum(%) |> out(%, %)
         )");
@@ -688,7 +688,7 @@ TEST_CASE("Per-type routing", "[polyphony][match]") {
 ```typescript
 describe('Polyphony', () => {
     it('produces audio from chord pattern', async () => {
-        const source = `pat("C4'") |> sine_osc(%.freq) |> sum(%) * 0.3 |> out(%, %)`;
+        const source = `pat("C4'") |> sine(%.freq) |> sum(%) * 0.3 |> out(%, %)`;
         compile_and_run(source);
         expect(getMaxOutput()).toBeGreaterThan(0);
     });
@@ -705,7 +705,7 @@ describe('Polyphony', () => {
 
 describe('MIDI Input', () => {
     it('responds to MIDI note on', async () => {
-        const source = `midi_in() |> sine_osc(%.freq) * env(%.gate) |> sum(%) |> out(%, %)`;
+        const source = `midi_in() |> sine(%.freq) * env(%.gate) |> sum(%) |> out(%, %)`;
         compile_and_run(source);
 
         enkido.cedar_midi_note_on(0, 60, 0.8);  // C4
@@ -723,7 +723,7 @@ describe('MIDI Input', () => {
 
 ```akkado
 // Basic polyphonic chord
-pat("C4' Am7' G7'") |> sine_osc(%.freq) * env(%.trig) |> sum(%) * 0.2 |> out(%, %)
+pat("C4' Am7' G7'") |> sine(%.freq) * env(%.trig) |> sum(%) * 0.2 |> out(%, %)
 
 // Supersaw per voice (12 oscillators for Am7')
 fn supersaw(f) = [f*0.99, f, f*1.01] |> saw(%) |> sum(%) * 0.33
@@ -732,7 +732,7 @@ pat("Am7'") |> supersaw(%.freq) * env(%.trig) |> sum(%) * 0.2 |> out(%, %)
 // Drum machine
 pat("kick . snare . kick kick snare .")
 |> match(%.type) {
-    "kick": sine_osc(55) * env(%.trig, 0.01, 0.1)
+    "kick": sine(55) * env(%.trig, 0.01, 0.1)
     "snare": noise() * env(%.trig, 0.01, 0.2) |> hp(200, %)
 }
 |> sum(%) * 0.5
@@ -740,7 +740,7 @@ pat("kick . snare . kick kick snare .")
 
 // MIDI input
 $polyphony(8)
-midi_in() |> sine_osc(%.freq) * env(%.gate, 0.01, 0.1, 0.7, 0.3) |> sum(%) * 0.3 |> out(%, %)
+midi_in() |> sine(%.freq) * env(%.gate, 0.01, 0.1, 0.7, 0.3) |> sum(%) * 0.3 |> out(%, %)
 ```
 
 ---

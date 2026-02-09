@@ -2349,9 +2349,9 @@ TEST_CASE("Codegen: Mini-notation patterns", "[codegen]") {
 // =============================================================================
 
 TEST_CASE("Codegen: UGen auto-expansion", "[codegen][arrays]") {
-    SECTION("array of frequencies expands sine_osc to 3 instances") {
-        // [440, 550, 660] |> sine_osc(%) produces 3 OSC_SIN instructions
-        auto result = akkado::compile("[440, 550, 660] |> sine_osc(%)");
+    SECTION("array of frequencies expands sine to 3 instances") {
+        // [440, 550, 660] |> sine(%) produces 3 OSC_SIN instructions
+        auto result = akkado::compile("[440, 550, 660] |> sine(%)");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
         // Should have 3 OSC_SIN instructions
@@ -2370,10 +2370,10 @@ TEST_CASE("Codegen: UGen auto-expansion", "[codegen][arrays]") {
     }
 
     SECTION("array of frequencies through osc() stdlib") {
-        // osc() is defined in stdlib and calls sine_osc for type="sin"
+        // osc() is defined in stdlib and calls sine for type="sin"
         // This currently produces 1 osc because the match resolves before expansion.
         // For full expansion through stdlib osc(), need to call directly:
-        auto result = akkado::compile("freqs = [440, 550, 660]\nsine_osc(freqs)");
+        auto result = akkado::compile("freqs = [440, 550, 660]\nsine(freqs)");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
         // Should have 3 OSC_SIN instructions
@@ -2381,7 +2381,7 @@ TEST_CASE("Codegen: UGen auto-expansion", "[codegen][arrays]") {
     }
 
     SECTION("single element array does not expand") {
-        auto result = akkado::compile("[440] |> sine_osc(%)");
+        auto result = akkado::compile("[440] |> sine(%)");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
         // Single element: just one instruction
@@ -2557,7 +2557,7 @@ TEST_CASE("Codegen: Array generation", "[codegen][arrays]") {
     }
 
     SECTION("harmonics through oscillator") {
-        auto result = akkado::compile("harmonics(110, 4) |> sine_osc(%)");
+        auto result = akkado::compile("harmonics(110, 4) |> sine(%)");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
         // 4 oscillators

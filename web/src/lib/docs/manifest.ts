@@ -1102,27 +1102,12 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Oscillators"
 	},
-	"triangle": {
-		"slug": "oscillators",
-		"category": "builtins",
-		"title": "Oscillators"
-	},
 	"saw": {
 		"slug": "oscillators",
 		"category": "builtins",
 		"title": "Oscillators"
 	},
-	"sawtooth": {
-		"slug": "oscillators",
-		"category": "builtins",
-		"title": "Oscillators"
-	},
 	"sqr": {
-		"slug": "oscillators",
-		"category": "builtins",
-		"title": "Oscillators"
-	},
-	"square": {
 		"slug": "oscillators",
 		"category": "builtins",
 		"title": "Oscillators"

@@ -111,6 +111,8 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
                         const auto& cp = child_node.as_closure_param();
                         param.name = cp.name;
                         param.default_value = cp.default_value;
+                        param.default_string = cp.default_string;
+                        param.is_rest = cp.is_rest;
                     } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
                         param.name = child_node.as_identifier();
                         param.default_value = std::nullopt;
@@ -164,6 +166,110 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
                 // Invalid pipe - regular variable
                 symbols_.define_variable(name, 0xFFFF);
             }
+        } else if (rhs != NULL_NODE && (*input_ast_).arena[rhs].type == NodeType::Call) {
+            // Check if this is a partial application (has _ placeholder args)
+            bool has_placeholder = false;
+            {
+                NodeIndex child = (*input_ast_).arena[rhs].first_child;
+                while (child != NULL_NODE) {
+                    const Node& cn = (*input_ast_).arena[child];
+                    if (cn.type == NodeType::Identifier &&
+                        std::holds_alternative<Node::IdentifierData>(cn.data) &&
+                        cn.as_identifier() == "_") {
+                        has_placeholder = true;
+                        break;
+                    }
+                    if (cn.type == NodeType::Argument && cn.first_child != NULL_NODE) {
+                        const Node& inner = (*input_ast_).arena[cn.first_child];
+                        if (inner.type == NodeType::Identifier &&
+                            std::holds_alternative<Node::IdentifierData>(inner.data) &&
+                            inner.as_identifier() == "_") {
+                            has_placeholder = true;
+                            break;
+                        }
+                    }
+                    child = (*input_ast_).arena[child].next_sibling;
+                }
+            }
+            if (has_placeholder) {
+                // Will be rewritten to a closure during pipe rewriting
+                // Count placeholder params
+                std::size_t placeholder_count = 0;
+                NodeIndex child = (*input_ast_).arena[rhs].first_child;
+                while (child != NULL_NODE) {
+                    const Node& cn = (*input_ast_).arena[child];
+                    bool is_ph = false;
+                    if (cn.type == NodeType::Identifier &&
+                        std::holds_alternative<Node::IdentifierData>(cn.data) &&
+                        cn.as_identifier() == "_") is_ph = true;
+                    if (cn.type == NodeType::Argument && cn.first_child != NULL_NODE) {
+                        const Node& inner = (*input_ast_).arena[cn.first_child];
+                        if (inner.type == NodeType::Identifier &&
+                            std::holds_alternative<Node::IdentifierData>(inner.data) &&
+                            inner.as_identifier() == "_") is_ph = true;
+                    }
+                    if (is_ph) placeholder_count++;
+                    child = (*input_ast_).arena[child].next_sibling;
+                }
+                FunctionRef func_ref{};
+                func_ref.closure_node = rhs;  // Will be updated after rewrite
+                func_ref.is_user_function = false;
+                for (std::size_t i = 0; i < placeholder_count; ++i) {
+                    FunctionParamInfo param;
+                    param.name = "__p" + std::to_string(i);
+                    func_ref.params.push_back(std::move(param));
+                }
+                symbols_.define_function_value(name, func_ref);
+            } else {
+                // Check if calling a function that returns a closure
+                const Node& call_node = (*input_ast_).arena[rhs];
+                std::string callee_name;
+                if (std::holds_alternative<Node::IdentifierData>(call_node.data)) {
+                    callee_name = call_node.as_identifier();
+                }
+                auto callee_sym = symbols_.lookup(callee_name);
+                if (callee_sym && callee_sym->kind == SymbolKind::UserFunction) {
+                    NodeIndex body = callee_sym->user_function.body_node;
+                    if (body != NULL_NODE && (*input_ast_).arena[body].type == NodeType::Closure) {
+                        FunctionRef func_ref{};
+                        func_ref.closure_node = body;
+                        func_ref.is_user_function = false;
+                        const Node& closure_body = (*input_ast_).arena[body];
+                        NodeIndex child = closure_body.first_child;
+                        while (child != NULL_NODE) {
+                            const Node& child_node = (*input_ast_).arena[child];
+                            if (child_node.type == NodeType::Identifier) {
+                                FunctionParamInfo param;
+                                if (std::holds_alternative<Node::ClosureParamData>(child_node.data)) {
+                                    const auto& cp = child_node.as_closure_param();
+                                    param.name = cp.name;
+                                    param.default_value = cp.default_value;
+                                    param.default_string = cp.default_string;
+                                    param.is_rest = cp.is_rest;
+                                } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
+                                    param.name = child_node.as_identifier();
+                                } else {
+                                    break;
+                                }
+                                func_ref.params.push_back(std::move(param));
+                            } else {
+                                break;
+                            }
+                            child = (*input_ast_).arena[child].next_sibling;
+                        }
+                        symbols_.define_function_value(name, func_ref);
+                    } else {
+                        symbols_.define_variable(name, 0xFFFF);
+                    }
+                } else if (callee_name == "compose") {
+                    // compose() returns a function value
+                    FunctionRef func_ref{};
+                    func_ref.is_user_function = false;
+                    symbols_.define_function_value(name, func_ref);
+                } else {
+                    symbols_.define_variable(name, 0xFFFF);
+                }
+            }
         } else {
             // Regular variable assignment
             symbols_.define_variable(name, 0xFFFF);
@@ -182,6 +288,7 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
         UserFunctionInfo func_info;
         func_info.name = fn_data.name;
         func_info.def_node = node;
+        func_info.has_rest_param = fn_data.has_rest_param;
 
         NodeIndex child = n.first_child;
         std::size_t param_idx = 0;
@@ -192,6 +299,8 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
                 const auto& cp = child_node.as_closure_param();
                 param.name = cp.name;
                 param.default_value = cp.default_value;
+                param.default_string = cp.default_string;
+                param.is_rest = cp.is_rest;
             } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
                 param.name = child_node.as_identifier();
                 param.default_value = std::nullopt;
@@ -203,6 +312,11 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
 
         // Body is the next child after params
         func_info.body_node = child;
+
+        // Check if body is explicitly a Closure (for closure-return detection in codegen)
+        if (child != NULL_NODE && (*input_ast_).arena[child].type == NodeType::Closure) {
+            func_info.returns_closure = true;
+        }
 
         symbols_.define_function(func_info);
     }
@@ -339,6 +453,112 @@ NodeIndex SemanticAnalyzer::clone_subtree(NodeIndex src_idx) {
     // Desugar method calls: receiver.method(a, b) -> method(receiver, a, b)
     if (src.type == NodeType::MethodCall) {
         return desugar_method_call(src_idx);
+    }
+
+    // Rewrite partial application: f(a, _, b) -> (p0) -> f(a, p0, b)
+    if (src.type == NodeType::Call) {
+        // Check if any argument is Identifier("_")
+        bool has_placeholder = false;
+        NodeIndex child = src.first_child;
+        while (child != NULL_NODE) {
+            const Node& cn = (*input_ast_).arena[child];
+            // Check direct Identifier("_")
+            if (cn.type == NodeType::Identifier &&
+                std::holds_alternative<Node::IdentifierData>(cn.data) &&
+                cn.as_identifier() == "_") {
+                has_placeholder = true;
+                break;
+            }
+            // Check Argument wrapping Identifier("_")
+            if (cn.type == NodeType::Argument && cn.first_child != NULL_NODE) {
+                const Node& inner = (*input_ast_).arena[cn.first_child];
+                if (inner.type == NodeType::Identifier &&
+                    std::holds_alternative<Node::IdentifierData>(inner.data) &&
+                    inner.as_identifier() == "_") {
+                    has_placeholder = true;
+                    break;
+                }
+            }
+            child = (*input_ast_).arena[child].next_sibling;
+        }
+
+        if (has_placeholder) {
+            // Build closure: replace each _ with a generated param name
+            // 1. Clone the call, replacing _ with generated param names
+            NodeIndex cloned_call = clone_node(src_idx);
+            std::vector<std::string> param_names;
+            NodeIndex src_child = src.first_child;
+            NodeIndex prev_dst = NULL_NODE;
+
+            while (src_child != NULL_NODE) {
+                const Node& sc = (*input_ast_).arena[src_child];
+                NodeIndex dst_child;
+
+                // Check if this argument is _ (directly or wrapped in Argument)
+                bool is_placeholder = false;
+                if (sc.type == NodeType::Identifier &&
+                    std::holds_alternative<Node::IdentifierData>(sc.data) &&
+                    sc.as_identifier() == "_") {
+                    is_placeholder = true;
+                }
+                if (sc.type == NodeType::Argument && sc.first_child != NULL_NODE) {
+                    const Node& inner = (*input_ast_).arena[sc.first_child];
+                    if (inner.type == NodeType::Identifier &&
+                        std::holds_alternative<Node::IdentifierData>(inner.data) &&
+                        inner.as_identifier() == "_") {
+                        is_placeholder = true;
+                    }
+                }
+
+                if (is_placeholder) {
+                    std::string pname = "__p" + std::to_string(param_names.size());
+                    param_names.push_back(pname);
+                    // Create identifier node with generated param name
+                    dst_child = output_arena_.alloc(NodeType::Identifier, sc.location);
+                    output_arena_[dst_child].data = Node::IdentifierData{pname};
+                } else {
+                    dst_child = clone_subtree(src_child);
+                }
+
+                if (dst_child != NULL_NODE) {
+                    output_arena_[dst_child].next_sibling = NULL_NODE;
+                    if (prev_dst == NULL_NODE) {
+                        output_arena_[cloned_call].first_child = dst_child;
+                    } else {
+                        output_arena_[prev_dst].next_sibling = dst_child;
+                    }
+                    prev_dst = dst_child;
+                }
+                src_child = (*input_ast_).arena[src_child].next_sibling;
+            }
+
+            // 2. Build closure: (p0, p1, ...) -> cloned_call
+            NodeIndex closure = output_arena_.alloc(NodeType::Closure, src.location);
+
+            // Add param nodes as children, then body (cloned_call)
+            NodeIndex prev = NULL_NODE;
+            for (const auto& pname : param_names) {
+                NodeIndex param_node = output_arena_.alloc(NodeType::Identifier, src.location);
+                output_arena_[param_node].data = Node::IdentifierData{pname};
+                output_arena_[param_node].next_sibling = NULL_NODE;
+                if (prev == NULL_NODE) {
+                    output_arena_[closure].first_child = param_node;
+                } else {
+                    output_arena_[prev].next_sibling = param_node;
+                }
+                prev = param_node;
+            }
+            // Append the call as the closure body
+            output_arena_[cloned_call].next_sibling = NULL_NODE;
+            if (prev == NULL_NODE) {
+                output_arena_[closure].first_child = cloned_call;
+            } else {
+                output_arena_[prev].next_sibling = cloned_call;
+            }
+
+            node_map_[src_idx] = closure;
+            return closure;
+        }
     }
 
     // Clone this node
@@ -740,6 +960,13 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
             // Validate user function call
             const auto& fn = sym->user_function;
 
+            // Reorder named arguments if any
+            {
+                std::vector<std::string> pnames;
+                for (const auto& p : fn.params) pnames.push_back(p.name);
+                reorder_named_arguments(node, pnames, func_name);
+            }
+
             // Count arguments
             std::size_t arg_count = 0;
             NodeIndex arg = output_arena_[node].first_child;
@@ -748,40 +975,31 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                 arg = output_arena_[arg].next_sibling;
             }
 
-            // Count required args (params without defaults)
+            // Count required args (params without defaults or rest)
             std::size_t min_args = 0;
             for (const auto& param : fn.params) {
-                if (!param.default_value.has_value()) {
+                if (!param.default_value.has_value() &&
+                    !param.default_string.has_value() &&
+                    !param.is_rest) {
                     min_args++;
                 }
             }
-            std::size_t max_args = fn.params.size();
 
             if (arg_count < min_args) {
                 error("E006", "Function '" + func_name + "' expects at least " +
                       std::to_string(min_args) + " argument(s), got " +
                       std::to_string(arg_count), n.location);
-            } else if (arg_count > max_args) {
-                error("E007", "Function '" + func_name + "' expects at most " +
-                      std::to_string(max_args) + " argument(s), got " +
-                      std::to_string(arg_count), n.location);
+            } else if (!fn.has_rest_param) {
+                // Only enforce max if no rest param
+                std::size_t max_args = fn.params.size();
+                if (arg_count > max_args) {
+                    error("E007", "Function '" + func_name + "' expects at most " +
+                          std::to_string(max_args) + " argument(s), got " +
+                          std::to_string(arg_count), n.location);
+                }
             }
         } else if (sym->kind == SymbolKind::Builtin) {
-            // Special handling for osc() - validation happens in codegen
-            // because argument count depends on the type string
-            if (func_name == "osc") {
-                // Basic validation: at least 2 args (type + freq)
-                std::size_t arg_count = 0;
-                NodeIndex arg = output_arena_[node].first_child;
-                while (arg != NULL_NODE) {
-                    arg_count++;
-                    arg = output_arena_[arg].next_sibling;
-                }
-                if (arg_count < 2) {
-                    error("E006", "Function 'osc' expects at least 2 arguments: "
-                          "osc(type, freq) or osc(type, freq, pwm)", n.location);
-                }
-            } else if (func_name == "tap_delay" || func_name == "tap_delay_ms" || func_name == "tap_delay_smp") {
+            if (func_name == "tap_delay" || func_name == "tap_delay_ms" || func_name == "tap_delay_smp") {
                 // Validate tap_delay(in, time, fb, processor, [dry], [wet])
                 std::size_t arg_count = 0;
                 NodeIndex arg = output_arena_[node].first_child;
@@ -824,6 +1042,17 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                                   proc_node.location);
                         }
                     }
+                }
+            } else if (func_name == "compose") {
+                // compose() requires at least 2 function arguments, no upper limit
+                std::size_t arg_count = 0;
+                NodeIndex arg = output_arena_[node].first_child;
+                while (arg != NULL_NODE) {
+                    arg_count++;
+                    arg = output_arena_[arg].next_sibling;
+                }
+                if (arg_count < 2) {
+                    error("E006", "Function 'compose' expects at least 2 arguments", n.location);
                 }
             } else {
                 // Reorder named arguments if any
@@ -1408,6 +1637,137 @@ bool SemanticAnalyzer::reorder_named_arguments(NodeIndex call_node,
     }
 
     // Clear argument names after reordering (they're now positional)
+    for (auto& a : args) {
+        if (a.name.has_value() && a.node != NULL_NODE) {
+            Node& arg_node = output_arena_[a.node];
+            if (arg_node.type == NodeType::Argument) {
+                arg_node.data = Node::ArgumentData{std::nullopt};
+            }
+        }
+    }
+
+    // Rebuild child list in new order
+    call.first_child = NULL_NODE;
+    NodeIndex prev = NULL_NODE;
+    for (NodeIndex idx : reordered) {
+        if (idx == NULL_NODE) continue;
+
+        output_arena_[idx].next_sibling = NULL_NODE;
+
+        if (prev == NULL_NODE) {
+            call.first_child = idx;
+        } else {
+            output_arena_[prev].next_sibling = idx;
+        }
+        prev = idx;
+    }
+
+    return true;
+}
+
+bool SemanticAnalyzer::reorder_named_arguments(NodeIndex call_node,
+                                                const std::vector<std::string>& param_names,
+                                                const std::string& func_name) {
+    Node& call = output_arena_[call_node];
+
+    // Collect all arguments
+    struct ArgInfo {
+        NodeIndex node;
+        std::optional<std::string> name;
+        int target_pos;
+    };
+    std::vector<ArgInfo> args;
+
+    NodeIndex arg = call.first_child;
+    while (arg != NULL_NODE) {
+        const Node& arg_node = output_arena_[arg];
+        std::optional<std::string> arg_name;
+        if (arg_node.type == NodeType::Argument) {
+            arg_name = arg_node.as_arg_name();
+        }
+        args.push_back({arg, arg_name, -1});
+        arg = output_arena_[arg].next_sibling;
+    }
+
+    if (args.empty()) return true;
+
+    // Check for named arguments and determine if reordering is needed
+    bool has_named = false;
+    bool seen_named = false;
+    std::set<std::string> used_params;
+
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (args[i].name.has_value()) {
+            has_named = true;
+            seen_named = true;
+
+            const std::string& name = *args[i].name;
+
+            if (used_params.count(name)) {
+                error("E010", "Duplicate named argument '" + name + "' in call to '" +
+                      func_name + "'", output_arena_[args[i].node].location);
+                return false;
+            }
+            used_params.insert(name);
+
+            // Find parameter index by linear search
+            int param_idx = -1;
+            for (std::size_t j = 0; j < param_names.size(); ++j) {
+                if (param_names[j] == name) {
+                    param_idx = static_cast<int>(j);
+                    break;
+                }
+            }
+            if (param_idx < 0) {
+                error("E011", "Unknown parameter '" + name + "' for function '" +
+                      func_name + "'", output_arena_[args[i].node].location);
+                return false;
+            }
+            args[i].target_pos = param_idx;
+        } else {
+            if (seen_named) {
+                error("E009", "Positional argument cannot follow named argument in call to '" +
+                      func_name + "'", output_arena_[args[i].node].location);
+                return false;
+            }
+            args[i].target_pos = static_cast<int>(i);
+        }
+    }
+
+    if (!has_named) {
+        return true;
+    }
+
+    // Check that positional args don't conflict with named args
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        if (!args[i].name.has_value()) {
+            for (std::size_t j = 0; j < args.size(); ++j) {
+                if (args[j].name.has_value() && args[j].target_pos == static_cast<int>(i)) {
+                    error("E012", "Parameter '" + *args[j].name + "' at position " +
+                          std::to_string(i) + " conflicts with positional argument in call to '" +
+                          func_name + "'", output_arena_[args[i].node].location);
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Reorder arguments: create array indexed by target position
+    std::size_t max_pos = 0;
+    for (const auto& a : args) {
+        if (a.target_pos >= 0) {
+            max_pos = std::max(max_pos, static_cast<std::size_t>(a.target_pos));
+        }
+    }
+
+    std::vector<NodeIndex> reordered(max_pos + 1, NULL_NODE);
+    for (const auto& a : args) {
+        if (a.target_pos >= 0) {
+            reordered[a.target_pos] = a.node;
+        }
+    }
+
+    // Clear argument names after reordering
     for (auto& a : args) {
         if (a.name.has_value() && a.node != NULL_NODE) {
             Node& arg_node = output_arena_[a.node];

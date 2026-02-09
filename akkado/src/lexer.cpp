@@ -204,6 +204,12 @@ Token Lexer::lex_token() {
         case '~': return make_token(TokenType::Tilde);
         case '^': return make_token(TokenType::Caret);
         case '.':
+            // Check for ... (variadic rest parameter)
+            if (peek() == '.' && peek_next() == '.') {
+                advance();  // consume second '.'
+                advance();  // consume third '.'
+                return make_token(TokenType::DotDotDot);
+            }
             // Check for leading decimal number (.001, .5)
             if (is_digit(peek())) {
                 return lex_number();

@@ -16,6 +16,9 @@ namespace akkado {
 struct FunctionParamInfo {
     std::string name;
     std::optional<double> default_value;
+    std::optional<std::string> default_string;  // String default for match dispatch
+    NodeIndex default_node = NULL_NODE;          // AST node for default literal (for param_literals_)
+    bool is_rest = false;                        // true for ...param (variadic rest)
 };
 
 /// Information about a user-defined function
@@ -24,6 +27,8 @@ struct UserFunctionInfo {
     std::vector<FunctionParamInfo> params;
     NodeIndex body_node;  // Index of function body in AST
     NodeIndex def_node;   // Index of FunctionDef node (for inlining)
+    bool has_rest_param = false;  // true if last param is ...rest
+    bool returns_closure = false; // true if body is explicitly a Closure in source
 };
 
 // Forward-declare hash function (same as Cedar's FNV-1a)
@@ -74,6 +79,7 @@ struct FunctionRef {
     std::vector<CaptureInfo> captures;           // Captured variables (read-only)
     bool is_user_function;                       // true if from `fn`
     std::string user_function_name;              // For user functions
+    std::vector<FunctionRef> compose_chain;      // For compose(): chain of functions to apply in sequence
 };
 
 /// Information about a record field

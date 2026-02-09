@@ -433,6 +433,28 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             }
 
             if (sym->kind == SymbolKind::Array) {
+                if (sym->array.source_node == NULL_NODE) {
+                    // Synthetic array (rest param) — buffers already computed
+                    if (!sym->array.buffer_indices.empty()) {
+                        register_multi_buffer(node, sym->array.buffer_indices);
+                        node_buffers_[node] = sym->array.buffer_indices[0];
+                        return sym->array.buffer_indices[0];
+                    }
+                    // Empty rest → zero
+                    auto zero_buf = buffers_.allocate();
+                    cedar::Instruction push_zero{};
+                    push_zero.opcode = cedar::Opcode::PUSH_CONST;
+                    push_zero.out_buffer = zero_buf;
+                    push_zero.inputs[0] = 0xFFFF;
+                    push_zero.inputs[1] = 0xFFFF;
+                    push_zero.inputs[2] = 0xFFFF;
+                    push_zero.inputs[3] = 0xFFFF;
+                    codegen::encode_const_value(push_zero, 0.0f);
+                    emit(push_zero);
+                    node_buffers_[node] = zero_buf;
+                    return zero_buf;
+                }
+
                 // Array variable - visit the source node to generate array code
                 std::uint16_t first_buf = visit(sym->array.source_node);
 
@@ -503,6 +525,14 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             std::uint16_t value_buffer = visit(value_idx);
 
             pop_path();
+
+            // Check if visit produced a pending function ref (closure-returning function call)
+            if (pending_function_ref_) {
+                symbols_->define_function_value(var_name, *pending_function_ref_);
+                pending_function_ref_ = std::nullopt;
+                node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
+                return BufferAllocator::BUFFER_UNUSED;
+            }
 
             // Update symbol table with the buffer index and multi-buffer info
             if (sym && (sym->kind == SymbolKind::Variable || sym->kind == SymbolKind::Parameter)) {
@@ -617,6 +647,8 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"oscilloscope", &CodeGenerator::handle_oscilloscope_call},
                 {"waveform", &CodeGenerator::handle_waveform_call},
                 {"spectrum", &CodeGenerator::handle_spectrum_call},
+                // Function composition
+                {"compose", &CodeGenerator::handle_compose_call},
             };
 
             auto handler_it = special_handlers.find(func_name);
@@ -741,7 +773,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             }
 
             // UGen Auto-Expansion: If this is a stateful UGen and an argument is multi-buffer,
-            // expand to N instances. E.g., [440, 550, 660] |> sine_osc(%) produces 3 oscillators.
+            // expand to N instances. E.g., [440, 550, 660] |> sine(%) produces 3 oscillators.
             if (builtin->requires_state && !arg_buffers.empty()) {
                 // Find expansion argument: first multi-buffer argument
                 int expansion_arg_idx = -1;
