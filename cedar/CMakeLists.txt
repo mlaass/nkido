@@ -33,12 +33,20 @@ add_library(cedar STATIC
     src/vm/vm.cpp
     src/opcodes/minblep_table.cpp
     src/opcodes/minblep_state.cpp
+    src/io/audio_decoder.cpp
 )
+
+# Add file_loader only for native builds (not WASM)
+if(NOT EMSCRIPTEN)
+    target_sources(cedar PRIVATE src/io/file_loader.cpp)
+endif()
 
 target_include_directories(cedar
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>
 )
 
 # Apply compiler options (use BUILD_INTERFACE to avoid export issues)

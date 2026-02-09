@@ -7,6 +7,9 @@
 import { DEFAULT_DRUM_KIT } from '$lib/audio/default-samples';
 import { settingsStore } from './settings.svelte';
 import { bankRegistry, type SampleReference } from '$lib/audio/bank-registry';
+import { loadFile, type FileSource } from '$lib/io/file-loader';
+import { detectAudioFormat } from '$lib/io/format-detect';
+import { decodeAudioFile } from '$lib/io/audio-decoder';
 
 interface Diagnostic {
 	severity: number;
@@ -1012,14 +1015,37 @@ function createAudioEngine() {
 
 		try {
 			const arrayBuffer = await file.arrayBuffer();
-			console.log('[AudioEngine] Loading WAV sample:', name, 'size:', arrayBuffer.byteLength);
+			console.log('[AudioEngine] Loading audio sample:', name, 'size:', arrayBuffer.byteLength);
 
-			// Send WAV data to worklet
-			workletNode.port.postMessage({
-				type: 'loadSampleWav',
-				name,
-				wavData: arrayBuffer
-			});
+			const format = detectAudioFormat(arrayBuffer);
+
+			if (format === 'wav') {
+				workletNode.port.postMessage({
+					type: 'loadSampleWav',
+					name,
+					wavData: arrayBuffer
+				});
+			} else if (format === 'ogg' || format === 'flac' || format === 'mp3') {
+				const ctx = audioContext;
+				if (!ctx) {
+					console.error('[AudioEngine] No AudioContext for decoding');
+					return false;
+				}
+				const decoded = await decodeAudioFile(arrayBuffer, ctx);
+				workletNode.port.postMessage({
+					type: 'loadSample',
+					name,
+					audioData: decoded.samples,
+					channels: decoded.channels,
+					sampleRate: decoded.sampleRate
+				});
+			} else {
+				workletNode.port.postMessage({
+					type: 'loadSampleAudio',
+					name,
+					audioData: arrayBuffer
+				});
+			}
 
 			return true;
 		} catch (err) {
@@ -1031,7 +1057,7 @@ function createAudioEngine() {
 	/**
 	 * Load a sample from a URL
 	 * @param name Sample name (e.g., "kick", "snare")
-	 * @param url URL to WAV file
+	 * @param url URL to audio file (WAV, OGG, FLAC, MP3)
 	 */
 	async function loadSampleFromUrl(name: string, url: string): Promise<boolean> {
 		if (!workletNode) {
@@ -1041,12 +1067,8 @@ function createAudioEngine() {
 
 		try {
 			console.log('[AudioEngine] Fetching sample from URL:', url);
-			const response = await fetch(url);
-			if (!response.ok) {
-				throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-			}
-
-			const arrayBuffer = await response.arrayBuffer();
+			const result = await loadFile({ type: 'url', url }, { cache: true });
+			const arrayBuffer = result.data;
 			console.log('[AudioEngine] Loaded sample from URL:', name, 'size:', arrayBuffer.byteLength);
 
 			// Create a promise that will be resolved when worklet confirms load
@@ -1062,12 +1084,40 @@ function createAudioEngine() {
 				}, 10000);
 			});
 
-			// Send WAV data to worklet
-			workletNode.port.postMessage({
-				type: 'loadSampleWav',
-				name,
-				wavData: arrayBuffer
-			});
+			// Detect format and choose loading path
+			const format = detectAudioFormat(arrayBuffer);
+
+			if (format === 'wav') {
+				// WAV: send raw data to worklet for C++ decoding
+				workletNode.port.postMessage({
+					type: 'loadSampleWav',
+					name,
+					wavData: arrayBuffer
+				});
+			} else if (format === 'ogg' || format === 'flac' || format === 'mp3') {
+				// Non-WAV: decode in TS via Web Audio API, then send decoded float data
+				const ctx = audioContext;
+				if (!ctx) {
+					console.error('[AudioEngine] No AudioContext for decoding');
+					pendingSampleLoads.delete(name);
+					return false;
+				}
+				const decoded = await decodeAudioFile(arrayBuffer, ctx);
+				workletNode.port.postMessage({
+					type: 'loadSample',
+					name,
+					audioData: decoded.samples,
+					channels: decoded.channels,
+					sampleRate: decoded.sampleRate
+				});
+			} else {
+				// Unknown format: try sending as raw data (let WASM auto-detect)
+				workletNode.port.postMessage({
+					type: 'loadSampleAudio',
+					name,
+					audioData: arrayBuffer
+				});
+			}
 
 			// Wait for worklet to confirm sample is loaded
 			return await loadPromise;

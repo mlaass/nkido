@@ -6,6 +6,8 @@
 #include <fstream>
 #include <cstring>
 
+#include "cedar/io/buffer.hpp"
+
 namespace cedar {
 
 struct WavData {
@@ -49,6 +51,11 @@ public:
 
         // Delegate to memory loader
         return load_from_memory(buffer.data(), buffer.size());
+    }
+
+    /// Load from a MemoryView
+    static WavData load_from_memory(MemoryView view) {
+        return load_from_memory(view.data, view.size);
     }
 
     static WavData load_from_memory(const std::uint8_t* data, std::size_t size) {

@@ -67,6 +67,7 @@ if(EMSCRIPTEN)
         # Sample management
         _cedar_load_sample
         _cedar_load_sample_wav
+        _cedar_load_audio_data
         _cedar_has_sample
         _cedar_get_sample_id
         _cedar_clear_samples

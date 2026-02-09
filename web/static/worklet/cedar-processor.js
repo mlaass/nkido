@@ -164,6 +164,10 @@ class CedarProcessor extends AudioWorkletProcessor {
 				this.loadSampleWav(msg.name, msg.wavData);
 				break;
 
+			case 'loadSampleAudio':
+				this.loadSampleAudio(msg.name, msg.audioData);
+				break;
+
 			case 'clearSamples':
 				if (this.module) {
 					this.module._cedar_clear_samples();
@@ -831,6 +835,56 @@ class CedarProcessor extends AudioWorkletProcessor {
 		} finally {
 			this.module._enkido_free(namePtr);
 			this.module._enkido_free(wavPtr);
+		}
+	}
+
+	/**
+	 * Load a sample from audio data in any supported format.
+	 * Uses cedar_load_audio_data which auto-detects format from magic bytes.
+	 * On WASM, only WAV is natively decoded; other formats should be
+	 * pre-decoded in TS and sent via loadSample instead.
+	 */
+	loadSampleAudio(name, audioData) {
+		if (!this.module) {
+			this.port.postMessage({ type: 'error', message: 'Module not initialized' });
+			return;
+		}
+
+		console.log('[CedarProcessor] Loading audio sample:', name, 'size:', audioData.byteLength);
+
+		// Allocate name string
+		const nameLen = this.module.lengthBytesUTF8(name) + 1;
+		const namePtr = this.module._enkido_malloc(nameLen);
+		if (namePtr === 0) {
+			this.port.postMessage({ type: 'error', message: 'Failed to allocate name' });
+			return;
+		}
+
+		// Allocate audio data
+		const dataArray = new Uint8Array(audioData);
+		const dataPtr = this.module._enkido_malloc(dataArray.length);
+		if (dataPtr === 0) {
+			this.module._enkido_free(namePtr);
+			this.port.postMessage({ type: 'error', message: 'Failed to allocate audio data' });
+			return;
+		}
+
+		try {
+			this.module.stringToUTF8(name, namePtr, nameLen);
+			this.writeByteArray(dataPtr, dataArray);
+
+			const sampleId = this.module._cedar_load_audio_data(namePtr, dataPtr, dataArray.length);
+
+			if (sampleId > 0) {
+				console.log('[CedarProcessor] Audio sample loaded successfully, ID:', sampleId);
+				this.port.postMessage({ type: 'sampleLoaded', name, sampleId });
+			} else {
+				console.error('[CedarProcessor] Failed to load audio sample');
+				this.port.postMessage({ type: 'error', message: 'Failed to load audio sample: ' + name });
+			}
+		} finally {
+			this.module._enkido_free(namePtr);
+			this.module._enkido_free(dataPtr);
 		}
 	}
 

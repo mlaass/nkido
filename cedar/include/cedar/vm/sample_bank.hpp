@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include "cedar/audio/wav_loader.hpp"
+#include "cedar/io/audio_decoder.hpp"
 
 namespace cedar {
 
@@ -148,6 +149,21 @@ public:
 
         return load_sample(name, wav.samples.data(), wav.num_frames,
                           wav.channels, static_cast<float>(wav.sample_rate));
+    }
+
+    /// Load a sample from audio data in any supported format (WAV, OGG, FLAC, MP3)
+    /// Auto-detects the format from magic bytes
+    /// @param name Sample name for lookup
+    /// @param data Audio file data
+    /// @return Sample ID, or 0 if failed
+    std::uint32_t load_audio_data(const std::string& name, MemoryView data) {
+        auto decoded = AudioDecoder::decode(data);
+        if (!decoded.success) {
+            return 0;
+        }
+
+        return load_sample(name, decoded.samples.data(), decoded.num_frames,
+                          decoded.channels, static_cast<float>(decoded.sample_rate));
     }
 
     /// Get sample by ID

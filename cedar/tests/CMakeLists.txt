@@ -30,6 +30,8 @@ add_executable(cedar_tests
     test_sample_bank.cpp
     test_memory_stress.cpp
     test_sequence.cpp
+    test_file_loader.cpp
+    test_audio_decoder.cpp
 )
 
 # Add concurrency tests if enabled

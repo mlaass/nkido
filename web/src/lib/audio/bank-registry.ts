@@ -6,6 +6,7 @@
  */
 
 import { audioEngine } from '$lib/stores/audio.svelte';
+import { loadFile } from '$lib/io/file-loader';
 
 /**
  * Strudel-compatible manifest format
@@ -90,12 +91,10 @@ class BankRegistryClass {
 		let baseUrl: string;
 
 		if (typeof source === 'string') {
-			// URL - fetch manifest
-			const response = await fetch(source);
-			if (!response.ok) {
-				throw new Error(`Failed to fetch manifest: ${response.status} ${response.statusText}`);
-			}
-			manifestData = await response.json();
+			// URL - fetch manifest via FileLoader (with caching)
+			const result = await loadFile({ type: 'url', url: source }, { cache: true });
+			const text = new TextDecoder().decode(result.data);
+			manifestData = JSON.parse(text);
 
 			// Determine base URL: use _base if provided, otherwise derive from manifest URL
 			if (manifestData._base) {
@@ -235,17 +234,8 @@ class BankRegistryClass {
 		// Construct full URL
 		const fullUrl = this.resolveUrl(manifest.baseUrl, samplePath);
 
-		// Fetch and load the sample
+		// Fetch and load the sample via audio engine (which uses FileLoader with caching)
 		console.log(`[BankRegistry] Loading sample ${qualifiedName} from ${fullUrl}`);
-		const response = await fetch(fullUrl);
-		if (!response.ok) {
-			throw new Error(`Failed to fetch sample: ${response.status} ${response.statusText}`);
-		}
-
-		const arrayBuffer = await response.arrayBuffer();
-
-		// Load into Cedar via audio engine
-		// Note: This goes through the existing loadSampleFromUrl flow
 		const success = await audioEngine.loadSampleFromUrl(qualifiedName, fullUrl);
 		if (!success) {
 			throw new Error(`Failed to load sample ${qualifiedName}`);

@@ -6,6 +6,7 @@
  */
 
 #include <cedar/vm/vm.hpp>
+#include <cedar/io/audio_decoder.hpp>
 #include <cedar/vm/instruction.hpp>
 #include <cedar/generated/opcode_metadata.hpp>
 #include <cedar/opcodes/sequencing.hpp>
@@ -297,6 +298,26 @@ WASM_EXPORT uint32_t cedar_load_sample_wav(const char* name,
     }
     
     return g_vm->sample_bank().load_wav_memory(name, wav_data, wav_size);
+}
+
+/**
+ * Load a sample from audio data in any supported format (WAV, OGG, FLAC, MP3)
+ * Auto-detects the format from magic bytes.
+ * On WASM, only WAV is decoded in C++ (other formats decoded in TS before reaching here).
+ * @param name Sample name (null-terminated)
+ * @param data Pointer to audio file data
+ * @param size Size of data in bytes
+ * @return Sample ID (>0) on success, 0 on failure
+ */
+WASM_EXPORT uint32_t cedar_load_audio_data(const char* name,
+                                            const uint8_t* data,
+                                            uint32_t size) {
+    if (!g_vm || !name || !data || size == 0) {
+        return 0;
+    }
+
+    cedar::MemoryView view(data, size);
+    return g_vm->sample_bank().load_audio_data(name, view);
 }
 
 /**
