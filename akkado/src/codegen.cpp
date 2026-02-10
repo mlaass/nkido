@@ -39,6 +39,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     required_samples_.clear();
     required_samples_extended_keys_.clear();
     required_samples_extended_.clear();
+    required_soundfonts_.clear();
     param_decls_.clear();
     viz_decls_.clear();
     filename_ = std::string(filename);
@@ -57,7 +58,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     if (!ast.valid()) {
         error("E100", "Invalid AST", {});
-        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, false};
+        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, false};
     }
 
     // Visit root (Program node)
@@ -72,6 +73,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     return {std::move(instructions_), std::move(source_locations_), std::move(diagnostics_),
             std::move(state_inits_), std::move(required_samples_vec), std::move(required_samples_extended_),
+            std::move(required_soundfonts_),
             std::move(param_decls_), std::move(viz_decls_), success};
 }
 
@@ -649,6 +651,8 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"spectrum", &CodeGenerator::handle_spectrum_call},
                 // Function composition
                 {"compose", &CodeGenerator::handle_compose_call},
+                // SoundFont playback
+                {"soundfont", &CodeGenerator::handle_soundfont_call},
             };
 
             auto handler_it = special_handlers.find(func_name);

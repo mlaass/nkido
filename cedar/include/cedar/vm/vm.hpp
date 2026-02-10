@@ -6,6 +6,7 @@
 #include "state_pool.hpp"
 #include "env_map.hpp"
 #include "sample_bank.hpp"
+#include "../audio/soundfont.hpp"
 #include "swap_controller.hpp"
 #include "crossfade_state.hpp"
 #include "../opcodes/dsp_state.hpp"
@@ -132,6 +133,10 @@ public:
     [[nodiscard]] SampleBank& sample_bank() { return sample_bank_; }
     [[nodiscard]] const SampleBank& sample_bank() const { return sample_bank_; }
 
+    // Get SoundFont registry (for SF2 management)
+    [[nodiscard]] SoundFontRegistry& soundfont_registry() { return soundfont_registry_; }
+    [[nodiscard]] const SoundFontRegistry& soundfont_registry() const { return soundfont_registry_; }
+
     // Initialize a SequenceState with compiled sequences (arena-allocated)
     // Used by compiler to set up the simplified sequence-based patterns
     // @param total_events Total event count across all sequences (for output buffer sizing)
@@ -206,6 +211,7 @@ private:
     StatePool state_pool_;
     EnvMap env_map_;
     SampleBank sample_bank_;
+    SoundFontRegistry soundfont_registry_;
     AudioArena audio_arena_;
 };
 

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <variant>
 #include <cstring>
+#include <new>
 #include "../vm/audio_arena.hpp"
 #include "sequence.hpp"
 
@@ -471,6 +472,141 @@ struct SamplerState {
 };
 
 // ============================================================================
+// SoundFont Voice State
+// ============================================================================
+
+// Per-voice state for SoundFont playback
+struct SFVoice {
+    float position = 0.0f;       // Current playback position in sample frames
+    float speed = 1.0f;          // Playback speed (sample_rate ratio * pitch shift)
+    std::uint32_t sample_id = 0; // Sample ID in SampleBank
+    std::uint8_t note = 0;       // MIDI note number
+    bool active = false;         // Voice currently producing audio
+    bool releasing = false;      // Gate off, in release phase
+
+    // Loop info (copied from zone at trigger time)
+    std::uint32_t loop_start = 0;
+    std::uint32_t loop_end = 0;
+    std::uint32_t sample_end = 0;
+    std::uint8_t loop_mode = 0;  // 0=none, 1=continuous, 3=sustain
+
+    // Envelope state (DAHDSR)
+    enum class EnvStage : std::uint8_t {
+        Idle = 0, Delay, Attack, Hold, Decay, Sustain, Release
+    };
+    EnvStage env_stage = EnvStage::Idle;
+    float env_level = 0.0f;      // Current envelope amplitude (0-1)
+    float env_time = 0.0f;       // Time within current stage (seconds)
+    // DAHDSR params (copied from zone at trigger time)
+    float env_delay = 0.0f;
+    float env_attack = 0.001f;
+    float env_hold = 0.0f;
+    float env_decay = 0.001f;
+    float env_sustain = 1.0f;
+    float env_release = 0.001f;
+
+    // Level
+    float attenuation_linear = 1.0f;  // Pre-computed from dB
+    float pan = 0.0f;                 // -0.5 to +0.5
+    float velocity_gain = 1.0f;       // Velocity-based amplitude scaling
+
+    // Per-voice SVF lowpass filter state
+    float filter_fc = 20000.0f;       // Cutoff frequency (Hz, from zone)
+    float filter_q = 0.0f;            // Q in dB (from zone, 0-96)
+    float filter_z1 = 0.0f;           // SVF state (ic1eq)
+    float filter_z2 = 0.0f;           // SVF state (ic2eq)
+    // Cached SVF coefficients (computed at note-on)
+    float filter_a1 = 0.0f;
+    float filter_a2 = 0.0f;
+    float filter_a3 = 0.0f;
+    bool filter_active = false;       // True if filter_fc < 19000
+
+    // Micro-fade for voice stealing / re-trigger
+    std::uint8_t fade_counter = 0;
+    static constexpr std::uint8_t FADE_SAMPLES = 64;
+};
+
+// SoundFont voice state — uses arena-allocated voice array
+// Keeps variant small (just pointer + metadata)
+struct SoundFontVoiceState {
+    static constexpr std::uint16_t MAX_VOICES = 32;
+
+    SFVoice* voices = nullptr;    // Arena-allocated array
+    std::uint16_t num_voices = 0; // Active voice count tracking
+    float prev_gate = 0.0f;       // For gate edge detection
+
+    // Ensure voices are allocated from arena
+    void ensure_voices(AudioArena* arena) {
+        if (voices) return;
+        if (!arena) return;
+        // Allocate as raw float buffer, reinterpret as SFVoice array
+        // sizeof(SFVoice) * MAX_VOICES / sizeof(float) gives us the float count
+        constexpr std::size_t voice_floats = (sizeof(SFVoice) * MAX_VOICES + sizeof(float) - 1) / sizeof(float);
+        float* raw = arena->allocate(voice_floats);
+        if (raw) {
+            voices = reinterpret_cast<SFVoice*>(raw);
+            // Value-initialize each voice
+            for (std::uint16_t i = 0; i < MAX_VOICES; ++i) {
+                new (&voices[i]) SFVoice{};
+            }
+        }
+    }
+
+    // Find a free voice, or steal the quietest releasing voice
+    SFVoice* allocate_voice(std::uint8_t /*note*/) {
+        if (!voices) return nullptr;
+
+        // First: find free voice
+        for (std::uint16_t i = 0; i < MAX_VOICES; ++i) {
+            if (!voices[i].active) {
+                return &voices[i];
+            }
+        }
+
+        // Second: steal quietest releasing voice
+        SFVoice* quietest = nullptr;
+        float min_level = 2.0f;
+        for (std::uint16_t i = 0; i < MAX_VOICES; ++i) {
+            if (voices[i].releasing && voices[i].env_level < min_level) {
+                min_level = voices[i].env_level;
+                quietest = &voices[i];
+            }
+        }
+        if (quietest) {
+            // Quick fade to avoid click
+            quietest->fade_counter = 0;
+            return quietest;
+        }
+
+        // Third: steal oldest active voice (highest position)
+        SFVoice* oldest = nullptr;
+        float max_pos = -1.0f;
+        for (std::uint16_t i = 0; i < MAX_VOICES; ++i) {
+            if (voices[i].position > max_pos) {
+                max_pos = voices[i].position;
+                oldest = &voices[i];
+            }
+        }
+        if (oldest) {
+            oldest->fade_counter = 0;
+        }
+        return oldest;
+    }
+
+    // Release all voices playing a specific note
+    void release_note(std::uint8_t note) {
+        if (!voices) return;
+        for (std::uint16_t i = 0; i < MAX_VOICES; ++i) {
+            if (voices[i].active && voices[i].note == note && !voices[i].releasing) {
+                voices[i].releasing = true;
+                voices[i].env_stage = SFVoice::EnvStage::Release;
+                voices[i].env_time = 0.0f;
+            }
+        }
+    }
+};
+
+// ============================================================================
 // Dynamics States
 // ============================================================================
 
@@ -881,6 +1017,7 @@ using DSPState = std::variant<
     PhaserState,
     // Sampler states
     SamplerState,
+    SoundFontVoiceState,
     // Dynamics states
     CompressorState,
     LimiterState,

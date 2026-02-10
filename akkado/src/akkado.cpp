@@ -151,6 +151,7 @@ CompileResult compile(std::string_view source, std::string_view filename,
     // Copy required sample names for runtime loading
     result.required_samples = std::move(gen.required_samples);
     result.required_samples_extended = std::move(gen.required_samples_extended);
+    result.required_soundfonts = std::move(gen.required_soundfonts);
 
     // Copy parameter declarations for UI generation
     result.param_decls = std::move(gen.param_decls);

@@ -189,6 +189,10 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                      {"gate", "pitch", "id", "", "", ""},
                      {NAN, NAN, NAN},
                      "Looping sample playback"}},
+    {"soundfont", {cedar::Opcode::NOP, 2, 1, false,
+                   {"input", "file", "preset", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "SoundFont playback: soundfont(pattern, \"file.sf2\", preset)"}},
 
     // Delays - time in seconds (default, intuitive)
     // Optional dry/wet parameters for mix control (defaults: dry=0.0, wet=1.0 = 100% wet)

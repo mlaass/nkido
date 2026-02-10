@@ -33,6 +33,7 @@ struct CompileResult {
     std::vector<StateInitData> state_inits;  // State initialization data for patterns
     std::vector<std::string> required_samples;  // Sample names used (for runtime loading) - legacy
     std::vector<RequiredSample> required_samples_extended;  // Sample refs with bank/variant info
+    std::vector<RequiredSoundFont> required_soundfonts;  // SoundFont files needed at runtime
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
 };

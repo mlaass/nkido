@@ -2391,4 +2391,122 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     return value_buf;
 }
 
+std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n) {
+    // soundfont(pattern, "file.sf2", preset) - SoundFont playback
+    // The pattern provides gate, freq, velocity signals via polyphonic fields.
+    // The file is a string literal (SF2 filename) resolved at compile time.
+    // The preset is a number literal (index into the SF2's preset list).
+    //
+    // Usage: pat("c4 e4 g4") |> soundfont(%, "piano.sf2", 0) |> out(%, %)
+
+    // Arg 0: pattern input (from pipe via %)
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "soundfont() requires a pattern as first argument "
+              "(e.g., pat(\"c4 e4 g4\") |> soundfont(%, \"piano.sf2\", 0))", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Arg 1: filename (string literal)
+    auto filename = get_string_arg(*ast_, n, 1);
+    if (!filename.has_value()) {
+        error("E131", "soundfont() requires a filename string as second argument "
+              "(e.g., \"piano.sf2\")", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Arg 2: preset index (number literal)
+    auto preset_opt = get_number_arg(*ast_, n, 2);
+    if (!preset_opt.has_value()) {
+        error("E132", "soundfont() requires a preset number as third argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+    int preset_index = static_cast<int>(*preset_opt);
+
+    // Visit pattern argument — this compiles the pattern and creates record fields
+    std::uint16_t pattern_buf = visit(pattern_arg);
+    if (pattern_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Get pattern's record fields (gate, freq, vel)
+    auto fields_it = record_fields_.find(pattern_arg);
+    if (fields_it == record_fields_.end()) {
+        error("E133", "soundfont() first argument must be a pattern that produces "
+              "gate/freq/vel fields", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    const auto& fields = fields_it->second;
+    auto gate_it = fields.find("gate");
+    auto freq_it = fields.find("freq");
+    auto vel_it = fields.find("vel");
+
+    if (gate_it == fields.end() || freq_it == fields.end() || vel_it == fields.end()) {
+        error("E133", "soundfont() pattern is missing required fields (gate, freq, vel)",
+              n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    std::uint16_t gate_buf = gate_it->second;
+    std::uint16_t freq_buf = freq_it->second;
+    std::uint16_t vel_buf = vel_it->second;
+
+    // Find or assign SF2 slot index (deduplicate by filename)
+    std::uint8_t sf_slot = 0;
+    bool found_slot = false;
+    for (std::size_t i = 0; i < required_soundfonts_.size(); i++) {
+        if (required_soundfonts_[i].filename == *filename) {
+            sf_slot = static_cast<std::uint8_t>(i);
+            found_slot = true;
+            break;
+        }
+    }
+    if (!found_slot) {
+        sf_slot = static_cast<std::uint8_t>(required_soundfonts_.size());
+        required_soundfonts_.push_back(RequiredSoundFont{*filename, preset_index});
+    }
+
+    // Create unique state ID
+    std::uint32_t sf_count = call_counters_["soundfont"]++;
+    push_path("soundfont#" + std::to_string(sf_count));
+    std::uint32_t state_id = compute_state_id();
+
+    // Emit constant for preset index
+    std::uint16_t preset_buf = codegen::emit_push_const(buffers_, instructions_,
+                                                         static_cast<float>(preset_index));
+    if (preset_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        pop_path();
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+    source_locations_.push_back(current_source_loc_);
+
+    // Allocate output buffer
+    std::uint16_t out_buf = buffers_.allocate();
+    if (out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        pop_path();
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Emit SOUNDFONT_VOICE instruction
+    cedar::Instruction sf_inst{};
+    sf_inst.opcode = cedar::Opcode::SOUNDFONT_VOICE;
+    sf_inst.out_buffer = out_buf;
+    sf_inst.inputs[0] = gate_buf;     // Gate signal (sustained)
+    sf_inst.inputs[1] = freq_buf;     // Frequency in Hz
+    sf_inst.inputs[2] = vel_buf;      // Velocity (0-1)
+    sf_inst.inputs[3] = preset_buf;   // Preset index (constant)
+    sf_inst.inputs[4] = 0xFFFF;
+    sf_inst.state_id = state_id;
+    sf_inst.rate = sf_slot;           // SF2 file index (resolved to sf_id at runtime)
+    emit(sf_inst);
+
+    pop_path();
+    node_buffers_[node] = out_buf;
+    return out_buf;
+}
+
 } // namespace akkado

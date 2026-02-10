@@ -552,6 +552,10 @@ void VM::execute(const Instruction& inst) {
             op_sample_play_loop(ctx_, inst, &sample_bank_);
             break;
 
+        case Opcode::SOUNDFONT_VOICE:
+            op_soundfont_voice(ctx_, inst, &sample_bank_, &soundfont_registry_);
+            break;
+
         // === Delays ===
         case Opcode::DELAY:
             op_delay(ctx_, inst);

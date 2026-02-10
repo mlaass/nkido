@@ -8,6 +8,7 @@
 #include <cedar/vm/vm.hpp>
 #include <cedar/io/audio_decoder.hpp>
 #include <cedar/vm/instruction.hpp>
+#include <cedar/audio/soundfont.hpp>
 #include <cedar/generated/opcode_metadata.hpp>
 #include <cedar/opcodes/sequencing.hpp>
 #include <cedar/opcodes/sequence.hpp>
@@ -554,6 +555,38 @@ WASM_EXPORT const char* akkado_get_required_sample_qualified(uint32_t index) {
     if (index >= g_compile_result.required_samples_extended.size()) return nullptr;
     g_qualified_name_buffer = g_compile_result.required_samples_extended[index].qualified_name();
     return g_qualified_name_buffer.c_str();
+}
+
+// ============================================================================
+// Required SoundFonts API
+// ============================================================================
+
+/**
+ * Get number of required SoundFont files from compile result
+ * @return Number of unique SF2 files referenced in the compiled code
+ */
+WASM_EXPORT uint32_t akkado_get_required_soundfonts_count() {
+    return static_cast<uint32_t>(g_compile_result.required_soundfonts.size());
+}
+
+/**
+ * Get required SoundFont filename by index
+ * @param index SoundFont index (0 to count-1)
+ * @return Pointer to null-terminated filename, or nullptr if index out of range
+ */
+WASM_EXPORT const char* akkado_get_required_soundfont_filename(uint32_t index) {
+    if (index >= g_compile_result.required_soundfonts.size()) return nullptr;
+    return g_compile_result.required_soundfonts[index].filename.c_str();
+}
+
+/**
+ * Get required SoundFont preset index by index
+ * @param index SoundFont index (0 to count-1)
+ * @return Preset index, or -1 if index out of range
+ */
+WASM_EXPORT int32_t akkado_get_required_soundfont_preset(uint32_t index) {
+    if (index >= g_compile_result.required_soundfonts.size()) return -1;
+    return g_compile_result.required_soundfonts[index].preset_index;
 }
 
 /**
@@ -1529,6 +1562,65 @@ WASM_EXPORT uint32_t akkado_get_unique_state_count() {
         }
     }
     return static_cast<uint32_t>(state_ids.size());
+}
+
+// ============================================================================
+// SoundFont API
+// ============================================================================
+
+// Static buffer for SoundFont preset JSON
+static std::string g_soundfont_presets_json;
+
+/**
+ * Load a SoundFont from memory
+ * @param data Pointer to SF2 file data
+ * @param size Size of data in bytes
+ * @param name Display name (null-terminated)
+ * @return SoundFont ID (>=0) on success, -1 on failure
+ */
+WASM_EXPORT int cedar_load_soundfont(const uint8_t* data, int size, const char* name) {
+    if (!g_vm || !data || size <= 0 || !name) {
+        return -1;
+    }
+
+    return g_vm->soundfont_registry().load_from_memory(data, size, name, g_vm->sample_bank());
+}
+
+/**
+ * Get number of presets in a loaded SoundFont
+ * @param sf_id SoundFont ID
+ * @return Number of presets, or 0 if invalid
+ */
+WASM_EXPORT uint32_t cedar_soundfont_preset_count(int sf_id) {
+    if (!g_vm) return 0;
+
+    const auto* bank = g_vm->soundfont_registry().get(sf_id);
+    if (!bank) return 0;
+    return static_cast<uint32_t>(bank->presets.size());
+}
+
+/**
+ * Get preset list as JSON for a loaded SoundFont
+ * @param sf_id SoundFont ID
+ * @return Pointer to null-terminated JSON string
+ */
+WASM_EXPORT const char* cedar_soundfont_presets_json(int sf_id) {
+    if (!g_vm) {
+        g_soundfont_presets_json = "[]";
+        return g_soundfont_presets_json.c_str();
+    }
+
+    g_soundfont_presets_json = g_vm->soundfont_registry().get_presets_json(sf_id);
+    return g_soundfont_presets_json.c_str();
+}
+
+/**
+ * Get number of loaded SoundFonts
+ * @return Count of loaded SoundFonts
+ */
+WASM_EXPORT uint32_t cedar_soundfont_count() {
+    if (!g_vm) return 0;
+    return static_cast<uint32_t>(g_vm->soundfont_registry().size());
 }
 
 } // extern "C"

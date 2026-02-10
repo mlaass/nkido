@@ -5,6 +5,7 @@
 	import ThemeSelector from '$lib/components/Theme/ThemeSelector.svelte';
 	import { ParamsPanel } from '$lib/components/Params';
 	import DebugPanel from './DebugPanel.svelte';
+	import SampleBrowser from '$lib/components/Samples/SampleBrowser.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { audioEngine } from '$lib/stores/audio.svelte';
 
@@ -28,9 +29,11 @@
 	let settingsScrollEl: HTMLElement | null = $state(null);
 	let docsScrollEl: HTMLElement | null = $state(null);
 	let debugScrollEl: HTMLElement | null = $state(null);
+	let samplesScrollEl: HTMLElement | null = $state(null);
 
 	function getScrollEl(tab: string): HTMLElement | null {
 		if (tab === 'controls') return controlsScrollEl;
+		if (tab === 'samples') return samplesScrollEl;
 		if (tab === 'settings') return settingsScrollEl;
 		if (tab === 'docs') return docsScrollEl;
 		if (tab === 'debug') return debugScrollEl;
@@ -52,7 +55,7 @@
 		}
 	}
 
-	function handleTabChange(tab: 'controls' | 'settings' | 'docs' | 'debug') {
+	function handleTabChange(tab: 'controls' | 'samples' | 'settings' | 'docs' | 'debug') {
 		saveScrollPosition(activeTab);
 		settingsStore.setActiveTab(tab);
 		// Restore scroll after DOM updates
@@ -123,6 +126,13 @@
 			</button>
 			<button
 				class="tab"
+				class:active={activeTab === 'samples'}
+				onclick={() => handleTabChange('samples')}
+			>
+				Samples
+			</button>
+			<button
+				class="tab"
 				class:active={activeTab === 'settings'}
 				onclick={() => handleTabChange('settings')}
 			>
@@ -150,6 +160,10 @@
 			{#if activeTab === 'controls'}
 				<div class="tab-content" bind:this={controlsScrollEl}>
 					<ParamsPanel />
+				</div>
+			{:else if activeTab === 'samples'}
+				<div class="tab-content" bind:this={samplesScrollEl}>
+					<SampleBrowser />
 				</div>
 			{:else if activeTab === 'settings'}
 				<div class="tab-content settings-content" bind:this={settingsScrollEl}>

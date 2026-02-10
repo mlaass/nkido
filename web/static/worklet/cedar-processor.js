@@ -170,6 +170,10 @@ class CedarProcessor extends AudioWorkletProcessor {
 				}
 				break;
 
+			case 'loadSoundFont':
+				this.loadSoundFont(msg.name, msg.data);
+				break;
+
 			case 'getBuiltins':
 				this.getBuiltins();
 				break;
@@ -251,6 +255,26 @@ class CedarProcessor extends AudioWorkletProcessor {
 			samples.push({ bank, name, variant, qualifiedName });
 		}
 		return samples;
+	}
+
+	/**
+	 * Get required SoundFont files from the compile result
+	 * @returns {Array<{filename: string, preset: number}>}
+	 */
+	getRequiredSoundFonts() {
+		if (!this.module._akkado_get_required_soundfonts_count) {
+			return [];
+		}
+
+		const count = this.module._akkado_get_required_soundfonts_count();
+		const soundfonts = [];
+		for (let i = 0; i < count; i++) {
+			const filenamePtr = this.module._akkado_get_required_soundfont_filename(i);
+			const filename = filenamePtr ? this.module.UTF8ToString(filenamePtr) : '';
+			const preset = this.module._akkado_get_required_soundfont_preset(i);
+			soundfonts.push({ filename, preset });
+		}
+		return soundfonts;
 	}
 
 	/**
@@ -515,6 +539,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 					// Extract required sample names (both legacy and extended)
 					const requiredSamples = this.getRequiredSamples();
 					const requiredSamplesExtended = this.getRequiredSamplesExtended();
+					const requiredSoundfonts = this.getRequiredSoundFonts();
 
 					// Extract all state initialization data
 					const stateInits = this.extractStateInits();
@@ -549,6 +574,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 					console.log('[CedarProcessor] Compiled successfully, bytecode size:', bytecodeSize,
 						'required samples:', requiredSamples, 'extended samples:', requiredSamplesExtended.length,
+						'required soundfonts:', requiredSoundfonts.length,
 						'state inits:', stateInits.length,
 						'param decls:', paramDecls.length, 'viz decls:', vizDecls.length,
 						'unique states:', disassembly?.summary?.uniqueStateIds ?? 'N/A');
@@ -559,6 +585,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 						bytecodeSize,
 						requiredSamples,
 						requiredSamplesExtended,
+						requiredSoundfonts,
 						paramDecls,
 						vizDecls,
 						disassembly
@@ -829,6 +856,78 @@ class CedarProcessor extends AudioWorkletProcessor {
 			} else {
 				console.error('[CedarProcessor] Failed to load audio sample');
 				this.port.postMessage({ type: 'error', message: 'Failed to load audio sample: ' + name });
+			}
+		} finally {
+			this.module._enkido_free(namePtr);
+			this.module._enkido_free(dataPtr);
+		}
+	}
+
+	/**
+	 * Load a SoundFont (SF2) file.
+	 * Parses in C++/WASM, extracts samples into SampleBank, returns preset info.
+	 */
+	loadSoundFont(name, audioData) {
+		if (!this.module) {
+			this.port.postMessage({ type: 'error', message: 'Module not initialized' });
+			return;
+		}
+
+		console.log('[CedarProcessor] Loading SoundFont:', name, 'size:', audioData.byteLength);
+
+		// Allocate name string
+		const nameLen = this.module.lengthBytesUTF8(name) + 1;
+		const namePtr = this.module._enkido_malloc(nameLen);
+		if (namePtr === 0) {
+			this.port.postMessage({ type: 'soundFontLoaded', name, success: false, error: 'Failed to allocate name' });
+			return;
+		}
+
+		// Allocate SF2 data
+		const dataArray = new Uint8Array(audioData);
+		const dataPtr = this.module._enkido_malloc(dataArray.length);
+		if (dataPtr === 0) {
+			this.module._enkido_free(namePtr);
+			this.port.postMessage({ type: 'soundFontLoaded', name, success: false, error: 'Failed to allocate SF2 data' });
+			return;
+		}
+
+		try {
+			this.module.stringToUTF8(name, namePtr, nameLen);
+			this.writeByteArray(dataPtr, dataArray);
+
+			const sfId = this.module._cedar_load_soundfont(dataPtr, dataArray.length, namePtr);
+
+			if (sfId >= 0) {
+				// Get preset list
+				const presetCount = this.module._cedar_soundfont_preset_count(sfId);
+				const presetsJsonPtr = this.module._cedar_soundfont_presets_json(sfId);
+				let presets = [];
+				if (presetsJsonPtr) {
+					try {
+						presets = JSON.parse(this.module.UTF8ToString(presetsJsonPtr));
+					} catch (e) {
+						console.warn('[CedarProcessor] Failed to parse presets JSON:', e);
+					}
+				}
+
+				console.log('[CedarProcessor] SoundFont loaded, ID:', sfId, 'presets:', presetCount);
+				this.port.postMessage({
+					type: 'soundFontLoaded',
+					name,
+					success: true,
+					sfId,
+					presetCount,
+					presets
+				});
+			} else {
+				console.error('[CedarProcessor] Failed to load SoundFont:', name);
+				this.port.postMessage({
+					type: 'soundFontLoaded',
+					name,
+					success: false,
+					error: 'SF2 parsing failed'
+				});
 			}
 		} finally {
 			this.module._enkido_free(namePtr);

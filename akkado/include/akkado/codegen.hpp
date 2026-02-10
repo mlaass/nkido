@@ -149,6 +149,12 @@ struct RequiredSample {
     }
 };
 
+/// Required SoundFont from compile-time soundfont() calls
+struct RequiredSoundFont {
+    std::string filename;     // SF2 filename (from string literal)
+    int preset_index = 0;    // Preset index within the SF2
+};
+
 /// Result of code generation
 struct CodeGenResult {
     std::vector<cedar::Instruction> instructions;
@@ -157,6 +163,7 @@ struct CodeGenResult {
     std::vector<StateInitData> state_inits;  // State initialization data
     std::vector<std::string> required_samples;  // Unique sample names used - legacy
     std::vector<RequiredSample> required_samples_extended;  // Sample refs with bank/variant info
+    std::vector<RequiredSoundFont> required_soundfonts;  // SoundFont files needed at runtime
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
     bool success = false;
@@ -342,6 +349,10 @@ private:
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     std::uint16_t handle_tap_delay_call(NodeIndex node, const Node& n);
 
+    /// Handle soundfont(file, preset) - SoundFont playback
+    /// Special-cased: extracts filename/preset at compile time, emits SOUNDFONT_VOICE
+    std::uint16_t handle_soundfont_call(NodeIndex node, const Node& n);
+
     // ============================================================================
     // Stereo handlers
     // ============================================================================
@@ -441,6 +452,8 @@ private:
     // Track samples with bank/variant info for extended sample resolution
     std::set<std::string> required_samples_extended_keys_;  // For deduplication
     std::vector<RequiredSample> required_samples_extended_;
+    // Track required SoundFont files
+    std::vector<RequiredSoundFont> required_soundfonts_;
 
     // Map from AST node index to output buffer index
     std::unordered_map<NodeIndex, std::uint16_t> node_buffers_;

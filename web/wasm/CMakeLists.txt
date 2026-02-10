@@ -88,6 +88,10 @@ if(EMSCRIPTEN)
         _akkado_get_required_samples_count
         _akkado_get_required_sample
         _akkado_resolve_sample_ids
+        # Required SoundFonts
+        _akkado_get_required_soundfonts_count
+        _akkado_get_required_soundfont_filename
+        _akkado_get_required_soundfont_preset
         # State init accessors
         _akkado_get_state_init_count
         _akkado_get_state_init_id
@@ -105,6 +109,11 @@ if(EMSCRIPTEN)
         _cedar_get_probe_sample_count
         _cedar_get_probe_data
         _cedar_get_probe_write_pos
+        # SoundFont API
+        _cedar_load_soundfont
+        _cedar_soundfont_preset_count
+        _cedar_soundfont_presets_json
+        _cedar_soundfont_count
         # Utility
         _enkido_get_block_size
         _enkido_malloc

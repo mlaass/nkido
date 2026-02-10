@@ -61,6 +61,7 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::ENV_FOLLOWER: return "ENV_FOLLOWER";
         case Opcode::SAMPLE_PLAY: return "SAMPLE_PLAY";
         case Opcode::SAMPLE_PLAY_LOOP: return "SAMPLE_PLAY_LOOP";
+        case Opcode::SOUNDFONT_VOICE: return "SOUNDFONT_VOICE";
         case Opcode::DELAY: return "DELAY";
         case Opcode::REVERB_FREEVERB: return "REVERB_FREEVERB";
         case Opcode::REVERB_DATTORRO: return "REVERB_DATTORRO";

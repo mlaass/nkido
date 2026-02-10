@@ -5,6 +5,7 @@
  */
 
 import { DEFAULT_DRUM_KIT } from '$lib/audio/default-samples';
+import { DEFAULT_SOUNDFONTS, resolveDefaultSoundFontUrl } from '$lib/audio/default-soundfonts';
 import { settingsStore } from './settings.svelte';
 import { bankRegistry, type SampleReference } from '$lib/audio/bank-registry';
 import { loadFile, type FileSource } from '$lib/io/file-loader';
@@ -98,12 +99,38 @@ export interface RequiredSampleExtended {
 	qualifiedName: string; // Full name for Cedar lookup (e.g., "TR808_bd_0")
 }
 
+/**
+ * SoundFont preset info returned from WASM
+ */
+export interface SoundFontPresetInfo {
+	name: string;
+	bank: number;
+	program: number;
+	zoneCount: number;
+}
+
+/**
+ * Result of loading a SoundFont
+ */
+export interface SoundFontInfo {
+	sfId: number;
+	name: string;
+	presetCount: number;
+	presets: SoundFontPresetInfo[];
+}
+
+interface RequiredSoundFont {
+	filename: string;
+	preset: number;
+}
+
 interface CompileResult {
 	success: boolean;
 	bytecodeSize?: number;
 	diagnostics?: Diagnostic[];
 	requiredSamples?: string[]; // Legacy: simple sample names
 	requiredSamplesExtended?: RequiredSampleExtended[]; // Extended: with bank/variant info
+	requiredSoundfonts?: RequiredSoundFont[]; // SF2 files needed
 	paramDecls?: ParamDecl[];
 	vizDecls?: VizDecl[];
 	disassembly?: DisassemblyInfo;
@@ -214,6 +241,7 @@ interface AudioState {
 	error: string | null;
 	samplesLoaded: boolean;
 	samplesLoading: boolean;
+	loadedSoundfonts: SoundFontInfo[];
 	params: ParamDecl[];
 	paramValues: Map<string, number>;
 	vizDecls: VizDecl[];
@@ -235,6 +263,7 @@ function createAudioEngine() {
 		error: null,
 		samplesLoaded: false,
 		samplesLoading: false,
+		loadedSoundfonts: [],
 		params: [],
 		paramValues: new Map(),
 		vizDecls: [],
@@ -273,6 +302,8 @@ function createAudioEngine() {
 	const loadedSamples = new Set<string>();
 	// Pending sample load promises (for waiting on worklet confirmation)
 	const pendingSampleLoads = new Map<string, { resolve: (success: boolean) => void }>();
+	// Pending SoundFont load promises
+	const pendingSoundFontLoads = new Map<string, { resolve: (info: SoundFontInfo | null) => void }>();
 
 	async function initialize() {
 		if (state.isInitialized || state.isLoading) return;
@@ -347,8 +378,9 @@ function createAudioEngine() {
 				console.log('[AudioEngine] Worklet WASM initialized');
 				// Set initial BPM after worklet is ready
 				workletNode?.port.postMessage({ type: 'setBpm', bpm: state.bpm });
-				// Load default samples
+				// Load default samples and soundfonts
 				loadDefaultSamples();
+				loadDefaultSoundFonts();
 				break;
 			case 'compiled': {
 				// Compilation result from worklet
@@ -358,6 +390,7 @@ function createAudioEngine() {
 					diagnostics: msg.diagnostics as Diagnostic[] | undefined,
 					requiredSamples: msg.requiredSamples as string[] | undefined,
 					requiredSamplesExtended: msg.requiredSamplesExtended as RequiredSampleExtended[] | undefined,
+					requiredSoundfonts: msg.requiredSoundfonts as RequiredSoundFont[] | undefined,
 					paramDecls: msg.paramDecls as ParamDecl[] | undefined,
 					vizDecls: msg.vizDecls as VizDecl[] | undefined,
 					disassembly: msg.disassembly as DisassemblyInfo | undefined
@@ -406,6 +439,36 @@ function createAudioEngine() {
 				if (pending) {
 					pending.resolve(true);
 					pendingSampleLoads.delete(name);
+				}
+				break;
+			}
+			case 'soundFontLoaded': {
+				const sfName = msg.name as string;
+				if (msg.success) {
+					console.log('[AudioEngine] SoundFont loaded:', sfName, 'id:', msg.sfId, 'presets:', msg.presetCount);
+					const sfInfo: SoundFontInfo = {
+						sfId: msg.sfId as number,
+						name: sfName,
+						presetCount: msg.presetCount as number,
+						presets: (msg.presets as SoundFontPresetInfo[]) || []
+					};
+					// Add to reactive state (avoid duplicates by sfId)
+					if (!state.loadedSoundfonts.some(s => s.sfId === sfInfo.sfId)) {
+						state.loadedSoundfonts = [...state.loadedSoundfonts, sfInfo];
+					}
+					// Resolve pending promise
+					const pendingSf = pendingSoundFontLoads.get(sfName);
+					if (pendingSf) {
+						pendingSf.resolve(sfInfo);
+						pendingSoundFontLoads.delete(sfName);
+					}
+				} else {
+					console.error('[AudioEngine] SoundFont load failed:', sfName, msg.error);
+					const pendingSf = pendingSoundFontLoads.get(sfName);
+					if (pendingSf) {
+						pendingSf.resolve(null);
+						pendingSoundFontLoads.delete(sfName);
+					}
 				}
 				break;
 			}
@@ -565,6 +628,7 @@ function createAudioEngine() {
 		state.hasProgram = false;
 		state.samplesLoaded = false;
 		state.samplesLoading = false;
+		state.loadedSoundfonts = [];
 		state.activeSampleRate = null;
 		state.params = [];
 		state.paramValues = new Map();
@@ -574,6 +638,7 @@ function createAudioEngine() {
 		sampleLoadState.clear();
 		loadedSamples.clear();
 		pendingSampleLoads.clear();
+		pendingSoundFontLoads.clear();
 
 		// Reinitialize
 		await initialize();
@@ -866,6 +931,34 @@ function createAudioEngine() {
 			};
 		}
 
+		// Step 2b: Load any required SoundFonts
+		const requiredSoundfonts = compileResult.requiredSoundfonts || [];
+		for (const sf of requiredSoundfonts) {
+			// Skip if already loaded (by name)
+			if (state.loadedSoundfonts.some((s) => s.name === sf.filename)) continue;
+
+			// Resolve short names (e.g., "gm") to default soundfont URLs
+			const defaultUrl = resolveDefaultSoundFontUrl(sf.filename);
+			const url = defaultUrl ?? sf.filename;
+
+			try {
+				await loadSoundFontFromUrl(sf.filename, url);
+			} catch (e) {
+				console.warn(`[AudioEngine] Failed to load SoundFont '${sf.filename}':`, e);
+				return {
+					success: false,
+					diagnostics: [
+						{
+							severity: 2,
+							message: `SoundFont '${sf.filename}' failed to load`,
+							line: 1,
+							column: 1
+						}
+					]
+				};
+			}
+		}
+
 		// Step 3: Load the compiled program with retry on SlotBusy
 		const maxRetries = 5;
 		const retryDelayMs = 20; // ~7.5 blocks (crossfade is typically 3-4 blocks)
@@ -1135,6 +1228,32 @@ function createAudioEngine() {
 	}
 
 	/**
+	 * Background preload of default SoundFonts (non-blocking)
+	 * Called automatically when the audio engine initializes
+	 */
+	function loadDefaultSoundFonts() {
+		console.log('[AudioEngine] Starting background SoundFont preload...');
+
+		(async () => {
+			for (const sf of DEFAULT_SOUNDFONTS) {
+				// Skip if already loaded
+				if (state.loadedSoundfonts.some((s) => s.name === sf.name)) continue;
+
+				try {
+					const info = await loadSoundFontFromUrl(sf.name, sf.url);
+					if (info) {
+						console.log(`[AudioEngine] Default SoundFont '${sf.name}' loaded: ${info.presetCount} presets`);
+					} else {
+						console.warn(`[AudioEngine] Default SoundFont '${sf.name}' failed to load`);
+					}
+				} catch (err) {
+					console.warn(`[AudioEngine] Default SoundFont '${sf.name}' error:`, err);
+				}
+			}
+		})();
+	}
+
+	/**
 	 * Clear all loaded samples
 	 */
 	function clearSamples() {
@@ -1177,6 +1296,60 @@ function createAudioEngine() {
 		} catch (err) {
 			console.error('[AudioEngine] Failed to load bank from GitHub:', err);
 			return false;
+		}
+	}
+
+	// =========================================================================
+	// SoundFont API
+	// =========================================================================
+
+	/**
+	 * Load a SoundFont (SF2) file from a URL or ArrayBuffer
+	 * @param name Display name for the SoundFont
+	 * @param data SF2 file data as ArrayBuffer
+	 * @returns SoundFont info with preset list, or null on failure
+	 */
+	async function loadSoundFont(name: string, data: ArrayBuffer): Promise<SoundFontInfo | null> {
+		if (!workletNode) {
+			console.warn('[AudioEngine] Cannot load SoundFont - worklet not initialized');
+			return null;
+		}
+
+		// Create a promise that will be resolved when worklet confirms load
+		const loadPromise = new Promise<SoundFontInfo | null>((resolve) => {
+			pendingSoundFontLoads.set(name, { resolve });
+			// Timeout after 30 seconds (large SF2 files can take time)
+			setTimeout(() => {
+				if (pendingSoundFontLoads.has(name)) {
+					console.error('[AudioEngine] SoundFont load timeout:', name);
+					pendingSoundFontLoads.delete(name);
+					resolve(null);
+				}
+			}, 30000);
+		});
+
+		workletNode.port.postMessage({
+			type: 'loadSoundFont',
+			name,
+			data
+		});
+
+		return await loadPromise;
+	}
+
+	/**
+	 * Load a SoundFont from a URL
+	 * @param name Display name for the SoundFont
+	 * @param url URL to the SF2 file
+	 * @returns SoundFont info with preset list, or null on failure
+	 */
+	async function loadSoundFontFromUrl(name: string, url: string): Promise<SoundFontInfo | null> {
+		try {
+			const result = await loadFile({ type: 'url', url }, { cache: true });
+			return await loadSoundFont(name, result.data);
+		} catch (err) {
+			console.error('[AudioEngine] Failed to fetch SoundFont:', err);
+			return null;
 		}
 	}
 
@@ -1496,6 +1669,7 @@ function createAudioEngine() {
 		get error() { return state.error; },
 		get samplesLoaded() { return state.samplesLoaded; },
 		get samplesLoading() { return state.samplesLoading; },
+		get loadedSoundfonts() { return state.loadedSoundfonts; },
 		// Parameter exposure
 		get params() { return state.params; },
 		get paramValues() { return state.paramValues; },
@@ -1530,6 +1704,9 @@ function createAudioEngine() {
 		loadBank,
 		loadBankFromGitHub,
 		getBankNames,
+		// SoundFont API
+		loadSoundFont,
+		loadSoundFontFromUrl,
 		getBankSampleNames,
 		getBankSampleVariantCount,
 		hasBank,
