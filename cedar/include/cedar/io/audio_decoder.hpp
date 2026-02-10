@@ -35,11 +35,9 @@ public:
 
     /// Format-specific decoders
     static DecodedAudio decode_wav(MemoryView data);
-#ifndef __EMSCRIPTEN__
     static DecodedAudio decode_ogg(MemoryView data);
     static DecodedAudio decode_flac(MemoryView data);
     static DecodedAudio decode_mp3(MemoryView data);
-#endif
 };
 
 }  // namespace cedar

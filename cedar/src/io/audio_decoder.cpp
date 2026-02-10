@@ -1,8 +1,7 @@
 #include "cedar/io/audio_decoder.hpp"
 #include "cedar/audio/wav_loader.hpp"
 
-#ifndef __EMSCRIPTEN__
-// Implementation defines for single-header libraries (native only)
+// Implementation defines for single-header libraries
 
 // stb_vorbis: OGG Vorbis decoder
 // We include the .c file directly since it's a single-translation-unit library.
@@ -55,8 +54,6 @@
 #pragma GCC diagnostic pop
 #endif
 
-#endif  // __EMSCRIPTEN__
-
 #include <cstring>
 
 namespace cedar {
@@ -106,14 +103,12 @@ DecodedAudio AudioDecoder::decode(MemoryView data) {
     switch (format) {
         case AudioFormat::WAV:
             return decode_wav(data);
-#ifndef __EMSCRIPTEN__
         case AudioFormat::OGG:
             return decode_ogg(data);
         case AudioFormat::FLAC:
             return decode_flac(data);
         case AudioFormat::MP3:
             return decode_mp3(data);
-#endif
         default: {
             DecodedAudio result;
             result.error = "Unknown or unsupported audio format";
@@ -138,8 +133,6 @@ DecodedAudio AudioDecoder::decode_wav(MemoryView data) {
     result.success = true;
     return result;
 }
-
-#ifndef __EMSCRIPTEN__
 
 DecodedAudio AudioDecoder::decode_ogg(MemoryView data) {
     DecodedAudio result;
@@ -232,7 +225,5 @@ DecodedAudio AudioDecoder::decode_mp3(MemoryView data) {
     std::free(info.buffer);
     return result;
 }
-
-#endif  // __EMSCRIPTEN__
 
 }  // namespace cedar

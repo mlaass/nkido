@@ -1,6 +1,6 @@
 # Third-Party Libraries
 
-Vendored single-header audio decoders for native builds.
+Vendored single-header audio decoders used by Cedar on all platforms (native and WASM).
 
 | Library | Version | License | Source |
 |---------|---------|---------|--------|
@@ -9,6 +9,3 @@ Vendored single-header audio decoders for native builds.
 | minimp3.h + minimp3_ex.h | latest | CC0 | https://github.com/lieff/minimp3 |
 
 All libraries are public domain or equivalent permissive licenses.
-
-These are only compiled on native platforms (not WASM). On WASM, non-WAV
-audio is decoded in TypeScript via Web Audio API's `decodeAudioData()`.

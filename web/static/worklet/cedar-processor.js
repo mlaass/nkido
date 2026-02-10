@@ -160,10 +160,6 @@ class CedarProcessor extends AudioWorkletProcessor {
 				this.loadSample(msg.name, msg.audioData, msg.channels, msg.sampleRate);
 				break;
 
-			case 'loadSampleWav':
-				this.loadSampleWav(msg.name, msg.wavData);
-				break;
-
 			case 'loadSampleAudio':
 				this.loadSampleAudio(msg.name, msg.audioData);
 				break;
@@ -791,58 +787,10 @@ class CedarProcessor extends AudioWorkletProcessor {
 		}
 	}
 
-	loadSampleWav(name, wavData) {
-		if (!this.module) {
-			this.port.postMessage({ type: 'error', message: 'Module not initialized' });
-			return;
-		}
-
-		console.log('[CedarProcessor] Loading WAV sample:', name, 'size:', wavData.byteLength);
-
-		// Allocate name string
-		const nameLen = this.module.lengthBytesUTF8(name) + 1;
-		const namePtr = this.module._enkido_malloc(nameLen);
-		if (namePtr === 0) {
-			this.port.postMessage({ type: 'error', message: 'Failed to allocate name' });
-			return;
-		}
-
-		// Allocate WAV data
-		const wavArray = new Uint8Array(wavData);
-		const wavPtr = this.module._enkido_malloc(wavArray.length);
-		if (wavPtr === 0) {
-			this.module._enkido_free(namePtr);
-			this.port.postMessage({ type: 'error', message: 'Failed to allocate WAV data' });
-			return;
-		}
-
-		try {
-			this.module.stringToUTF8(name, namePtr, nameLen);
-
-			// Copy WAV data to WASM memory using fresh heap view
-			this.writeByteArray(wavPtr, wavArray);
-
-			// Load sample from WAV
-			const sampleId = this.module._cedar_load_sample_wav(namePtr, wavPtr, wavArray.length);
-
-			if (sampleId > 0) {
-				console.log('[CedarProcessor] WAV sample loaded successfully, ID:', sampleId);
-				this.port.postMessage({ type: 'sampleLoaded', name, sampleId });
-			} else {
-				console.error('[CedarProcessor] Failed to load WAV sample');
-				this.port.postMessage({ type: 'error', message: 'Failed to load WAV sample: ' + name });
-			}
-		} finally {
-			this.module._enkido_free(namePtr);
-			this.module._enkido_free(wavPtr);
-		}
-	}
-
 	/**
-	 * Load a sample from audio data in any supported format.
-	 * Uses cedar_load_audio_data which auto-detects format from magic bytes.
-	 * On WASM, only WAV is natively decoded; other formats should be
-	 * pre-decoded in TS and sent via loadSample instead.
+	 * Load a sample from audio data in any supported format (WAV, OGG, FLAC, MP3).
+	 * Uses cedar_load_audio_data which auto-detects format from magic bytes
+	 * and decodes entirely in C++/WASM.
 	 */
 	loadSampleAudio(name, audioData) {
 		if (!this.module) {
