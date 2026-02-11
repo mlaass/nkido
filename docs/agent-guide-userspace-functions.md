@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Developer guide for function features. Current.
+
 # Agent Guide: Writing Akkado Userspace Functions
 
 Quick reference for writing `fn` definitions — stdlib helpers, DSP chains, or utility functions.

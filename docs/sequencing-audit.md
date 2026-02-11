@@ -1,3 +1,5 @@
+> **Status: TRACKING** — Cleanup spec identifying technical debt to remove.
+
 # Sequencing Functions Audit & Deprecation
 
 ## Summary

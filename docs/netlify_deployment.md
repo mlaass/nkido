@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Deployment guide. Operational.
+
 # Netlify Deployment Setup
 
 Automatic deployment via GitHub Actions to Netlify.

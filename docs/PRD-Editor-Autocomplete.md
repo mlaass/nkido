@@ -1,3 +1,5 @@
+> **Status: DONE** — Completions, signature help, WASM builtins export.
+
 # PRD: Editor Autocomplete & Code Assistance
 
 ## Overview

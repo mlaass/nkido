@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Python testing methodology. Active.
+
 # DSP Experiment Methodology
 
 This document explains how we verify the quality and correctness of Cedar DSP opcodes using Python experiments.

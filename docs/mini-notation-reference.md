@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — User-facing syntax reference. Current and accurate.
+
 # Mini-Notation Reference
 
 This document provides a comprehensive reference for Akkado's mini-notation syntax, used in pattern functions like `pat()` and `timeline()`.

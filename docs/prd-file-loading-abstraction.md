@@ -1,3 +1,5 @@
+> **Status: DONE** — Cross-platform file loading with multi-format audio decoding (commit a3283d3).
+
 # PRD: Cross-Platform File Loading Abstraction
 
 **Status:** Draft

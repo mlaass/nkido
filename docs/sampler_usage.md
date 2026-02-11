@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Cedar sampler usage guide. Current.
+
 # Cedar Sampler System - Usage Guide
 
 ## Overview

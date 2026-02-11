@@ -1,3 +1,5 @@
+> **Status: NOT STARTED** — No wavetable system exists.
+
 # **Product Requirement Document: "Smooch" Wavetable Oscillator (C++)**
 
 ## **1\. Overview**

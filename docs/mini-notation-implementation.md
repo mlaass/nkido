@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Implementation spec. Fully implemented and current.
+
 # Mini-Notation Implementation Specification
 
 This document describes the implementation of mini-notation pattern evaluation and timing in the Akkado language compiler.

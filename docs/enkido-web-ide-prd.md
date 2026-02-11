@@ -1,3 +1,5 @@
+> **Status: PARTIAL** — Phases 1–6 substantially complete. Phase 7 (polish) ongoing.
+
 # NKIDO Web IDE - Product Requirements Document
 
 ## Executive Summary

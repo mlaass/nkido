@@ -1,3 +1,5 @@
+> **Status: DONE** — All 6 features implemented (string defaults, named args, closures, variadic, partial application, compose).
+
 # Advanced Function System PRD
 
 ## Executive Summary

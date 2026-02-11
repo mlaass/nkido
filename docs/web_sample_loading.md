@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Web sample loading guide. Current.
+
 # Web Sample Loading Guide
 
 ## Overview

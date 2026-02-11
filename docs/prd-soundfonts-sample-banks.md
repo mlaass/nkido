@@ -1,3 +1,5 @@
+> **Status: DONE** — BankRegistry, SoundFont loading, SOUNDFONT_VOICE opcode (commit a741806).
+
 # PRD: SoundFont and Sample Bank System
 
 **Status:** Draft

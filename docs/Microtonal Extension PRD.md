@@ -1,3 +1,5 @@
+> **Status: NOT STARTED** — No microtonal parsing or tuning engine.
+
 # **Product Requirement Document: Akkado Microtonal Extension**
 
 **Version:** 1.0

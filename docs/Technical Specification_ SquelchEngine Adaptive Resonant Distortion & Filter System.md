@@ -1,3 +1,5 @@
+> **Status: NOT STARTED** — No squelch/reactive distortion system exists.
+
 # **Technical Specification: SquelchEngine**
 
 ## **Adaptive Resonant Distortion & Filter System**

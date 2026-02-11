@@ -1,3 +1,5 @@
+> **Status: NOT STARTED** — No curve notation parsing.
+
 # Timeline Curve Notation PRD
 
 ## Executive Summary

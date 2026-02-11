@@ -1,3 +1,5 @@
+> **Status: DONE** — Record literals, field access, pipe bindings, pattern fields.
+
 # PRD: Records and Field Access in Akkado
 
 **Version:** 1.0

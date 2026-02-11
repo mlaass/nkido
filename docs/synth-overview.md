@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Cedar architecture overview. Current and accurate.
+
 # Cedar Synth Architecture Overview
 
 This document provides a comprehensive technical reference for implementing the cedar_synth audio engine in C or C++.

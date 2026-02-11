@@ -1,3 +1,5 @@
+> **Status: PARTIAL** — Compile-time polyphony, field access, spread(), gate field done. Missing: MIDI input/voice allocation (Phase 6).
+
 # Polyphony System PRD
 
 ## Executive Summary

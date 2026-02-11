@@ -1,3 +1,5 @@
+> **Status: DONE** — SEQPAT_TRANSPORT opcode, clock overrides, transport() builtin.
+
 # PRD: Pattern Transport
 
 ## Prerequisite

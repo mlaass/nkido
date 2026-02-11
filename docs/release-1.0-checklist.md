@@ -1,3 +1,5 @@
+> **Status: TRACKING** — Master release checklist.
+
 # NKIDO 1.0 Release Checklist
 
 ## Features Completed
@@ -15,7 +17,7 @@
 - [x] Closures with environment capture
 - [x] Docstrings (`///`)
 - [x] Binary operators (`+`, `-`, `*`, `/`, `^`, comparisons, logical)
-- [ ] Variadic function arguments
+- [x] Variadic function arguments
 - [ ] Compile-time and runtime `match`
 - [ ] JS-style dictionaries/objects
 - [ ] Multiline strings
@@ -39,10 +41,10 @@
 
 ### Sample Loading
 
-- [ ] Web (URL / GitHub shortcut)
-- [ ] Local files
-- [ ] Builtin samples (default drum kit)
-- [ ] Soundfonts
+- [x] Web (URL / GitHub shortcut)
+- [x] Local files
+- [x] Builtin samples (default drum kit)
+- [x] Soundfonts
 
 ### Parameter Exposure
 
@@ -84,7 +86,7 @@
 - [x] Inline pattern preview widgets (piano rolls)
 - [x] Active step highlighting during playback
 - [x] Font size control (10–24px)
-- [ ] Better syntax highlighting in web frontend
+- [x] Better syntax highlighting in web frontend
 
 ### Web App — Transport & Audio
 

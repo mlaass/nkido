@@ -1,3 +1,5 @@
+> **Status: DONE** — Triple buffer, semantic ID matching, crossfade.
+
 # Cedar VM: Hot-Swap System Implementation
 
 ## Overview

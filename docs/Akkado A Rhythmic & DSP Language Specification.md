@@ -1,3 +1,5 @@
+> **Status: REFERENCE** — Akkado language specification. Current.
+
 # Akkado: Language Specification v2
 
 Akkado is a domain-specific language for live-coding musical patterns and modular synthesis. It combines Strudel/Tidal-style mini-notation with a functional DAG approach to audio signal processing.

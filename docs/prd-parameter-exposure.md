@@ -1,3 +1,5 @@
+> **Status: DONE** — param/toggle/button/dropdown end-to-end with web UI.
+
 # PRD: Parameter Exposure System
 
 **Status:** Draft

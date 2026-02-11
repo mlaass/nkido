@@ -1,3 +1,5 @@
+> **Status: TRACKING** — 92% opcode coverage.
+
 # DSP Quality Assurance Checklist
 
 This document tracks the quality verification status of Cedar DSP opcodes. Each opcode should be tested for correctness, performance, and audio quality before being considered production-ready.

@@ -1,3 +1,5 @@
+> **Status: DONE** — PROBE opcode, pianoroll/oscilloscope/waveform/spectrum, viz declarations.
+
 # Visualization System PRD
 
 ## Overview

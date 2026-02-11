@@ -1,3 +1,5 @@
+> **Status: NOT STARTED** — Separate project, no implementation exists.
+
 # PRD: Godot Extension for Enkido
 
 **Status:** Draft

@@ -35,7 +35,7 @@ _deps/
 
 # Bytecode output
 *.cedar
-docs/bytecode_*.md
+docs/archive/
 
 # Experiment output (WAV, PNG)
 experiments/output/
@@ -46,3 +46,4 @@ web/static/wasm/enkido.wasm
 
 # Bundled SoundFonts (downloaded via web/scripts/download-soundfonts.sh)
 web/static/soundfonts/
+

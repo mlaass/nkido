@@ -1,3 +1,5 @@
+> **Status: TRACKING** — Active blockers for MVP completeness.
+
 # MVP Incomplete Implementations
 
 This document tracks all incomplete implementations in the akkado codebase that need to be fixed.

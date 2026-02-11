@@ -1,3 +1,5 @@
+> **Status: DONE** — Cedar opcodes (DELAY_TAP/DELAY_WRITE) + full Akkado codegen with closure support.
+
 # Tap Delay System PRD
 
 ## Executive Summary

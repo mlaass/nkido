@@ -1,3 +1,5 @@
+> **Status: NOT STARTED** — No TypedValue struct or type checking infrastructure exists.
+
 # PRD: Akkado Compiler Type System
 
 ## Problem

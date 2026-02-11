@@ -1,3 +1,5 @@
+> **Status: TRACKING** — 6 open issues, 17 resolved.
+
 # DSP Issues Found in Experiments
 
 Tracked issues discovered by opcode experiment tests. Each entry includes the failing test, observed behavior, and suggested investigation path.

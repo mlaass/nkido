@@ -1,3 +1,5 @@
+> **Status: DONE** — Opcodes 140–149, infix + function syntax, select/ternary.
+
 # PRD: Conditionals and Logic Operators for Akkado
 
 ## Overview

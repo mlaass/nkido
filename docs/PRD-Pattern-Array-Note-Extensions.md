@@ -1,3 +1,5 @@
+> **Status: PARTIAL** — Arrays + map + chord expansion done. Missing: pattern objects, method chaining, voicing system, polymeter.
+
 # PRD: Strudel-Style Pattern System Extensions
 
 ## 1. Vision
