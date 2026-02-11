@@ -1,770 +1,502 @@
-> **Status: PARTIAL** — Compile-time polyphony, field access, spread(), gate field done. Missing: MIDI input/voice allocation (Phase 6).
+**Status: REFACTOR** — Old compile-time expansion system (Phases 1-5) complete. This PRD replaces it with a unified runtime POLY opcode. Phase 6 (MIDI) absorbed into the new design.
 
-# Polyphony System PRD
+# Polyphony System PRD — Runtime POLY Opcode
 
 ## Executive Summary
 
-This document specifies a complete polyphony system for Enkido/Akkado that enables:
-- Multi-voice synthesis from pattern chords and MIDI input
-- Per-voice DSP processing with automatic state isolation
-- Per-type voice routing (drum machines, multi-timbral)
-- Voice consolidation into shared effects chains
-- Configurable voice count with `$polyphony(n)`
-- Hot-swap compatible state preservation
+This document specifies a unified runtime polyphony system for Enkido built around a single **POLY opcode** that manages voices for any instrument — oscillators, SoundFonts, samplers, FM synths, etc. It replaces the current three incompatible mechanisms with one explicit, composable approach.
+
+### Why Refactor?
+
+The current system has three separate, incompatible polyphony mechanisms:
+
+| Mechanism | How it works | Problem |
+|-----------|-------------|---------|
+| **Compile-time multi-buffer expansion** | Compiler duplicates UGens N times when they receive polyphonic input | Implicit — polyphony determined by pattern content, no voice management, no mono/legato |
+| **SoundFont internal voice allocator** | 32 voices baked into SOUNDFONT_VOICE opcode | Isolated — can't share voice management with other instruments |
+| **Sampler internal voice allocator** | 32 voices baked into SAMPLE_PLAY opcode | Same isolation problem |
+
+**Goal**: Users explicitly choose `poly(n, instrument)` or `mono(instrument)`. One voice allocator handles everything — oscillators, SoundFonts, samplers, FM synths, future instruments.
 
 ---
 
-## 1. Core Concepts
+## 1. Target Syntax
 
-### 1.1 Voice Source
-
-A **voice source** produces events that can trigger multiple simultaneous voices.
-
-**Types**:
-- `pat("C4' Am7'")` - Pattern with chords (compile-time analyzed)
-- `chord("Am7")` - Single chord (compile-time)
-- `midi_in()` - External MIDI (runtime varying)
-- `osc_bank(n)` - N parallel oscillator voices (future)
-
-**Event Fields** (accessible via `%.field`):
-| Field | Aliases | Description |
-|-------|---------|-------------|
-| `freq` | `f`, `pitch` | Frequency in Hz |
-| `vel` | `v`, `velocity` | Velocity 0-1 |
-| `trig` | `t`, `trigger` | Trigger pulse (1 on note-on) |
-| `gate` | `g` | Gate signal (1 while held, 0 on release) |
-| `note` | `n`, `midi` | MIDI note number |
-| `type` | | Voice type string (for per-type routing) |
-| `dur` | `duration` | Event duration in beats |
-
-### 1.2 Voice Expansion
-
-When a voice source flows into a stateful UGen, the UGen is **automatically expanded** to N instances (one per voice).
+### 1.1 Basic Usage
 
 ```akkado
-// 3 voices (C, E, G) → 3 oscillators
-pat("C4'") |> sine(%.freq) |> sum(%) |> out(%, %)
+// Define instrument as a function
+fn lead(freq, gate, vel) =
+    osc("saw", freq) |> lp(%, 2000 * adsr(gate)) |> % * vel
+
+// Explicit polyphonic (8-voice)
+pat("C4' Am7' G4'") |> poly(8, lead) |> out(%, %)
+
+// Explicit monophonic (last-note priority, retrigger)
+pat("c4 e4 g4 b4") |> mono(lead) |> out(%, %)
 ```
 
-**Expansion Rules**:
-1. Voice source creates multi-buffer of voice event fields
-2. Stateful UGen receiving multi-buffer expands to N instances
-3. Each instance gets unique state_id from semantic path
-4. Result is multi-buffer of N outputs
-
-### 1.3 Voice Consolidation
-
-Multiple voices are combined back to a single signal for shared processing:
+### 1.2 SoundFont and Sampler
 
 ```akkado
-pat("C4' Am7'")
-|> sine(%.freq) * env(%.trig)  // per-voice: 4 oscillators, 4 envelopes
-|> sum(%)                           // consolidate: 4 → 1
-|> reverb(%)                        // shared: 1 reverb instance
-|> out(%, %)
+// SoundFont as instrument
+pat("C4' Am7'") |> poly(32, soundfont("piano.sf2")) |> out(%, %)
+
+// Sampler as instrument
+pat("x _ x _") |> poly(4, sample("kick.wav")) |> out(%, %)
 ```
 
-**Consolidation Functions**:
-- `sum(arr)` - Sum all voices
-- `mean(arr)` - Average (sum / count)
-- `mix(arr, weights)` - Weighted mix (future)
-- `pan_spread(arr)` - Stereo spread across voices (future)
-
-### 1.4 Per-Type Voice Routing
-
-For drum machines or multi-timbral setups, different voice types can route to different DSP chains:
+### 1.3 MIDI Input (Future)
 
 ```akkado
-pat("kick snare hihat kick snare")
-|> match(%.type) {
-    "kick": sine(55) * env(%.trig, 0.01, 0.1)
-    "snare": noise() * env(%.trig, 0.01, 0.2) |> hp(200, %)
-    "hihat": noise() * env(%.trig, 0.001, 0.05) |> hp(8000, %)
-    _: 0
-}
-|> sum(%)
-|> out(%, %)
+midi_in() |> poly(16, lead) |> out(%, %)
 ```
 
-**Type Resolution**:
-- Pattern atoms map to type strings (e.g., "kick", "snare")
-- Types can also be numeric indices (0, 1, 2...)
-- `match(%.type)` routes each voice to appropriate DSP
-
----
-
-## 2. Syntax & API
-
-### 2.1 Global Directives
+### 1.4 Mono and Legato
 
 ```akkado
-$polyphony(16)      // Default voice count for MIDI/unknown sources
-$sample_rate(48000) // (existing)
-$bpm(120)           // (existing)
+// mono = poly(1) with last-note priority and retrigger
+pat("c4 e4 g4 b4") |> mono(lead) |> out(%, %)
+
+// legato = mono without retrigger (freq glides, gate stays high)
+pat("c4 e4 g4 b4") |> legato(lead) |> out(%, %)
 ```
 
-### 2.2 Voice Sources
+### 1.5 Effects After Polyphony
+
+POLY outputs a mixed signal — effects chain naturally after it:
 
 ```akkado
-// Pattern-based (compile-time analyzed)
-pat("C4' Am7'")           // Chords in mini-notation
-chord("Am7")              // Single chord
-[440, 550, 660]           // Array literal
+fn pad(freq, gate, vel) =
+    osc("saw", freq) |> lp(%, 1000) |> % * adsr(gate, 0.1, 0.2, 0.6, 0.5) * vel
 
-// External input (runtime)
-midi_in()                 // MIDI input, expands to $polyphony voices
-midi_in(channel: 1)       // Specific MIDI channel
-
-// Explicit voice count
-spread(8, source)         // Force 8 voices from source
-```
-
-### 2.3 Voice Field Access
-
-```akkado
-pat("C4' Am7'") as e |>
-    sine(e.freq) *     // e.freq = multi-buffer of all voice frequencies
-    e.vel *                 // e.vel = multi-buffer of all voice velocities
-    env(e.trig)             // e.trig = multi-buffer of all voice triggers
-|> sum(%)
-|> out(%, %)
-```
-
-### 2.4 Per-Voice vs Shared Processing
-
-```akkado
-// Per-voice: UGen inside voice expansion
-pat("C4'") |> sine(%.freq) |> filter(1000, %) |> sum(%)
-//           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 3 oscs, 3 filters
-
-// Shared: UGen after consolidation
-pat("C4'") |> sine(%.freq) |> sum(%) |> filter(1000, %)
-//                                          ^^^^^^^^^^^^^^^^ 1 filter
-
-// Mixed:
-pat("C4'")
-|> sine(%.freq) * env(%.trig)   // per-voice
-|> sum(%) * 0.3                      // consolidate + scale
-|> reverb(%)                         // shared
-|> out(%, %)
-```
-
-### 2.5 Nested Voice Expansion
-
-Voice expansion composes naturally:
-
-```akkado
-fn supersaw(freq) =
-    [freq * 0.99, freq, freq * 1.01] |> saw(%) |> sum(%) * 0.33
-
-// 4 voices × 3 oscs = 12 oscillators
-pat("Am7'") |> supersaw(%.freq) |> sum(%) |> out(%, %)
+pat("C4' Am7' G7' F4'")
+|> poly(8, pad)       // 8 voices, mixed to mono
+|> reverb(%)          // shared reverb on the mix
+|> out(%, %) * 0.3
 ```
 
 ---
 
-## 3. Implementation Architecture
+## 2. Architecture
 
-### 3.1 Compile-Time Voice Analysis
+### 2.1 Bytecode Layout
 
-For pattern-based sources, analyze at compile time:
+The POLY block brackets a body of instructions that execute once per active voice:
+
+```
+SEQPAT_QUERY    state_id=S           // Set up pattern events
+POLY_BEGIN      rate=body_length     // Start poly block
+                out=mix_buf
+                in0=voice_freq_buf
+                in1=voice_gate_buf
+                in2=voice_vel_buf
+                in3=voice_trig_buf
+                in4=voice_out_buf
+                state_id=P           // PolyAllocState
+
+  // Body: executed once per active voice
+  OSC_SAW       in0=voice_freq_buf   out=tmp0   state_id=A
+  FILTER_SVF_LP in0=tmp0 in1=... in2=...  out=tmp1   state_id=B
+  ENV_ADSR      in0=voice_gate_buf   out=tmp2   state_id=C
+  MUL           in0=tmp1 in1=tmp2    out=voice_out_buf
+
+POLY_END                             // End marker
+OUTPUT          in0=mix_buf in1=mix_buf
+```
+
+Key points:
+- `rate` field encodes body_length (0-255 instructions)
+- Body instructions are ordinary opcodes — no special per-voice variants
+- `voice_freq_buf` etc. are scratch buffers filled per-voice before each body iteration
+- `voice_out_buf` is accumulated into `mix_buf` after each body iteration
+
+### 2.2 VM Execution
+
+Change `execute_program` from range-for to index-based:
 
 ```cpp
-// In SequenceCompiler (akkado/src/codegen_patterns.cpp)
-std::uint8_t max_voices() const {
-    std::uint8_t max = 1;
-    for (const auto& seq : sequence_events_) {
-        for (const auto& e : seq) {
-            max = std::max(max, e.num_values);
-        }
+auto program = slot->program();
+std::size_t ip = 0;
+while (ip < program.size()) {
+    if (program[ip].opcode == Opcode::POLY_BEGIN) {
+        ip = execute_poly_block(program, ip);
+    } else {
+        execute(program[ip]);
+        ++ip;
     }
-    return max;
 }
 ```
 
-### 3.2 Multi-Buffer Voice Fields
+`execute_poly_block` algorithm:
+1. Read POLY_BEGIN instruction config
+2. Get `PolyAllocState` from `state_id`
+3. Read events from linked `SequenceState` → update voice allocation
+4. Clear `mix_buf` to zero
+5. For each active voice (0..max_voices-1):
+   a. Fill `voice_freq/gate/vel/trig` buffers from voice slot data
+   b. Set `state_pool_.state_id_xor = voice_index * 0x9E3779B9u + 1` (golden ratio salt)
+   c. Execute body instructions (ip+1 to ip+body_length)
+   d. Accumulate `voice_out_buf` into `mix_buf`
+6. Reset `state_pool_.state_id_xor = 0`
+7. Return `ip + body_length + 2` (past POLY_END)
 
-**Current limitation**: `%.freq` returns only first voice's frequency.
+### 2.3 State ID Isolation (XOR Approach)
 
-**Fix**: Return multi-buffer of all voice frequencies.
-
-```cpp
-// In CodeGenerator (akkado/include/akkado/codegen.hpp)
-struct PolyphonicFields {
-    std::vector<std::uint16_t> freq_buffers;
-    std::vector<std::uint16_t> vel_buffers;
-    std::vector<std::uint16_t> trig_buffers;
-    std::vector<std::uint16_t> gate_buffers;
-};
-
-// Map pattern node → polyphonic field buffers
-std::unordered_map<NodeIndex, PolyphonicFields> polyphonic_fields_;
-```
-
-**Pattern codegen** (`akkado/src/codegen_patterns.cpp`):
-```cpp
-// For each voice, emit SEQPAT_STEP and collect buffers
-PolyphonicFields fields;
-for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
-    // ... emit SEQPAT_STEP for this voice ...
-    fields.freq_buffers.push_back(voice_freq_buf);
-    fields.vel_buffers.push_back(voice_vel_buf);
-    fields.trig_buffers.push_back(voice_trig_buf);
-    fields.gate_buffers.push_back(voice_gate_buf);
-}
-polyphonic_fields_[node] = std::move(fields);
-```
-
-**Field access codegen** (`akkado/src/codegen.cpp`):
-```cpp
-std::uint16_t handle_field_access(NodeIndex node, const Node& n) {
-    // ... existing code ...
-
-    // Check for polyphonic pattern field
-    auto poly_it = polyphonic_fields_.find(expr_node);
-    if (poly_it != polyphonic_fields_.end()) {
-        const auto& fields = poly_it->second;
-        std::vector<std::uint16_t>* buffers = nullptr;
-
-        if (field_name == "freq" || field_name == "f" || field_name == "pitch") {
-            buffers = &fields.freq_buffers;
-        } else if (field_name == "vel" || field_name == "v" || field_name == "velocity") {
-            buffers = &fields.vel_buffers;
-        } else if (field_name == "trig" || field_name == "t" || field_name == "trigger") {
-            buffers = &fields.trig_buffers;
-        } else if (field_name == "gate" || field_name == "g") {
-            buffers = &fields.gate_buffers;
-        }
-
-        if (buffers && buffers->size() > 1) {
-            return register_multi_buffer(node, *buffers);
-        }
-    }
-
-    // ... fall through to existing handling ...
-}
-```
-
-### 3.3 UGen Auto-Expansion (Already Implemented)
-
-The existing UGen auto-expansion in `codegen.cpp:660-765` handles multi-buffer inputs:
-- Detects when argument is multi-buffer
-- Creates N instances with unique state_ids
-- Each instance processes one element
-- Returns multi-buffer of N outputs
-
-### 3.4 MIDI Voice Allocation
-
-**New VM State**: Voice slot manager
+Each voice needs isolated state (oscillator phase, filter memory, etc.). Instead of modifying instructions per-voice, add a transparent XOR offset to StatePool:
 
 ```cpp
-// In cedar/include/cedar/vm/midi_voices.hpp
-struct VoiceSlot {
-    std::int8_t note = -1;      // MIDI note, -1 = inactive
-    float freq = 0.0f;          // Frequency in Hz
-    float vel = 0.0f;           // Velocity 0-1
-    float gate = 0.0f;          // Gate signal
-    std::uint32_t age = 0;      // For voice stealing
-    bool releasing = false;     // In release phase
-};
-
-class VoiceAllocator {
-    std::array<VoiceSlot, 128> slots_;  // Max 128 voices
-    std::size_t active_count_ = 0;
-    std::size_t max_voices_ = 16;       // From $polyphony
-
+// state_pool.hpp
+class StatePool {
+    std::uint32_t state_id_xor_ = 0;  // NEW
 public:
-    void set_max_voices(std::size_t n);
-    std::size_t allocate(std::int8_t note, float vel);  // Returns slot index
-    void release(std::int8_t note);                      // Note off
-    const VoiceSlot& get(std::size_t idx) const;
-    void tick();  // Increment ages, clean up released
-};
-```
+    void set_state_id_xor(std::uint32_t xor_val) { state_id_xor_ = xor_val; }
 
-**New Opcodes**:
-```cpp
-enum class Opcode : std::uint8_t {
-    // ... existing ...
-
-    // MIDI Voice (180-189)
-    MIDI_VOICE_FREQ = 180,   // out = voice[slot_idx].freq
-    MIDI_VOICE_VEL = 181,    // out = voice[slot_idx].vel
-    MIDI_VOICE_GATE = 182,   // out = voice[slot_idx].gate
-    MIDI_VOICE_TRIG = 183,   // out = voice[slot_idx] triggered this block
-    MIDI_NOTE_ON = 184,      // Process note-on queue
-    MIDI_NOTE_OFF = 185,     // Process note-off queue
-};
-```
-
-**Akkado codegen for midi_in()**:
-```cpp
-std::uint16_t handle_midi_in(NodeIndex node, const Node& n) {
-    std::size_t voice_count = options_.default_polyphony;  // From $polyphony
-
-    // Create buffers for each voice slot
-    PolyphonicFields fields;
-    for (std::size_t i = 0; i < voice_count; ++i) {
-        push_path("voice" + std::to_string(i));
-
-        // Emit MIDI_VOICE_* instructions for this slot
-        std::uint16_t freq_buf = emit_midi_voice_freq(i);
-        std::uint16_t vel_buf = emit_midi_voice_vel(i);
-        std::uint16_t trig_buf = emit_midi_voice_trig(i);
-        std::uint16_t gate_buf = emit_midi_voice_gate(i);
-
-        fields.freq_buffers.push_back(freq_buf);
-        fields.vel_buffers.push_back(vel_buf);
-        fields.trig_buffers.push_back(trig_buf);
-        fields.gate_buffers.push_back(gate_buf);
-
-        pop_path();
+    template<typename T>
+    T& get_or_create(std::uint32_t state_id) {
+        std::uint32_t effective_id = state_id ^ state_id_xor_;  // transparent
+        // ...existing lookup with effective_id...
     }
-
-    polyphonic_fields_[node] = std::move(fields);
-    return register_multi_buffer(node, fields.freq_buffers);
-}
-```
-
-### 3.5 Per-Type Voice Routing
-
-**Pattern type annotation**:
-In mini-notation, bare words become type strings:
-- `pat("kick snare hihat")` → events with type="kick", type="snare", type="hihat"
-- `pat("c4 e4 g4")` → events with type="" (no type, melodic)
-
-**Type field in Event struct**:
-```cpp
-// In cedar/include/cedar/opcodes/sequence.hpp
-struct Event {
-    // ... existing fields ...
-    std::uint8_t type_id = 0;  // Index into type string table
 };
 ```
 
-**SEQPAT_TYPE opcode**:
-```cpp
-SEQPAT_TYPE = 154,  // out = current event type_id (0-255)
+Properties:
+- **Zero cost** when no POLY active (XOR with 0 = identity)
+- **No changes** to any existing opcode implementations
+- **Nested POLY** works: save/restore xor, compose via XOR
+- **Hot-swap** works: state_ids are deterministic for same voice index
+- **Golden ratio salt** (`0x9E3779B9u`) provides perfect distribution, avoids hash collisions between voices
+
+### 2.4 Instruction Encoding
+
+```
+POLY_BEGIN:
+  rate        = body_length (0-255 instructions)
+  out_buffer  = mix output buffer
+  inputs[0]   = voice_freq_buf (body reads freq from here)
+  inputs[1]   = voice_gate_buf
+  inputs[2]   = voice_vel_buf
+  inputs[3]   = voice_trig_buf
+  inputs[4]   = voice_out_buf (body writes final audio here)
+  state_id    = PolyAllocState hash
+
+POLY_END:
+  NOP marker (no data needed, just body terminator)
 ```
 
-**Match codegen**:
+### 2.5 Buffer Reuse
+
+Body temp buffers are reused across voice iterations — only one voice runs at a time (full BLOCK_SIZE). The `voice_out_buf` is accumulated into `mix_buf` after each iteration, then overwritten by the next voice. This keeps buffer usage minimal.
+
+---
+
+## 3. PolyAllocState
+
 ```cpp
-// match(%.type) generates conditional branches
-// Each arm compiles to: if type == arm_type then arm_body else next_arm
+struct PolyAllocState {
+    static constexpr uint16_t MAX_VOICES = 32;
+
+    // Config (set by compiler via init_poly_state)
+    uint32_t seq_state_id = 0;    // Linked SequenceState for events
+    uint8_t max_voices = 8;
+    uint8_t mode = 0;             // 0=poly, 1=mono, 2=legato
+    uint8_t steal_strategy = 0;   // 0=oldest, 1=quietest
+
+    struct Voice {
+        float freq = 0.0f;
+        float vel = 0.0f;
+        float gate = 0.0f;
+        bool active = false;
+        bool releasing = false;
+        uint32_t age = 0;
+        int8_t note = -1;         // MIDI note for voice stealing
+    };
+    Voice voices[MAX_VOICES] = {};
+
+    // Voice allocation
+    Voice* allocate(float freq, float vel);
+    void release_by_freq(float freq);
+
+    // Event processing
+    void process_events(const SequenceState& seq, float beat_pos, float samples_per_beat);
+
+    // Per-block maintenance
+    void tick();  // age++, clean released voices
+};
 ```
 
-### 3.6 spread() Function
+### 3.1 Voice Allocation Strategy
 
-Force specific voice count, padding with zeros if source has fewer:
+**Poly mode** (mode=0):
+1. Find first inactive slot → assign note
+2. If all slots active, steal by strategy:
+   - `oldest` (default): steal voice with highest age
+   - `quietest`: steal voice with lowest vel that is also releasing
+3. On note-off: set `releasing = true`, keep `gate = 0` so envelope can release naturally
+
+**Mono mode** (mode=1):
+1. Always use voice slot 0
+2. On new note: retrigger (gate 0→1 transition), update freq/vel
+3. On note-off: only release if the released note matches current note (last-note priority)
+
+**Legato mode** (mode=2):
+1. Always use voice slot 0
+2. On new note: update freq/vel but do NOT retrigger (gate stays 1)
+3. On note-off: same as mono
+
+### 3.2 Event Processing
+
+`process_events` reads from the linked `SequenceState`:
 
 ```cpp
-std::uint16_t handle_spread_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 2);
-    std::size_t target_count = static_cast<std::size_t>(
-        ast_->arena[args.nodes[0]].as_number());
-    NodeIndex source = args.nodes[1];
-
-    // Visit source to get its voice buffers
-    visit(source);
-    auto source_buffers = get_multi_buffers(source);
-
-    // Pad or truncate to target count
-    std::vector<std::uint16_t> result;
-    for (std::size_t i = 0; i < target_count; ++i) {
-        if (i < source_buffers.size()) {
-            result.push_back(source_buffers[i]);
-        } else {
-            // Pad with zero (silent voice)
-            result.push_back(emit_const(0.0f, node));
+void PolyAllocState::process_events(const SequenceState& seq,
+                                     float beat_pos,
+                                     float samples_per_beat) {
+    // For each event in the current block:
+    for (const auto& event : seq.current_events()) {
+        if (event.is_note_on()) {
+            Voice* v = allocate(event.freq, event.vel);
+            if (v) {
+                v->freq = event.freq;
+                v->vel = event.vel;
+                v->gate = 1.0f;
+                v->note = event.note;
+                // trig_sample = exact sample position within block
+            }
+        } else if (event.is_note_off()) {
+            release_by_freq(event.freq);
         }
     }
-
-    return register_multi_buffer(node, std::move(result));
+    tick();  // age all voices
 }
 ```
 
-### 3.7 Gate vs Trigger Fields
+### 3.3 Per-Sample Gate Accuracy
 
-**trig** (%.trig): Impulse signal, 1.0 on note-on frame, 0.0 otherwise
-- Use for: Triggering envelopes, one-shots
+For trigger accuracy, the voice buffers are filled with per-sample precision:
 
-**gate** (%.gate): Level signal, 1.0 while note held, 0.0 after release
-- Use for: Sustaining envelopes, gated processing
+```cpp
+// Fill voice_trig_buf: 1.0 at exact trigger sample, 0.0 elsewhere
+// Fill voice_gate_buf: 0.0 before note-on, 1.0 from note-on sample onward
+// This gives sub-block timing accuracy for envelopes
+```
+
+---
+
+## 4. Compiler Integration
+
+### 4.1 Compiling `poly(8, lead)`
+
+When the compiler encounters `poly(8, instrument_fn)`:
+
+1. **Emit SEQPAT_QUERY** for the upstream pattern (already exists)
+2. **Allocate 5 scratch buffers**: voice_freq, voice_gate, voice_vel, voice_trig, voice_out
+3. **Allocate mix output buffer**
+4. **Emit POLY_BEGIN** with config (max_voices, mode, body_length)
+5. **Compile instrument function body** with params mapped to voice buffers:
+   - `freq` parameter → reads from `voice_freq_buf`
+   - `gate` parameter → reads from `voice_gate_buf`
+   - `vel` parameter → reads from `voice_vel_buf`
+6. **Emit POLY_END**
+7. **Call `vm.init_poly_state(state_id, seq_state_id, max_voices, mode)`** to link event source
+
+### 4.2 Instrument Function Convention
+
+Instrument functions take `(freq, gate, vel)` as their first three parameters:
 
 ```akkado
-// ADSR envelope with proper release
-pat("C4' Am7'") as e |>
-    sine(e.freq) * adsr(e.gate, 0.01, 0.1, 0.7, 0.3)
-|> sum(%) |> out(%, %)
+fn lead(freq, gate, vel) =
+    osc("saw", freq) |> lp(%, 2000 * adsr(gate)) |> % * vel
 ```
 
-### 3.8 Hot-Swap State Preservation
+The compiler maps these positionally:
+- Param 0 (`freq`) → `voice_freq_buf`
+- Param 1 (`gate`) → `voice_gate_buf`
+- Param 2 (`vel`) → `voice_vel_buf`
 
-State preservation uses semantic path matching:
-- Each voice instance has path like `main/pat#0/voice2/osc#0`
-- On hot-swap, match paths to preserve oscillator phase, filter state, etc.
-- If voice structure changes, new voices start fresh
+Additional parameters are allowed and compiled normally:
 
----
+```akkado
+fn lead(freq, gate, vel, cutoff) =
+    osc("saw", freq) |> lp(%, cutoff * adsr(gate)) |> % * vel
 
-## 4. Directive System
-
-### 4.1 Lexer Changes
-
-```cpp
-// akkado/src/lexer.cpp
-case '$':
-    advance();
-    return Token{TokenType::DIRECTIVE, scan_identifier(), ...};
+pat("C4'") |> poly(8, lead(%, %, %, param("cutoff", 2000))) |> out(%, %)
 ```
 
-### 4.2 Parser Changes
+### 4.3 `mono()` and `legato()` as Sugar
 
-```cpp
-// akkado/src/parser.cpp
-NodeIndex parse_directive() {
-    // $polyphony(16)
-    Token directive = previous();  // DIRECTIVE token
-    consume(TokenType::LPAREN, "Expected '(' after directive");
-    NodeIndex arg = parse_expression();
-    consume(TokenType::RPAREN, "Expected ')' after directive argument");
-
-    NodeIndex node = make_node(NodeType::Directive, directive);
-    ast_->arena[node].data = Node::DirectiveData{
-        directive.lexeme.substr(1),  // Remove '$'
-        arg
-    };
-    return node;
-}
+```akkado
+mono(lead)   → poly(1, lead)  with mode=1 (mono)
+legato(lead) → poly(1, lead)  with mode=2 (legato)
 ```
 
-### 4.3 Codegen Changes
+### 4.4 `soundfont()` and `sample()` as Instrument Factories
 
-```cpp
-// akkado/src/codegen.cpp
-struct CompilerOptions {
-    std::size_t default_polyphony = 16;
-    // ... other options ...
-};
+These compile to special single-voice opcodes (SF_PLAY, SAMPLE_VOICE) wrapped in the standard instrument function convention:
 
-void handle_directive(NodeIndex node, const Node& n) {
-    const auto& data = n.as_directive();
-    if (data.name == "polyphony") {
-        options_.default_polyphony = static_cast<std::size_t>(
-            ast_->arena[data.arg].as_number());
-    }
-}
+```akkado
+// This:
+poly(32, soundfont("piano.sf2"))
+
+// Compiles as if it were:
+poly(32, fn(freq, gate, vel) = sf_play("piano.sf2", freq, gate, vel))
 ```
 
 ---
 
-## 5. Web Integration
+## 5. What Stays vs What Changes
 
-### 5.1 WebMIDI Integration
-
-```typescript
-// web/src/lib/midi/midi-manager.ts
-class MIDIManager {
-    private inputs: Map<string, MIDIInput> = new Map();
-
-    async init() {
-        const access = await navigator.requestMIDIAccess();
-        for (const input of access.inputs.values()) {
-            input.onmidimessage = this.handleMessage.bind(this);
-            this.inputs.set(input.id, input);
-        }
-    }
-
-    private handleMessage(event: MIDIMessageEvent) {
-        const [status, note, velocity] = event.data;
-        const channel = status & 0x0F;
-        const command = status >> 4;
-
-        if (command === 9 && velocity > 0) {
-            // Note on
-            audioStore.midiNoteOn(channel, note, velocity / 127);
-        } else if (command === 8 || (command === 9 && velocity === 0)) {
-            // Note off
-            audioStore.midiNoteOff(channel, note);
-        }
-    }
-}
-```
-
-### 5.2 WASM Bindings
-
-```cpp
-// web/wasm/enkido_wasm.cpp
-EMSCRIPTEN_BINDINGS(enkido) {
-    // ... existing ...
-
-    function("cedar_midi_note_on", &cedar_midi_note_on);
-    function("cedar_midi_note_off", &cedar_midi_note_off);
-    function("cedar_set_polyphony", &cedar_set_polyphony);
-}
-
-void cedar_midi_note_on(int channel, int note, float velocity) {
-    g_vm.voice_allocator().note_on(note, velocity);
-}
-
-void cedar_midi_note_off(int channel, int note) {
-    g_vm.voice_allocator().note_off(note);
-}
-
-void cedar_set_polyphony(int max_voices) {
-    g_vm.voice_allocator().set_max_voices(max_voices);
-}
-```
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Multi-buffer system for arrays | **Stays** | `[440, 550] \|> osc(%)` still works |
+| SEQPAT_QUERY (pattern event setup) | **Stays** | POLY reads events from it |
+| Sequence/Event structs | **Stays** | Event format unchanged |
+| UGen auto-expansion from multi-buffer | **Stays for arrays** | Removed for polyphonic patterns |
+| Per-voice SEQPAT_STEP/GATE/TYPE emission | **Removed** | POLY handles voice distribution |
+| PolyphonicFields struct | **Removed** | No longer needed |
+| SoundFont internal voice allocator | **Removed** | Replaced by POLY + SF_PLAY |
+| Sampler internal voice allocator | **Removed** | Replaced by POLY + SAMPLE_VOICE |
+| `$polyphony(n)` directive | **Stays** | Sets default for `poly()` |
+| `spread()` function | **Stays** | Still useful for array padding |
 
 ---
 
-## 6. Files to Modify/Create
+## 6. MAX_STATES Consideration
 
-### 6.1 New Files
+Current limit: 256 state entries. With 8 voices and 6 stateful opcodes per voice = 48 states for one POLY block. Two POLY blocks = 96 states — already significant.
 
-| File | Description |
-|------|-------------|
-| `cedar/include/cedar/vm/voice_allocator.hpp` | Voice slot manager for MIDI |
-| `cedar/include/cedar/opcodes/midi.hpp` | MIDI_VOICE_* opcode implementations |
-| `web/src/lib/midi/midi-manager.ts` | WebMIDI integration |
+**Action**: May need to increase `MAX_STATES` to 512 or 1024.
 
-### 6.2 Modified Files
-
-| File | Changes |
-|------|---------|
-| `akkado/include/akkado/codegen.hpp` | Add PolyphonicFields, CompilerOptions |
-| `akkado/src/codegen.cpp` | Polyphonic field access, directive handling |
-| `akkado/src/codegen_patterns.cpp` | Emit per-voice field buffers |
-| `akkado/src/lexer.cpp` | DIRECTIVE token |
-| `akkado/src/parser.cpp` | parse_directive() |
-| `akkado/include/akkado/builtins.hpp` | spread, midi_in entries |
-| `cedar/include/cedar/vm/instruction.hpp` | MIDI_VOICE_* opcodes |
-| `cedar/include/cedar/vm/vm.hpp` | VoiceAllocator member |
-| `cedar/include/cedar/opcodes/sequence.hpp` | type_id field in Event |
-| `web/wasm/enkido_wasm.cpp` | MIDI bindings |
+File: `cedar/include/cedar/vm/state_pool.hpp` — `MAX_STATES` constant.
 
 ---
 
 ## 7. Implementation Phases
 
-### Phase 1: Polyphonic Field Access (Foundation)
-**Goal**: `pat("C4'") |> sine(%.freq) |> sum(%)` works
+### Phase 1: Cedar POLY Infrastructure
+**Goal**: VM can execute POLY_BEGIN/POLY_END with hardcoded voice data
 
-**Changes**:
-1. Add PolyphonicFields struct to codegen.hpp
-2. Modify pattern codegen to emit per-voice field buffers
-3. Modify field access to return multi-buffer from polyphonic pattern
-4. Add tests for polyphonic expansion
+Files to modify:
+- `cedar/include/cedar/vm/instruction.hpp` — add `POLY_BEGIN`, `POLY_END` opcodes
+- `cedar/include/cedar/vm/state_pool.hpp` — add `state_id_xor_` field, modify `get_or_create`
+- `cedar/include/cedar/opcodes/dsp_state.hpp` — add `PolyAllocState` struct, add to `DSPState` variant
+- `cedar/src/vm/vm.hpp` — add `execute_poly_block` method, add `init_poly_state` method
+- `cedar/src/vm/vm.cpp` — change `execute_program` to index-based loop, implement `execute_poly_block`
+- `cedar/include/cedar/generated/opcode_metadata.hpp` — regenerate (run `bun run build:opcodes`)
 
-**Estimate**: ~200 lines C++
+**Test**: Python experiment with hardcoded bytecode — 3 oscillators at different frequencies via POLY.
 
-### Phase 2: Directive System
-**Goal**: `$polyphony(16)` sets default
+### Phase 2: Akkado Compiler — `poly()` and `mono()`
+**Goal**: `pat("C4'") |> poly(8, synth_fn) |> out(%, %)` compiles and plays
 
-**Changes**:
-1. Add DIRECTIVE token to lexer
-2. Add parse_directive() to parser
-3. Add CompilerOptions and directive handling to codegen
-4. Add tests
+Files to modify:
+- `akkado/include/akkado/builtins.hpp` — add `poly` and `mono` builtin entries
+- `akkado/src/codegen.cpp` — implement `handle_poly_call`, wire instrument function body compilation
+- `akkado/include/akkado/codegen.hpp` — add poly-related state tracking
+- `akkado/tests/test_codegen.cpp` — tests for POLY bytecode generation
 
-**Estimate**: ~100 lines C++
+Key logic:
+- Detect pipe input is a pattern → emit SEQPAT_QUERY, link to POLY
+- Resolve instrument function → inline body with voice buffer params
+- Compute body_length, emit POLY_BEGIN/body/POLY_END
 
-### Phase 3: spread() Function
-**Goal**: `spread(8, source)` forces voice count
+### Phase 3: Voice Allocation Logic
+**Goal**: Proper event-driven voice allocation, stealing, mono, legato
 
-**Changes**:
-1. Add spread builtin entry
-2. Implement handle_spread_call
-3. Add tests
+Files to modify:
+- `cedar/include/cedar/opcodes/dsp_state.hpp` — flesh out `PolyAllocState::process_events`, `allocate`, `release_by_freq`
+- `cedar/src/vm/vm.cpp` — integrate event processing into `execute_poly_block`
 
-**Estimate**: ~50 lines C++
+Features:
+- Event-driven allocation from SequenceState events
+- Voice stealing (oldest first, then quietest releasing)
+- Mono mode: kill previous voice on new note
+- Legato mode: update freq without retrigger
+- Per-sample gate accuracy (trigger pulse at exact event time)
 
-### Phase 4: Per-Type Routing
-**Goal**: `match(%.type)` routes by voice type
+### Phase 4: SoundFont Single-Voice Opcode
+**Goal**: `poly(32, soundfont("piano.sf2"))` works
 
-**Changes**:
-1. Add type_id field to Event struct
-2. Add SEQPAT_TYPE opcode
-3. Pattern parser extracts type from atom names
-4. match() codegen handles type routing
-5. Add tests
+Files to create/modify:
+- `cedar/include/cedar/opcodes/soundfont.hpp` — add `SF_PLAY` opcode (single-voice SoundFont playback, extracted from SOUNDFONT_VOICE)
+- `cedar/include/cedar/vm/instruction.hpp` — add `SF_PLAY` opcode
+- `cedar/src/vm/vm.cpp` — register new opcode
+- `akkado/include/akkado/builtins.hpp` — `soundfont()` as instrument factory
+- `akkado/src/codegen.cpp` — `soundfont("file")` compiles to instrument-like callable
 
-**Estimate**: ~200 lines C++
+`SF_PLAY` = the inner loop of current SOUNDFONT_VOICE, minus voice allocation:
+- Takes freq, gate, vel, preset as inputs
+- Handles zone lookup, sample interpolation, per-voice filter, DAHDSR envelope
+- Returns mono audio output
 
-### Phase 5: Gate Field & Envelope Integration
-**Goal**: `env(%.gate)` for proper ADSR
+### Phase 5: Sampler Single-Voice Opcode
+**Goal**: `poly(4, sample("kick.wav"))` works
 
-**Changes**:
-1. Add gate_buffers to PolyphonicFields
-2. Add SEQPAT_GATE opcode (tracks held state)
-3. Modify pattern codegen to emit gate
-4. Add tests
+Files to create/modify:
+- `cedar/include/cedar/opcodes/samplers.hpp` — add `SAMPLE_VOICE` opcode (single-voice, extracted from SAMPLE_PLAY)
+- Same pattern as Phase 4
 
-**Estimate**: ~100 lines C++
-
-### Phase 6: MIDI Input
-**Goal**: `midi_in() |> ...` works with external MIDI
-
-**Changes**:
-1. Create VoiceAllocator class
-2. Add MIDI_VOICE_* opcodes
-3. Implement handle_midi_in codegen
-4. Add WebMIDI integration
-5. Add WASM bindings
-6. Add tests
-
-**Estimate**: ~400 lines C++, ~150 lines TypeScript
+### Phase 6: Deprecate Old System & Clean Up
+- Remove per-voice SEQPAT_STEP/GATE/TYPE emission from compiler (keep SEQPAT_QUERY)
+- Keep multi-buffer auto-expansion for arrays (`[440, 550] |> osc(%)` still works)
+- Remove PolyphonicFields system from codegen
+- Deprecate SOUNDFONT_VOICE, old SAMPLE_PLAY multi-voice behavior
+- Update docs
+- Error on old implicit polyphony patterns with helpful migration message
 
 ---
 
-## 8. Testing Strategy
+## 8. Verification
 
-### 8.1 Unit Tests (akkado/tests/)
+### 8.1 Per-Phase Testing
 
-```cpp
-TEST_CASE("Polyphonic field access", "[polyphony]") {
-    SECTION("%.freq on triad returns 3-element multi-buffer") {
-        auto result = compile(R"(
-            pat("C4'") |> sine(%.freq) |> sum(%) |> out(%, %)
-        )");
-        REQUIRE(result.success);
-        CHECK(count_instructions(result, OSC_SIN) == 3);
-    }
+| Phase | Test | Method |
+|-------|------|--------|
+| 1 | 3 oscillators at different frequencies mix correctly | Python experiment — build POLY bytecode manually |
+| 2 | `poly(8, fn(f,g,v) = osc("sin",f)*adsr(g))` produces correct instruction count | Akkado compiler test |
+| 3 | Voice stealing works when exceeding max_voices; mono plays only last note | Audio integration test |
+| 4 | `poly(8, soundfont("piano.sf2"))` matches audio quality of old SOUNDFONT_VOICE | A/B audio comparison |
+| 5 | `poly(4, sample("kick.wav"))` triggers samples correctly | Audio integration test |
+| 6 | Old syntax errors out with helpful message; all tests pass | Regression test suite |
 
-    SECTION("%.trig on chord triggers all voices") {
-        auto result = compile(R"(
-            pat("Am7'") |> sine(%.freq) * env(%.trig) |> sum(%) |> out(%, %)
-        )");
-        REQUIRE(result.success);
-        CHECK(count_instructions(result, OSC_SIN) == 4);
-        CHECK(count_instructions(result, ENV_AR) == 4);
-    }
-
-    SECTION("Nested expansion multiplies voice count") {
-        auto result = compile(R"(
-            fn supersaw(f) = [f*0.99, f, f*1.01] |> saw(%) |> sum(%)
-            pat("C4'") |> supersaw(%.freq) |> sum(%) |> out(%, %)
-        )");
-        REQUIRE(result.success);
-        CHECK(count_instructions(result, OSC_SAW) == 9);  // 3 voices × 3 oscs
-    }
-}
-
-TEST_CASE("Directive system", "[directives]") {
-    SECTION("$polyphony sets default voice count") {
-        auto result = compile(R"(
-            $polyphony(8)
-        )");
-        REQUIRE(result.success);
-        CHECK(result.options.default_polyphony == 8);
-    }
-}
-
-TEST_CASE("spread() function", "[polyphony]") {
-    SECTION("spread pads to target count") {
-        auto result = compile(R"(
-            spread(6, pat("C4'")) |> sine(%.freq) |> sum(%) |> out(%, %)
-        )");
-        REQUIRE(result.success);
-        CHECK(count_instructions(result, OSC_SIN) == 6);  // 3 real + 3 padded
-    }
-}
-
-TEST_CASE("Per-type routing", "[polyphony][match]") {
-    SECTION("match routes by type string") {
-        auto result = compile(R"(
-            pat("kick snare") |> match(%.type) {
-                "kick": sine(55)
-                "snare": noise()
-            } |> sum(%) |> out(%, %)
-        )");
-        REQUIRE(result.success);
-        CHECK(count_instructions(result, OSC_SIN) == 1);
-        CHECK(count_instructions(result, NOISE) == 1);
-    }
-}
-```
-
-### 8.2 Integration Tests (web/tests/)
-
-```typescript
-describe('Polyphony', () => {
-    it('produces audio from chord pattern', async () => {
-        const source = `pat("C4'") |> sine(%.freq) |> sum(%) * 0.3 |> out(%, %)`;
-        compile_and_run(source);
-        expect(getMaxOutput()).toBeGreaterThan(0);
-    });
-
-    it('handles nested expansion', async () => {
-        const source = `
-            fn super(f) = [f*0.99, f*1.01] |> saw(%) |> sum(%)
-            pat("C4'") |> super(%.freq) |> sum(%) * 0.1 |> out(%, %)
-        `;
-        compile_and_run(source);
-        expect(getMaxOutput()).toBeGreaterThan(0);
-    });
-});
-
-describe('MIDI Input', () => {
-    it('responds to MIDI note on', async () => {
-        const source = `midi_in() |> sine(%.freq) * env(%.gate) |> sum(%) |> out(%, %)`;
-        compile_and_run(source);
-
-        enkido.cedar_midi_note_on(0, 60, 0.8);  // C4
-        process_blocks(10);
-        expect(getMaxOutput()).toBeGreaterThan(0);
-
-        enkido.cedar_midi_note_off(0, 60);
-        process_blocks(100);  // Let envelope release
-        expect(getMaxOutput()).toBeLessThan(0.01);  // Faded to silence
-    });
-});
-```
-
-### 8.3 Manual Testing
+### 8.2 Manual Testing
 
 ```akkado
-// Basic polyphonic chord
-pat("C4' Am7' G7'") |> sine(%.freq) * env(%.trig) |> sum(%) * 0.2 |> out(%, %)
+// Basic polyphonic chord (verify 3 voices mix)
+fn pad(f, g, v) = osc("saw", f) |> lp(%, 1000) |> % * adsr(g, 0.1, 0.2, 0.6, 0.5) * v
+pat("C4' Am7' G7' F4'") |> poly(8, pad) |> out(%, %) * 0.3
 
-// Supersaw per voice (12 oscillators for Am7')
-fn supersaw(f) = [f*0.99, f, f*1.01] |> saw(%) |> sum(%) * 0.33
-pat("Am7'") |> supersaw(%.freq) * env(%.trig) |> sum(%) * 0.2 |> out(%, %)
+// Mono lead (verify only 1 voice at a time)
+fn lead(f, g, v) = osc("saw", f) |> lp(%, 3000) |> % * adsr(g, 0.01, 0.1, 0.8, 0.2)
+pat("c4 e4 g4 c5 g4 e4") |> mono(lead) |> out(%, %) * 0.5
 
-// Drum machine
-pat("kick . snare . kick kick snare .")
-|> match(%.type) {
-    "kick": sine(55) * env(%.trig, 0.01, 0.1)
-    "snare": noise() * env(%.trig, 0.01, 0.2) |> hp(200, %)
-}
-|> sum(%) * 0.5
-|> out(%, %)
+// SoundFont polyphonic
+pat("C4' Am7'") |> poly(32, soundfont("piano.sf2")) |> out(%, %)
 
-// MIDI input
-$polyphony(8)
-midi_in() |> sine(%.freq) * env(%.gate, 0.01, 0.1, 0.7, 0.3) |> sum(%) * 0.3 |> out(%, %)
+// Voice stealing — exceed 4 voices with 7th chord
+fn simple(f, g, v) = osc("sin", f) * adsr(g) * v
+pat("Am7' CM9'") |> poly(4, simple) |> out(%, %) * 0.3
 ```
 
 ---
 
 ## 9. Summary
 
-This PRD specifies a complete polyphony system with:
-
-| Feature | Syntax | Status |
-|---------|--------|--------|
-| Polyphonic field access | `%.freq` returns multi-buffer | Phase 1 |
-| Directive system | `$polyphony(16)` | Phase 2 |
-| Voice count override | `spread(8, source)` | Phase 3 |
-| Per-type routing | `match(%.type) {...}` | Phase 4 |
-| Gate field | `%.gate` for sustain/release | Phase 5 |
-| MIDI input | `midi_in()` | Phase 6 |
-
-**Total estimated scope**: ~1000 lines C++, ~150 lines TypeScript
+| Feature | Syntax | Phase |
+|---------|--------|-------|
+| POLY_BEGIN/POLY_END opcodes | (bytecode) | Phase 1 |
+| State ID XOR isolation | (transparent) | Phase 1 |
+| `poly(n, instrument)` | `pat(...) \|> poly(8, lead)` | Phase 2 |
+| `mono(instrument)` | `pat(...) \|> mono(lead)` | Phase 2 |
+| Voice allocation & stealing | (runtime) | Phase 3 |
+| Mono/legato modes | `mono(lead)`, `legato(lead)` | Phase 3 |
+| SoundFont single-voice | `poly(32, soundfont("piano.sf2"))` | Phase 4 |
+| Sampler single-voice | `poly(4, sample("kick.wav"))` | Phase 5 |
+| Deprecate old system | Migration errors | Phase 6 |
 
 **Key design principles**:
-1. Compile-time expansion where possible (patterns, chords)
-2. Runtime allocation only for external input (MIDI)
-3. Semantic path-based state preservation for hot-swap
-4. Composable voice expansion (nested functions work naturally)
-5. Explicit consolidation points (`sum()`, `mean()`)
+1. **Explicit over implicit** — user chooses `poly(n, ...)` or `mono(...)`, never auto-expanded
+2. **One allocator for everything** — oscillators, SoundFonts, samplers all use PolyAllocState
+3. **Zero-cost abstraction** — XOR state isolation adds no overhead outside POLY blocks
+4. **Hot-swap safe** — deterministic state IDs per voice index
+5. **Composable** — instruments are ordinary functions, effects chain after POLY naturally
