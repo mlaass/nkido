@@ -1302,6 +1302,7 @@ static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
 
 // Helper: Compile a pattern and return the compiled data
 // Returns true on success. On success, populates out_* parameters.
+// out_events and out_cycle_length carry already-transformed events from inner transforms.
 static bool compile_pattern_for_transform(
     CodeGenerator& gen,
     const Ast& ast,
@@ -1309,11 +1310,13 @@ static bool compile_pattern_for_transform(
     SampleRegistry* sample_registry,
     SequenceCompiler& compiler,
     NodeIndex& out_pattern_node,
-    std::uint32_t& out_num_elements) {
+    std::uint32_t& out_num_elements,
+    std::vector<std::vector<cedar::Event>>& out_events,
+    float& out_cycle_length) {
 
     const Node& pat_node = ast.arena[pattern_arg];
 
-    // Handle MiniLiteral: get the pattern node inside
+    // Case 1: MiniLiteral (base case)
     if (pat_node.type == NodeType::MiniLiteral) {
         out_pattern_node = pat_node.first_child;
         if (out_pattern_node == NULL_NODE) {
@@ -1328,13 +1331,79 @@ static bool compile_pattern_for_transform(
         }
 
         out_num_elements = compiler.count_top_level_elements(out_pattern_node);
+        out_events = compiler.sequence_events();
+        out_cycle_length = static_cast<float>(std::max(1u, out_num_elements));
         return true;
     }
 
-    // Handle pattern-producing Call nodes (pat, seq, etc.)
-    // For now, recurse and compile the Call to get the inner pattern
+    // Handle Call nodes
     if (pat_node.type == NodeType::Call) {
-        // Get the first argument which should be a string literal
+        const std::string& func_name = pat_node.as_identifier();
+
+        // Case 3: Transform calls (recursive case)
+        bool is_transform = (func_name == "slow" || func_name == "fast" ||
+                             func_name == "rev" || func_name == "transpose");
+        if (is_transform) {
+            // Get the inner pattern argument (first arg of this transform call)
+            NodeIndex inner_arg = get_pattern_arg(ast, pat_node, 0);
+            if (inner_arg == NULL_NODE) return false;
+
+            // Recursively compile the inner pattern
+            if (!compile_pattern_for_transform(gen, ast, inner_arg, sample_registry,
+                                                compiler, out_pattern_node, out_num_elements,
+                                                out_events, out_cycle_length)) {
+                return false;
+            }
+
+            // Apply this transform to the already-compiled events
+            if (func_name == "slow") {
+                auto factor = get_number_arg(ast, pat_node, 1);
+                if (!factor.has_value() || *factor <= 0) return false;
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        event.time *= *factor;
+                        event.duration *= *factor;
+                    }
+                }
+                out_cycle_length *= *factor;
+            } else if (func_name == "fast") {
+                auto factor = get_number_arg(ast, pat_node, 1);
+                if (!factor.has_value() || *factor <= 0) return false;
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        event.time /= *factor;
+                        event.duration /= *factor;
+                    }
+                }
+                out_cycle_length /= *factor;
+            } else if (func_name == "rev") {
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        float new_time = out_cycle_length - event.time - event.duration;
+                        if (new_time < 0.0f) new_time = 0.0f;
+                        event.time = new_time;
+                    }
+                }
+            } else if (func_name == "transpose") {
+                auto semitones = get_number_arg(ast, pat_node, 1);
+                if (!semitones.has_value()) return false;
+                float ratio = std::pow(2.0f, *semitones / 12.0f);
+                if (!compiler.is_sample_pattern()) {
+                    for (auto& seq_events : out_events) {
+                        for (auto& event : seq_events) {
+                            if (event.type == cedar::EventType::DATA) {
+                                for (std::uint8_t i = 0; i < event.num_values; ++i) {
+                                    event.values[i] *= ratio;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Case 2: pat/seq/timeline calls (base case — unwrap to MiniLiteral)
         NodeIndex first_arg = pat_node.first_child;
         if (first_arg != NULL_NODE) {
             const Node& arg_node = ast.arena[first_arg];
@@ -1355,6 +1424,8 @@ static bool compile_pattern_for_transform(
 
                         if (compiler.compile(out_pattern_node)) {
                             out_num_elements = compiler.count_top_level_elements(out_pattern_node);
+                            out_events = compiler.sequence_events();
+                            out_cycle_length = static_cast<float>(std::max(1u, out_num_elements));
                             return true;
                         }
                     }
@@ -1493,13 +1564,16 @@ std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Compile the pattern
+    // Compile the pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "slow() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -1509,20 +1583,15 @@ std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
     push_path("slow#" + std::to_string(slow_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Get compiled events and apply slow transformation
-    auto sequence_events = compiler.sequence_events();
+    // Apply slow transformation on top of any inner transforms
     float slow_factor = *factor;
-
-    // Transform all events: multiply time and duration by factor
     for (auto& seq_events : sequence_events) {
         for (auto& event : seq_events) {
             event.time *= slow_factor;
             event.duration *= slow_factor;
         }
     }
-
-    // Adjust cycle length
-    float cycle_length = static_cast<float>(std::max(1u, num_elements)) * slow_factor;
+    cycle_length *= slow_factor;
 
     const Node& pattern = ast_->arena[pattern_node];
     std::uint16_t result = emit_pattern_with_state(
@@ -1565,13 +1634,16 @@ std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Compile the pattern
+    // Compile the pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "fast() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -1581,20 +1653,15 @@ std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
     push_path("fast#" + std::to_string(fast_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Get compiled events and apply fast transformation
-    auto sequence_events = compiler.sequence_events();
+    // Apply fast transformation on top of any inner transforms
     float fast_factor = *factor;
-
-    // Transform all events: divide time and duration by factor
     for (auto& seq_events : sequence_events) {
         for (auto& event : seq_events) {
             event.time /= fast_factor;
             event.duration /= fast_factor;
         }
     }
-
-    // Adjust cycle length
-    float cycle_length = static_cast<float>(std::max(1u, num_elements)) / fast_factor;
+    cycle_length /= fast_factor;
 
     const Node& pattern = ast_->arena[pattern_node];
     std::uint16_t result = emit_pattern_with_state(
@@ -1631,13 +1698,16 @@ std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Compile the pattern
+    // Compile the pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "rev() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -1647,20 +1717,11 @@ std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
     push_path("rev#" + std::to_string(rev_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Get compiled events and apply reverse transformation
-    auto sequence_events = compiler.sequence_events();
-    float cycle_length = static_cast<float>(std::max(1u, num_elements));
-
-    // Transform all events: reverse time positions within each sequence
-    // For events normalized to [0, 1), we use: new_time = 1 - old_time - old_duration
-    // But since we work with beats, we use cycle_length
+    // Apply reverse transformation on top of any inner transforms
     for (auto& seq_events : sequence_events) {
         for (auto& event : seq_events) {
-            // Calculate new start time so event ends where it used to start
-            // old_end = old_time + old_duration
-            // new_time = cycle_length - old_end = cycle_length - old_time - old_duration
             float new_time = cycle_length - event.time - event.duration;
-            if (new_time < 0.0f) new_time = 0.0f;  // Clamp to avoid negative times
+            if (new_time < 0.0f) new_time = 0.0f;
             event.time = new_time;
         }
     }
@@ -1706,13 +1767,16 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Compile the pattern
+    // Compile the pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "transpose() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -1722,20 +1786,14 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
     push_path("transpose#" + std::to_string(transpose_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Get compiled events and apply transpose transformation
-    auto sequence_events = compiler.sequence_events();
+    // Apply transpose transformation on top of any inner transforms
     float semitones_value = *semitones;
-
-    // Transpose ratio: multiply frequency by 2^(semitones/12)
     float transpose_ratio = std::pow(2.0f, semitones_value / 12.0f);
 
-    // Transform all events: multiply frequency values by transpose ratio
-    // Only for pitch patterns (not sample patterns)
     if (!compiler.is_sample_pattern()) {
         for (auto& seq_events : sequence_events) {
             for (auto& event : seq_events) {
                 if (event.type == cedar::EventType::DATA) {
-                    // Transpose all pitch values in the event
                     for (std::uint8_t i = 0; i < event.num_values; ++i) {
                         event.values[i] *= transpose_ratio;
                     }
@@ -1743,8 +1801,6 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
             }
         }
     }
-
-    float cycle_length = static_cast<float>(std::max(1u, num_elements));
 
     const Node& pattern = ast_->arena[pattern_node];
     std::uint16_t result = emit_pattern_with_state(
@@ -1789,13 +1845,16 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Compile the pattern
+    // Compile the pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "velocity() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -1805,17 +1864,7 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
     push_path("velocity#" + std::to_string(velocity_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Get compiled events
-    auto sequence_events = compiler.sequence_events();
     float velocity_value = *vel;
-
-    // Note: The current event structure doesn't store velocity per event.
-    // Velocity is applied at the pattern level via the velocity buffer output.
-    // For now, we compile the pattern normally and multiply the velocity output.
-    // This is a simplified implementation - a full implementation would need
-    // per-event velocity stored in the Event struct.
-
-    float cycle_length = static_cast<float>(std::max(1u, num_elements));
 
     // Collect required samples
     compiler.collect_samples(required_samples_);
@@ -1944,13 +1993,16 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Compile the pattern
+    // Compile the pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "bank() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -1960,10 +2012,7 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     push_path("bank#" + std::to_string(bank_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Get compiled events and sample mappings
-    auto sequence_events = compiler.sequence_events();
     auto sample_mappings = compiler.sample_mappings();
-    float cycle_length = static_cast<float>(std::max(1u, num_elements));
 
     // Update bank field on all sample mappings
     for (auto& mapping : sample_mappings) {
@@ -2095,13 +2144,16 @@ std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Compile the main pattern
+    // Compile the main pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "n() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -2111,10 +2163,7 @@ std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
     push_path("n#" + std::to_string(n_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Get compiled events and sample mappings
-    auto sequence_events = compiler.sequence_events();
     auto sample_mappings = compiler.sample_mappings();
-    float cycle_length = static_cast<float>(std::max(1u, num_elements));
 
     if (is_fixed_variant) {
         // Case 1: Fixed variant - set on all sample mappings
@@ -2127,11 +2176,12 @@ std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
         SequenceCompiler variant_compiler(ast_->arena, sample_registry_);
         NodeIndex variant_pattern_node = NULL_NODE;
         std::uint32_t variant_num_elements = 1;
+        std::vector<std::vector<cedar::Event>> variant_events;
+        float variant_cycle_length = 1.0f;
 
         if (compile_pattern_for_transform(*this, *ast_, variant_arg, sample_registry_,
-                                          variant_compiler, variant_pattern_node, variant_num_elements)) {
-            // Get variant pattern events
-            auto variant_events = variant_compiler.sequence_events();
+                                          variant_compiler, variant_pattern_node, variant_num_elements,
+                                          variant_events, variant_cycle_length)) {
 
             // Match events: for each sample event in the main pattern,
             // look up the corresponding variant value from the variant pattern.
@@ -2267,13 +2317,16 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     // Fourth arg: reset trigger (optional)
     NodeIndex reset_arg = get_pattern_arg(*ast_, n, 3);
 
-    // Compile the pattern
+    // Compile the pattern (may include inner transforms applied recursively)
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     NodeIndex pattern_node = NULL_NODE;
     std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
 
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
-                                        compiler, pattern_node, num_elements)) {
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
         error("E130", "transport() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
@@ -2286,8 +2339,6 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     push_path("pat");
     std::uint32_t seq_state_id = compute_state_id();
     pop_path();
-
-    float cycle_length = static_cast<float>(std::max(1u, num_elements));
     bool is_sample_pattern = compiler.is_sample_pattern();
 
     // Visit trigger argument
@@ -2372,7 +2423,6 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     }
 
     // Store sequence program initialization data
-    auto sequence_events = compiler.sequence_events();
     StateInitData seq_init;
     seq_init.state_id = seq_state_id;
     seq_init.type = StateInitData::Type::SequenceProgram;

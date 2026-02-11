@@ -1563,6 +1563,7 @@ TEST_CASE("Method call desugaring", "[codegen][methods]") {
 
     SECTION("chained pattern methods compile without crash") {
         // Verify the analyzer doesn't crash on chained methods
+        // Semantic correctness is tested in "Pattern transform chaining" tests
         auto result = akkado::compile(R"(
             slow(fast(pat("c4 e4"), 2), 2)
         )");
@@ -1650,6 +1651,107 @@ TEST_CASE("Pattern function: velocity()", "[codegen][patterns]") {
     SECTION("velocity with valid pattern and value compiles") {
         auto result = akkado::compile(R"(velocity(pat("c4 e4"), 0.7))");
         CHECK(result.success);
+    }
+}
+
+// =============================================================================
+// Pattern Transform Chaining Tests
+// =============================================================================
+
+TEST_CASE("Pattern transform chaining compiles", "[codegen][patterns]") {
+    SECTION("transpose(slow(...)) compiles - two-level nesting") {
+        auto result = akkado::compile(R"(transpose(slow(pat("c4 e4"), 2), 12))");
+        CHECK(result.success);
+    }
+
+    SECTION("rev(transpose(slow(...))) compiles - three-level nesting") {
+        auto result = akkado::compile(R"(rev(transpose(slow(pat("c4 e4"), 2), 12)))");
+        CHECK(result.success);
+    }
+
+    SECTION("fast(transpose(...)) compiles") {
+        auto result = akkado::compile(R"(fast(transpose(pat("c4 e4"), 7), 2))");
+        CHECK(result.success);
+    }
+
+    SECTION("slow(rev(...)) compiles") {
+        auto result = akkado::compile(R"(slow(rev(pat("c4 e4 g4")), 3))");
+        CHECK(result.success);
+    }
+
+    SECTION("transpose(fast(...)) compiles") {
+        auto result = akkado::compile(R"(transpose(fast(pat("c4 e4"), 2), 5))");
+        CHECK(result.success);
+    }
+
+    SECTION("rev(slow(...)) compiles") {
+        auto result = akkado::compile(R"(rev(slow(pat("c4 e4 g4"), 2)))");
+        CHECK(result.success);
+    }
+}
+
+TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][patterns]") {
+    SECTION("slow(pat(...), 2) doubles event times and cycle length") {
+        // pat("c4 e4") has 2 elements -> base cycle_length = 2
+        // slow(2) -> cycle_length = 4, event times doubled
+        auto result = akkado::compile(R"(slow(pat("c4 e4"), 2))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(4.0f));
+        REQUIRE_FALSE(si.sequence_events.empty());
+        REQUIRE(si.sequence_events[0].size() >= 2);
+        CHECK(si.sequence_events[0][0].time == Catch::Approx(0.0f));
+        CHECK(si.sequence_events[0][1].time == Catch::Approx(1.0f));
+    }
+
+    SECTION("slow(fast(pat(...), 2), 2) is identity") {
+        // pat("c4 e4") base: cycle_length=2, times at 0, 0.5 (each dur=0.5)
+        // fast(2): cycle_length=1, times at 0, 0.25 (each dur=0.25)
+        // slow(2): cycle_length=2, times at 0, 0.5 (each dur=0.5) -> identity
+        auto result = akkado::compile(R"(slow(fast(pat("c4 e4"), 2), 2))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(2.0f));
+        REQUIRE_FALSE(si.sequence_events.empty());
+        REQUIRE(si.sequence_events[0].size() >= 2);
+        CHECK(si.sequence_events[0][0].time == Catch::Approx(0.0f));
+        CHECK(si.sequence_events[0][1].time == Catch::Approx(0.5f));
+    }
+
+    SECTION("transpose(slow(pat(...), 2), 12) applies both transforms") {
+        // pat("c4 e4") base: cycle_length=2
+        // slow(2): cycle_length=4
+        // transpose(12): frequencies doubled (octave up)
+        auto result = akkado::compile(R"(transpose(slow(pat("c4 e4"), 2), 12))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        // Cycle length should be doubled from slow
+        CHECK(si.cycle_length == Catch::Approx(4.0f));
+
+        // Events should have transposed frequencies
+        REQUIRE_FALSE(si.sequence_events.empty());
+        REQUIRE(si.sequence_events[0].size() >= 2);
+        // C4 = 261.63 Hz, transposed +12 = 523.25 Hz
+        float c4_freq = 261.6256f;
+        CHECK(si.sequence_events[0][0].values[0] == Catch::Approx(c4_freq * 2.0f).margin(1.0f));
+    }
+
+    SECTION("fast(fast(pat(...), 2), 3) compounds speed") {
+        // pat("c4 e4") base: cycle_length=2
+        // fast(2): cycle_length=1
+        // fast(3): cycle_length=1/3
+        auto result = akkado::compile(R"(fast(fast(pat("c4 e4"), 2), 3))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(2.0f / 6.0f));
     }
 }
 
