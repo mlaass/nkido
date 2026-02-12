@@ -215,6 +215,7 @@ NodeIndex MiniParser::parse_pitch_atom(const MiniToken& token) {
     arena_[node].data = Node::MiniAtomData{
         .kind = Node::MiniAtomKind::Pitch,
         .midi_note = pitch.midi_note,
+        .velocity = pitch.velocity,
         .sample_name = "",
         .sample_variant = 0,
         .chord_root = "",
@@ -233,6 +234,7 @@ NodeIndex MiniParser::parse_sample_atom(const MiniToken& token) {
     arena_[node].data = Node::MiniAtomData{
         .kind = Node::MiniAtomKind::Sample,
         .midi_note = 0,
+        .velocity = 1.0f,
         .sample_name = sample.name,
         .sample_variant = sample.variant,
         .sample_bank = sample.bank,
@@ -252,6 +254,7 @@ NodeIndex MiniParser::parse_chord_atom(const MiniToken& token) {
     arena_[node].data = Node::MiniAtomData{
         .kind = Node::MiniAtomKind::Chord,
         .midi_note = 0,
+        .velocity = chord.velocity,
         .sample_name = "",
         .sample_variant = 0,
         .chord_root = chord.root,
@@ -269,6 +272,7 @@ NodeIndex MiniParser::parse_rest() {
     arena_[node].data = Node::MiniAtomData{
         .kind = Node::MiniAtomKind::Rest,
         .midi_note = 0,
+        .velocity = 1.0f,
         .sample_name = "",
         .sample_variant = 0,
         .chord_root = "",
@@ -286,6 +290,7 @@ NodeIndex MiniParser::parse_elongate() {
     arena_[node].data = Node::MiniAtomData{
         .kind = Node::MiniAtomKind::Elongate,
         .midi_note = 0,
+        .velocity = 1.0f,
         .sample_name = "",
         .sample_variant = 0,
         .chord_root = "",

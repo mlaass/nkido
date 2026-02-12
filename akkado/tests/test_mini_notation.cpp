@@ -1203,3 +1203,66 @@ TEST_CASE("Pattern evaluation with chords", "[pattern_eval][chord]") {
         CHECK(events.events[2].chord_data->root == "G");
     }
 }
+
+// ============================================================================
+// Velocity Suffix Tests [mini_lexer]
+// ============================================================================
+
+TEST_CASE("Pitch velocity suffix", "[mini_lexer]") {
+    SECTION("c4:0.8 has velocity 0.8") {
+        auto [tokens, diags] = lex_mini("c4:0.8");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK_THAT(static_cast<double>(pitch.velocity), WithinRel(0.8, 0.001));
+    }
+
+    SECTION("e4:0.5 has velocity 0.5") {
+        auto [tokens, diags] = lex_mini("e4:0.5");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 64);
+        CHECK_THAT(static_cast<double>(pitch.velocity), WithinRel(0.5, 0.001));
+    }
+
+    SECTION("c4 without suffix has velocity 1.0") {
+        auto [tokens, diags] = lex_mini("c4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        CHECK_THAT(static_cast<double>(tokens[0].as_pitch().velocity), WithinRel(1.0, 0.001));
+    }
+
+    SECTION("multiple pitches with velocities") {
+        auto [tokens, diags] = lex_mini("c4:0.8 e4:0.5 g4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens.size() >= 4); // 3 pitches + Eof
+        CHECK_THAT(static_cast<double>(tokens[0].as_pitch().velocity), WithinRel(0.8, 0.001));
+        CHECK_THAT(static_cast<double>(tokens[1].as_pitch().velocity), WithinRel(0.5, 0.001));
+        CHECK_THAT(static_cast<double>(tokens[2].as_pitch().velocity), WithinRel(1.0, 0.001));
+    }
+
+    SECTION("velocity clamped to 0-1") {
+        auto [tokens, diags] = lex_mini("c4:1.5");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        CHECK_THAT(static_cast<double>(tokens[0].as_pitch().velocity), WithinRel(1.0, 0.001));
+    }
+}
+
+TEST_CASE("Chord velocity suffix", "[mini_lexer]") {
+    SECTION("Am:0.5 has velocity 0.5") {
+        auto [tokens, diags] = lex_mini("Am:0.5");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::ChordToken);
+        CHECK_THAT(static_cast<double>(tokens[0].as_chord().velocity), WithinRel(0.5, 0.001));
+    }
+
+    SECTION("C without suffix has velocity 1.0") {
+        auto [tokens, diags] = lex_mini("C");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::ChordToken);
+        CHECK_THAT(static_cast<double>(tokens[0].as_chord().velocity), WithinRel(1.0, 0.001));
+    }
+}

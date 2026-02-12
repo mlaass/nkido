@@ -290,6 +290,7 @@ private:
         e.time = time_offset;
         e.duration = time_span;
         e.chance = 1.0f;
+        e.velocity = atom_data.velocity;
         e.num_values = 1;
         // Use pattern-relative offset for UI highlighting
         e.source_offset = static_cast<std::uint16_t>(n.location.offset - pattern_base_offset_);

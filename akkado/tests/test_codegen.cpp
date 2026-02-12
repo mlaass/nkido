@@ -3134,3 +3134,49 @@ TEST_CASE("Codegen: Pattern string prefix", "[codegen][pattern-prefix]") {
         REQUIRE(result.success);
     }
 }
+
+// ============================================================================
+// Velocity in Pattern Events
+// ============================================================================
+
+TEST_CASE("Codegen: velocity suffix in pattern events", "[codegen][pattern][velocity]") {
+    SECTION("pat with velocity suffix stores velocity in events") {
+        auto result = akkado::compile(R"(pat("c4:0.8 e4:0.5"))");
+        REQUIRE(result.success);
+
+        const akkado::StateInitData* seq_init = nullptr;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+                seq_init = &init;
+                break;
+            }
+        }
+        REQUIRE(seq_init != nullptr);
+        REQUIRE(seq_init->sequence_events.size() >= 1);
+        const auto& root_events = seq_init->sequence_events[0];
+        REQUIRE(root_events.size() == 2);
+
+        CHECK(root_events[0].velocity == Catch::Approx(0.8f).margin(0.001f));
+        CHECK(root_events[1].velocity == Catch::Approx(0.5f).margin(0.001f));
+    }
+
+    SECTION("pat without velocity suffix defaults to 1.0") {
+        auto result = akkado::compile(R"(pat("c4 e4"))");
+        REQUIRE(result.success);
+
+        const akkado::StateInitData* seq_init = nullptr;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+                seq_init = &init;
+                break;
+            }
+        }
+        REQUIRE(seq_init != nullptr);
+        REQUIRE(seq_init->sequence_events.size() >= 1);
+        const auto& root_events = seq_init->sequence_events[0];
+        REQUIRE(root_events.size() == 2);
+
+        CHECK(root_events[0].velocity == Catch::Approx(1.0f).margin(0.001f));
+        CHECK(root_events[1].velocity == Catch::Approx(1.0f).margin(0.001f));
+    }
+}

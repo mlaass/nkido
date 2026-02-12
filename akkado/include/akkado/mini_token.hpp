@@ -86,6 +86,7 @@ constexpr std::string_view mini_token_type_name(MiniTokenType type) {
 struct MiniPitchData {
     std::uint8_t midi_note;    // MIDI note number (60 = C4)
     bool has_octave;           // Whether octave was explicit in source
+    float velocity = 1.0f;     // 0.0-1.0, from :vel suffix (e.g., c4:0.8)
 };
 
 /// Sample data for mini-notation
@@ -101,6 +102,7 @@ struct MiniChordData {
     std::string quality;                   // Chord quality: "", "m", "7", "maj7", etc.
     std::uint8_t root_midi;                // MIDI note of root (default octave 4)
     std::vector<std::int8_t> intervals;    // Semitone intervals from root
+    float velocity = 1.0f;                 // 0.0-1.0, from :vel suffix (e.g., Am:0.5)
 };
 
 /// Token value for mini-notation

@@ -693,6 +693,79 @@ TEST_CASE("Multi-value event - chord", "[sequence]") {
 // Source Location Tracking (UI Highlighting)
 // ============================================================================
 
+// ============================================================================
+// Velocity in Events
+// ============================================================================
+
+TEST_CASE("Event velocity default", "[sequence]") {
+    Event e;
+    CHECK(e.velocity == 1.0f);
+}
+
+TEST_CASE("Velocity propagated through query_pattern", "[sequence]") {
+    g_test_storage.reset();
+    SequenceState state;
+    g_test_storage.init_state(state);
+
+    Sequence& seq = g_test_storage.add_sequence(state);
+    seq.mode = SequenceMode::NORMAL;
+    seq.duration = 4.0f;
+
+    Event e1;
+    e1.type = EventType::DATA;
+    e1.time = 0.0f;
+    e1.duration = 2.0f;
+    e1.velocity = 0.8f;
+    e1.num_values = 1;
+    e1.values[0] = 261.63f;
+    seq.add_event(e1);
+
+    Event e2;
+    e2.type = EventType::DATA;
+    e2.time = 2.0f;
+    e2.duration = 2.0f;
+    e2.velocity = 0.5f;
+    e2.num_values = 1;
+    e2.values[0] = 329.63f;
+    seq.add_event(e2);
+
+    state.cycle_length = 4.0f;
+
+    query_pattern(state, 0, 4.0f);
+
+    REQUIRE(state.output.num_events == 2);
+    CHECK_THAT(state.output.events[0].velocity, WithinAbs(0.8f, 0.001f));
+    CHECK_THAT(state.output.events[1].velocity, WithinAbs(0.5f, 0.001f));
+}
+
+TEST_CASE("Velocity default 1.0 in output events", "[sequence]") {
+    g_test_storage.reset();
+    SequenceState state;
+    g_test_storage.init_state(state);
+
+    Sequence& seq = g_test_storage.add_sequence(state);
+    seq.mode = SequenceMode::NORMAL;
+    seq.duration = 4.0f;
+
+    Event e;
+    e.type = EventType::DATA;
+    e.time = 0.0f;
+    e.duration = 4.0f;
+    e.num_values = 1;
+    e.values[0] = 440.0f;
+    // velocity defaults to 1.0f
+    seq.add_event(e);
+
+    query_pattern(state, 0, 4.0f);
+
+    REQUIRE(state.output.num_events == 1);
+    CHECK_THAT(state.output.events[0].velocity, WithinAbs(1.0f, 0.001f));
+}
+
+// ============================================================================
+// Source Location Tracking (UI Highlighting)
+// ============================================================================
+
 TEST_CASE("Source location tracking", "[sequence]") {
     g_test_storage.reset();
     SequenceState state;

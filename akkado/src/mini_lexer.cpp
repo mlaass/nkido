@@ -1,6 +1,7 @@
 #include "akkado/mini_lexer.hpp"
 #include "akkado/music_theory.hpp"
 #include "akkado/chord_parser.hpp"
+#include <algorithm>
 #include <charconv>
 #include <cctype>
 
@@ -429,11 +430,30 @@ std::optional<MiniToken> MiniLexer::try_lex_chord_symbol() {
         interval_vec = {0, 4, 7};
     }
 
+    float velocity = 1.0f;
+
+    // Check for :velocity suffix (e.g., Am:0.5)
+    if (peek() == ':' && (is_digit(peek_next()) || peek_next() == '.')) {
+        advance(); // consume ':'
+        std::size_t vel_start = current_;
+        if (peek() == '.') advance();
+        while (is_digit(peek())) advance();
+        if (pattern_[vel_start] != '.' && peek() == '.' && is_digit(peek_next())) {
+            advance(); // consume '.'
+            while (is_digit(peek())) advance();
+        }
+        std::string_view vel_text = pattern_.substr(vel_start, current_ - vel_start);
+        double vel_val = 0.0;
+        std::from_chars(vel_text.data(), vel_text.data() + vel_text.size(), vel_val);
+        velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
+    }
+
     MiniChordData chord_data{
         chord_info->root,
         chord_info->quality,
         static_cast<std::uint8_t>(chord_info->root_midi),
-        std::move(interval_vec)
+        std::move(interval_vec),
+        velocity
     };
 
     return make_token(MiniTokenType::ChordToken, std::move(chord_data));
@@ -487,7 +507,25 @@ MiniToken MiniLexer::lex_pitch_or_sample() {
         // If we consumed everything, it's a pitch
         if (pos == text.size()) {
             std::uint8_t midi = parse_pitch_to_midi(text[0], accidental, octave);
-            return make_token(MiniTokenType::PitchToken, MiniPitchData{midi, has_octave});
+            float velocity = 1.0f;
+
+            // Check for :velocity suffix (e.g., c4:0.8)
+            if (peek() == ':' && (is_digit(peek_next()) || peek_next() == '.')) {
+                advance(); // consume ':'
+                std::size_t vel_start = current_;
+                if (peek() == '.') advance();
+                while (is_digit(peek())) advance();
+                if (pattern_[vel_start] != '.' && peek() == '.' && is_digit(peek_next())) {
+                    advance(); // consume '.'
+                    while (is_digit(peek())) advance();
+                }
+                std::string_view vel_text = pattern_.substr(vel_start, current_ - vel_start);
+                double vel_val = 0.0;
+                std::from_chars(vel_text.data(), vel_text.data() + vel_text.size(), vel_val);
+                velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
+            }
+
+            return make_token(MiniTokenType::PitchToken, MiniPitchData{midi, has_octave, velocity});
         }
     }
 

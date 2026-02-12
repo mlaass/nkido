@@ -496,7 +496,7 @@ inline void op_seqpat_step(ExecutionContext& ctx, const Instruction& inst) {
         // Select value based on voice index (for polyphonic chord support)
         // If voice_index exceeds available values, output 0 (silence that voice)
         out_value[i] = (voice_index < evt.num_values) ? evt.values[voice_index] : 0.0f;
-        if (out_velocity) out_velocity[i] = 1.0f;  // Velocity support TBD
+        if (out_velocity) out_velocity[i] = evt.velocity;
 
         // Keep active step in sync with current event for UI highlighting (only voice 0)
         if (voice_index == 0) {
