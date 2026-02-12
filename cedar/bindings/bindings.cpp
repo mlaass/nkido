@@ -118,6 +118,9 @@ PYBIND11_MODULE(cedar_core, m) {
         .value("OSC_TRI_4X", cedar::Opcode::OSC_TRI_4X)
         .value("OSC_SQR_PWM_4X", cedar::Opcode::OSC_SQR_PWM_4X)
         .value("OSC_SAW_PWM_4X", cedar::Opcode::OSC_SAW_PWM_4X)
+        // Polyphony (150-151)
+        .value("POLY_BEGIN", cedar::Opcode::POLY_BEGIN)
+        .value("POLY_END", cedar::Opcode::POLY_END)
         // Stereo Operations (170-179)
         .value("PAN", cedar::Opcode::PAN)
         .value("WIDTH", cedar::Opcode::WIDTH)
@@ -199,6 +202,11 @@ PYBIND11_MODULE(cedar_core, m) {
                 dst[i] = r(i);
             }
         })
+
+        // Polyphony state initialization
+        .def("init_poly_state", &cedar::VM::init_poly_state,
+            py::arg("state_id"), py::arg("seq_state_id"),
+            py::arg("max_voices"), py::arg("mode"), py::arg("steal_strategy"))
 
         // Sample loading for sampler opcodes
         .def("load_sample", [](cedar::VM& vm, const std::string& name, py::array_t<float> data,

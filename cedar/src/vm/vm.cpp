@@ -232,11 +232,74 @@ void VM::execute_program(const ProgramSlot* slot, float* out_left, float* out_ri
     // Mark beginning of frame for state GC tracking
     state_pool_.begin_frame();
 
-    // Execute all instructions
+    // Execute all instructions (index-based for POLY block jumping)
     auto program = slot->program();
-    for (const auto& inst : program) {
-        execute(inst);
+    std::size_t ip = 0;
+    while (ip < program.size()) {
+        if (program[ip].opcode == Opcode::POLY_BEGIN) {
+            ip = execute_poly_block(program, ip);
+        } else {
+            execute(program[ip]);
+            ++ip;
+        }
     }
+}
+
+std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::size_t ip) {
+    const auto& poly_inst = program[ip];
+    std::uint8_t body_length = poly_inst.rate;
+    std::uint16_t mix_buf = poly_inst.out_buffer;
+    std::uint16_t voice_freq_buf = poly_inst.inputs[0];
+    std::uint16_t voice_gate_buf = poly_inst.inputs[1];
+    std::uint16_t voice_vel_buf = poly_inst.inputs[2];
+    std::uint16_t voice_trig_buf = poly_inst.inputs[3];
+    std::uint16_t voice_out_buf = poly_inst.inputs[4];
+
+    // Get PolyAllocState
+    auto& poly_state = state_pool_.get_or_create<PolyAllocState>(poly_inst.state_id);
+    poly_state.ensure_voices(ctx_.arena);
+
+    // Clear mix buffer to zero
+    float* mix = buffer_pool_.get(mix_buf);
+    std::fill_n(mix, BLOCK_SIZE, 0.0f);
+
+    // Iterate active voices
+    for (std::uint8_t v = 0; v < poly_state.max_voices; ++v) {
+        if (!poly_state.voices || !poly_state.voices[v].active) continue;
+
+        const auto& voice = poly_state.voices[v];
+
+        // Fill voice parameter buffers
+        float* freq_buf = buffer_pool_.get(voice_freq_buf);
+        float* gate_buf = buffer_pool_.get(voice_gate_buf);
+        float* vel_buf = buffer_pool_.get(voice_vel_buf);
+        float* trig_buf = buffer_pool_.get(voice_trig_buf);
+        std::fill_n(freq_buf, BLOCK_SIZE, voice.freq);
+        std::fill_n(gate_buf, BLOCK_SIZE, voice.gate);
+        std::fill_n(vel_buf, BLOCK_SIZE, voice.vel);
+        std::fill_n(trig_buf, BLOCK_SIZE, 0.0f); // Phase 3: per-sample trig
+
+        // Set XOR isolation for this voice
+        state_pool_.set_state_id_xor(
+            static_cast<std::uint32_t>(v) * 0x9E3779B9u + 1);
+
+        // Execute body instructions
+        for (std::size_t bi = 0; bi < body_length; ++bi) {
+            execute(program[ip + 1 + bi]);
+        }
+
+        // Accumulate voice output into mix buffer
+        const float* voice_out = buffer_pool_.get(voice_out_buf);
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            mix[i] += voice_out[i];
+        }
+    }
+
+    // Reset XOR
+    state_pool_.set_state_id_xor(0);
+
+    // Advance past POLY_BEGIN + body + POLY_END
+    return ip + 1 + body_length + 1;
 }
 
 void VM::execute(const Instruction& inst) {
@@ -750,6 +813,12 @@ void VM::execute(const Instruction& inst) {
 
         case Opcode::DELAY_PINGPONG:
             op_delay_pingpong(ctx_, inst);
+            break;
+
+        // === Polyphony ===
+        case Opcode::POLY_BEGIN:
+        case Opcode::POLY_END:
+            // Handled by execute_program's IP loop — should not reach here
             break;
 
         // === Visualization ===

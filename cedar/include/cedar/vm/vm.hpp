@@ -149,6 +149,18 @@ public:
                                           &audio_arena_, total_events);
     }
 
+    // Initialize polyphony state for a POLY_BEGIN opcode
+    void init_poly_state(std::uint32_t state_id, std::uint32_t seq_state_id,
+                         std::uint8_t max_voices, std::uint8_t mode,
+                         std::uint8_t steal_strategy) {
+        auto& state = state_pool_.get_or_create<PolyAllocState>(state_id);
+        state.seq_state_id = seq_state_id;
+        state.max_voices = std::min(max_voices, static_cast<std::uint8_t>(PolyAllocState::MAX_VOICES));
+        state.mode = mode;
+        state.steal_strategy = steal_strategy;
+        state.ensure_voices(&audio_arena_);
+    }
+
     // =========================================================================
     // Query API
     // =========================================================================
@@ -175,6 +187,10 @@ private:
 
     // Execute single instruction
     void execute(const Instruction& inst);
+
+    // Execute a POLY block — iterates voices, sets XOR isolation, accumulates mix
+    // Returns the instruction pointer past POLY_END
+    std::size_t execute_poly_block(std::span<const Instruction> program, std::size_t ip);
 
     // Handle block-boundary swap logic
     void handle_swap();

@@ -148,7 +148,12 @@ enum class Opcode : std::uint8_t {
     LOGIC_OR = 148,          // out = ((a > 0) || (b > 0)) ? 1.0 : 0.0
     LOGIC_NOT = 149,         // out = (a > 0) ? 0.0 : 1.0
 
-    // Lazy Queryable Patterns (150-159)
+    // Polyphony (150-151)
+    POLY_BEGIN = 150,     // Start poly block: rate=body_length, out=mix_buf,
+                          // in0=freq, in1=gate, in2=vel, in3=trig, in4=voice_out
+    POLY_END = 151,       // End marker for poly block (no data, just terminator)
+
+    // Lazy Queryable Patterns (152-159)
     SEQPAT_QUERY = 152,      // Query sequence system at block boundaries
     SEQPAT_STEP = 153,       // Step through sequence results: out=value, in[0]=velocity, in[1]=trigger
     SEQPAT_TYPE = 154,       // Type ID signal for routing: out=type_id, in[0]=voice_idx

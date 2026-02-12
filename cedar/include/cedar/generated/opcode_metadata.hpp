@@ -115,6 +115,8 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::LOGIC_AND: return "LOGIC_AND";
         case Opcode::LOGIC_OR: return "LOGIC_OR";
         case Opcode::LOGIC_NOT: return "LOGIC_NOT";
+        case Opcode::POLY_BEGIN: return "POLY_BEGIN";
+        case Opcode::POLY_END: return "POLY_END";
         case Opcode::SEQPAT_QUERY: return "SEQPAT_QUERY";
         case Opcode::SEQPAT_STEP: return "SEQPAT_STEP";
         case Opcode::SEQPAT_TYPE: return "SEQPAT_TYPE";

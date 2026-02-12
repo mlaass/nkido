@@ -889,6 +889,74 @@ struct PingPongDelayState {
 };
 
 // ============================================================================
+// Polyphony State
+// ============================================================================
+
+// NoteEvent bridges pattern events and MIDI to voice allocation
+struct NoteEvent {
+    float freq;                    // Hz
+    float vel;                     // 0-1
+    std::uint16_t event_index;     // Source OutputEvent index
+    std::uint16_t voice_index;     // Which chord note (0-3)
+    std::uint32_t gate_on_sample;  // Sample offset within block for note-on
+    std::uint32_t gate_off_sample; // Sample offset for note-off (BLOCK_SIZE if sustaining)
+};
+
+// Voice slot for POLY block
+struct PolyVoice {
+    float freq = 0.0f;
+    float vel = 0.0f;
+    float gate = 0.0f;
+    bool active = false;
+    bool releasing = false;
+    std::uint32_t age = 0;
+    std::int8_t note = -1;
+    std::uint16_t event_index = 0xFFFF;
+    std::uint32_t cycle = 0;
+};
+
+// PolyAllocState — arena-allocated voices (same pattern as SoundFontVoiceState)
+struct PolyAllocState {
+    static constexpr std::uint16_t MAX_VOICES = 32;
+
+    PolyVoice* voices = nullptr;          // Arena-allocated array
+    std::uint32_t seq_state_id = 0;       // Linked SequenceState for events
+    std::uint8_t max_voices = 8;
+    std::uint8_t mode = 0;               // 0=poly, 1=mono, 2=legato
+    std::uint8_t steal_strategy = 0;     // 0=oldest, 1=quietest
+
+    void ensure_voices(AudioArena* arena) {
+        if (voices) return;
+        if (!arena) return;
+        constexpr std::size_t voice_floats =
+            (sizeof(PolyVoice) * MAX_VOICES + sizeof(float) - 1) / sizeof(float);
+        float* raw = arena->allocate(voice_floats);
+        if (raw) {
+            voices = reinterpret_cast<PolyVoice*>(raw);
+            for (std::uint16_t i = 0; i < MAX_VOICES; ++i) {
+                new (&voices[i]) PolyVoice{};
+            }
+        }
+    }
+
+    std::uint8_t active_voice_count() const {
+        if (!voices) return 0;
+        std::uint8_t count = 0;
+        for (std::uint16_t i = 0; i < max_voices; ++i) {
+            if (voices[i].active) ++count;
+        }
+        return count;
+    }
+
+    void tick() {
+        if (!voices) return;
+        for (std::uint16_t i = 0; i < max_voices; ++i) {
+            if (voices[i].active) voices[i].age++;
+        }
+    }
+};
+
+// ============================================================================
 // Visualization States
 // ============================================================================
 
@@ -1028,6 +1096,8 @@ using DSPState = std::variant<
     FDNState,
     // Stereo effect states
     PingPongDelayState,
+    // Polyphony state
+    PolyAllocState,
     // Visualization states
     ProbeState,
     // Extended parameters (for opcodes with 7+ params)

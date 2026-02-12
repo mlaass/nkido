@@ -60,16 +60,20 @@ public:
         clear_all();
     }
 
+    void set_state_id_xor(std::uint32_t xor_val) { state_id_xor_ = xor_val; }
+    std::uint32_t state_id_xor() const { return state_id_xor_; }
+
     // Get or create state for a given semantic ID
     // Template type T must be one of the DSPState variant alternatives
     template<typename T>
     [[nodiscard]] T& get_or_create(std::uint32_t state_id) {
-        std::size_t idx = find_or_insert_slot(state_id);
+        std::uint32_t effective_id = state_id ^ state_id_xor_;
+        std::size_t idx = find_or_insert_slot(effective_id);
         touched_[idx] = true;
 
         auto& entry = states_[idx];
         if (!entry.occupied) {
-            entry.key = state_id;
+            entry.key = effective_id;
             entry.state.template emplace<T>();
             entry.occupied = true;
             ++state_count_;
@@ -86,7 +90,8 @@ public:
     // Get existing state (assumes it exists and is correct type)
     template<typename T>
     [[nodiscard]] T& get(std::uint32_t state_id) {
-        std::size_t idx = find_slot(state_id);
+        std::uint32_t effective_id = state_id ^ state_id_xor_;
+        std::size_t idx = find_slot(effective_id);
         touched_[idx] = true;
         return std::get<T>(states_[idx].state);
     }
@@ -94,7 +99,8 @@ public:
     // Get existing state if it exists and is the correct type (returns nullptr otherwise)
     template<typename T>
     [[nodiscard]] T* get_if(std::uint32_t state_id) {
-        std::size_t idx = find_slot(state_id);
+        std::uint32_t effective_id = state_id ^ state_id_xor_;
+        std::size_t idx = find_slot(effective_id);
         if (idx == INVALID_SLOT) {
             return nullptr;
         }
@@ -107,12 +113,14 @@ public:
 
     // Check if state exists
     [[nodiscard]] bool exists(std::uint32_t state_id) const {
-        return find_slot(state_id) != INVALID_SLOT;
+        std::uint32_t effective_id = state_id ^ state_id_xor_;
+        return find_slot(effective_id) != INVALID_SLOT;
     }
 
     // Mark state as touched (for GC tracking)
     void touch(std::uint32_t state_id) {
-        std::size_t idx = find_slot(state_id);
+        std::uint32_t effective_id = state_id ^ state_id_xor_;
+        std::size_t idx = find_slot(effective_id);
         if (idx != INVALID_SLOT) {
             touched_[idx] = true;
         }
@@ -510,6 +518,26 @@ public:
                 }
                 json << "]}";
             }
+            else if constexpr (std::is_same_v<T, PolyAllocState>) {
+                json << R"({"type":"PolyAllocState")";
+                json << R"(,"max_voices":)" << static_cast<int>(state.max_voices);
+                json << R"(,"mode":)" << static_cast<int>(state.mode);
+                json << R"(,"steal_strategy":)" << static_cast<int>(state.steal_strategy);
+                json << R"(,"seq_state_id":)" << state.seq_state_id;
+                json << R"(,"voices":[)";
+                for (int vi = 0; vi < state.max_voices && state.voices; ++vi) {
+                    if (vi > 0) json << ",";
+                    const auto& v = state.voices[vi];
+                    json << R"({"active":)" << (v.active ? "true" : "false");
+                    json << R"(,"freq":)" << v.freq;
+                    json << R"(,"vel":)" << v.vel;
+                    json << R"(,"gate":)" << v.gate;
+                    json << R"(,"releasing":)" << (v.releasing ? "true" : "false");
+                    json << R"(,"age":)" << v.age;
+                    json << "}";
+                }
+                json << "]}";
+            }
             else if constexpr (std::is_same_v<T, ProbeState>) {
                 json << R"({"type":"ProbeState")";
                 json << R"(,"write_pos":)" << state.write_pos;
@@ -757,6 +785,7 @@ private:
     std::array<bool, MAX_STATES> touched_;
     std::size_t state_count_ = 0;
     std::uint32_t fade_blocks_ = 3;  // Default: match crossfade duration
+    std::uint32_t state_id_xor_ = 0; // XOR mask for poly voice state isolation
 };
 
 }  // namespace cedar
