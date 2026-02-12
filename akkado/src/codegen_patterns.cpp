@@ -709,6 +709,9 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
     push_path("pat#" + std::to_string(pat_count));
     std::uint32_t state_id = compute_state_id();
 
+    // Record state_id for poly() to link to upstream pattern
+    pattern_state_ids_[node] = state_id;
+
     // Use the SequenceCompiler for lazy queryable patterns
     SequenceCompiler compiler(ast_->arena, sample_registry_);
     // Set base offset so event source_offset values are pattern-relative
@@ -998,6 +1001,9 @@ std::uint16_t CodeGenerator::handle_pattern_reference(const std::string& name,
 
     push_path(name);
     std::uint32_t state_id = compute_state_id();
+
+    // Record state_id for poly() to link to upstream pattern
+    pattern_state_ids_[pattern_node] = state_id;
 
     NodeIndex mini_pattern = pattern_n.first_child;
     if (mini_pattern == NULL_NODE) {

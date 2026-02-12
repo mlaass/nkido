@@ -666,6 +666,18 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                    "Scale array to [lo, hi] range"}},
 
     // Polyphony control
+    {"poly",      {cedar::Opcode::NOP, 2, 1, false,
+                   {"voices", "instrument", "input", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Polyphonic voice manager"}},
+    {"mono",      {cedar::Opcode::NOP, 1, 1, false,
+                   {"instrument", "input", "", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Monophonic voice manager"}},
+    {"legato",    {cedar::Opcode::NOP, 1, 1, false,
+                   {"instrument", "input", "", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Legato voice manager"}},
     {"spread",    {cedar::Opcode::NOP, 2, 0, false,
                    {"n", "source", "", "", "", ""},
                    {NAN, NAN, NAN},

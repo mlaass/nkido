@@ -49,6 +49,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     call_counters_.clear();
     param_function_refs_.clear();
     multi_buffers_.clear();
+    pattern_state_ids_.clear();
     array_lengths_.clear();
     current_source_loc_ = {};
     options_ = CompilerOptions{};  // Reset compiler options
@@ -653,6 +654,10 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"compose", &CodeGenerator::handle_compose_call},
                 // SoundFont playback
                 {"soundfont", &CodeGenerator::handle_soundfont_call},
+                // Polyphony
+                {"poly",   &CodeGenerator::handle_poly_call},
+                {"mono",   &CodeGenerator::handle_poly_call},
+                {"legato", &CodeGenerator::handle_poly_call},
             };
 
             auto handler_it = special_handlers.find(func_name);

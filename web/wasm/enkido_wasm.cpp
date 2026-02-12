@@ -700,6 +700,16 @@ WASM_EXPORT uint32_t cedar_apply_state_inits() {
             );
             count++;
         }
+        else if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+            g_vm->init_poly_state(
+                init.state_id,
+                init.poly_seq_state_id,
+                init.poly_max_voices,
+                init.poly_mode,
+                init.poly_steal_strategy
+            );
+            count++;
+        }
         // Timeline state init would go here if needed
     }
     return count;

@@ -1037,4 +1037,241 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     return write_out_buf;
 }
 
+// Handle poly(voices, instrument) / mono(instrument) / legato(instrument)
+// Emits POLY_BEGIN, inlines instrument body, emits POLY_END
+std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
+    using codegen::extract_call_args;
+
+    const std::string& func_name = n.as_identifier();
+
+    // Determine mode from function name
+    std::uint8_t mode = 0;  // 0=poly
+    if (func_name == "mono") mode = 1;
+    else if (func_name == "legato") mode = 2;
+
+    // Collect arguments
+    auto args = extract_call_args(ast_->arena, n.first_child, 1, 3);
+    if (!args.valid) {
+        if (mode == 0) {
+            error("E400", "poly() requires 2-3 arguments: poly(voices, instrument) or poly(input, voices, instrument)", n.location);
+        } else {
+            error("E400", func_name + "() requires 1-2 arguments: " + func_name + "(instrument) or " + func_name + "(input, instrument)", n.location);
+        }
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Parse arguments based on func_name and arg count
+    NodeIndex pattern_arg = NULL_NODE;
+    NodeIndex voices_arg = NULL_NODE;
+    NodeIndex instrument_arg = NULL_NODE;
+    std::uint8_t max_voices = (mode == 0) ? 8 : 1;
+
+    if (mode == 0) {
+        // poly: 2 args = (voices, fn), 3 args = (input, voices, fn)
+        if (args.nodes.size() == 3) {
+            pattern_arg = args.nodes[0];
+            voices_arg = args.nodes[1];
+            instrument_arg = args.nodes[2];
+        } else if (args.nodes.size() == 2) {
+            voices_arg = args.nodes[0];
+            instrument_arg = args.nodes[1];
+        } else {
+            error("E400", "poly() requires 2-3 arguments", n.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+    } else {
+        // mono/legato: 1 arg = (fn), 2 args = (input, fn)
+        if (args.nodes.size() == 2) {
+            pattern_arg = args.nodes[0];
+            instrument_arg = args.nodes[1];
+        } else if (args.nodes.size() == 1) {
+            instrument_arg = args.nodes[0];
+        } else {
+            error("E400", func_name + "() requires 1-2 arguments", n.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+    }
+
+    // Extract voice count from number literal
+    if (voices_arg != NULL_NODE) {
+        const Node& vn = ast_->arena[voices_arg];
+        if (vn.type == NodeType::NumberLit) {
+            int v = static_cast<int>(vn.as_number());
+            if (v < 1 || v > 32) {
+                error("E401", "Voice count must be between 1 and 32", vn.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+            max_voices = static_cast<std::uint8_t>(v);
+        } else {
+            error("E402", "Voice count must be a number literal", vn.location);
+            return BufferAllocator::BUFFER_UNUSED;
+        }
+    }
+
+    // Visit pattern input if present (emits SEQPAT_QUERY etc.)
+    std::uint32_t seq_state_id = 0;
+    if (pattern_arg != NULL_NODE) {
+        (void)visit(pattern_arg);
+        // Look up pattern state_id from the visited pattern node
+        auto pit = pattern_state_ids_.find(pattern_arg);
+        if (pit != pattern_state_ids_.end()) {
+            seq_state_id = pit->second;
+        }
+    }
+
+    // Resolve instrument function
+    auto func_ref = resolve_function_arg(instrument_arg);
+    if (!func_ref) {
+        error("E403", func_name + "() instrument argument must be a function with 3 parameters (freq, gate, vel)", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Validate exactly 3 parameters
+    if (func_ref->params.size() != 3) {
+        error("E404", func_name + "() instrument function must have exactly 3 parameters (freq, gate, vel), got " +
+              std::to_string(func_ref->params.size()), n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Allocate scratch buffers for voice parameters and output
+    std::uint16_t voice_freq_buf = buffers_.allocate();
+    std::uint16_t voice_gate_buf = buffers_.allocate();
+    std::uint16_t voice_vel_buf = buffers_.allocate();
+    std::uint16_t voice_trig_buf = buffers_.allocate();
+    std::uint16_t voice_out_buf = buffers_.allocate();
+    std::uint16_t mix_buf = buffers_.allocate();
+
+    if (mix_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Push semantic path for unique state_id
+    std::uint32_t count = call_counters_["poly"]++;
+    push_path("poly#" + std::to_string(count));
+    std::uint32_t poly_state_id = compute_state_id();
+
+    // Emit POLY_BEGIN instruction
+    std::size_t poly_begin_idx = instructions_.size();
+    cedar::Instruction poly_begin{};
+    poly_begin.opcode = cedar::Opcode::POLY_BEGIN;
+    poly_begin.out_buffer = mix_buf;
+    poly_begin.inputs[0] = voice_freq_buf;
+    poly_begin.inputs[1] = voice_gate_buf;
+    poly_begin.inputs[2] = voice_vel_buf;
+    poly_begin.inputs[3] = voice_trig_buf;
+    poly_begin.inputs[4] = voice_out_buf;
+    poly_begin.rate = 0;  // Patched after body emission
+    poly_begin.state_id = poly_state_id;
+    emit(poly_begin);
+
+    // Inline function body
+    // Push scope and bind params to voice buffers
+    symbols_->push_scope();
+    symbols_->define_variable(func_ref->params[0].name, voice_freq_buf);
+    symbols_->define_variable(func_ref->params[1].name, voice_gate_buf);
+    symbols_->define_variable(func_ref->params[2].name, voice_vel_buf);
+
+    // Bind captures for closures
+    for (const auto& capture : func_ref->captures) {
+        symbols_->define_variable(capture.name, capture.buffer_index);
+    }
+
+    // Save node_buffers_ state before visiting body
+    auto saved_node_buffers = std::move(node_buffers_);
+    node_buffers_.clear();
+
+    // Record body start instruction index
+    std::size_t body_start = instructions_.size();
+
+    // Visit body
+    std::uint16_t body_result = BufferAllocator::BUFFER_UNUSED;
+    if (func_ref->is_user_function) {
+        // User function: body is directly the body_node
+        body_result = visit(func_ref->closure_node);
+    } else {
+        // Closure: find body (last child of closure node)
+        const Node& closure_node = ast_->arena[func_ref->closure_node];
+        NodeIndex child = closure_node.first_child;
+        NodeIndex body = NULL_NODE;
+        while (child != NULL_NODE) {
+            const Node& child_node = ast_->arena[child];
+            if (child_node.type == NodeType::Identifier) {
+                // parameter — skip
+            } else {
+                body = child;
+                break;
+            }
+            child = ast_->arena[child].next_sibling;
+        }
+        if (body != NULL_NODE) {
+            body_result = visit(body);
+        }
+    }
+
+    // If body result != voice_out_buf, emit COPY to wire it
+    if (body_result != BufferAllocator::BUFFER_UNUSED && body_result != voice_out_buf) {
+        cedar::Instruction copy_inst{};
+        copy_inst.opcode = cedar::Opcode::COPY;
+        copy_inst.out_buffer = voice_out_buf;
+        copy_inst.inputs[0] = body_result;
+        copy_inst.inputs[1] = 0xFFFF;
+        copy_inst.inputs[2] = 0xFFFF;
+        copy_inst.inputs[3] = 0xFFFF;
+        copy_inst.inputs[4] = 0xFFFF;
+        copy_inst.state_id = 0;
+        emit(copy_inst);
+    }
+
+    // Record body end
+    std::size_t body_end = instructions_.size();
+
+    // Restore node_buffers_
+    for (auto& [k, v] : saved_node_buffers) {
+        if (node_buffers_.find(k) == node_buffers_.end()) {
+            node_buffers_[k] = v;
+        }
+    }
+
+    // Pop scope
+    symbols_->pop_scope();
+
+    // Patch POLY_BEGIN.rate = body_length
+    std::size_t body_length = body_end - body_start;
+    if (body_length > 255) {
+        error("E405", "Poly instrument body too large (max 255 instructions)", n.location);
+        pop_path();
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+    instructions_[poly_begin_idx].rate = static_cast<std::uint8_t>(body_length);
+
+    // Emit POLY_END
+    cedar::Instruction poly_end{};
+    poly_end.opcode = cedar::Opcode::POLY_END;
+    poly_end.out_buffer = 0xFFFF;
+    poly_end.inputs[0] = 0xFFFF;
+    poly_end.inputs[1] = 0xFFFF;
+    poly_end.inputs[2] = 0xFFFF;
+    poly_end.inputs[3] = 0xFFFF;
+    poly_end.inputs[4] = 0xFFFF;
+    poly_end.state_id = 0;
+    emit(poly_end);
+
+    // Pop semantic path
+    pop_path();
+
+    // Add StateInitData for PolyAlloc
+    StateInitData poly_init;
+    poly_init.state_id = poly_state_id;
+    poly_init.type = StateInitData::Type::PolyAlloc;
+    poly_init.poly_seq_state_id = seq_state_id;
+    poly_init.poly_max_voices = max_voices;
+    poly_init.poly_mode = mode;
+    poly_init.poly_steal_strategy = 0;  // oldest
+    state_inits_.push_back(std::move(poly_init));
+
+    node_buffers_[node] = mix_buf;
+    return mix_buf;
+}
+
 } // namespace akkado

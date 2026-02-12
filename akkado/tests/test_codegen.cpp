@@ -3180,3 +3180,144 @@ TEST_CASE("Codegen: velocity suffix in pattern events", "[codegen][pattern][velo
         CHECK(root_events[1].velocity == Catch::Approx(1.0f).margin(0.001f));
     }
 }
+
+// =============================================================================
+// Polyphony Tests (poly / mono / legato)
+// =============================================================================
+
+TEST_CASE("Codegen: poly()", "[codegen][poly]") {
+    SECTION("basic poly with named function") {
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq)
+            poly(4, lead) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+
+        // Should contain POLY_BEGIN, body, POLY_END, OUTPUT
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_END) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::OUTPUT) == 1);
+
+        // Find POLY_BEGIN and verify rate = body_length > 0
+        auto* poly = find_instruction(insts, cedar::Opcode::POLY_BEGIN);
+        REQUIRE(poly != nullptr);
+        CHECK(poly->rate > 0);  // body_length >= 1
+
+        // Verify state_id is set
+        CHECK(poly->state_id != 0);
+
+        // Verify state_init has PolyAlloc type with correct config
+        bool found_poly_init = false;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+                CHECK(init.poly_max_voices == 4);
+                CHECK(init.poly_mode == 0);  // poly mode
+                CHECK(init.state_id == poly->state_id);
+                found_poly_init = true;
+            }
+        }
+        CHECK(found_poly_init);
+    }
+
+    SECTION("mono desugars to poly with mode=1") {
+        auto result = akkado::compile(R"(
+            fn synth(f, g, v) -> osc("sin", f)
+            mono(synth) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_END) == 1);
+
+        // Verify state_init has mode=1 and max_voices=1
+        bool found_poly_init = false;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+                CHECK(init.poly_mode == 1);
+                CHECK(init.poly_max_voices == 1);
+                found_poly_init = true;
+            }
+        }
+        CHECK(found_poly_init);
+    }
+
+    SECTION("legato desugars to poly with mode=2") {
+        auto result = akkado::compile(R"(
+            fn synth(f, g, v) -> osc("sin", f)
+            legato(synth) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
+
+        bool found_poly_init = false;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+                CHECK(init.poly_mode == 2);
+                CHECK(init.poly_max_voices == 1);
+                found_poly_init = true;
+            }
+        }
+        CHECK(found_poly_init);
+    }
+
+    SECTION("poly with piped pattern input") {
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq)
+            pat("c4 e4 g4") |> poly(%, 8, lead) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+
+        // Pattern emits SEQPAT_QUERY
+        CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_QUERY) == 1);
+        // POLY block present
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_END) == 1);
+
+        // Check that poly state_init has a linked seq_state_id
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+                CHECK(init.poly_seq_state_id != 0);
+                CHECK(init.poly_max_voices == 8);
+            }
+        }
+    }
+
+    SECTION("poly with inline closure") {
+        auto result = akkado::compile(R"(
+            poly(4, (f, g, v) -> osc("sin", f) * v) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_END) == 1);
+    }
+
+    SECTION("error: instrument function must have 3 params") {
+        auto result = akkado::compile(R"(
+            fn bad(x) -> osc("sin", x)
+            poly(4, bad) |> out(%, %)
+        )");
+        CHECK(!result.success);
+    }
+
+    SECTION("error: instrument must be a function") {
+        auto result = akkado::compile(R"(
+            poly(4, 440) |> out(%, %)
+        )");
+        CHECK(!result.success);
+    }
+
+    SECTION("mono with piped pattern") {
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq)
+            pat("c4 e4 g4") |> mono(%, lead) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_QUERY) == 1);
+    }
+}

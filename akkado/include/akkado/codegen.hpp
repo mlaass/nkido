@@ -98,7 +98,8 @@ struct StateInitData {
     std::uint32_t state_id;  // Must match Instruction::state_id (32-bit FNV-1a hash)
     enum class Type : std::uint8_t {
         Timeline = 1,     // Initialize TimelineState with breakpoints
-        SequenceProgram   // Initialize SequenceState with compiled sequences
+        SequenceProgram,  // Initialize SequenceState with compiled sequences
+        PolyAlloc         // Initialize PolyAllocState for poly/mono/legato
     } type;
 
     // Cycle length in beats (used by SequenceProgram)
@@ -123,6 +124,12 @@ struct StateInitData {
 
     // AST JSON (serialized during compilation for debug UI)
     std::string ast_json;
+
+    // For PolyAlloc: configuration for poly/mono/legato voice allocation
+    std::uint32_t poly_seq_state_id = 0;   // Linked SequenceState for events
+    std::uint8_t poly_max_voices = 8;
+    std::uint8_t poly_mode = 0;            // 0=poly, 1=mono, 2=legato
+    std::uint8_t poly_steal_strategy = 0;  // 0=oldest
 };
 
 /// Required sample with bank context
@@ -353,6 +360,10 @@ private:
     /// Special-cased: extracts filename/preset at compile time, emits SOUNDFONT_VOICE
     std::uint16_t handle_soundfont_call(NodeIndex node, const Node& n);
 
+    /// Handle poly(voices, instrument) / mono(instrument) / legato(instrument)
+    /// Emits POLY_BEGIN, inlines instrument body, emits POLY_END
+    std::uint16_t handle_poly_call(NodeIndex node, const Node& n);
+
     // ============================================================================
     // Stereo handlers
     // ============================================================================
@@ -457,6 +468,9 @@ private:
 
     // Map from AST node index to output buffer index
     std::unordered_map<NodeIndex, std::uint16_t> node_buffers_;
+
+    // Map from pattern node → state_id (for linking POLY to upstream pattern)
+    std::unordered_map<NodeIndex, std::uint32_t> pattern_state_ids_;
 
     // Map from parameter name hash to literal AST node (for inline match resolution)
     // Only populated during user function calls when the argument is a literal
