@@ -913,6 +913,8 @@ struct PolyVoice {
     std::int8_t note = -1;
     std::uint16_t event_index = 0xFFFF;
     std::uint32_t cycle = 0;
+    std::uint32_t pending_gate_on = BLOCK_SIZE;   // BLOCK_SIZE = no pending on
+    std::uint32_t pending_gate_off = BLOCK_SIZE;  // BLOCK_SIZE = no pending off
 };
 
 // PolyAllocState — arena-allocated voices (same pattern as SoundFontVoiceState)
@@ -948,10 +950,130 @@ struct PolyAllocState {
         return count;
     }
 
+    // Allocate a voice for a new note, returns voice index or -1 if failed
+    int allocate_voice(float freq, float vel, std::uint16_t event_idx,
+                       std::uint32_t cyc, std::uint32_t gate_on_sample) {
+        if (!voices) return -1;
+
+        if (mode == 1 || mode == 2) {
+            // Mono/Legato: always use voice 0
+            auto& v = voices[0];
+            bool was_active = v.active;
+            v.freq = freq;
+            v.vel = vel;
+            v.active = true;
+            v.releasing = false;
+            v.event_index = event_idx;
+            v.cycle = cyc;
+            v.pending_gate_on = gate_on_sample;
+            v.pending_gate_off = BLOCK_SIZE;
+            // Mono: always retrigger. Legato: only trigger if wasn't active
+            if (mode == 1 || !was_active) {
+                v.gate = 1.0f;
+                v.age = 0;
+            }
+            // Legato with already-active voice: update freq/vel but keep gate
+            return 0;
+        }
+
+        // Poly mode: find first inactive slot
+        for (std::uint16_t i = 0; i < max_voices; ++i) {
+            if (!voices[i].active) {
+                auto& v = voices[i];
+                v.freq = freq;
+                v.vel = vel;
+                v.gate = 1.0f;
+                v.active = true;
+                v.releasing = false;
+                v.age = 0;
+                v.event_index = event_idx;
+                v.cycle = cyc;
+                v.pending_gate_on = gate_on_sample;
+                v.pending_gate_off = BLOCK_SIZE;
+                return static_cast<int>(i);
+            }
+        }
+
+        // All voices active — steal oldest
+        // Prefer stealing a releasing voice first
+        int steal_idx = -1;
+        std::uint32_t max_age = 0;
+        for (std::uint16_t i = 0; i < max_voices; ++i) {
+            if (voices[i].releasing && voices[i].age >= max_age) {
+                max_age = voices[i].age;
+                steal_idx = static_cast<int>(i);
+            }
+        }
+        if (steal_idx < 0) {
+            // No releasing voices — steal oldest active
+            max_age = 0;
+            for (std::uint16_t i = 0; i < max_voices; ++i) {
+                if (voices[i].age >= max_age) {
+                    max_age = voices[i].age;
+                    steal_idx = static_cast<int>(i);
+                }
+            }
+        }
+        if (steal_idx >= 0) {
+            auto& v = voices[steal_idx];
+            v.freq = freq;
+            v.vel = vel;
+            v.gate = 1.0f;
+            v.active = true;
+            v.releasing = false;
+            v.age = 0;
+            v.event_index = event_idx;
+            v.cycle = cyc;
+            v.pending_gate_on = gate_on_sample;
+            v.pending_gate_off = BLOCK_SIZE;
+        }
+        return steal_idx;
+    }
+
+    // Release voices whose event_index+cycle match
+    void release_voice_by_event(std::uint16_t event_idx, std::uint32_t cyc,
+                                std::uint32_t gate_off_sample) {
+        if (!voices) return;
+
+        if (mode == 1 || mode == 2) {
+            // Mono/legato: only release if current voice matches
+            auto& v = voices[0];
+            if (v.active && v.event_index == event_idx && v.cycle == cyc) {
+                v.releasing = true;
+                v.gate = 0.0f;
+                v.age = 0;
+                v.pending_gate_off = gate_off_sample;
+            }
+            return;
+        }
+
+        // Poly mode: find and release matching voices
+        for (std::uint16_t i = 0; i < max_voices; ++i) {
+            auto& v = voices[i];
+            if (v.active && !v.releasing &&
+                v.event_index == event_idx && v.cycle == cyc) {
+                v.releasing = true;
+                v.gate = 0.0f;
+                v.age = 0;
+                v.pending_gate_off = gate_off_sample;
+            }
+        }
+    }
+
+    // Release timeout: ~0.5s at 48kHz/128 block size
+    static constexpr std::uint32_t RELEASE_TIMEOUT = 200;
+
     void tick() {
         if (!voices) return;
         for (std::uint16_t i = 0; i < max_voices; ++i) {
-            if (voices[i].active) voices[i].age++;
+            if (voices[i].active) {
+                voices[i].age++;
+                // Clean up voices that have been releasing past timeout
+                if (voices[i].releasing && voices[i].age > RELEASE_TIMEOUT) {
+                    voices[i].active = false;
+                    voices[i].releasing = false;
+                }
+            }
         }
     }
 };

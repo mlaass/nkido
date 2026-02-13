@@ -2,6 +2,7 @@
 #include "cedar/opcodes/opcodes.hpp"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 
 namespace cedar {
@@ -263,21 +264,138 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
     float* mix = buffer_pool_.get(mix_buf);
     std::fill_n(mix, BLOCK_SIZE, 0.0f);
 
-    // Iterate active voices
+    // =========================================================================
+    // Event processing: read OutputEvents from linked SequenceState
+    // =========================================================================
+    auto* seq_state = (poly_state.seq_state_id != 0)
+        ? state_pool_.get_if<SequenceState>(poly_state.seq_state_id)
+        : nullptr;
+
+    if (seq_state && seq_state->output.num_events > 0) {
+        const float spb = ctx_.samples_per_beat();
+        const float beat_start = static_cast<float>(ctx_.global_sample_counter) / spb;
+        const float cycle_length = seq_state->cycle_length;
+        const float cycle_pos = std::fmod(beat_start, cycle_length);
+        const std::uint32_t current_cycle =
+            static_cast<std::uint32_t>(std::floor(beat_start / cycle_length));
+        const float block_beats = static_cast<float>(BLOCK_SIZE) / spb;
+        const float block_end_pos = cycle_pos + block_beats;
+
+        // Reset pending gate transitions for all voices
+        if (poly_state.voices) {
+            for (std::uint16_t v = 0; v < poly_state.max_voices; ++v) {
+                poly_state.voices[v].pending_gate_on = BLOCK_SIZE;
+                poly_state.voices[v].pending_gate_off = BLOCK_SIZE;
+            }
+        }
+
+        // Scan all output events for gate-on and gate-off within this block
+        for (std::uint32_t e = 0; e < seq_state->output.num_events; ++e) {
+            const auto& evt = seq_state->output.events[e];
+
+            float evt_start = evt.time;
+            float evt_end = evt.time + evt.duration;
+
+            // Check for gate-on: event starts within [cycle_pos, block_end_pos)
+            bool gate_on_this_block = false;
+            float on_beat_offset = 0.0f;
+
+            if (evt_start >= cycle_pos && evt_start < block_end_pos) {
+                // Normal case: event starts within block
+                gate_on_this_block = true;
+                on_beat_offset = evt_start - cycle_pos;
+            } else if (block_end_pos > cycle_length) {
+                // Block wraps around cycle boundary
+                float wrapped_end = block_end_pos - cycle_length;
+                if (evt_start < wrapped_end) {
+                    gate_on_this_block = true;
+                    on_beat_offset = (cycle_length - cycle_pos) + evt_start;
+                }
+            }
+
+            if (gate_on_this_block) {
+                std::uint32_t on_sample = static_cast<std::uint32_t>(
+                    std::max(0.0f, on_beat_offset * spb));
+                if (on_sample >= BLOCK_SIZE) on_sample = BLOCK_SIZE - 1;
+
+                // Allocate a voice for each chord note in this event
+                for (std::uint8_t vi = 0; vi < evt.num_values; ++vi) {
+                    poly_state.allocate_voice(
+                        evt.values[vi], evt.velocity,
+                        static_cast<std::uint16_t>(e), current_cycle, on_sample);
+                }
+            }
+
+            // Check for gate-off: event ends within [cycle_pos, block_end_pos)
+            bool gate_off_this_block = false;
+            float off_beat_offset = 0.0f;
+
+            if (evt_end >= cycle_pos && evt_end < block_end_pos) {
+                gate_off_this_block = true;
+                off_beat_offset = evt_end - cycle_pos;
+            } else if (evt_end > cycle_length) {
+                // Event wraps around cycle boundary
+                float wrapped_end = evt_end - cycle_length;
+                if (wrapped_end >= cycle_pos && wrapped_end < block_end_pos) {
+                    gate_off_this_block = true;
+                    off_beat_offset = wrapped_end - cycle_pos;
+                } else if (block_end_pos > cycle_length) {
+                    float block_wrapped = block_end_pos - cycle_length;
+                    if (wrapped_end < block_wrapped) {
+                        gate_off_this_block = true;
+                        off_beat_offset = (cycle_length - cycle_pos) + wrapped_end;
+                    }
+                }
+            }
+
+            if (gate_off_this_block) {
+                std::uint32_t off_sample = static_cast<std::uint32_t>(
+                    std::max(0.0f, off_beat_offset * spb));
+                if (off_sample >= BLOCK_SIZE) off_sample = BLOCK_SIZE - 1;
+
+                poly_state.release_voice_by_event(
+                    static_cast<std::uint16_t>(e), current_cycle, off_sample);
+            }
+        }
+
+        // Age voices and clean up timed-out releases
+        poly_state.tick();
+    }
+
+    // =========================================================================
+    // Voice iteration: fill buffers and execute body per active voice
+    // =========================================================================
     for (std::uint8_t v = 0; v < poly_state.max_voices; ++v) {
         if (!poly_state.voices || !poly_state.voices[v].active) continue;
 
-        const auto& voice = poly_state.voices[v];
+        auto& voice = poly_state.voices[v];
 
         // Fill voice parameter buffers
         float* freq_buf = buffer_pool_.get(voice_freq_buf);
         float* gate_buf = buffer_pool_.get(voice_gate_buf);
         float* vel_buf = buffer_pool_.get(voice_vel_buf);
         float* trig_buf = buffer_pool_.get(voice_trig_buf);
+
         std::fill_n(freq_buf, BLOCK_SIZE, voice.freq);
-        std::fill_n(gate_buf, BLOCK_SIZE, voice.gate);
         std::fill_n(vel_buf, BLOCK_SIZE, voice.vel);
-        std::fill_n(trig_buf, BLOCK_SIZE, 0.0f); // Phase 3: per-sample trig
+        std::fill_n(trig_buf, BLOCK_SIZE, 0.0f);
+
+        // Per-sample gate and trigger accuracy
+        if (voice.pending_gate_on < BLOCK_SIZE) {
+            // Note-on happened this block
+            std::fill_n(gate_buf, voice.pending_gate_on, 0.0f);
+            std::fill_n(gate_buf + voice.pending_gate_on,
+                        BLOCK_SIZE - voice.pending_gate_on, 1.0f);
+            trig_buf[voice.pending_gate_on] = 1.0f;
+        } else if (voice.pending_gate_off < BLOCK_SIZE) {
+            // Note-off happened this block
+            std::fill_n(gate_buf, voice.pending_gate_off, 1.0f);
+            std::fill_n(gate_buf + voice.pending_gate_off,
+                        BLOCK_SIZE - voice.pending_gate_off, 0.0f);
+        } else {
+            // No transition: fill with current gate state
+            std::fill_n(gate_buf, BLOCK_SIZE, voice.gate);
+        }
 
         // Set XOR isolation for this voice
         state_pool_.set_state_id_xor(
