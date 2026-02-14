@@ -8,50 +8,17 @@ This document tracks all incomplete implementations in the akkado codebase that 
 
 Pattern transformation functions are implemented but have limitations:
 
-### 1.1 Chained Transformations Not Working
+### 1.1 Chained Transformations
 
-**Status:** BROKEN
-**File:** `akkado/src/codegen_patterns.cpp:1165-1227`
+**Status:** FIXED
 
-```akkado
-// This works:
-slow(pat("c4 e4 g4"), 2)
+Chaining for slow/fast/rev/transpose was already working. Chaining with velocity/bank/n as inner transforms was broken (`compile_pattern_for_transform()` only recognized slow/fast/rev/transpose). Now fixed — velocity/bank/n are recognized as recursive transforms.
 
-// This FAILS with E130:
-transpose(slow(pat("c4 e4"), 2), 12)
-```
+### 1.2 Direct String Literal Syntax
 
-**Problem:** `compile_pattern_for_transform()` only handles:
-- Direct `MiniLiteral` nodes
-- `Call` nodes with `MiniLiteral` as first argument
+**Status:** FIXED
 
-It doesn't handle `Call` nodes where the first argument is another transformation call.
-
-**Solution:** Implement recursive pattern compilation:
-1. When the argument is a transformation call (slow/fast/rev/transpose/velocity), recursively compile it
-2. Extract the resulting `sequence_events` from the inner compilation
-3. Apply the outer transformation to those events
-4. Emit only once at the outermost level
-
-### 1.2 Direct String Literal Syntax Not Working
-
-**Status:** BROKEN
-**File:** `akkado/src/codegen_patterns.cpp:1165-1227`
-
-```akkado
-// This works:
-slow(pat("c4 e4 g4"), 2)
-
-// This FAILS with E133:
-slow("c4 e4 g4", 2)
-```
-
-**Problem:** `compile_pattern_for_transform()` doesn't handle `StringLit` nodes.
-
-**Solution:** Add handling for `StringLit` nodes:
-1. Check if `pat_node.type == NodeType::StringLit`
-2. Parse the string content as mini-notation using `parse_mini()`
-3. Compile the resulting pattern AST
+`StringLit` nodes are now accepted by both `is_pattern_expr()` and `compile_pattern_for_transform()`. String literals are parsed as mini-notation via `parse_mini()`. `slow("c4 e4 g4", 2)` now works.
 
 ---
 
@@ -77,7 +44,7 @@ record.field1.field2
 
 ### 2.2 Method Calls
 
-**Status:** BLOCKED (E113)
+**Status:** DEFERRED BY DESIGN (E113)
 **File:** `akkado/src/codegen.cpp:648-650`
 
 ```akkado
@@ -87,7 +54,9 @@ pattern.slow(2)
 
 **Error:** "Method calls not supported in MVP"
 
-**Solution Options:**
+**Note:** This is intentionally deferred, not just blocked. Method chaining should be designed holistically as part of an object system revamp to work consistently across patterns, arrays, chords, and audio signals. See [PRD-Pattern-Array-Note-Extensions.md Section 8](PRD-Pattern-Array-Note-Extensions.md#8-deferred-to-object-system-revamp) for rationale. The functional style (`slow(pat(...), 2)`) is the current endorsed approach.
+
+**Solution Options (for future object system revamp):**
 - **UFCS (Uniform Function Call Syntax):** Rewrite `x.f(args)` to `f(x, args)` during parsing/analysis
 - **Full method dispatch:** Implement proper method resolution
 
@@ -125,23 +94,21 @@ pattern.slow(2)
 
 ### 3.1 Chord Expansion (ChordLit)
 
-**Status:** STUB - only emits root note
+**Status:** OBSOLETE — `C4'` standalone syntax deprecated in favor of chords inside `pat()`/`chord()`
 **File:** `akkado/src/codegen.cpp:167-180`
 
 ```akkado
-// C4' should emit [261.6, 329.6, 392.0] Hz (C major chord)
-// Currently only emits 261.6 Hz (root note)
+// C4' standalone syntax only emits root note — this is expected
+// Use chords inside patterns instead:
+pat("C4'") |> sine(%.freq) |> sum(%) |> out(%, %)  // Works correctly (multi-voice)
+chord("Am") |> ...                                    // Also works
 ```
 
-**Problem:** Full chord expansion requires array support in Cedar VM for polyphonic playback.
-
-**Blocker:** Needs Cedar-level array/multi-buffer support or parallel oscillator emission.
-
-**Current workaround:** Chords in mini-notation patterns DO work (they use multi-buffer support). Only standalone `ChordLit` nodes are affected.
+**Resolution:** The PRD ([PRD-Pattern-Array-Note-Extensions.md](PRD-Pattern-Array-Note-Extensions.md)) explicitly deprecates standalone `C4'` syntax in favor of `chord("Am")` inside mini-notation. Chords in patterns already expand correctly to multi-voice via multi-buffer support. No fix needed for the standalone stub.
 
 ### 3.2 Array Indexing
 
-**Status:** STUB - returns first element
+**Status:** LOW PRIORITY — stub returns first element
 **File:** `akkado/src/codegen.cpp:226-240`
 
 ```akkado
@@ -153,18 +120,20 @@ arr[1]  // Should return 2, currently returns 1
 
 **Blocker:** Requires Cedar VM changes to add an `ARRAY_INDEX` opcode.
 
+**Note:** The multi-buffer approach for polyphony covers the primary use case for arrays. Pattern voices are accessed via field names (`%.freq`, `%.vel`), not array indices. This reduces the urgency of runtime array indexing.
+
 ---
 
 ## Implementation Order
 
-1. **Pattern transformation chaining** - akkado-only, unblocks common use case
-2. **Direct string literal syntax** - akkado-only, small change
+1. ~~**Pattern transformation chaining**~~ - **FIXED**
+2. ~~**Direct string literal syntax**~~ - **FIXED**
 3. **Nested field access** - akkado-only, type tracking change
 4. **Field access on expressions** - akkado-only, type tracking change
-5. **Method calls (UFCS)** - parser/analyzer change, enables fluent API
+5. **Method calls (UFCS)** - deferred by design to object system revamp
 6. **Post statements** - needs semantics clarification first
-7. **Array indexing** - requires Cedar VM changes
-8. **Chord expansion** - requires Cedar array support
+7. **Array indexing** - low priority, multi-buffer approach covers primary use case
+8. ~~**Chord expansion**~~ - **OBSOLETE** — `C4'` deprecated, chords in patterns work
 
 ---
 

@@ -93,6 +93,11 @@ public:
         return sample_mappings_;
     }
 
+    // Mutable access for transforms that modify sample mappings (bank, n)
+    std::vector<SequenceSampleMapping>& mutable_sample_mappings() {
+        return sample_mappings_;
+    }
+
     // Get maximum number of values per event (for polyphonic chord support)
     // Returns 1 for monophonic patterns, >1 for patterns with chords
     std::uint8_t max_voices() const {
@@ -1265,6 +1270,7 @@ static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
     const Node& n = ast.arena[node];
 
     if (n.type == NodeType::MiniLiteral) return true;
+    if (n.type == NodeType::StringLit) return true;
 
     if (n.type == NodeType::Call) {
         const std::string& func_name = n.as_identifier();
@@ -1313,13 +1319,34 @@ static bool compile_pattern_for_transform(
         return true;
     }
 
+    // Case 1b: StringLit — parse as mini-notation
+    if (pat_node.type == NodeType::StringLit) {
+        std::string pattern_str = pat_node.as_string();
+        auto [pattern_root, diags] = parse_mini(pattern_str,
+            const_cast<AstArena&>(ast.arena), pat_node.location, false);
+        if (pattern_root == NULL_NODE) return false;
+
+        out_pattern_node = pattern_root;
+        const Node& pattern = ast.arena[out_pattern_node];
+        compiler.set_pattern_base_offset(pattern.location.offset);
+
+        if (!compiler.compile(out_pattern_node)) return false;
+
+        out_num_elements = compiler.count_top_level_elements(out_pattern_node);
+        out_events = compiler.sequence_events();
+        out_cycle_length = static_cast<float>(std::max(1u, out_num_elements));
+        return true;
+    }
+
     // Handle Call nodes
     if (pat_node.type == NodeType::Call) {
         const std::string& func_name = pat_node.as_identifier();
 
         // Case 3: Transform calls (recursive case)
         bool is_transform = (func_name == "slow" || func_name == "fast" ||
-                             func_name == "rev" || func_name == "transpose");
+                             func_name == "rev" || func_name == "transpose" ||
+                             func_name == "velocity" || func_name == "bank" ||
+                             func_name == "n");
         if (is_transform) {
             // Get the inner pattern argument (first arg of this transform call)
             NodeIndex inner_arg = get_pattern_arg(ast, pat_node, 0);
@@ -1375,6 +1402,26 @@ static bool compile_pattern_for_transform(
                             }
                         }
                     }
+                }
+            } else if (func_name == "velocity") {
+                auto vel = get_number_arg(ast, pat_node, 1);
+                if (!vel.has_value() || *vel < 0 || *vel > 1) return false;
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        event.velocity *= *vel;
+                    }
+                }
+            } else if (func_name == "bank") {
+                auto bank_name = get_string_arg(ast, pat_node, 1);
+                if (!bank_name.has_value()) return false;
+                for (auto& mapping : compiler.mutable_sample_mappings()) {
+                    mapping.bank = *bank_name;
+                }
+            } else if (func_name == "n") {
+                auto variant = get_number_arg(ast, pat_node, 1);
+                if (!variant.has_value() || *variant < 0) return false;
+                for (auto& mapping : compiler.mutable_sample_mappings()) {
+                    mapping.variant = static_cast<std::uint8_t>(*variant);
                 }
             }
             return true;

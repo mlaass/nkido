@@ -1752,6 +1752,74 @@ TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][pattern
 }
 
 // =============================================================================
+// Pattern Transform: velocity/bank/n Chaining Tests
+// =============================================================================
+
+TEST_CASE("Pattern transform: velocity in chain", "[codegen][patterns]") {
+    SECTION("slow(velocity(...)) compiles") {
+        auto result = akkado::compile(R"(slow(velocity(pat("c4 e4"), 0.5), 2))");
+        CHECK(result.success);
+    }
+    SECTION("velocity(slow(...)) compiles") {
+        auto result = akkado::compile(R"(velocity(slow(pat("c4 e4"), 2), 0.5))");
+        CHECK(result.success);
+    }
+    SECTION("velocity in chain modifies event velocity") {
+        auto result = akkado::compile(R"(slow(velocity(pat("c4 e4"), 0.5), 2))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        // slow(2) doubles cycle_length: 2 * 2 = 4
+        CHECK(si.cycle_length == Catch::Approx(4.0f));
+        // velocity(0.5) sets velocity to 0.5
+        REQUIRE_FALSE(si.sequence_events.empty());
+        REQUIRE(si.sequence_events[0].size() >= 1);
+        CHECK(si.sequence_events[0][0].velocity == Catch::Approx(0.5f));
+    }
+}
+
+TEST_CASE("Pattern transform: bank/n in chain", "[codegen][patterns]") {
+    SECTION("slow(bank(...)) compiles") {
+        auto result = akkado::compile(R"(slow(bank(pat("bd sd"), "TR808"), 2))");
+        CHECK(result.success);
+    }
+    SECTION("slow(n(...)) compiles") {
+        auto result = akkado::compile(R"(slow(n(pat("bd sd"), 2), 2))");
+        CHECK(result.success);
+    }
+}
+
+// =============================================================================
+// Pattern Transform: String Literal as Pattern Tests
+// =============================================================================
+
+TEST_CASE("Pattern transform: string literal as pattern", "[codegen][patterns]") {
+    SECTION("slow with string literal compiles") {
+        auto result = akkado::compile(R"(slow("c4 e4 g4", 2))");
+        CHECK(result.success);
+    }
+    SECTION("transpose with string literal compiles") {
+        auto result = akkado::compile(R"(transpose("c4 e4", 12))");
+        CHECK(result.success);
+    }
+    SECTION("rev with string literal compiles") {
+        auto result = akkado::compile(R"(rev("c4 e4 g4"))");
+        CHECK(result.success);
+    }
+    SECTION("string literal has correct semantics") {
+        auto result = akkado::compile(R"(slow("c4 e4", 2))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(4.0f));
+    }
+    SECTION("chained transform on string literal") {
+        auto result = akkado::compile(R"(transpose(slow("c4 e4", 2), 12))");
+        CHECK(result.success);
+    }
+}
+
+// =============================================================================
 // Error Path Tests
 // =============================================================================
 
@@ -2996,14 +3064,10 @@ TEST_CASE("Pattern function: n()", "[codegen][patterns][n]") {
         CHECK(found);
     }
 
-    SECTION("n requires number or pattern as second argument") {
-        auto result = akkado::compile(R"(n(pat("bd"), "not_a_number"))");
-        CHECK(!result.success);
-        bool found = false;
-        for (const auto& d : result.diagnostics) {
-            if (d.code == "E131") found = true;
-        }
-        CHECK(found);
+    SECTION("n accepts string literal as variant pattern") {
+        // String literals are now valid pattern expressions (parsed as mini-notation)
+        auto result = akkado::compile(R"(n(pat("bd"), "1 2 3"))");
+        CHECK(result.success);
     }
 
     SECTION("n with fixed variant compiles") {
