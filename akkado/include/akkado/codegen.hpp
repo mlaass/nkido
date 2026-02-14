@@ -672,28 +672,15 @@ private:
     std::unordered_map<NodeIndex, std::unordered_map<std::string, std::uint16_t>> record_fields_;
 
     // ============================================================================
-    // Polyphonic pattern support
+    // Polyphonic pattern error tracking
     // ============================================================================
-    // Track per-voice buffers for polyphonic patterns (chords, arrays)
-    // Each field (freq, vel, trig) has one buffer per voice
-    struct PolyphonicFields {
-        std::vector<std::uint16_t> freq_buffers;   // Per-voice frequency
-        std::vector<std::uint16_t> vel_buffers;    // Per-voice velocity
-        std::vector<std::uint16_t> trig_buffers;   // Per-voice trigger
-        std::vector<std::uint16_t> gate_buffers;   // Per-voice gate (sustained signal)
-        std::vector<std::uint16_t> type_buffers;   // Per-voice type_id (for sample routing)
-        std::uint8_t num_voices = 0;
+    // Track polyphonic patterns (max_voices > 1) that are not consumed by poly().
+    // At the end of generate(), any remaining entries emit E410 errors.
+    struct PolyPatternInfo {
+        SourceLocation location;
+        std::uint8_t max_voices;
     };
-    std::unordered_map<NodeIndex, PolyphonicFields> polyphonic_fields_;
-
-    /// Resolve a polyphonic field name to its buffer vector
-    /// @param poly The polyphonic fields for the pattern
-    /// @param field_name The field name to resolve (freq, vel, trig, gate, type + aliases)
-    /// @param out_buffers Output: the buffer vector for the resolved field
-    /// @return true if field was found, false otherwise
-    [[nodiscard]] bool resolve_polyphonic_field(const PolyphonicFields& poly,
-                                                const std::string& field_name,
-                                                std::vector<std::uint16_t>& out_buffers) const;
+    std::unordered_map<NodeIndex, PolyPatternInfo> polyphonic_pattern_nodes_;
 
     // ============================================================================
     // Array length tracking (compile-time)

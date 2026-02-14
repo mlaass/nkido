@@ -50,6 +50,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     param_function_refs_.clear();
     multi_buffers_.clear();
     pattern_state_ids_.clear();
+    polyphonic_pattern_nodes_.clear();
     array_lengths_.clear();
     current_source_loc_ = {};
     options_ = CompilerOptions{};  // Reset compiler options
@@ -66,6 +67,14 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     visit(ast.root);
 
     pop_path();
+
+    // Emit errors for polyphonic patterns not consumed by poly()
+    for (const auto& [node, info] : polyphonic_pattern_nodes_) {
+        error("E410", "Chord pattern has " + std::to_string(info.max_voices) +
+              " voices but is not wrapped in poly(). "
+              "Use poly(" + std::to_string(info.max_voices) +
+              ", instrument_fn) to enable polyphonic playback.", info.location);
+    }
 
     bool success = !has_errors(diagnostics_);
 
@@ -419,12 +428,6 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 if (!sym->multi_buffers.empty()) {
                     register_multi_buffer(node, sym->multi_buffers);
                 }
-                if (sym->polyphonic_source != NULL_NODE) {
-                    auto poly_it = polyphonic_fields_.find(sym->polyphonic_source);
-                    if (poly_it != polyphonic_fields_.end()) {
-                        polyphonic_fields_[node] = poly_it->second;
-                    }
-                }
 
                 return buf;
             }
@@ -546,10 +549,6 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     new_sym.name_hash = fnv1a_hash(var_name);
                     new_sym.buffer_index = value_buffer;
                     new_sym.multi_buffers = get_multi_buffers(value_idx);
-                    auto poly_it = polyphonic_fields_.find(value_idx);
-                    if (poly_it != polyphonic_fields_.end()) {
-                        new_sym.polyphonic_source = value_idx;
-                    }
                     symbols_->define(new_sym);
                 } else {
                     symbols_->define_variable(var_name, value_buffer);
@@ -1307,23 +1306,10 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
 
     // Case 1b: Pattern literal (MiniLiteral) - patterns have .freq, .vel, .trig fields
     if (expr.type == NodeType::MiniLiteral) {
-        // Visit to generate code and populate record_fields_ / polyphonic_fields_
+        // Visit to generate code and populate record_fields_
         visit(expr_node);
 
-        // Check for polyphonic pattern - return multi-buffer for field access
-        auto poly_it = polyphonic_fields_.find(expr_node);
-        if (poly_it != polyphonic_fields_.end()) {
-            std::vector<std::uint16_t> field_buffers;
-            if (resolve_polyphonic_field(poly_it->second, field_name, field_buffers)) {
-                std::uint16_t first_buf = register_multi_buffer(node, std::move(field_buffers));
-                node_buffers_[node] = first_buf;
-                return first_buf;
-            }
-            error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
-        }
-
-        // Fallback: monophonic pattern - return single buffer
+        // Monophonic pattern - return single buffer
         auto it = record_fields_.find(expr_node);
         if (it != record_fields_.end()) {
             auto field_it = it->second.find(field_name);
@@ -1346,41 +1332,12 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
 
         auto sym = symbols_->lookup(var_name);
 
-        // Case 2a: Variable/Parameter with polyphonic source
-        if (sym && (sym->kind == SymbolKind::Variable || sym->kind == SymbolKind::Parameter)
-            && sym->polyphonic_source != NULL_NODE) {
-            auto poly_it = polyphonic_fields_.find(sym->polyphonic_source);
-            if (poly_it != polyphonic_fields_.end()) {
-                std::vector<std::uint16_t> field_buffers;
-                if (resolve_polyphonic_field(poly_it->second, field_name, field_buffers)) {
-                    std::uint16_t first_buf = register_multi_buffer(node, std::move(field_buffers));
-                    node_buffers_[node] = first_buf;
-                    return first_buf;
-                }
-                error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
-            }
-        }
-
         // Case 2b: Pattern variable - generate pattern code and resolve fields
         if (sym && sym->kind == SymbolKind::Pattern) {
-            // Generate pattern code (now with polyphonic support)
+            // Generate pattern code
             handle_pattern_reference(var_name, sym->pattern.pattern_node, n.location);
 
-            // Check for polyphonic fields registered by handle_pattern_reference
-            auto poly_it = polyphonic_fields_.find(sym->pattern.pattern_node);
-            if (poly_it != polyphonic_fields_.end()) {
-                std::vector<std::uint16_t> field_buffers;
-                if (resolve_polyphonic_field(poly_it->second, field_name, field_buffers)) {
-                    std::uint16_t first_buf = register_multi_buffer(node, std::move(field_buffers));
-                    node_buffers_[node] = first_buf;
-                    return first_buf;
-                }
-                error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
-            }
-
-            // Fallback: monophonic record_fields_
+            // Monophonic record_fields_
             auto rec_it = record_fields_.find(sym->pattern.pattern_node);
             if (rec_it != record_fields_.end()) {
                 auto field_it = rec_it->second.find(field_name);
@@ -1446,23 +1403,10 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
 
     // Case 3: Call expression - check for pattern-producing calls (chord, pat, etc.)
     if (expr.type == NodeType::Call) {
-        // Visit to generate code and populate polyphonic_fields_ / record_fields_
+        // Visit to generate code and populate record_fields_
         visit(expr_node);
 
-        // Check for polyphonic pattern - return multi-buffer for field access
-        auto poly_it = polyphonic_fields_.find(expr_node);
-        if (poly_it != polyphonic_fields_.end()) {
-            std::vector<std::uint16_t> field_buffers;
-            if (resolve_polyphonic_field(poly_it->second, field_name, field_buffers)) {
-                std::uint16_t first_buf = register_multi_buffer(node, std::move(field_buffers));
-                node_buffers_[node] = first_buf;
-                return first_buf;
-            }
-            error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
-        }
-
-        // Fallback: check for record_fields_ (monophonic pattern result)
+        // Check for record_fields_ (monophonic pattern result)
         auto it = record_fields_.find(expr_node);
         if (it != record_fields_.end()) {
             auto field_it = it->second.find(field_name);
@@ -1567,10 +1511,6 @@ std::uint16_t CodeGenerator::handle_pipe_binding(NodeIndex node, const Node& n) 
             new_sym.name_hash = fnv1a_hash(binding_name);
             new_sym.buffer_index = expr_buffer;
             new_sym.multi_buffers = get_multi_buffers(expr_node);
-            auto poly_it = polyphonic_fields_.find(expr_node);
-            if (poly_it != polyphonic_fields_.end()) {
-                new_sym.polyphonic_source = expr_node;
-            }
             symbols_->define(new_sym);
         } else {
             symbols_->define_variable(binding_name, expr_buffer);

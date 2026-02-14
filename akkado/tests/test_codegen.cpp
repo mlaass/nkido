@@ -956,13 +956,9 @@ TEST_CASE("Codegen: Complex expressions", "[codegen][integration]") {
         CHECK(count_instructions(insts, cedar::Opcode::ADD) == 2);
     }
 
-    SECTION("polyphonic oscillator inline") {
+    SECTION("polyphonic oscillator inline without poly is error") {
         auto result = akkado::compile("sum(map(mtof(chord(\"Am\")), (f) -> saw(f)))");
-        REQUIRE(result.success);
-        auto insts = get_instructions(result);
-        // Should have multiple SAW oscillators and ADDs to sum them
-        CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) >= 3);
-        CHECK(count_instructions(insts, cedar::Opcode::ADD) >= 2);
+        CHECK_FALSE(result.success);
     }
 }
 
@@ -2386,14 +2382,19 @@ TEST_CASE("Codegen: Parameters", "[codegen]") {
 }
 
 TEST_CASE("Codegen: Chord function", "[codegen]") {
-    SECTION("single chord") {
+    SECTION("chord without poly produces E410") {
         auto result = akkado::compile("chord(\"Am\")");
-        CHECK(result.success);
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("chord progression") {
+    SECTION("chord progression without poly produces E410") {
         auto result = akkado::compile("chord(\"Am C F G\")");
-        CHECK(result.success);
+        CHECK_FALSE(result.success);
+    }
+
+    SECTION("chord pattern without poly is error") {
+        auto result = akkado::compile(R"(pat("C4'") |> osc("sin", %.freq) |> out(%, %))");
+        CHECK_FALSE(result.success);
     }
 }
 

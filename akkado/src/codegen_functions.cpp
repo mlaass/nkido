@@ -1117,6 +1117,8 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
         if (pit != pattern_state_ids_.end()) {
             seq_state_id = pit->second;
         }
+        // Consume polyphonic tracking — poly() handles voice allocation at runtime
+        polyphonic_pattern_nodes_.erase(pattern_arg);
     }
 
     // Resolve instrument function

@@ -765,7 +765,12 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
     // Check for polyphonic patterns (chords with multiple values per event)
     std::uint8_t max_voices = compiler.max_voices();
 
-    // Emit per-voice SEQPAT_STEP/GATE/TYPE and register polyphonic fields
+    // Track polyphonic patterns for error reporting (must be consumed by poly())
+    if (max_voices > 1 && !is_sample_pattern) {
+        polyphonic_pattern_nodes_[node] = {n.location, max_voices};
+    }
+
+    // Emit single-voice SEQPAT_STEP/GATE/TYPE (voice 0 only)
     if (!emit_per_voice_seqpat(node, state_id, max_voices, value_buf, velocity_buf,
                                 trigger_buf, is_sample_pattern, n.location)) {
         pop_path();
@@ -860,126 +865,72 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
     pop_path();
     node_buffers_[node] = result_buf;
 
-    // If closure is present, clear polyphonic registration since the user
+    // If closure is present, clear polyphonic tracking since the user
     // processes pattern events manually through closure parameters
     if (closure_node != NULL_NODE && max_voices > 1) {
-        polyphonic_fields_.erase(node);
-        multi_buffers_.erase(node);
+        polyphonic_pattern_nodes_.erase(node);
     }
 
     return result_buf;
 }
 
-// Resolve polyphonic field name to buffer vector
-bool CodeGenerator::resolve_polyphonic_field(const PolyphonicFields& poly,
-                                             const std::string& field_name,
-                                             std::vector<std::uint16_t>& out_buffers) const {
-    if (field_name == "freq" || field_name == "f" || field_name == "pitch") {
-        out_buffers = poly.freq_buffers;
-    } else if (field_name == "vel" || field_name == "v" || field_name == "velocity") {
-        out_buffers = poly.vel_buffers;
-    } else if (field_name == "trig" || field_name == "t" || field_name == "trigger") {
-        out_buffers = poly.trig_buffers;
-    } else if (field_name == "gate" || field_name == "g") {
-        out_buffers = poly.gate_buffers;
-    } else if (field_name == "type") {
-        out_buffers = poly.type_buffers;
-    } else {
-        return false;
-    }
-    return true;
-}
 
-// Emit per-voice SEQPAT_STEP/GATE/TYPE and register polyphonic fields + multi-buffers
+// Emit single-voice SEQPAT_STEP/GATE/TYPE (voice 0) and register record fields
 bool CodeGenerator::emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id,
                                            std::uint8_t max_voices,
                                            std::uint16_t value_buf, std::uint16_t velocity_buf,
                                            std::uint16_t trigger_buf,
                                            bool is_sample_pattern, SourceLocation loc,
                                            std::uint16_t clock_override) {
-    std::vector<std::uint16_t> voice_freq_buffers;
-    std::vector<std::uint16_t> voice_vel_buffers;
-    std::vector<std::uint16_t> voice_trig_buffers;
-    std::vector<std::uint16_t> voice_gate_buffers;
-    std::vector<std::uint16_t> voice_type_buffers;
+    std::uint16_t gate_buf = buffers_.allocate();
+    std::uint16_t type_buf = buffers_.allocate();
 
-    for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
-        std::uint16_t voice_value_buf = (voice == 0) ? value_buf : buffers_.allocate();
-        std::uint16_t voice_vel_buf = (voice == 0) ? velocity_buf : buffers_.allocate();
-        std::uint16_t voice_trig_buf = (voice == 0) ? trigger_buf : buffers_.allocate();
-        std::uint16_t voice_gate_buf = buffers_.allocate();
-        std::uint16_t voice_type_buf = buffers_.allocate();
-
-        if (voice_value_buf == BufferAllocator::BUFFER_UNUSED ||
-            voice_vel_buf == BufferAllocator::BUFFER_UNUSED ||
-            voice_trig_buf == BufferAllocator::BUFFER_UNUSED ||
-            voice_gate_buf == BufferAllocator::BUFFER_UNUSED ||
-            voice_type_buf == BufferAllocator::BUFFER_UNUSED) {
-            error("E101", "Buffer pool exhausted", loc);
-            return false;
-        }
-
-        cedar::Instruction step_inst{};
-        step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
-        step_inst.out_buffer = voice_value_buf;
-        step_inst.inputs[0] = voice_vel_buf;
-        step_inst.inputs[1] = voice_trig_buf;
-        step_inst.inputs[2] = voice;
-        step_inst.inputs[3] = clock_override;
-        step_inst.inputs[4] = 0xFFFF;
-        step_inst.state_id = state_id;
-        emit(step_inst);
-
-        cedar::Instruction gate_inst{};
-        gate_inst.opcode = cedar::Opcode::SEQPAT_GATE;
-        gate_inst.out_buffer = voice_gate_buf;
-        gate_inst.inputs[0] = voice;
-        gate_inst.inputs[1] = clock_override;
-        gate_inst.inputs[2] = 0xFFFF;
-        gate_inst.inputs[3] = 0xFFFF;
-        gate_inst.inputs[4] = 0xFFFF;
-        gate_inst.state_id = state_id;
-        emit(gate_inst);
-
-        cedar::Instruction type_inst{};
-        type_inst.opcode = cedar::Opcode::SEQPAT_TYPE;
-        type_inst.out_buffer = voice_type_buf;
-        type_inst.inputs[0] = voice;
-        type_inst.inputs[1] = clock_override;
-        type_inst.inputs[2] = 0xFFFF;
-        type_inst.inputs[3] = 0xFFFF;
-        type_inst.inputs[4] = 0xFFFF;
-        type_inst.state_id = state_id;
-        emit(type_inst);
-
-        voice_freq_buffers.push_back(voice_value_buf);
-        voice_vel_buffers.push_back(voice_vel_buf);
-        voice_trig_buffers.push_back(voice_trig_buf);
-        voice_gate_buffers.push_back(voice_gate_buf);
-        voice_type_buffers.push_back(voice_type_buf);
+    if (gate_buf == BufferAllocator::BUFFER_UNUSED ||
+        type_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", loc);
+        return false;
     }
+
+    cedar::Instruction step_inst{};
+    step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
+    step_inst.out_buffer = value_buf;
+    step_inst.inputs[0] = velocity_buf;
+    step_inst.inputs[1] = trigger_buf;
+    step_inst.inputs[2] = 0;  // voice 0
+    step_inst.inputs[3] = clock_override;
+    step_inst.inputs[4] = 0xFFFF;
+    step_inst.state_id = state_id;
+    emit(step_inst);
+
+    cedar::Instruction gate_inst{};
+    gate_inst.opcode = cedar::Opcode::SEQPAT_GATE;
+    gate_inst.out_buffer = gate_buf;
+    gate_inst.inputs[0] = 0;  // voice 0
+    gate_inst.inputs[1] = clock_override;
+    gate_inst.inputs[2] = 0xFFFF;
+    gate_inst.inputs[3] = 0xFFFF;
+    gate_inst.inputs[4] = 0xFFFF;
+    gate_inst.state_id = state_id;
+    emit(gate_inst);
+
+    cedar::Instruction type_inst{};
+    type_inst.opcode = cedar::Opcode::SEQPAT_TYPE;
+    type_inst.out_buffer = type_buf;
+    type_inst.inputs[0] = 0;  // voice 0
+    type_inst.inputs[1] = clock_override;
+    type_inst.inputs[2] = 0xFFFF;
+    type_inst.inputs[3] = 0xFFFF;
+    type_inst.inputs[4] = 0xFFFF;
+    type_inst.state_id = state_id;
+    emit(type_inst);
 
     // Store monophonic record fields (voice 0)
     std::unordered_map<std::string, std::uint16_t> pattern_fields;
     pattern_fields["freq"] = value_buf;
     pattern_fields["vel"] = velocity_buf;
     pattern_fields["trig"] = trigger_buf;
-    pattern_fields["gate"] = voice_gate_buffers.empty() ? BufferAllocator::BUFFER_UNUSED : voice_gate_buffers[0];
+    pattern_fields["gate"] = gate_buf;
     record_fields_[node] = std::move(pattern_fields);
-
-    // Register polyphonic fields and multi-buffer for polyphonic patterns
-    if (max_voices > 1 && !is_sample_pattern) {
-        PolyphonicFields poly_fields;
-        poly_fields.freq_buffers = voice_freq_buffers;
-        poly_fields.vel_buffers = voice_vel_buffers;
-        poly_fields.trig_buffers = voice_trig_buffers;
-        poly_fields.gate_buffers = voice_gate_buffers;
-        poly_fields.type_buffers = voice_type_buffers;
-        poly_fields.num_voices = max_voices;
-        polyphonic_fields_[node] = std::move(poly_fields);
-
-        register_multi_buffer(node, std::move(voice_freq_buffers));
-    }
 
     return true;
 }
@@ -1058,8 +1009,14 @@ std::uint16_t CodeGenerator::handle_pattern_reference(const std::string& name,
     query_inst.state_id = state_id;
     emit(query_inst);
 
-    // Emit per-voice SEQPAT_STEP/GATE/TYPE (polyphonic if pattern has chords)
+    // Emit single-voice SEQPAT_STEP/GATE/TYPE
     std::uint8_t max_voices = compiler.max_voices();
+
+    // Track polyphonic patterns for error reporting (must be consumed by poly())
+    if (max_voices > 1 && !is_sample_pattern) {
+        polyphonic_pattern_nodes_[pattern_node] = {loc, max_voices};
+    }
+
     if (!emit_per_voice_seqpat(pattern_node, state_id, max_voices, value_buf, velocity_buf,
                                 trigger_buf, is_sample_pattern, loc)) {
         pop_path();
@@ -1170,41 +1127,63 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
 
     // Check for polyphonic patterns (chords with multiple values per event)
     std::uint8_t max_voices = compiler.max_voices();
-    std::vector<std::uint16_t> voice_freq_buffers;
-    std::vector<std::uint16_t> voice_vel_buffers;
-    std::vector<std::uint16_t> voice_trig_buffers;
 
-    // Emit SEQPAT_STEP for each voice
-    // For polyphonic patterns, each voice gets its own freq, vel, and trig buffers
-    for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
-        std::uint16_t voice_value_buf = (voice == 0) ? value_buf : buffers_.allocate();
-        std::uint16_t voice_vel_buf = (voice == 0) ? velocity_buf : buffers_.allocate();
-        std::uint16_t voice_trig_buf = (voice == 0) ? trigger_buf : buffers_.allocate();
-
-        if (voice_value_buf == BufferAllocator::BUFFER_UNUSED ||
-            voice_vel_buf == BufferAllocator::BUFFER_UNUSED ||
-            voice_trig_buf == BufferAllocator::BUFFER_UNUSED) {
-            error("E101", "Buffer pool exhausted", n.location);
-            pop_path();
-            return BufferAllocator::BUFFER_UNUSED;
-        }
-
-        cedar::Instruction step_inst{};
-        step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
-        step_inst.out_buffer = voice_value_buf;
-        step_inst.inputs[0] = voice_vel_buf;
-        step_inst.inputs[1] = voice_trig_buf;
-        // Voice index for polyphonic selection
-        step_inst.inputs[2] = voice;
-        step_inst.inputs[3] = 0xFFFF;
-        step_inst.inputs[4] = 0xFFFF;
-        step_inst.state_id = state_id;
-        emit(step_inst);
-
-        voice_freq_buffers.push_back(voice_value_buf);
-        voice_vel_buffers.push_back(voice_vel_buf);
-        voice_trig_buffers.push_back(voice_trig_buf);
+    // Track polyphonic patterns for error reporting (must be consumed by poly())
+    if (max_voices > 1) {
+        polyphonic_pattern_nodes_[node] = {n.location, max_voices};
     }
+
+    // Emit single-voice SEQPAT_STEP (voice 0 only)
+    std::uint16_t gate_buf = buffers_.allocate();
+    std::uint16_t type_buf = buffers_.allocate();
+
+    if (gate_buf == BufferAllocator::BUFFER_UNUSED ||
+        type_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        pop_path();
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    cedar::Instruction step_inst{};
+    step_inst.opcode = cedar::Opcode::SEQPAT_STEP;
+    step_inst.out_buffer = value_buf;
+    step_inst.inputs[0] = velocity_buf;
+    step_inst.inputs[1] = trigger_buf;
+    step_inst.inputs[2] = 0;  // voice 0
+    step_inst.inputs[3] = 0xFFFF;
+    step_inst.inputs[4] = 0xFFFF;
+    step_inst.state_id = state_id;
+    emit(step_inst);
+
+    cedar::Instruction gate_inst{};
+    gate_inst.opcode = cedar::Opcode::SEQPAT_GATE;
+    gate_inst.out_buffer = gate_buf;
+    gate_inst.inputs[0] = 0;  // voice 0
+    gate_inst.inputs[1] = 0xFFFF;
+    gate_inst.inputs[2] = 0xFFFF;
+    gate_inst.inputs[3] = 0xFFFF;
+    gate_inst.inputs[4] = 0xFFFF;
+    gate_inst.state_id = state_id;
+    emit(gate_inst);
+
+    cedar::Instruction type_inst{};
+    type_inst.opcode = cedar::Opcode::SEQPAT_TYPE;
+    type_inst.out_buffer = type_buf;
+    type_inst.inputs[0] = 0;  // voice 0
+    type_inst.inputs[1] = 0xFFFF;
+    type_inst.inputs[2] = 0xFFFF;
+    type_inst.inputs[3] = 0xFFFF;
+    type_inst.inputs[4] = 0xFFFF;
+    type_inst.state_id = state_id;
+    emit(type_inst);
+
+    // Store monophonic record fields (voice 0)
+    std::unordered_map<std::string, std::uint16_t> pattern_fields;
+    pattern_fields["freq"] = value_buf;
+    pattern_fields["vel"] = velocity_buf;
+    pattern_fields["trig"] = trigger_buf;
+    pattern_fields["gate"] = gate_buf;
+    record_fields_[node] = std::move(pattern_fields);
 
     // Store sequence program initialization data
     StateInitData seq_init;
@@ -1219,22 +1198,13 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
+    // Record state_id for poly() to link to upstream pattern
+    pattern_state_ids_[node] = state_id;
+
     pop_path();
 
-    // Store polyphonic field buffers for %.field access with multi-buffer support
-    if (max_voices > 1) {
-        PolyphonicFields poly_fields;
-        poly_fields.freq_buffers = voice_freq_buffers;
-        poly_fields.vel_buffers = voice_vel_buffers;
-        poly_fields.trig_buffers = voice_trig_buffers;
-        poly_fields.num_voices = max_voices;
-        polyphonic_fields_[node] = std::move(poly_fields);
-    }
-
-    // Register multi-buffer for polyphony (freq buffers are the main output)
-    std::uint16_t first_buf = register_multi_buffer(node, std::move(voice_freq_buffers));
-    node_buffers_[node] = first_buf;
-    return first_buf;
+    node_buffers_[node] = value_buf;
+    return value_buf;
 }
 
 // ============================================================================

@@ -194,55 +194,53 @@ TEST_CASE("Root to MIDI conversion", "[chord]") {
     }
 }
 
-TEST_CASE("chord() integration", "[chord][akkado]") {
-    SECTION("single chord produces multi-buffer via SEQPAT") {
+// ============================================================================
+// Chord without poly() produces E410 error
+// ============================================================================
+
+TEST_CASE("chord() without poly() produces error", "[chord][akkado]") {
+    SECTION("single chord without poly is error") {
         auto result = akkado::compile("chord(\"Am\")");
-        REQUIRE(result.success);
-        // Am = A, C, E = 3 notes, now uses SEQPAT system
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) {
-                seqpat_step_count++;
-            }
+        CHECK_FALSE(result.success);
+        bool found_e410 = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E410") found_e410 = true;
         }
-        CHECK(seqpat_step_count == 3);  // 3 SEQPAT_STEP for Am triad
+        CHECK(found_e410);
     }
 
-    SECTION("chord pattern compiles with parallel SEQPAT_STEPs") {
+    SECTION("chord progression without poly is error") {
         auto result = akkado::compile("chord(\"Am C7 F G\")");
-        REQUIRE(result.success);
-        // C7 is a 4-note chord, so max voices = 4
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
+        CHECK_FALSE(result.success);
+    }
 
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) {
-                seqpat_step_count++;
+    SECTION("chord with pipe without poly is error") {
+        auto result = akkado::compile("chord(\"Am\") |> osc(\"saw\", %) |> out(%, %)");
+        CHECK_FALSE(result.success);
+    }
+
+    SECTION("chord pattern with pipe without poly is error") {
+        auto result = akkado::compile("chord(\"Am C F G\") |> osc(\"saw\", %) |> out(%, %)");
+        CHECK_FALSE(result.success);
+    }
+
+    SECTION("E410 message includes voice count") {
+        auto result = akkado::compile("chord(\"Am\")");
+        CHECK_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E410") {
+                found = true;
+                CHECK(d.message.find("3 voices") != std::string::npos);
+                CHECK(d.message.find("poly()") != std::string::npos);
             }
         }
-        CHECK(seqpat_step_count == 4);  // 4 parallel voices (C7 has 4 notes)
+        CHECK(found);
     }
 
-    SECTION("chord pattern state init uses SequenceProgram") {
+    SECTION("chord produces E410 for progressions too") {
         auto result = akkado::compile("chord(\"Am C F\")");
-        REQUIRE(result.success);
-        // Should have 1 SequenceProgram state init (shared by all voices)
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-    }
-
-    SECTION("chord with pipe") {
-        auto result = akkado::compile("chord(\"Am\") |> osc(\"saw\", %) |> out(%, %)");
-        REQUIRE(result.success);
-    }
-
-    SECTION("chord pattern with pipe") {
-        auto result = akkado::compile("chord(\"Am C F G\") |> osc(\"saw\", %) |> out(%, %)");
-        REQUIRE(result.success);
+        CHECK_FALSE(result.success);
     }
 }
 
@@ -280,21 +278,10 @@ TEST_CASE("map() applies function to each element", "[array][map]") {
         CHECK(osc_count == 3);  // 3 oscillators for 3 elements
     }
 
-    SECTION("map over chord produces multiple oscillators") {
+    SECTION("map over chord without poly is error") {
         auto result = akkado::compile(
             R"(chord("Am") |> mtof(%) |> map(%, (f) -> osc("tri", f)) |> sum(%) |> out(%, %))");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::OSC_TRI) {
-                osc_count++;
-            }
-        }
-        CHECK(osc_count == 3);  // Am = 3 notes = 3 oscillators
+        CHECK_FALSE(result.success);
     }
 }
 
@@ -332,47 +319,24 @@ TEST_CASE("sum() reduces array to single signal", "[array][sum]") {
         CHECK(add_count == 2);  // (1+2)+3 = 2 ADDs
     }
 
-    SECTION("sum with map over chord") {
+    SECTION("sum with map over chord without poly is error") {
         auto result = akkado::compile(
             R"(chord("C") |> mtof(%) |> map(%, (f) -> osc("sin", f)) |> sum(%) |> out(%, %))");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int add_count = 0;
-        int out_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::ADD) add_count++;
-            if (insts[i].opcode == cedar::Opcode::OUTPUT) out_count++;
-        }
-
-        CHECK(add_count == 2);  // C = 3 notes, 2 ADDs for sum
-        CHECK(out_count == 1);  // Single output (summed signal)
+        CHECK_FALSE(result.success);
     }
 }
 
-TEST_CASE("mtof() propagates multi-buffers", "[array][mtof]") {
-    SECTION("mtof on chord produces multiple frequencies") {
+TEST_CASE("mtof() with chord without poly is error", "[array][mtof]") {
+    SECTION("mtof on chord without poly is error") {
         auto result = akkado::compile("chord(\"Am\") |> mtof(%)");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int mtof_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::MTOF) {
-                mtof_count++;
-            }
-        }
-        CHECK(mtof_count == 3);  // 3 MTOF calls for 3 chord notes
+        CHECK_FALSE(result.success);
     }
 }
 
 TEST_CASE("map() voices have unique state_ids", "[array][map]") {
+    // Uses array literal (not chord pattern) so no poly() needed
     auto result = akkado::compile(
-        R"(chord("C") |> mtof(%) |> map(%, (f) -> osc("sin", f)) |> sum(%) |> out(%, %))");
+        R"([261.6, 329.6, 392.0] |> map(%, (f) -> osc("sin", f)) |> sum(%) |> out(%, %))");
     REQUIRE(result.success);
 
     auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
@@ -385,35 +349,20 @@ TEST_CASE("map() voices have unique state_ids", "[array][map]") {
         }
     }
 
-    CHECK(state_ids.size() == 3);  // 3 unique state_ids for C, E, G
+    CHECK(state_ids.size() == 3);  // 3 unique state_ids
 }
 
-TEST_CASE("polyphonic chord with averaging", "[chord][polyphony]") {
-    // Inline poly pattern: sum(map(c, func)) / len(c)
-    // Note: len() only works on array literals, so use constant 3 for Am triad
+TEST_CASE("chord without poly produces error in pipeline", "[chord][polyphony]") {
     auto result = akkado::compile(R"(
         chord("Am") |> mtof(%) |> map(%, (f) -> osc("tri", f)) |> sum(%) / 3 |> out(%, %)
     )");
-    REQUIRE(result.success);
-
-    auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-    std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-    int osc_count = 0;
-    int div_count = 0;
-    for (std::size_t i = 0; i < count; ++i) {
-        if (insts[i].opcode == cedar::Opcode::OSC_TRI) osc_count++;
-        if (insts[i].opcode == cedar::Opcode::DIV) div_count++;
-    }
-
-    CHECK(osc_count == 3);  // 3 oscillators for Am triad
-    CHECK(div_count == 1);  // 1 division for averaging
+    CHECK_FALSE(result.success);
 }
 
-TEST_CASE("per-voice filter inside map()", "[array][map]") {
-    // User explicitly wants per-voice filtering
+TEST_CASE("per-voice filter inside map() with array", "[array][map]") {
+    // Uses array literal (not chord pattern) — no poly() needed
     auto result = akkado::compile(
-        R"(chord("Am") |> mtof(%) |> map(%, (f) -> osc("saw", f) |> lp(1000, %)) |> sum(%) |> out(%, %))");
+        R"([440, 550, 660] |> map(%, (f) -> osc("saw", f) |> lp(1000, %)) |> sum(%) |> out(%, %))");
     REQUIRE(result.success);
 
     auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
@@ -448,570 +397,160 @@ TEST_CASE("array literal produces multi-buffer", "[array]") {
     CHECK(osc_count == 3);  // 3 oscillators for [60, 64, 67]
 }
 
-TEST_CASE("chord pattern produces polyphonic sequence", "[chord][pattern]") {
-    // Each chord in the pattern should produce multiple voices
+TEST_CASE("chord pattern without poly produces error", "[chord][pattern]") {
     auto result = akkado::compile(
         R"(chord("Am C") |> mtof(%) |> map(%, (f) -> osc("tri", f)) |> sum(%) |> out(%, %))");
-    REQUIRE(result.success);
-
-    auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-    std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-    int seqpat_step_count = 0;
-    int osc_count = 0;
-    for (std::size_t i = 0; i < count; ++i) {
-        if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        if (insts[i].opcode == cedar::Opcode::OSC_TRI) osc_count++;
-    }
-
-    // Should have 3 SEQPAT_STEPs (one per voice: root, 3rd, 5th)
-    CHECK(seqpat_step_count == 3);
-    // Should have 3 oscillators (one per voice)
-    CHECK(osc_count == 3);
+    CHECK_FALSE(result.success);
 }
 
 // ============================================================================
 // Mini-notation chord tests
 // ============================================================================
 
-TEST_CASE("chord with mini-notation brackets", "[chord][mini]") {
-    SECTION("brackets subdivide timing - [Am C7] Fm Gm produces 4 chords") {
+TEST_CASE("chord mini-notation variants produce E410", "[chord][mini]") {
+    SECTION("brackets subdivide timing") {
         auto result = akkado::compile("chord(\"[Am C7] Fm Gm\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init shared by all voices
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-
-        // Count SEQPAT_STEP instructions - should be 4 (C7 has 4 notes = max voices)
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        }
-        CHECK(seqpat_step_count == 4);  // 4 voices (C7 has 4 notes)
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("simple 4-chord pattern without brackets") {
+    SECTION("simple 4-chord pattern") {
         auto result = akkado::compile("chord(\"Am C7 Fm Gm\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
+        CHECK_FALSE(result.success);
     }
-}
 
-TEST_CASE("chord with repeat modifier", "[chord][mini]") {
-    SECTION("Am!2 C repeats Am twice (extends sequence)") {
-        // !2 is the repeat modifier - it EXTENDS the sequence (not *2 which compresses)
-        // Am!2 C = Am Am C (3 elements, each gets 1/3 of cycle)
+    SECTION("repeat modifier") {
         auto result = akkado::compile("chord(\"Am!2 C\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-
-        // Count SEQPAT_STEP instructions - should be 3 (triads have 3 notes)
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        }
-        CHECK(seqpat_step_count == 3);  // 3 voices (triads)
+        CHECK_FALSE(result.success);
     }
-}
 
-TEST_CASE("chord with alternating sequence", "[chord][mini]") {
-    SECTION("<Am C> Fm compiles with SEQPAT") {
+    SECTION("alternating sequence") {
         auto result = akkado::compile("chord(\"<Am C> Fm\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-
-        // Count SEQPAT_STEP instructions - should be 3 (triads have 3 notes)
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        }
-        CHECK(seqpat_step_count == 3);  // 3 voices (triads)
+        CHECK_FALSE(result.success);
     }
-}
 
-TEST_CASE("chord with nested brackets", "[chord][mini]") {
-    SECTION("[[Am C] Dm] Em creates nested timing") {
+    SECTION("nested brackets") {
         auto result = akkado::compile("chord(\"[[Am C] Dm] Em\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-
-        // Count SEQPAT_STEP instructions - should be 3 (triads have 3 notes)
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        }
-        CHECK(seqpat_step_count == 3);  // 3 voices (triads)
+        CHECK_FALSE(result.success);
     }
-}
 
-TEST_CASE("chord with euclidean rhythm", "[chord][mini]") {
-    SECTION("Am(3,8) creates euclidean pattern of Am") {
+    SECTION("euclidean rhythm") {
         auto result = akkado::compile("chord(\"Am(3,8)\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-
-        // Count SEQPAT_STEP instructions - should be 3 (Am triad = 3 notes)
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        }
-        CHECK(seqpat_step_count == 3);  // 3 voices (Am triad)
+        CHECK_FALSE(result.success);
     }
-}
 
-TEST_CASE("chord with polyrhythm", "[chord][mini]") {
-    SECTION("[Am, C, F] plays all simultaneously") {
+    SECTION("polyrhythm") {
         auto result = akkado::compile("chord(\"[Am, C, F]\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-
-        // Count SEQPAT_STEP instructions - should be 3 (triads have 3 notes)
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        }
-        CHECK(seqpat_step_count == 3);  // 3 voices (triads)
-    }
-}
-
-TEST_CASE("chord backward compatibility", "[chord]") {
-    SECTION("simple whitespace-separated chords still work") {
-        // This is the most common use case - should continue working
-        auto result = akkado::compile("chord(\"Am C7 F G\")");
-        REQUIRE(result.success);
-        // Uses SEQPAT system: 1 SequenceProgram state init
-        CHECK(result.state_inits.size() == 1);
-
-        // Count SEQPAT_STEP instructions - should be 4 (C7 has 4 notes = max voices)
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-        }
-        CHECK(seqpat_step_count == 4);  // C7 has 4 notes = 4 voices
-    }
-
-    SECTION("single chord still produces multi-buffer via SEQPAT") {
-        auto result = akkado::compile("chord(\"Am\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_step_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) {
-                seqpat_step_count++;
-            }
-        }
-        CHECK(seqpat_step_count == 3);  // 3 SEQPAT_STEP for Am triad
+        CHECK_FALSE(result.success);
     }
 }
 
 // ============================================================================
-// SEQPAT polyphony tests
+// SEQPAT single-voice emission (voice 0 only, polyphony via poly())
 // ============================================================================
 
-TEST_CASE("SEQPAT voice index parameter", "[chord][seqpat]") {
-    SECTION("each voice gets unique voice index") {
+TEST_CASE("chord emits E410 with voice count info", "[chord][seqpat]") {
+    SECTION("triad chord produces E410 with 3 voices") {
         auto result = akkado::compile("chord(\"Am\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        std::vector<std::uint16_t> voice_indices;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) {
-                voice_indices.push_back(insts[i].inputs[2]);
+        CHECK_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E410") {
+                found = true;
+                CHECK(d.message.find("3 voices") != std::string::npos);
             }
         }
-
-        REQUIRE(voice_indices.size() == 3);
-        CHECK(voice_indices[0] == 0);  // First voice
-        CHECK(voice_indices[1] == 1);  // Second voice
-        CHECK(voice_indices[2] == 2);  // Third voice
+        CHECK(found);
     }
 
-    SECTION("all voices output velocity and trigger for polyphonic access") {
-        // With polyphonic field access support, each voice gets its own vel/trig buffers
-        // This enables: pat("Am") |> osc("sin", %.freq) * %.vel |> sum(%)
-        auto result = akkado::compile("chord(\"Am\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int voice_idx = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) {
-                // All voices should have their own velocity and trigger outputs
-                CHECK(insts[i].inputs[0] != 0xFFFF);  // velocity_buf
-                CHECK(insts[i].inputs[1] != 0xFFFF);  // trigger_buf
-                voice_idx++;
-            }
-        }
-        CHECK(voice_idx == 3);  // Am triad = 3 voices
-    }
-
-    SECTION("all voices share same state_id") {
+    SECTION("seventh chord produces E410 with 4 voices") {
         auto result = akkado::compile("chord(\"Cmaj7\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        std::set<std::uint32_t> state_ids;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) {
-                state_ids.insert(insts[i].state_id);
+        CHECK_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E410") {
+                found = true;
+                CHECK(d.message.find("4 voices") != std::string::npos);
             }
         }
-
-        // All SEQPAT_STEP instructions should share the same state_id
-        CHECK(state_ids.size() == 1);
+        CHECK(found);
     }
 }
 
-TEST_CASE("chord voice count varies by chord type", "[chord][seqpat]") {
-    SECTION("triad produces 3 voices") {
-        auto result = akkado::compile("chord(\"C\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 3);
+TEST_CASE("all chord types produce E410 without poly", "[chord][seqpat]") {
+    SECTION("triad") {
+        CHECK_FALSE(akkado::compile("chord(\"C\")").success);
     }
-
-    SECTION("seventh chord produces 4 voices") {
-        auto result = akkado::compile("chord(\"Cmaj7\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 4);
+    SECTION("seventh chord") {
+        CHECK_FALSE(akkado::compile("chord(\"Cmaj7\")").success);
     }
-
-    SECTION("power chord produces 2 voices") {
-        auto result = akkado::compile("chord(\"C5\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 2);
+    SECTION("power chord") {
+        CHECK_FALSE(akkado::compile("chord(\"C5\")").success);
     }
-
-    SECTION("mixed chord types use max voice count") {
-        // C (3 notes) + Cmaj7 (4 notes) -> 4 voices total
-        auto result = akkado::compile("chord(\"C Cmaj7\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 4);  // Max voices from Cmaj7
+    SECTION("mixed chord types") {
+        CHECK_FALSE(akkado::compile("chord(\"C Cmaj7\")").success);
     }
 }
 
-TEST_CASE("pat() with chord symbols in mini-notation", "[chord][seqpat][pat]") {
-    SECTION("C (uppercase) produces 3-voice polyphonic pattern") {
-        // In mini-notation, uppercase chord symbols like 'C', 'Am', 'G7' are recognized
+TEST_CASE("pat() with chord symbols produces E410", "[chord][seqpat][pat]") {
+    SECTION("C (uppercase chord) without poly is error") {
         auto result = akkado::compile("pat(\"C\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 3);  // C major triad = 3 notes
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("Am7 produces 4-voice pattern") {
+    SECTION("Am7 without poly is error") {
         auto result = akkado::compile("pat(\"Am7\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 4);  // Am7 = 4 notes
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("mixed chords and notes in pat()") {
-        // c4 = single note (lowercase), C = chord (uppercase)
+    SECTION("mixed chords and notes without poly is error") {
+        // c4 = single note, C = chord → max_voices > 1
         auto result = akkado::compile("pat(\"c4 C e4\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        // Max voices determined by C (3 notes)
-        CHECK(seqpat_count == 3);
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("chord progression in pat()") {
+    SECTION("chord progression in pat() without poly is error") {
         auto result = akkado::compile("pat(\"C F G C\")");
-        REQUIRE(result.success);
-
-        // Should use SequenceProgram
-        CHECK(result.state_inits.size() == 1);
-        CHECK(result.state_inits[0].type == akkado::StateInitData::Type::SequenceProgram);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        int query_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_QUERY) query_count++;
-        }
-        CHECK(query_count == 1);   // Single query
-        CHECK(seqpat_count == 3);  // 3 voices (all triads)
+        CHECK_FALSE(result.success);
     }
 }
 
-TEST_CASE("SEQPAT chord integration with audio graph", "[chord][seqpat][integration]") {
-    SECTION("chord with osc and out") {
+TEST_CASE("chord integration with audio graph requires poly()", "[chord][seqpat][integration]") {
+    SECTION("chord with osc and out without poly is error") {
         auto result = akkado::compile(
             R"(chord("Am") |> mtof(%) |> map(%, (f) -> osc("sin", f)) |> sum(%) |> out(%, %))");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        int osc_count = 0;
-        int mtof_count = 0;
-        int add_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-            if (insts[i].opcode == cedar::Opcode::MTOF) mtof_count++;
-            if (insts[i].opcode == cedar::Opcode::ADD) add_count++;
-        }
-
-        CHECK(seqpat_count == 3);  // 3 voices
-        CHECK(mtof_count == 3);    // 3 mtof conversions
-        CHECK(osc_count == 3);     // 3 oscillators
-        CHECK(add_count == 2);     // sum of 3 = 2 adds
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("seventh chord with filter per voice") {
+    SECTION("seventh chord with filter per voice without poly is error") {
         auto result = akkado::compile(
             R"(chord("Cmaj7") |> mtof(%) |> map(%, (f) -> osc("saw", f) |> lp(2000, %)) |> sum(%) |> out(%, %))");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        int osc_count = 0;
-        int filter_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-            if (insts[i].opcode == cedar::Opcode::OSC_SAW) osc_count++;
-            if (insts[i].opcode == cedar::Opcode::FILTER_SVF_LP) filter_count++;
-        }
-
-        CHECK(seqpat_count == 4);  // 4 voices (seventh chord)
-        CHECK(osc_count == 4);     // 4 oscillators
-        CHECK(filter_count == 4);  // 4 filters
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("pat() chord with simple processing") {
-        // Use uppercase chord symbols in mini-notation
-        // Test that each voice gets its own oscillator and filter
+    SECTION("pat() chord with processing without poly is error") {
         auto result = akkado::compile(
             R"(pat("C Am") |> map(%, (f) -> osc("tri", f) |> lp(1000, %)) |> sum(%) |> out(%, %))");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        int osc_count = 0;
-        int filter_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-            if (insts[i].opcode == cedar::Opcode::OSC_TRI) osc_count++;
-            if (insts[i].opcode == cedar::Opcode::FILTER_SVF_LP) filter_count++;
-        }
-
-        CHECK(seqpat_count == 3);  // 3 voices (triads)
-        CHECK(osc_count == 3);
-        CHECK(filter_count == 3);
+        CHECK_FALSE(result.success);
     }
 }
 
-TEST_CASE("chord accidentals and inversions", "[chord][seqpat]") {
-    SECTION("sharp chord symbols") {
-        auto result = akkado::compile("chord(\"F#m\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 3);
-    }
-
-    SECTION("flat chord symbols") {
-        auto result = akkado::compile("chord(\"Bbmaj7\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 4);  // maj7 = 4 notes
-    }
-
-    SECTION("diminished chord") {
-        auto result = akkado::compile("chord(\"Cdim\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 3);  // dim = 3 notes
-    }
-
-    SECTION("augmented chord") {
-        auto result = akkado::compile("chord(\"Caug\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 3);  // aug = 3 notes
-    }
-
-    SECTION("suspended chords") {
-        auto result = akkado::compile("chord(\"Csus4 Csus2\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 3);  // sus chords = 3 notes
-    }
+TEST_CASE("chord accidentals produce E410 without poly", "[chord][seqpat]") {
+    CHECK_FALSE(akkado::compile("chord(\"F#m\")").success);
+    CHECK_FALSE(akkado::compile("chord(\"Bbmaj7\")").success);
+    CHECK_FALSE(akkado::compile("chord(\"Cdim\")").success);
+    CHECK_FALSE(akkado::compile("chord(\"Caug\")").success);
+    CHECK_FALSE(akkado::compile("chord(\"Csus4 Csus2\")").success);
 }
 
-TEST_CASE("chord sequence compilation details", "[chord][seqpat]") {
-    SECTION("SequenceProgram contains correct event count") {
-        auto result = akkado::compile("chord(\"Am C F G\")");
-        REQUIRE(result.success);
-        REQUIRE(result.state_inits.size() == 1);
-
-        const auto& init = result.state_inits[0];
-        CHECK(init.type == akkado::StateInitData::Type::SequenceProgram);
-        CHECK(init.total_events >= 4);  // At least 4 chord events
-    }
-
-    SECTION("cycle length matches chord count") {
-        auto result = akkado::compile("chord(\"Am C F\")");
-        REQUIRE(result.success);
-        REQUIRE(result.state_inits.size() == 1);
-
-        const auto& init = result.state_inits[0];
-        CHECK(init.cycle_length == 3.0f);  // 3 chords = 3 beats
-    }
-
-    SECTION("single chord has cycle length 1") {
-        auto result = akkado::compile("chord(\"Am\")");
-        REQUIRE(result.success);
-        REQUIRE(result.state_inits.size() == 1);
-
-        const auto& init = result.state_inits[0];
-        CHECK(init.cycle_length == 1.0f);
-    }
-
-    SECTION("bracketed chords affect cycle length") {
-        // [Am C] F = 2 top-level elements
-        auto result = akkado::compile("chord(\"[Am C] F\")");
-        REQUIRE(result.success);
-        REQUIRE(result.state_inits.size() == 1);
-
-        const auto& init = result.state_inits[0];
-        CHECK(init.cycle_length == 2.0f);  // 2 top-level elements
-    }
+TEST_CASE("chord sequence compilation produces E410", "[chord][seqpat]") {
+    CHECK_FALSE(akkado::compile("chord(\"Am C F G\")").success);
+    CHECK_FALSE(akkado::compile("chord(\"Am C F\")").success);
+    CHECK_FALSE(akkado::compile("chord(\"Am\")").success);
+    CHECK_FALSE(akkado::compile("chord(\"[Am C] F\")").success);
 }
 
 TEST_CASE("monophonic vs polyphonic pattern detection", "[chord][seqpat]") {
-    SECTION("single notes produce 1 SEQPAT_STEP") {
+    SECTION("monophonic single notes compile successfully") {
         auto result = akkado::compile("pat(\"c4 e4 g4\")");
         REQUIRE(result.success);
 
@@ -1025,22 +564,12 @@ TEST_CASE("monophonic vs polyphonic pattern detection", "[chord][seqpat]") {
         CHECK(seqpat_count == 1);  // Monophonic = single voice
     }
 
-    SECTION("chords produce multiple SEQPAT_STEPs") {
-        // Use uppercase chord symbol in mini-notation (not Strudel syntax)
+    SECTION("polyphonic chord without poly produces error") {
         auto result = akkado::compile("pat(\"C\")");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_count++;
-        }
-        CHECK(seqpat_count == 3);  // Polyphonic = 3 voices
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("samples produce 1 SEQPAT_STEP") {
+    SECTION("sample patterns compile successfully") {
         auto result = akkado::compile("pat(\"bd sd hh\")");
         REQUIRE(result.success);
 
@@ -1056,11 +585,7 @@ TEST_CASE("monophonic vs polyphonic pattern detection", "[chord][seqpat]") {
 }
 
 // ============================================================================
-// Polyphonic Field Access Tests
-// ============================================================================
-
-// ============================================================================
-// Multi-buffer propagation through variables and bindings
+// Multi-buffer propagation (arrays still work, chords require poly())
 // ============================================================================
 
 TEST_CASE("multi-buffer through variable assignment", "[polyphony][variable]") {
@@ -1081,76 +606,32 @@ TEST_CASE("multi-buffer through variable assignment", "[polyphony][variable]") {
         CHECK(osc_count == 3);
     }
 
-    SECTION("chord through variable preserves multi-buffer") {
+    SECTION("chord through variable without poly is error") {
         auto result = akkado::compile(R"(
             ch = chord("Am")
             map(ch, (f) -> osc("sin", f)) |> sum(%) |> out(%, %)
         )");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-        }
-        CHECK(osc_count == 3);
+        CHECK_FALSE(result.success);
     }
 }
 
-TEST_CASE("polyphonic field access through pipe binding", "[polyphony][pipe_binding]") {
-    SECTION("pat with chord via pipe binding expands oscillators") {
+TEST_CASE("chord field access without poly produces error", "[polyphony][pipe_binding]") {
+    SECTION("pat with chord via pipe binding without poly is error") {
         auto result = akkado::compile(R"(
-            pat("C") as e |> osc("sin", e.freq) |> sum(%) |> out(%, %)
+            pat("C") as e |> osc("sin", e.freq) |> out(%, %)
         )");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-        }
-        CHECK(osc_count == 3);  // C major triad = 3 oscillators
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("chord() via pipe binding preserves polyphonic fields") {
+    SECTION("chord() via pipe binding without poly is error") {
         auto result = akkado::compile(R"(
-            chord("Am") as e |> osc("sin", e.freq) |> sum(%) |> out(%, %)
+            chord("Am") as e |> osc("sin", e.freq) |> out(%, %)
         )");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-        }
-        CHECK(osc_count == 3);  // Am triad = 3 oscillators
+        CHECK_FALSE(result.success);
     }
 }
 
-TEST_CASE("polyphonic field access through pattern variable", "[polyphony][pattern_var]") {
-    SECTION("pattern variable with chord accesses .freq polyphonically") {
-        auto result = akkado::compile(R"(
-            e = pat("C")
-            osc("sin", e.freq) |> sum(%) |> out(%, %)
-        )");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-        }
-        CHECK(osc_count == 3);  // C major triad = 3 oscillators
-    }
-
+TEST_CASE("pattern field access — monophonic still works", "[polyphony][pattern_var]") {
     SECTION("pattern variable with monophonic pattern accesses .freq") {
         auto result = akkado::compile(R"(
             e = pat("c4 e4 g4")
@@ -1167,15 +648,20 @@ TEST_CASE("polyphonic field access through pattern variable", "[polyphony][patte
         }
         CHECK(osc_count == 1);  // Monophonic = 1 oscillator
     }
+
+    SECTION("pattern variable with chord without poly is error") {
+        auto result = akkado::compile(R"(
+            e = pat("C")
+            osc("sin", e.freq) |> out(%, %)
+        )");
+        CHECK_FALSE(result.success);
+    }
 }
 
-TEST_CASE("polyphonic field access produces multi-buffer", "[polyphony][field_access]") {
-    SECTION("pat with chord expands to multiple oscillators via .freq") {
-        // pat("Am") creates a chord (A minor triad) - 3 voices
-        // .freq on a polyphonic pattern should return 3 frequency buffers
-        // which then expand the oscillator to 3 instances
+TEST_CASE("monophonic pattern field access via pipe", "[polyphony][field_access]") {
+    SECTION("monophonic pat() with .freq via % works") {
         auto result = akkado::compile(R"(
-            pat("Am") |> osc("sin", %.freq) |> sum(%) |> out(%, %)
+            pat("c4 e4 g4") |> osc("sin", %.freq) |> out(%, %)
         )");
         REQUIRE(result.success);
 
@@ -1183,84 +669,39 @@ TEST_CASE("polyphonic field access produces multi-buffer", "[polyphony][field_ac
         std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
 
         int osc_count = 0;
-        int seqpat_step_count = 0;
         for (std::size_t i = 0; i < count; ++i) {
             if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
         }
+        CHECK(osc_count == 1);
+    }
+}
 
-        // 3 SEQPAT_STEPs for 3-note chord (A, C, E)
-        CHECK(seqpat_step_count == 3);
-        // 3 oscillators expanded from the multi-buffer .freq
-        CHECK(osc_count == 3);
+TEST_CASE("polyphonic field access without poly produces error", "[polyphony][field_access]") {
+    SECTION("pat with chord .freq without poly is error") {
+        auto result = akkado::compile(R"(
+            pat("Am") |> osc("sin", %.freq) |> out(%, %)
+        )");
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("chord() field access .freq produces multiple oscillators") {
-        // chord("Am") produces 3 voices (A, C, E)
-        // Accessing .freq should give 3 frequency buffers
+    SECTION("chord() .freq without poly is error") {
         auto result = akkado::compile(R"(
-            chord("Am") |> osc("tri", %.freq) |> sum(%) |> out(%, %)
+            chord("Am") |> osc("tri", %.freq) |> out(%, %)
         )");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::OSC_TRI) osc_count++;
-        }
-
-        CHECK(osc_count == 3);  // 3 oscillators for Am triad
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("polyphonic .vel produces multiple SEQPAT_STEP outputs") {
-        // Access .vel on a polyphonic pattern - should have per-voice velocity
+    SECTION("polyphonic .vel without poly is error") {
         auto result = akkado::compile(R"(
-            pat("Am") |> osc("sin", %.freq) * %.vel |> sum(%) |> out(%, %)
+            pat("Am") |> osc("sin", %.freq) * %.vel |> out(%, %)
         )");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int seqpat_step_count = 0;
-        int mul_count = 0;
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::SEQPAT_STEP) seqpat_step_count++;
-            if (insts[i].opcode == cedar::Opcode::MUL) mul_count++;
-            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-        }
-
-        // 3 SEQPAT_STEPs, each outputting its own freq, vel, trig
-        CHECK(seqpat_step_count == 3);
-        // 3 oscillators
-        CHECK(osc_count == 3);
-        // 3 multiplications (one per voice: osc * vel)
-        CHECK(mul_count == 3);
+        CHECK_FALSE(result.success);
     }
 
-    SECTION("polyphonic .trig expands envelope per voice") {
-        // Access .trig on a polyphonic pattern for ADSR
+    SECTION("polyphonic .trig without poly is error") {
         auto result = akkado::compile(R"(
-            pat("Am") |> osc("sin", %.freq) * adsr(%.trig, 0.01, 0.1, 0.5, 0.3) |> sum(%) |> out(%, %)
+            pat("Am") |> osc("sin", %.freq) * adsr(%.trig, 0.01, 0.1, 0.5, 0.3) |> out(%, %)
         )");
-        REQUIRE(result.success);
-
-        auto insts = reinterpret_cast<const cedar::Instruction*>(result.bytecode.data());
-        std::size_t count = result.bytecode.size() / sizeof(cedar::Instruction);
-
-        int adsr_count = 0;
-        int osc_count = 0;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (insts[i].opcode == cedar::Opcode::ENV_ADSR) adsr_count++;
-            if (insts[i].opcode == cedar::Opcode::OSC_SIN) osc_count++;
-        }
-
-        // 3 ADSRs (one per voice)
-        CHECK(adsr_count == 3);
-        // 3 oscillators
-        CHECK(osc_count == 3);
+        CHECK_FALSE(result.success);
     }
 }
