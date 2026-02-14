@@ -1,4 +1,4 @@
-> **Status: PARTIAL** — Arrays + map + chord expansion done. Missing: pattern objects, method chaining, voicing system, polymeter.
+> **Status: PARTIAL** — Phases 1+3 done (arrays, map, chord expansion). Phases 2, 4-8 intentionally deferred to object system revamp (see Section 8).
 
 # PRD: Strudel-Style Pattern System Extensions
 
@@ -145,12 +145,15 @@ drums.slow(2).rev() |> sampler(%) |> out(%, %)
 | Mini-notation lexer | ✓ Complete | Tokens, modifiers working |
 | Mini-notation parser | ✓ Complete | AST nodes for groups, sequences |
 | Pattern evaluation | ✓ Complete | Time division, modifiers |
-| Chord parsing | ✗ Wrong syntax | Uses `C4'` instead of `chord("Am")` |
-| Chord expansion | ✗ Not implemented | Only emits root note |
-| Array type | ✗ Not implemented | Blocking chord expansion |
-| Polymeter `{x}` | ✗ Not implemented | No curly brace handling |
-| Method chaining | ✗ Not implemented | `pat()` returns void |
-| Voicing system | ✗ Not implemented | No anchor, mode, voice leading |
+| Array type + map() | ✓ Complete | Multi-buffer expansion at compile time |
+| Chord expansion | ✓ Complete | Chords in mini-notation expand to multi-voice via `pat()`/`chord()` |
+| Chord parsing | ✓ Complete | Strudel-compatible `chord("Am")` inside patterns |
+| `C4'` standalone syntax | Deprecated | Stub (root only) — use chords inside `pat()`/`chord()` instead |
+| Method chaining | Deferred | Awaiting object system revamp (Section 8) |
+| Voicing system | Deferred | Depends on method chaining (Section 8) |
+| Polymeter `{x}` | Deferred | Nice-to-have, not blocking core functionality |
+| String-as-pattern | Deferred | Explicit `pat()` is the endorsed approach |
+| Algorithmic generators | Deferred | Nice-to-have |
 
 ## 4. Implementation Phases
 
