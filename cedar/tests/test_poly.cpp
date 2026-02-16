@@ -434,16 +434,15 @@ TEST_CASE("POLY voice allocation: voice release on event end", "[poly][alloc]") 
         vm.process_block(left.data(), right.data());
     }
 
-    // After the event ends, the voice should be releasing
+    // After the event ends and release timeout expires, the voice should be freed
     auto& poly = vm.states().get_or_create<PolyAllocState>(POLY_STATE_ID);
-    bool found_releasing = false;
+    bool any_active = false;
     for (std::uint8_t i = 0; i < poly.max_voices; ++i) {
-        if (poly.voices[i].releasing) {
-            found_releasing = true;
-            CHECK(poly.voices[i].gate == 0.0f);
+        if (poly.voices[i].active) {
+            any_active = true;
         }
     }
-    CHECK(found_releasing);
+    CHECK_FALSE(any_active);
 }
 
 TEST_CASE("POLY voice allocation: mono mode uses single voice", "[poly][alloc]") {

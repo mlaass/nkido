@@ -412,19 +412,11 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
             execute(program[ip + 1 + bi]);
         }
 
-        // Accumulate voice output into mix buffer (with fade for releasing voices)
+        // Accumulate voice output into mix buffer, gated by gate signal
         const float* voice_out = buffer_pool_.get(voice_out_buf);
-        if (voice.releasing) {
-            float fade = 1.0f - static_cast<float>(voice.age) /
-                                static_cast<float>(PolyAllocState::RELEASE_TIMEOUT + 1);
-            if (fade <= 0.0f) continue;  // fully faded, skip
-            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-                mix[i] += voice_out[i] * fade;
-            }
-        } else {
-            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-                mix[i] += voice_out[i];
-            }
+        const float* gate = buffer_pool_.get(voice_gate_buf);
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            mix[i] += voice_out[i] * gate[i];
         }
     }
 

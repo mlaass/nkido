@@ -160,7 +160,7 @@ while (ip < program.size()) {
    a. Fill `voice_freq/gate/vel/trig` buffers from voice slot data
    b. Set `state_pool_.state_id_xor = voice_index * 0x9E3779B9u + 1` (golden ratio salt)
    c. Execute body instructions (ip+1 to ip+body_length)
-   d. Accumulate `voice_out_buf` into `mix_buf`
+   d. Accumulate `voice_out_buf * voice_gate_buf` into `mix_buf` (gate-multiplied, see 2.8)
 7. Reset `state_pool_.state_id_xor = 0`
 8. Return `ip + body_length + 2` (past POLY_END)
 
@@ -209,7 +209,7 @@ POLY_END:
 
 ### 2.5 Buffer Reuse
 
-Body temp buffers are reused across voice iterations — only one voice runs at a time (full BLOCK_SIZE). The `voice_out_buf` is accumulated into `mix_buf` after each iteration, then overwritten by the next voice. This keeps buffer usage minimal.
+Body temp buffers are reused across voice iterations — only one voice runs at a time (full BLOCK_SIZE). The `voice_out_buf` is gate-multiplied and accumulated into `mix_buf` after each iteration, then overwritten by the next voice. This keeps buffer usage minimal.
 
 ### 2.6 NoteEvent Abstraction
 
@@ -232,7 +232,32 @@ struct NoteEvent {
 
 The POLY voice allocator consumes `NoteEvent*` + count regardless of source, keeping the voice allocation logic completely decoupled from the event source.
 
-### 2.7 Constraints
+### 2.7 Gate-Multiplied Voice Accumulation
+
+Voice output is multiplied by the gate signal during accumulation into the mix buffer:
+
+```cpp
+const float* voice_out = buffer_pool_.get(voice_out_buf);
+const float* gate = buffer_pool_.get(voice_gate_buf);
+for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+    mix[i] += voice_out[i] * gate[i];
+}
+```
+
+The gate signal (`voice_gate_buf`) is a sustained signal — 1.0 while the note is active, 0.0 after release, with sample-precise ramp transitions at note-on and note-off boundaries. This makes it the natural mechanism for controlling whether a voice contributes to the mix:
+
+| Voice state | Gate value | Effect |
+|-------------|-----------|--------|
+| Active, no transition | 1.0 | Full output |
+| Note-on block | Ramps 0→1 at on_sample | Fade-in at note start |
+| Note-off block | Ramps 1→0 at off_sample | Sample-precise silence |
+| Already released | 0.0 | Zero output |
+
+Because gate-off immediately zeros the output, `RELEASE_TIMEOUT` is set to 1 block — the voice runs one more block to process the gate-off transition, then is freed. This avoids wasting CPU on voices that produce no audio.
+
+**Tradeoff — envelope release tails are cut at gate-off.** If the instrument body contains an envelope with a release phase (e.g. `adsr(gate, 0.01, 0.1, 0.7, 0.5)`), the release tail will be multiplied by zero once gate drops, silencing it immediately. This is the intended behavior for now — the poly engine gates voices, and the instrument body controls timbre within that gate window. See section 7 (Future: Configurable Voice Release) for planned improvements.
+
+### 2.8 Constraints
 
 - **SEQPAT_STEP/GATE/TYPE must NOT appear inside POLY body** — they mutate `SequenceState.current_index` (shared state), which would corrupt event tracking across voice iterations
 - **POLY body opcodes must be stateless or use state_id** — the XOR isolation mechanism only works for state accessed via `StatePool::get_or_create(state_id)`. Opcodes that use global mutable state will not be isolated per-voice.
@@ -287,7 +312,7 @@ struct PolyAllocState {
 2. If all slots active, steal by strategy:
    - `oldest` (default): steal voice with highest age
    - `quietest`: steal voice with lowest vel that is also releasing
-3. On note-off: set `releasing = true`, keep `gate = 0` so envelope can release naturally
+3. On note-off: set `releasing = true`, gate = 0 → gate multiplication zeros output → voice freed after 1 block
 
 **Mono mode** (mode=1):
 1. Always use voice slot 0
@@ -526,6 +551,34 @@ Files to create/modify:
 - `cedar/include/cedar/opcodes/samplers.hpp` — add `SAMPLE_VOICE` opcode (single-voice, extracted from SAMPLE_PLAY)
 - Same pattern as SF_PLAY
 
+### Future: Configurable Voice Release
+
+**Problem**: Gate-multiplied accumulation (section 2.7) cuts envelope release tails at note-off. For percussive sounds this is fine, but pads and strings need their release phase to ring out naturally.
+
+**Approach**: Add a `release` parameter to `poly()` that keeps the voice alive (and un-gated) for a specified duration after gate-off:
+
+```akkado
+// Voice stays alive 500ms after gate-off for envelope release
+pat("C4' Am7'") |> poly(%, 8, pad, release: 0.5) |> out(%, %)
+
+// Default (no release param) = current behavior: immediate gate-off silence
+pat("c4 e4") |> poly(%, 4, lead) |> out(%, %)
+```
+
+Implementation options (choose one):
+
+1. **Time-based release window** — `RELEASE_TIMEOUT` becomes per-poly-instance instead of global constant. During the release window, gate stays 0 but the voice output is accumulated without gate multiplication, allowing the instrument's own envelope to complete its release phase. Simple, predictable, but wastes CPU if the envelope finishes early.
+
+2. **Envelope-done signaling** — The instrument body writes a "done" signal (e.g. envelope output drops below threshold) to a designated buffer. The poly engine reads this to know when a releasing voice can be freed. More efficient but requires a convention for signaling completion, and couples the poly engine to envelope behavior.
+
+Option 1 is the likely first implementation due to simplicity. Option 2 could be added later as an optimization.
+
+Files to modify:
+- `cedar/include/cedar/opcodes/dsp_state.hpp` — per-instance release timeout in `PolyAllocState`
+- `cedar/src/vm/vm.cpp` — conditional gate multiplication (skip during release window)
+- `akkado/include/akkado/builtins.hpp` — add `release` parameter to `poly` builtin
+- `akkado/src/codegen.cpp` — pass release time to `init_poly_state`
+
 ---
 
 ## 8. Verification
@@ -582,6 +635,7 @@ pat("C4' Am7'") |> poly(%, 8, filtered) |> out(%, %) * 0.3
 | Deprecate compile-time expansion | Migration errors | Phase 4 |
 | SoundFont single-voice | `poly(32, soundfont("piano.sf2"))` | Future |
 | Sampler single-voice | `poly(4, sample("kick.wav"))` | Future |
+| Configurable voice release | `poly(8, pad, release: 0.5)` | Future |
 
 **Key design principles**:
 1. **Explicit over implicit** — user chooses `poly(n, ...)` or `mono(...)`, never auto-expanded
