@@ -299,17 +299,19 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
             // Check for gate-on: event starts within [cycle_pos, block_end_pos)
             bool gate_on_this_block = false;
             float on_beat_offset = 0.0f;
+            std::uint32_t on_cycle = current_cycle;
 
             if (evt_start >= cycle_pos && evt_start < block_end_pos) {
                 // Normal case: event starts within block
                 gate_on_this_block = true;
                 on_beat_offset = evt_start - cycle_pos;
             } else if (block_end_pos > cycle_length) {
-                // Block wraps around cycle boundary
+                // Block wraps around cycle boundary — event is in next cycle
                 float wrapped_end = block_end_pos - cycle_length;
                 if (evt_start < wrapped_end) {
                     gate_on_this_block = true;
                     on_beat_offset = (cycle_length - cycle_pos) + evt_start;
+                    on_cycle = current_cycle + 1;
                 }
             }
 
@@ -322,13 +324,14 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
                 for (std::uint8_t vi = 0; vi < evt.num_values; ++vi) {
                     poly_state.allocate_voice(
                         evt.values[vi], evt.velocity,
-                        static_cast<std::uint16_t>(e), current_cycle, on_sample);
+                        static_cast<std::uint16_t>(e), on_cycle, on_sample);
                 }
             }
 
             // Check for gate-off: event ends within [cycle_pos, block_end_pos)
             bool gate_off_this_block = false;
             float off_beat_offset = 0.0f;
+            std::uint32_t off_cycle = current_cycle;
 
             if (evt_end >= cycle_pos && evt_end < block_end_pos) {
                 gate_off_this_block = true;
@@ -337,8 +340,11 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
                 // Event wraps around cycle boundary
                 float wrapped_end = evt_end - cycle_length;
                 if (wrapped_end >= cycle_pos && wrapped_end < block_end_pos) {
+                    // Wrapped off in a normal block of the next cycle —
+                    // the voice was allocated in the previous cycle
                     gate_off_this_block = true;
                     off_beat_offset = wrapped_end - cycle_pos;
+                    off_cycle = current_cycle > 0 ? current_cycle - 1 : current_cycle;
                 } else if (block_end_pos > cycle_length) {
                     float block_wrapped = block_end_pos - cycle_length;
                     if (wrapped_end < block_wrapped) {
@@ -354,7 +360,7 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
                 if (off_sample >= BLOCK_SIZE) off_sample = BLOCK_SIZE - 1;
 
                 poly_state.release_voice_by_event(
-                    static_cast<std::uint16_t>(e), current_cycle, off_sample);
+                    static_cast<std::uint16_t>(e), off_cycle, off_sample);
             }
         }
 
@@ -406,10 +412,19 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
             execute(program[ip + 1 + bi]);
         }
 
-        // Accumulate voice output into mix buffer
+        // Accumulate voice output into mix buffer (with fade for releasing voices)
         const float* voice_out = buffer_pool_.get(voice_out_buf);
-        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-            mix[i] += voice_out[i];
+        if (voice.releasing) {
+            float fade = 1.0f - static_cast<float>(voice.age) /
+                                static_cast<float>(PolyAllocState::RELEASE_TIMEOUT + 1);
+            if (fade <= 0.0f) continue;  // fully faded, skip
+            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+                mix[i] += voice_out[i] * fade;
+            }
+        } else {
+            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+                mix[i] += voice_out[i];
+            }
         }
     }
 

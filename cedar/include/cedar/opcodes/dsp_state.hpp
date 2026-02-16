@@ -1060,8 +1060,8 @@ struct PolyAllocState {
         }
     }
 
-    // Release timeout: ~0.5s at 48kHz/128 block size
-    static constexpr std::uint32_t RELEASE_TIMEOUT = 200;
+    // Release timeout: ~43ms at 48kHz/128 block size
+    static constexpr std::uint32_t RELEASE_TIMEOUT = 16;
 
     void tick() {
         if (!voices) return;
