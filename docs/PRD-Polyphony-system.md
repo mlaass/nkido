@@ -36,20 +36,20 @@ fn lead(freq, gate, vel) =
     osc("saw", freq) |> lp(%, 2000 * adsr(gate)) |> % * vel
 
 // Explicit polyphonic (8-voice)
-pat("C4' Am7' G4'") |> poly(8, lead) |> out(%, %)
+pat("C4' Am7' G4'") |> poly(%, 8, lead) |> out(%, %)
 
 // Explicit monophonic (last-note priority, retrigger)
-pat("c4 e4 g4 b4") |> mono(lead) |> out(%, %)
+pat("c4 e4 g4 b4") |> mono(%, lead) |> out(%, %)
 ```
 
 ### 1.2 SoundFont and Sampler (Future)
 
 ```akkado
 // SoundFont as instrument (requires SF_PLAY opcode — future work)
-pat("C4' Am7'") |> poly(32, soundfont("piano.sf2")) |> out(%, %)
+pat("C4' Am7'") |> poly(%, 32, soundfont("piano.sf2")) |> out(%, %)
 
 // Sampler as instrument (requires SAMPLE_VOICE opcode — future work)
-pat("x _ x _") |> poly(4, sample("kick.wav")) |> out(%, %)
+pat("x _ x _") |> poly(%, 4, sample("kick.wav")) |> out(%, %)
 ```
 
 > **Note**: `soundfont` exists in `builtins.hpp` as `Opcode::NOP` (handled specially by codegen). SF_PLAY and SAMPLE_VOICE single-voice opcodes are future phases — SoundFont and Sampler keep their internal voice allocators until then.
@@ -57,17 +57,17 @@ pat("x _ x _") |> poly(4, sample("kick.wav")) |> out(%, %)
 ### 1.3 MIDI Input (Future)
 
 ```akkado
-midi_in() |> poly(16, lead) |> out(%, %)
+midi_in() |> poly(%, 16, lead) |> out(%, %)
 ```
 
 ### 1.4 Mono and Legato
 
 ```akkado
 // mono = poly(1) with last-note priority and retrigger
-pat("c4 e4 g4 b4") |> mono(lead) |> out(%, %)
+pat("c4 e4 g4 b4") |> mono(%, lead) |> out(%, %)
 
 // legato = mono without retrigger (freq glides, gate stays high)
-pat("c4 e4 g4 b4") |> legato(lead) |> out(%, %)
+pat("c4 e4 g4 b4") |> legato(%, lead) |> out(%, %)
 ```
 
 **Mono voice count**: `mono()` compiles to `poly(1, ...)` — envelope release tail is cut when a new note arrives. This matches hardware mono synths. Users who want release overlap can use `poly(2, ...)` with `mode=mono`.
@@ -81,7 +81,7 @@ fn pad(freq, gate, vel) =
     osc("saw", freq) |> lp(%, 1000) |> % * adsr(gate, 0.1, 0.2, 0.6, 0.5) * vel
 
 pat("C4' Am7' G7' F4'")
-|> poly(8, pad)       // 8 voices, mixed to mono
+|> poly(%, 8, pad)    // 8 voices, mixed to mono
 |> reverb(%)          // shared reverb on the mix
 |> out(%, %) * 0.3
 ```
@@ -95,7 +95,7 @@ cutoff = param("cutoff", 2000)
 fn lead(freq, gate, vel) =
     osc("saw", freq) |> lp(%, cutoff * adsr(gate)) |> % * vel
 
-pat("C4'") |> poly(8, lead) |> out(%, %)
+pat("C4'") |> poly(%, 8, lead) |> out(%, %)
 ```
 
 ---
@@ -464,7 +464,7 @@ Files to modify:
 **Test**: Python experiment with hardcoded bytecode — 3 oscillators at different frequencies via POLY.
 
 ### Phase 2: Akkado Compiler — `poly()` and `mono()`
-**Goal**: `pat("C4'") |> poly(8, synth_fn) |> out(%, %)` compiles and plays
+**Goal**: `pat("C4'") |> poly(%, 8, synth_fn) |> out(%, %)` compiles and plays
 
 Files to modify:
 - `akkado/include/akkado/builtins.hpp` — add `poly` and `mono` builtin entries
@@ -545,23 +545,23 @@ Files to create/modify:
 ```akkado
 // Basic polyphonic chord (verify 3 voices mix)
 fn pad(f, g, v) = osc("saw", f) |> lp(%, 1000) |> % * adsr(g, 0.1, 0.2, 0.6, 0.5) * v
-pat("C4' Am7' G7' F4'") |> poly(8, pad) |> out(%, %) * 0.3
+pat("C4' Am7' G7' F4'") |> poly(%, 8, pad) |> out(%, %) * 0.3
 
 // Mono lead (verify only 1 voice at a time)
 fn lead(f, g, v) = osc("saw", f) |> lp(%, 3000) |> % * adsr(g, 0.01, 0.1, 0.8, 0.2)
-pat("c4 e4 g4 c5 g4 e4") |> mono(lead) |> out(%, %) * 0.5
+pat("c4 e4 g4 c5 g4 e4") |> mono(%, lead) |> out(%, %) * 0.5
 
 // Old monophonic pattern (verify still works without poly())
 pat("c4 e4 g4") |> osc("sin", %.freq) |> out(%, %)
 
 // Voice stealing — exceed 4 voices with 7th chord
 fn simple(f, g, v) = osc("sin", f) * adsr(g) * v
-pat("Am7' CM9'") |> poly(4, simple) |> out(%, %) * 0.3
+pat("Am7' CM9'") |> poly(%, 4, simple) |> out(%, %) * 0.3
 
 // Closure capture for extra params
 cutoff = param("cutoff", 2000)
 fn filtered(f, g, v) = osc("saw", f) |> lp(%, cutoff * adsr(g)) |> % * v
-pat("C4' Am7'") |> poly(8, filtered) |> out(%, %) * 0.3
+pat("C4' Am7'") |> poly(%, 8, filtered) |> out(%, %) * 0.3
 ```
 
 ---
@@ -574,8 +574,8 @@ pat("C4' Am7'") |> poly(8, filtered) |> out(%, %) * 0.3
 | NoteEvent abstraction | (internal) | Phase 1 |
 | POLY_BEGIN/POLY_END opcodes | (bytecode) | Phase 1 |
 | State ID XOR isolation | (transparent) | Phase 1 |
-| `poly(n, instrument)` | `pat(...) \|> poly(8, lead)` | Phase 2 |
-| `mono(instrument)` | `pat(...) \|> mono(lead)` | Phase 2 |
+| `poly(n, instrument)` | `pat(...) \|> poly(%, 8, lead)` | Phase 2 |
+| `mono(instrument)` | `pat(...) \|> mono(%, lead)` | Phase 2 |
 | Voice allocation & stealing | (runtime) | Phase 3 |
 | Mono/legato modes | `mono(lead)`, `legato(lead)` | Phase 3 |
 | Event-index-based release | (runtime) | Phase 3 |
