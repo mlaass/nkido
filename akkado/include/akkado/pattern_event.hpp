@@ -42,6 +42,7 @@ struct PatternEvent {
 
     // Pitch data (for Pitch type)
     std::uint8_t midi_note = 60; // MIDI note number (60 = C4)
+    std::int8_t micro_offset = 0; // Microtonal step offset
 
     // Sample data (for Sample type)
     std::string sample_name;    // Sample identifier (e.g., "bd", "sd")

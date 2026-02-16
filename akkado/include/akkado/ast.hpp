@@ -186,6 +186,7 @@ struct Node {
     struct MiniAtomData {
         MiniAtomKind kind;
         std::uint8_t midi_note;     // For Pitch kind
+        std::int8_t micro_offset = 0;  // Microtonal step offset
         float velocity = 1.0f;      // 0.0-1.0, from :vel suffix
         std::string sample_name;    // For Sample kind
         std::uint8_t sample_variant; // For Sample kind (e.g., bd:2)

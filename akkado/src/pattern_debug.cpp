@@ -90,6 +90,11 @@ void serialize_node(std::string& json, NodeIndex idx, const AstArena& arena) {
                 json += ",\"midi\":";
                 std::snprintf(num_buf, sizeof(num_buf), "%d", static_cast<int>(data.midi_note));
                 json += num_buf;
+                if (data.micro_offset != 0) {
+                    json += ",\"microOffset\":";
+                    std::snprintf(num_buf, sizeof(num_buf), "%d", static_cast<int>(data.micro_offset));
+                    json += num_buf;
+                }
             } else if (data.kind == Node::MiniAtomKind::Sample) {
                 json += ",\"sampleName\":\"";
                 json += escape_json(data.sample_name);

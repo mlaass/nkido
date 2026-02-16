@@ -189,6 +189,7 @@ void PatternEvaluator::eval_atom(NodeIndex node, const PatternEvalContext& ctx,
         case Node::MiniAtomKind::Pitch:
             event.type = PatternEventType::Pitch;
             event.midi_note = atom_data.midi_note;
+            event.micro_offset = atom_data.micro_offset;
             break;
         case Node::MiniAtomKind::Sample:
             // In chord mode, try to parse sample name as chord symbol

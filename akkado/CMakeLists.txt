@@ -54,6 +54,7 @@ add_library(akkado STATIC
     src/codegen_viz.cpp
     src/chord_parser.cpp
     src/pattern_debug.cpp
+    src/tuning.cpp
 )
 
 target_include_directories(akkado

@@ -352,6 +352,9 @@ private:
     /// Handle transport(pattern, trig, step?, reset?) - trigger-driven pattern clock
     std::uint16_t handle_transport_call(NodeIndex node, const Node& n);
 
+    /// Handle tune(tuning_name, pattern) - apply microtonal tuning to pattern
+    std::uint16_t handle_tune_call(NodeIndex node, const Node& n);
+
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     std::uint16_t handle_tap_delay_call(NodeIndex node, const Node& n);

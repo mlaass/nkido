@@ -134,7 +134,7 @@ SourceLocation MiniLexer::current_location() const {
 }
 
 bool MiniLexer::looks_like_pitch() const {
-    // Check if current position looks like a pitch: [a-gA-G][#b]?[0-9]?
+    // Check if current position looks like a pitch: [a-gA-G][#bx^v+]*[0-9]?
     // followed by whitespace, modifier, or end
     //
     // IMPORTANT: Uppercase letters without octave (A, C, G) or with chord quality (Am, C7)
@@ -147,9 +147,14 @@ bool MiniLexer::looks_like_pitch() const {
 
     std::size_t pos = current_ + 1;
 
-    // Optional accidental
-    if (pos < pattern_.size() && is_accidental(pattern_[pos])) {
-        pos++;
+    // Scan modifier stream: accidentals (#, b, x) and micro-step operators (^, v, +)
+    while (pos < pattern_.size()) {
+        char c = pattern_[pos];
+        if (c == '#' || c == 'b' || c == 'x' || c == '^' || c == 'v' || c == '+') {
+            pos++;
+        } else {
+            break;
+        }
     }
 
     // For uppercase letters, REQUIRE an octave digit to be a pitch
@@ -222,13 +227,13 @@ MiniToken MiniLexer::lex_token() {
             }
             // Chord detection failed, try as pitch
             if (looks_like_pitch()) {
-                return lex_pitch_or_sample();
+                return lex_pitch();
             }
         }
 
         // For lowercase a-g, check if it looks like a pitch
         if (looks_like_pitch()) {
-            return lex_pitch_or_sample();
+            return lex_pitch();
         }
     }
 
@@ -457,6 +462,59 @@ std::optional<MiniToken> MiniLexer::try_lex_chord_symbol() {
     };
 
     return make_token(MiniTokenType::ChordToken, std::move(chord_data));
+}
+
+MiniToken MiniLexer::lex_pitch() {
+    // Character-by-character pitch parsing that handles microtonal modifiers (^, v, +, x)
+    // Called only when looks_like_pitch() returned true, so we know this IS a pitch.
+    char note_letter = advance();
+    int accidental_std = 0;
+    std::int8_t micro_offset = 0;
+
+    // Parse modifier stream: accidentals and micro-step operators
+    while (!is_at_end()) {
+        char c = peek();
+        if (c == '#')      { accidental_std++; advance(); }
+        else if (c == 'b') { accidental_std--; advance(); }  // always flat in pitch context
+        else if (c == 'x') { accidental_std += 2; advance(); }
+        else if (c == '^') { micro_offset++; advance(); }
+        else if (c == 'v') { micro_offset--; advance(); }
+        else if (c == '+') { micro_offset++; advance(); }
+        else break;
+    }
+
+    // Parse octave (0-9, default 4)
+    int octave = 4;
+    bool has_octave = false;
+    if (!is_at_end() && is_digit(peek())) {
+        has_octave = true;
+        octave = advance() - '0';
+        // Double-digit octave
+        if (!is_at_end() && is_digit(peek())) {
+            octave = octave * 10 + (advance() - '0');
+        }
+    }
+
+    std::uint8_t midi = parse_pitch_to_midi(note_letter, accidental_std, octave);
+    float velocity = 1.0f;
+
+    // Check for :velocity suffix (e.g., c4:0.8)
+    if (peek() == ':' && (is_digit(peek_next()) || peek_next() == '.')) {
+        advance(); // consume ':'
+        std::size_t vel_start = current_;
+        if (peek() == '.') advance();
+        while (is_digit(peek())) advance();
+        if (pattern_[vel_start] != '.' && peek() == '.' && is_digit(peek_next())) {
+            advance(); // consume '.'
+            while (is_digit(peek())) advance();
+        }
+        std::string_view vel_text = pattern_.substr(vel_start, current_ - vel_start);
+        double vel_val = 0.0;
+        std::from_chars(vel_text.data(), vel_text.data() + vel_text.size(), vel_val);
+        velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
+    }
+
+    return make_token(MiniTokenType::PitchToken, MiniPitchData{midi, has_octave, velocity, micro_offset});
 }
 
 MiniToken MiniLexer::lex_pitch_or_sample() {

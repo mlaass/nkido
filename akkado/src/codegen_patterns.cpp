@@ -7,6 +7,7 @@
 #include "akkado/pattern_eval.hpp"
 #include "akkado/mini_parser.hpp"
 #include "akkado/pattern_debug.hpp"
+#include "akkado/tuning.hpp"
 #include <cedar/opcodes/sequence.hpp>
 #include <bit>
 #include <cmath>
@@ -35,6 +36,9 @@ class SequenceCompiler {
 public:
     explicit SequenceCompiler(const AstArena& arena, SampleRegistry* sample_registry = nullptr)
         : arena_(arena), sample_registry_(sample_registry) {}
+
+    /// Set the tuning context for microtonal Hz resolution
+    void set_tuning(const TuningContext& tuning) { tuning_ = tuning; }
 
     // Set base offset for computing pattern-relative source offsets
     void set_pattern_base_offset(std::uint32_t offset) {
@@ -309,9 +313,8 @@ private:
         }
 
         if (atom_data.kind == Node::MiniAtomKind::Pitch) {
-            // Convert MIDI note to frequency
-            float freq = 440.0f * std::pow(2.0f,
-                (static_cast<float>(atom_data.midi_note) - 69.0f) / 12.0f);
+            // Convert MIDI note + micro_offset to frequency using tuning context
+            float freq = tuning_.resolve_hz(atom_data.midi_note, atom_data.micro_offset);
             e.values[0] = freq;
         } else if (atom_data.kind == Node::MiniAtomKind::Chord) {
             // Chord symbol: expand intervals to frequencies
@@ -680,6 +683,7 @@ private:
 
     const AstArena& arena_;
     SampleRegistry* sample_registry_ = nullptr;
+    TuningContext tuning_;  // Microtonal tuning context (default: 12-EDO)
     std::vector<cedar::Sequence> sequences_;
     std::vector<std::vector<cedar::Event>> sequence_events_;  // Event storage for each sequence
     std::set<std::string> sample_names_;
@@ -1277,7 +1281,8 @@ static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
         return func_name == "pat" || func_name == "timeline" ||
                func_name == "slow" || func_name == "fast" ||
                func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
-               func_name == "bank" || func_name == "n" || func_name == "transport";
+               func_name == "bank" || func_name == "n" || func_name == "transport" ||
+               func_name == "tune";
     }
 
     return false;
@@ -1346,8 +1351,23 @@ static bool compile_pattern_for_transform(
         bool is_transform = (func_name == "slow" || func_name == "fast" ||
                              func_name == "rev" || func_name == "transpose" ||
                              func_name == "velocity" || func_name == "bank" ||
-                             func_name == "n");
+                             func_name == "n" || func_name == "tune");
         if (is_transform) {
+            // tune() sets context BEFORE compilation (not post-processing)
+            if (func_name == "tune") {
+                auto tuning_name = get_string_arg(ast, pat_node, 0);
+                NodeIndex inner_arg = get_pattern_arg(ast, pat_node, 1);
+                if (!tuning_name.has_value() || inner_arg == NULL_NODE) return false;
+
+                auto tuning = parse_tuning(*tuning_name);
+                if (!tuning.has_value()) return false;
+
+                compiler.set_tuning(*tuning);
+                return compile_pattern_for_transform(gen, ast, inner_arg, sample_registry,
+                                                      compiler, out_pattern_node, out_num_elements,
+                                                      out_events, out_cycle_length);
+            }
+
             // Get the inner pattern argument (first arg of this transform call)
             NodeIndex inner_arg = get_pattern_arg(ast, pat_node, 0);
             if (inner_arg == NULL_NODE) return false;
@@ -2463,6 +2483,73 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     pop_path();
     node_buffers_[node] = value_buf;
     return value_buf;
+}
+
+std::uint16_t CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
+    // tune(tuning_name, pattern) - apply microtonal tuning context to a pattern
+    // tuning_name is a string like "31edo", "24edo"
+    // The tuning context affects how micro_offset is resolved to Hz
+
+    auto tuning_name = get_string_arg(*ast_, n, 0);
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 1);
+
+    if (!tuning_name.has_value()) {
+        error("E130", "tune() requires a tuning name string as first argument (e.g., \"31edo\")", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    if (pattern_arg == NULL_NODE) {
+        error("E131", "tune() requires a pattern as second argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    auto tuning = parse_tuning(*tuning_name);
+    if (!tuning.has_value()) {
+        error("E132", "Unknown tuning: '" + *tuning_name + "'. Use format like '31edo', '24edo'", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    const Node& pat_node = ast_->arena[pattern_arg];
+    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+        error("E133", "tune() second argument must be a pattern", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Compile the pattern with the tuning context set
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    compiler.set_tuning(*tuning);
+
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "tune() failed to compile pattern argument", n.location);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set up state ID
+    std::uint32_t tune_count = call_counters_["tune"]++;
+    push_path("tune#" + std::to_string(tune_count));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    std::uint16_t result = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_buffers_, record_fields_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+
+    if (result == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+
+    return result;
 }
 
 std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n) {

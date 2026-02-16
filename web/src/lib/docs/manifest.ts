@@ -7,6 +7,7 @@ export const slugToPath: Record<string, string> = {
 	"02-filters": "tutorials/02-filters.md",
 	"04-rhythm": "tutorials/04-rhythm.md",
 	"01-hello-sine": "tutorials/01-hello-sine.md",
+	"microtonal": "reference/mini-notation/microtonal.md",
 	"basics": "reference/mini-notation/basics.md",
 	"pipes": "reference/language/pipes.md",
 	"variables": "reference/language/variables.md",
@@ -117,6 +118,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "basics",
 			"title": "Mini-Notation Basics"
+		},
+		{
+			"slug": "microtonal",
+			"title": "Microtonal Notation"
 		}
 	],
 	"concepts": [
@@ -472,6 +477,76 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "osc",
 		"anchor": "osc"
+	},
+	"microtonal": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"tuning": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"edo": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"quarter tone": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"17edo": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"24edo": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"31edo": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"tune": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"xenharmonic": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"cents": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"micro-step": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"step up": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"step down": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
+	},
+	"caret": {
+		"slug": "microtonal",
+		"category": "mini-notation",
+		"title": "Microtonal Notation"
 	},
 	"mini-notation": {
 		"slug": "basics",
@@ -1102,12 +1177,27 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Oscillators"
 	},
+	"triangle": {
+		"slug": "oscillators",
+		"category": "builtins",
+		"title": "Oscillators"
+	},
 	"saw": {
 		"slug": "oscillators",
 		"category": "builtins",
 		"title": "Oscillators"
 	},
+	"sawtooth": {
+		"slug": "oscillators",
+		"category": "builtins",
+		"title": "Oscillators"
+	},
 	"sqr": {
+		"slug": "oscillators",
+		"category": "builtins",
+		"title": "Oscillators"
+	},
+	"square": {
 		"slug": "oscillators",
 		"category": "builtins",
 		"title": "Oscillators"
@@ -1230,6 +1320,7 @@ export const previews: Record<string, string> = {
 	"02-filters": "Filters are essential tools for sculpting your sounds. They remove or emphasize certain frequencies, transforming raw oscillators into musical...",
 	"04-rhythm": "Music is about time. In this tutorial, you'll learn to create rhythmic patterns, from basic beats to complex polyrhythms.",
 	"01-hello-sine": "Welcome to Akkado! In this tutorial, you'll make your first sound and learn the basics of how the language works.",
+	"microtonal": "Akkado supports microtonal pitch notation through micro-step operators (, , ) and the  function, which selects how those operators map to frequency.",
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
 	"pipes": "The pipe operator () and hole () are the foundation of Akkado's signal flow model.",
 	"variables": "Variables store values for reuse throughout your patch.",

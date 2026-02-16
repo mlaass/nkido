@@ -70,6 +70,7 @@ private:
     void skip_whitespace();
     MiniToken lex_token();
     MiniToken lex_number();
+    MiniToken lex_pitch();          // Character-by-character pitch parsing (handles ^v+x modifiers)
     MiniToken lex_pitch_or_sample();
     MiniToken lex_sample_only();  // For sample_only mode
 

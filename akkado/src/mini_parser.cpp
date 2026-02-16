@@ -215,6 +215,7 @@ NodeIndex MiniParser::parse_pitch_atom(const MiniToken& token) {
     arena_[node].data = Node::MiniAtomData{
         .kind = Node::MiniAtomKind::Pitch,
         .midi_note = pitch.midi_note,
+        .micro_offset = pitch.micro_offset,
         .velocity = pitch.velocity,
         .sample_name = "",
         .sample_variant = 0,

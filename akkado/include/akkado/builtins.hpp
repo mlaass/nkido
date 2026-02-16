@@ -747,6 +747,10 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"pattern", "variant", "", "", "", ""},
                  {NAN, NAN, NAN},
                  "Set sample variant for pattern events."}},
+    {"tune",    {cedar::Opcode::NOP, 2, 0, false,
+                 {"tuning", "pattern", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Apply microtonal tuning context to a pattern."}},
 
     // Parameter exposure builtins (handled specially by codegen)
     // These extract metadata at compile time for UI generation

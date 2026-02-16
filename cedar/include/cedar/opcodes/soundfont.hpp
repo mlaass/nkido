@@ -110,9 +110,9 @@ inline void op_soundfont_voice(ExecutionContext& ctx, const Instruction& inst,
                 voice->position = 0.0f;
                 voice->fade_counter = SFVoice::FADE_SAMPLES; // No fade needed for fresh voice
 
-                // Compute playback speed
-                // Speed = 2^((note - root_key + transpose) / 12 + tune/1200) * zone_sr/ctx_sr
-                float pitch_cents = (static_cast<float>(note) - static_cast<float>(zone.root_key)
+                // Compute playback speed using fractional midi_note for microtonal precision
+                // Speed = 2^((midi - root_key + transpose) / 12 + tune/1200) * zone_sr/ctx_sr
+                float pitch_cents = (midi_note - static_cast<float>(zone.root_key)
                                      + static_cast<float>(zone.transpose)) * 100.0f
                                     + static_cast<float>(zone.tune);
                 float pitch_ratio = std::pow(2.0f, pitch_cents / 1200.0f);
@@ -152,7 +152,8 @@ inline void op_soundfont_voice(ExecutionContext& ctx, const Instruction& inst,
                 float fc = zone.filter_fc;
                 if (zone.mod_env_to_filter_fc != 0) {
                     // Key-to-filter: scale by semitone distance from middle C
-                    float key_offset = static_cast<float>(note) - 60.0f;
+                    // Use fractional midi_note for microtonal precision
+                    float key_offset = midi_note - 60.0f;
                     fc *= std::pow(2.0f, key_offset * static_cast<float>(zone.mod_env_to_filter_fc) / (1200.0f * 12.0f));
                 }
                 fc = std::clamp(fc, 20.0f, ctx.sample_rate * 0.49f);

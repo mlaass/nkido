@@ -3,6 +3,7 @@
 #include "akkado/mini_lexer.hpp"
 #include "akkado/mini_parser.hpp"
 #include "akkado/pattern_eval.hpp"
+#include "akkado/tuning.hpp"
 
 using namespace akkado;
 using Catch::Matchers::WithinRel;
@@ -1264,5 +1265,289 @@ TEST_CASE("Chord velocity suffix", "[mini_lexer]") {
         REQUIRE(diags.empty());
         REQUIRE(tokens[0].type == MiniTokenType::ChordToken);
         CHECK_THAT(static_cast<double>(tokens[0].as_chord().velocity), WithinRel(1.0, 0.001));
+    }
+}
+
+// ============================================================================
+// Microtonal Pitch Parsing Tests
+// ============================================================================
+
+TEST_CASE("Microtonal pitch lexing", "[mini_lexer][microtonal]") {
+    SECTION("c^4 — single micro step up") {
+        auto [tokens, diags] = lex_mini("c^4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK(pitch.micro_offset == 1);
+    }
+
+    SECTION("c#^4 — sharp + micro up (mixed)") {
+        auto [tokens, diags] = lex_mini("c#^4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 61);
+        CHECK(pitch.micro_offset == 1);
+    }
+
+    SECTION("cbb4 — stacked flats (double flat)") {
+        auto [tokens, diags] = lex_mini("cbb4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 58);  // C4 - 2 semitones
+        CHECK(pitch.micro_offset == 0);
+    }
+
+    SECTION("c+4 — alias for micro up") {
+        auto [tokens, diags] = lex_mini("c+4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK(pitch.micro_offset == 1);
+    }
+
+    SECTION("cx4 — double sharp") {
+        auto [tokens, diags] = lex_mini("cx4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 62);  // C4 + 2 semitones
+        CHECK(pitch.micro_offset == 0);
+    }
+
+    SECTION("c^^4 — stacked micro ups") {
+        auto [tokens, diags] = lex_mini("c^^4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK(pitch.micro_offset == 2);
+    }
+
+    SECTION("cvv4 — stacked micro downs") {
+        auto [tokens, diags] = lex_mini("cvv4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK(pitch.micro_offset == -2);
+    }
+
+    SECTION("c#^v4 — micro up/down cancel") {
+        auto [tokens, diags] = lex_mini("c#^v4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 61);
+        CHECK(pitch.micro_offset == 0);
+    }
+
+    SECTION("c4 backward compat — no micro offset") {
+        auto [tokens, diags] = lex_mini("c4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK(pitch.micro_offset == 0);
+    }
+
+    SECTION("f#3 backward compat — no micro offset") {
+        auto [tokens, diags] = lex_mini("f#3");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 54);
+        CHECK(pitch.micro_offset == 0);
+    }
+
+    SECTION("bd sample not affected by microtonal") {
+        auto [tokens, diags] = lex_mini("bd");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::SampleToken);
+        CHECK(tokens[0].as_sample().name == "bd");
+    }
+
+    SECTION("cv4 — micro down with octave") {
+        auto [tokens, diags] = lex_mini("cv4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK(pitch.micro_offset == -1);
+    }
+
+    SECTION("microtonal pitch with velocity suffix") {
+        auto [tokens, diags] = lex_mini("c^4:0.5");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& pitch = tokens[0].as_pitch();
+        CHECK(pitch.midi_note == 60);
+        CHECK(pitch.micro_offset == 1);
+        CHECK_THAT(static_cast<double>(pitch.velocity), WithinRel(0.5, 0.001));
+    }
+
+    SECTION("microtonal pitches in sequence") {
+        auto [tokens, diags] = lex_mini("c^4 ev4 g4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens.size() >= 4); // 3 pitches + Eof
+        CHECK(tokens[0].as_pitch().micro_offset == 1);
+        CHECK(tokens[1].as_pitch().micro_offset == -1);
+        CHECK(tokens[2].as_pitch().micro_offset == 0);
+    }
+}
+
+TEST_CASE("Microtonal pitch parsing and evaluation", "[mini_parser][microtonal]") {
+    SECTION("micro_offset threaded to AST") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("c^4", arena);
+        REQUIRE(diags.empty());
+        REQUIRE(root != NULL_NODE);
+
+        NodeIndex atom = arena[root].first_child;
+        CHECK(arena[atom].type == NodeType::MiniAtom);
+        CHECK(arena[atom].as_mini_atom().kind == Node::MiniAtomKind::Pitch);
+        CHECK(arena[atom].as_mini_atom().midi_note == 60);
+        CHECK(arena[atom].as_mini_atom().micro_offset == 1);
+    }
+
+    SECTION("micro_offset threaded to PatternEvent") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("c^^4 ev4", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 2);
+        CHECK(events.events[0].midi_note == 60);
+        CHECK(events.events[0].micro_offset == 2);
+        CHECK(events.events[1].midi_note == 64);
+        CHECK(events.events[1].micro_offset == -1);
+    }
+}
+
+// ============================================================================
+// TuningContext and parse_tuning Tests
+// ============================================================================
+
+TEST_CASE("TuningContext resolve_hz", "[tuning]") {
+    SECTION("12-EDO default: no micro_offset is standard pitch") {
+        TuningContext tuning{12};
+        // A4 = 440Hz
+        CHECK_THAT(static_cast<double>(tuning.resolve_hz(69, 0)),
+                   WithinRel(440.0, 0.001));
+        // C4 = ~261.6Hz
+        CHECK_THAT(static_cast<double>(tuning.resolve_hz(60, 0)),
+                   WithinRel(261.626, 0.001));
+    }
+
+    SECTION("12-EDO: micro_offset=+1 is one semitone (100 cents)") {
+        TuningContext tuning{12};
+        // A4 + 1 micro step in 12-EDO = A#4/Bb4 = ~466.16 Hz
+        float a4_up = tuning.resolve_hz(69, 1);
+        float asharp4 = tuning.resolve_hz(70, 0);
+        CHECK_THAT(static_cast<double>(a4_up), WithinRel(static_cast<double>(asharp4), 0.001));
+    }
+
+    SECTION("24-EDO: micro_offset=+1 is quarter tone (50 cents)") {
+        TuningContext tuning{24};
+        float hz = tuning.resolve_hz(69, 1);
+        // 50 cents above A4 = 440 * 2^(50/1200) ≈ 452.89
+        CHECK_THAT(static_cast<double>(hz), WithinRel(452.893, 0.01));
+    }
+
+    SECTION("31-EDO: micro_offset=+1 is ~38.7 cents") {
+        TuningContext tuning{31};
+        float hz = tuning.resolve_hz(69, 1);
+        // 1200/31 ≈ 38.71 cents above A4 = 440 * 2^(38.71/1200) ≈ 449.90
+        double expected = 440.0 * std::pow(2.0, (1200.0 / 31.0) / 1200.0);
+        CHECK_THAT(static_cast<double>(hz), WithinRel(expected, 0.001));
+    }
+
+    SECTION("no micro_offset: identical to standard formula") {
+        TuningContext tuning12{12};
+        TuningContext tuning31{31};
+        // Without micro_offset, all EDO systems produce the same Hz
+        CHECK_THAT(static_cast<double>(tuning12.resolve_hz(60, 0)),
+                   WithinRel(static_cast<double>(tuning31.resolve_hz(60, 0)), 0.001));
+        CHECK_THAT(static_cast<double>(tuning12.resolve_hz(72, 0)),
+                   WithinRel(static_cast<double>(tuning31.resolve_hz(72, 0)), 0.001));
+    }
+}
+
+TEST_CASE("parse_tuning", "[tuning]") {
+    SECTION("standard EDO formats") {
+        auto t12 = parse_tuning("12edo");
+        REQUIRE(t12.has_value());
+        CHECK(t12->edo_count == 12);
+
+        auto t24 = parse_tuning("24edo");
+        REQUIRE(t24.has_value());
+        CHECK(t24->edo_count == 24);
+
+        auto t31 = parse_tuning("31edo");
+        REQUIRE(t31.has_value());
+        CHECK(t31->edo_count == 31);
+    }
+
+    SECTION("dash format") {
+        auto t = parse_tuning("31-edo");
+        REQUIRE(t.has_value());
+        CHECK(t->edo_count == 31);
+
+        auto t2 = parse_tuning("53-EDO");
+        REQUIRE(t2.has_value());
+        CHECK(t2->edo_count == 53);
+    }
+
+    SECTION("invalid tunings return nullopt") {
+        CHECK_FALSE(parse_tuning("foo").has_value());
+        CHECK_FALSE(parse_tuning("").has_value());
+        CHECK_FALSE(parse_tuning("edo").has_value());
+        CHECK_FALSE(parse_tuning("0edo").has_value());
+    }
+}
+
+// ============================================================================
+// tune() end-to-end compilation tests [tuning]
+// ============================================================================
+
+#include "akkado/akkado.hpp"
+
+static bool has_diagnostic_code(const std::vector<akkado::Diagnostic>& diagnostics, const std::string& code) {
+    for (const auto& d : diagnostics) {
+        if (d.code == code) return true;
+    }
+    return false;
+}
+
+TEST_CASE("tune() compiles end-to-end", "[tuning]") {
+    SECTION("basic tune() compiles successfully") {
+        auto result = akkado::compile(R"(tune("24edo", pat("c4 c^4")))");
+        INFO("Diagnostics:");
+        for (const auto& d : result.diagnostics) {
+            INFO("  " << d.code << ": " << d.message);
+        }
+        CHECK(result.success);
+    }
+
+    SECTION("tune() in full pipeline with pipe") {
+        auto result = akkado::compile(R"(tune("31edo", pat("a4 a^4 a^^4")) |> ((f) -> osc("sin", f)) |> out(%, %))");
+        INFO("Diagnostics:");
+        for (const auto& d : result.diagnostics) {
+            INFO("  " << d.code << ": " << d.message);
+        }
+        CHECK(result.success);
+    }
+
+    SECTION("invalid tuning name produces error") {
+        auto result = akkado::compile(R"(tune("invalid", pat("c4")))");
+        CHECK_FALSE(result.success);
+    }
+
+    SECTION("non-pattern second arg produces error") {
+        auto result = akkado::compile(R"(tune("24edo", 42))");
+        CHECK_FALSE(result.success);
     }
 }

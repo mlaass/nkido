@@ -87,6 +87,7 @@ struct MiniPitchData {
     std::uint8_t midi_note;    // MIDI note number (60 = C4)
     bool has_octave;           // Whether octave was explicit in source
     float velocity = 1.0f;     // 0.0-1.0, from :vel suffix (e.g., c4:0.8)
+    std::int8_t micro_offset = 0;  // Microtonal step offset (^=+1, v=-1, stacking for larger)
 };
 
 /// Sample data for mini-notation
