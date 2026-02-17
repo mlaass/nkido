@@ -398,11 +398,9 @@ NodeIndex SemanticAnalyzer::rewrite_pipes(NodeIndex node) {
         // Also substitute binding name references with the LHS value
         NodeIndex new_rhs;
         if (!binding_name.empty()) {
-            // Substitute both holes and binding name references
-            new_rhs = substitute_holes_and_binding(rhs_idx, new_lhs, binding_name);
+            new_rhs = substitute_nodes(rhs_idx, {new_lhs, binding_name, NULL_NODE, true});
         } else {
-            // substitute_holes also handles any nested pipes in the RHS
-            new_rhs = substitute_holes(rhs_idx, new_lhs);
+            new_rhs = substitute_nodes(rhs_idx, {new_lhs});
         }
 
         // Track mapping so function/closure bodies pointing to this pipe get updated
@@ -598,59 +596,76 @@ NodeIndex SemanticAnalyzer::clone_subtree(NodeIndex src_idx) {
     return dst_idx;
 }
 
-NodeIndex SemanticAnalyzer::substitute_holes(NodeIndex node, NodeIndex replacement) {
+NodeIndex SemanticAnalyzer::substitute_nodes(NodeIndex node, const SubstituteOpts& opts) {
     if (node == NULL_NODE) return NULL_NODE;
 
     const Node& n = (*input_ast_).arena[node];
 
-    // If this is a hole, return the replacement node
-    // (For MVP, multiple holes share the same replacement node)
+    // 1. Hole → replace with replacement (clone if clone_on_hole)
     if (n.type == NodeType::Hole) {
         // Check for hole with field access: %.field
         if (std::holds_alternative<Node::HoleData>(n.data)) {
             const auto& hole_data = n.as_hole();
             if (hole_data.field_name.has_value()) {
-                // Create FieldAccess node: replacement.field
+                NodeIndex base = opts.clone_on_hole
+                    ? clone_subtree(opts.replacement)
+                    : opts.replacement;
                 NodeIndex field_access = output_arena_.alloc(NodeType::FieldAccess, n.location);
                 output_arena_[field_access].data = Node::FieldAccessData{hole_data.field_name.value()};
-                output_arena_[field_access].first_child = replacement;  // Already in output arena
+                output_arena_[field_access].first_child = base;
                 return field_access;
             }
         }
-        return replacement;
+        return opts.clone_on_hole ? clone_subtree(opts.replacement) : opts.replacement;
     }
 
-    // Handle nested pipes - they need to be rewritten
+    // 2. Identifier matching binding_name → clone replacement
+    if (!opts.binding_name.empty() && n.type == NodeType::Identifier) {
+        std::string name;
+        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
+            name = n.as_identifier();
+        }
+        if (name == opts.binding_name) {
+            return clone_subtree(opts.replacement);
+        }
+    }
+
+    // 3. Node identity match → return replacement directly
+    if (opts.identifier_to_replace != NULL_NODE && node == opts.identifier_to_replace) {
+        return opts.replacement;
+    }
+
+    // 4. Pipe → recurse LHS, then RHS with adjusted opts
     if (n.type == NodeType::Pipe) {
-        // Get LHS and RHS of the nested pipe
         NodeIndex src_lhs = n.first_child;
         NodeIndex src_rhs = (src_lhs != NULL_NODE) ?
                             (*input_ast_).arena[src_lhs].next_sibling : NULL_NODE;
 
-        // First, substitute holes in the LHS using the outer replacement
-        NodeIndex new_lhs = substitute_holes(src_lhs, replacement);
+        NodeIndex new_lhs = substitute_nodes(src_lhs, opts);
 
-        // Then, substitute holes in the RHS using the new LHS as replacement
-        // This eliminates the nested pipe
-        NodeIndex new_rhs = substitute_holes(src_rhs, new_lhs);
+        // For RHS: replacement becomes new_lhs, and drop identifier_to_replace
+        // (standard pipe semantics: only holes in RHS get the LHS value)
+        // But binding_name carries through (as-binding is visible in entire chain)
+        SubstituteOpts rhs_opts;
+        rhs_opts.replacement = new_lhs;
+        rhs_opts.binding_name = opts.binding_name;
+        rhs_opts.identifier_to_replace = NULL_NODE;  // drop identity match for RHS
+        rhs_opts.clone_on_hole = opts.clone_on_hole;
 
-        // Track mapping so function/closure bodies pointing to this pipe get updated
+        NodeIndex new_rhs = substitute_nodes(src_rhs, rhs_opts);
+
         node_map_[node] = new_rhs;
-
-        // Return the transformed RHS (pipe is eliminated)
         return new_rhs;
     }
 
-    // For other nodes, clone and recurse on children
+    // 5. Clone node, recurse children
     NodeIndex new_node = clone_node(node);
 
-    // Handle MatchArm guard_node specially - it's not a child but stored in data
+    // Handle MatchArm guard_node specially
     if (n.type == NodeType::MatchArm) {
         const auto& arm_data = n.as_match_arm();
         if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
-            // Substitute holes in the guard expression
-            NodeIndex new_guard = substitute_holes(arm_data.guard_node, replacement);
-            // Update the MatchArmData in the new node
+            NodeIndex new_guard = substitute_nodes(arm_data.guard_node, opts);
             auto& dst_data = std::get<Node::MatchArmData>(output_arena_[new_node].data);
             dst_data.guard_node = new_guard;
         }
@@ -660,7 +675,7 @@ NodeIndex SemanticAnalyzer::substitute_holes(NodeIndex node, NodeIndex replaceme
     NodeIndex prev_dst_child = NULL_NODE;
 
     while (src_child != NULL_NODE) {
-        NodeIndex dst_child = substitute_holes(src_child, replacement);
+        NodeIndex dst_child = substitute_nodes(src_child, opts);
 
         if (dst_child != NULL_NODE) {
             if (prev_dst_child == NULL_NODE) {
@@ -672,6 +687,32 @@ NodeIndex SemanticAnalyzer::substitute_holes(NodeIndex node, NodeIndex replaceme
         }
 
         src_child = (*input_ast_).arena[src_child].next_sibling;
+    }
+
+    // 6. Desugar MethodCall → Call (inlined desugar_method_call_output)
+    if (n.type == NodeType::MethodCall) {
+        Node& src_out = output_arena_[new_node];
+
+        NodeIndex call_idx = output_arena_.alloc(NodeType::Call, src_out.location);
+        output_arena_[call_idx].data = src_out.data;
+
+        NodeIndex receiver = src_out.first_child;
+        if (receiver == NULL_NODE) {
+            error("E008", "Method call missing receiver", src_out.location);
+            return call_idx;
+        }
+
+        NodeIndex receiver_arg = output_arena_.alloc(NodeType::Argument, src_out.location);
+        output_arena_[receiver_arg].data = Node::ArgumentData{std::nullopt};
+        output_arena_[receiver_arg].first_child = receiver;
+
+        NodeIndex remaining_args = output_arena_[receiver].next_sibling;
+        output_arena_[receiver].next_sibling = NULL_NODE;
+
+        output_arena_[call_idx].first_child = receiver_arg;
+        output_arena_[receiver_arg].next_sibling = remaining_args;
+
+        return call_idx;
     }
 
     return new_node;
@@ -693,177 +734,7 @@ bool SemanticAnalyzer::contains_hole(NodeIndex node) const {
     return false;
 }
 
-// Helper for as-binding: substitute holes AND identifiers matching binding_name
-NodeIndex SemanticAnalyzer::substitute_holes_and_binding(
-    NodeIndex node, NodeIndex replacement, const std::string& binding_name) {
 
-    if (node == NULL_NODE) return NULL_NODE;
-
-    const Node& n = (*input_ast_).arena[node];
-
-    // If this is a hole, return the replacement node
-    if (n.type == NodeType::Hole) {
-        // Check for hole with field access: %.field
-        if (std::holds_alternative<Node::HoleData>(n.data)) {
-            const auto& hole_data = n.as_hole();
-            if (hole_data.field_name.has_value()) {
-                // Create FieldAccess node: replacement.field
-                NodeIndex field_access = output_arena_.alloc(NodeType::FieldAccess, n.location);
-                output_arena_[field_access].data = Node::FieldAccessData{hole_data.field_name.value()};
-                output_arena_[field_access].first_child = replacement;  // Already in output arena
-                return field_access;
-            }
-        }
-        // Clone the replacement to create a fresh copy
-        return clone_subtree(replacement);
-    }
-
-    // If this is an identifier matching the binding name, substitute it
-    if (n.type == NodeType::Identifier) {
-        std::string name;
-        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
-            name = n.as_identifier();
-        }
-        if (name == binding_name) {
-            // Clone the replacement to create a fresh copy
-            return clone_subtree(replacement);
-        }
-    }
-
-    // Handle nested pipes - they need to be rewritten
-    if (n.type == NodeType::Pipe) {
-        NodeIndex src_lhs = n.first_child;
-        NodeIndex src_rhs = (src_lhs != NULL_NODE) ?
-                            (*input_ast_).arena[src_lhs].next_sibling : NULL_NODE;
-
-        // Substitute binding references in the LHS
-        NodeIndex new_lhs = substitute_holes_and_binding(src_lhs, replacement, binding_name);
-
-        // Substitute holes in the RHS using the new LHS as replacement
-        // But also substitute binding name references
-        NodeIndex new_rhs = substitute_holes_and_binding(src_rhs, new_lhs, binding_name);
-
-        // Track mapping
-        node_map_[node] = new_rhs;
-
-        return new_rhs;
-    }
-
-    // For other nodes, clone and recurse on children
-    NodeIndex new_node = clone_node(node);
-
-    // Handle MatchArm guard_node specially
-    if (n.type == NodeType::MatchArm) {
-        const auto& arm_data = n.as_match_arm();
-        if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
-            NodeIndex new_guard = substitute_holes_and_binding(arm_data.guard_node, replacement, binding_name);
-            auto& dst_data = std::get<Node::MatchArmData>(output_arena_[new_node].data);
-            dst_data.guard_node = new_guard;
-        }
-    }
-
-    NodeIndex src_child = n.first_child;
-    NodeIndex prev_dst_child = NULL_NODE;
-
-    while (src_child != NULL_NODE) {
-        NodeIndex dst_child = substitute_holes_and_binding(src_child, replacement, binding_name);
-
-        if (dst_child != NULL_NODE) {
-            if (prev_dst_child == NULL_NODE) {
-                output_arena_[new_node].first_child = dst_child;
-            } else {
-                output_arena_[prev_dst_child].next_sibling = dst_child;
-            }
-            prev_dst_child = dst_child;
-        }
-
-        src_child = (*input_ast_).arena[src_child].next_sibling;
-    }
-
-    return new_node;
-}
-
-// Helper for pipe-to-lambda: substitute holes AND a specific identifier
-NodeIndex SemanticAnalyzer::substitute_holes_and_identifier(
-    NodeIndex node, NodeIndex replacement, NodeIndex identifier_to_replace) {
-
-    if (node == NULL_NODE) return NULL_NODE;
-
-    const Node& n = (*input_ast_).arena[node];
-
-    // If this is a hole, return the replacement node
-    if (n.type == NodeType::Hole) {
-        // Check for hole with field access: %.field
-        if (std::holds_alternative<Node::HoleData>(n.data)) {
-            const auto& hole_data = n.as_hole();
-            if (hole_data.field_name.has_value()) {
-                // Create FieldAccess node: replacement.field
-                NodeIndex field_access = output_arena_.alloc(NodeType::FieldAccess, n.location);
-                output_arena_[field_access].data = Node::FieldAccessData{hole_data.field_name.value()};
-                output_arena_[field_access].first_child = replacement;  // Already in output arena
-                return field_access;
-            }
-        }
-        return replacement;
-    }
-
-    // If this is the identifier we're replacing, return the replacement
-    if (node == identifier_to_replace) {
-        return replacement;
-    }
-
-    // Handle nested pipes - they need to be rewritten
-    if (n.type == NodeType::Pipe) {
-        NodeIndex src_lhs = n.first_child;
-        NodeIndex src_rhs = (src_lhs != NULL_NODE) ?
-                            (*input_ast_).arena[src_lhs].next_sibling : NULL_NODE;
-
-        // Substitute holes/identifier in the LHS
-        NodeIndex new_lhs = substitute_holes_and_identifier(src_lhs, replacement, identifier_to_replace);
-
-        // Substitute holes in the RHS using the new LHS as replacement
-        // (normal pipe semantics: holes in RHS get the LHS value)
-        NodeIndex new_rhs = substitute_holes(src_rhs, new_lhs);
-
-        // Track mapping
-        node_map_[node] = new_rhs;
-
-        return new_rhs;
-    }
-
-    // For other nodes, clone and recurse on children
-    NodeIndex new_node = clone_node(node);
-
-    // Handle MatchArm guard_node specially
-    if (n.type == NodeType::MatchArm) {
-        const auto& arm_data = n.as_match_arm();
-        if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
-            NodeIndex new_guard = substitute_holes_and_identifier(arm_data.guard_node, replacement, identifier_to_replace);
-            auto& dst_data = std::get<Node::MatchArmData>(output_arena_[new_node].data);
-            dst_data.guard_node = new_guard;
-        }
-    }
-
-    NodeIndex src_child = n.first_child;
-    NodeIndex prev_dst_child = NULL_NODE;
-
-    while (src_child != NULL_NODE) {
-        NodeIndex dst_child = substitute_holes_and_identifier(src_child, replacement, identifier_to_replace);
-
-        if (dst_child != NULL_NODE) {
-            if (prev_dst_child == NULL_NODE) {
-                output_arena_[new_node].first_child = dst_child;
-            } else {
-                output_arena_[prev_dst_child].next_sibling = dst_child;
-            }
-            prev_dst_child = dst_child;
-        }
-
-        src_child = (*input_ast_).arena[src_child].next_sibling;
-    }
-
-    return new_node;
-}
 
 NodeIndex SemanticAnalyzer::create_closure_from_pipe(
     NodeIndex param_node, NodeIndex body_node, SourceLocation loc) {
@@ -887,7 +758,7 @@ NodeIndex SemanticAnalyzer::create_closure_from_pipe(
     output_arena_[param_ref].data = Node::IdentifierData{param_name};
 
     // Substitute holes AND the parameter identifier in body with param reference
-    NodeIndex body = substitute_holes_and_identifier(body_node, param_ref, param_node);
+    NodeIndex body = substitute_nodes(body_node, {param_ref, {}, param_node});
     output_arena_[param].next_sibling = body;
 
     symbols_.pop_scope();
@@ -937,6 +808,7 @@ NodeIndex SemanticAnalyzer::desugar_method_call(NodeIndex method_call_idx) {
 
     return call_idx;
 }
+
 
 void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
     if (node == NULL_NODE) return;

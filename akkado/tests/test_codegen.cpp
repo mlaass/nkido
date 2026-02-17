@@ -1532,38 +1532,175 @@ TEST_CASE("Codegen: dropdown() creates selection parameter", "[codegen][params]"
 }
 
 // =============================================================================
-// Method Desugar Tests
+// Dot-Call Syntax Tests
 // =============================================================================
 
-TEST_CASE("Method call desugaring", "[codegen][methods]") {
-    SECTION("method on builtin function") {
-        // sin(440).abs() should become abs(sin(440))
-        // sin and abs are both builtins
-        auto result = akkado::compile(R"(
+TEST_CASE("Dot-call syntax", "[codegen][methods]") {
+    SECTION("method on builtin: sin(440).abs() == abs(sin(440))") {
+        auto dot = akkado::compile(R"(
             x = sin(440).abs()
             out(x, x)
         )");
-        CHECK(result.success);
+        auto direct = akkado::compile(R"(
+            x = abs(sin(440))
+            out(x, x)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        // Same instructions
+        CHECK(dot.bytecode == direct.bytecode);
     }
 
-    SECTION("method call produces valid AST") {
-        // Test that method desugar doesn't crash the compiler
-        // Even if the pattern transformation isn't fully implemented
-        auto result = akkado::compile(R"(
-            slow(pat("c4 e4 g4"), 2)
+    SECTION("dot-call with arguments: osc(\"saw\", 440).lp(800, 0.707)") {
+        auto dot = akkado::compile(R"(
+            osc("saw", 440).lp(800, 0.707) |> out(%, %)
         )");
-        // Should compile (with warning) since slow() passes through
-        // The result may not be usable with %.freq yet
-        CHECK(result.success);
+        auto direct = akkado::compile(R"(
+            lp(osc("saw", 440), 800, 0.707) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
     }
 
-    SECTION("chained pattern methods compile without crash") {
-        // Verify the analyzer doesn't crash on chained methods
-        // Semantic correctness is tested in "Pattern transform chaining" tests
-        auto result = akkado::compile(R"(
-            slow(fast(pat("c4 e4"), 2), 2)
+    SECTION("chained dot-calls: a.f().g() == g(f(a))") {
+        auto dot = akkado::compile(R"(
+            osc("saw", 440).lp(800).abs() |> out(%, %)
         )");
-        CHECK(result.success);
+        auto direct = akkado::compile(R"(
+            abs(lp(osc("saw", 440), 800)) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
+    }
+
+    SECTION("dot-call on user-defined function") {
+        auto dot = akkado::compile(R"(
+            fn gain(sig, amt) -> sig * amt
+            osc("sin", 440).gain(0.5) |> out(%, %)
+        )");
+        auto direct = akkado::compile(R"(
+            fn gain(sig, amt) -> sig * amt
+            gain(osc("sin", 440), 0.5) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
+    }
+
+    SECTION("dot-call mixed with pipe operator") {
+        auto dot = akkado::compile(R"(
+            osc("saw", 440).lp(800) |> % * 0.5 |> out(%, %)
+        )");
+        auto pipe = akkado::compile(R"(
+            osc("saw", 440) |> lp(%, 800) |> % * 0.5 |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(pipe.success);
+        CHECK(dot.bytecode == pipe.bytecode);
+    }
+
+    SECTION("dot-call on expression result") {
+        auto dot = akkado::compile(R"(
+            x = osc("sin", 440)
+            x.abs() |> out(%, %)
+        )");
+        auto direct = akkado::compile(R"(
+            x = osc("sin", 440)
+            abs(x) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
+    }
+
+    SECTION("dot-call with no extra arguments") {
+        // noise().abs() == abs(noise())
+        auto dot = akkado::compile(R"(
+            noise().abs() |> out(%, %)
+        )");
+        auto direct = akkado::compile(R"(
+            abs(noise()) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
+    }
+
+    SECTION("dot-call produces correct opcodes") {
+        auto result = akkado::compile(R"(
+            osc("saw", 440).lp(800) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::OSC_SAW) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::FILTER_SVF_LP) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::OUTPUT) != nullptr);
+    }
+
+    SECTION("pattern method via dot-call: pat().slow()") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4").slow(2))");
+        auto direct = akkado::compile(R"(slow(pat("c4 e4 g4"), 2))");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
+    }
+
+    SECTION("chained pattern methods via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4").fast(2).slow(4))");
+        auto direct = akkado::compile(R"(slow(fast(pat("c4 e4"), 2), 4))");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
+    }
+
+    SECTION("dot-call on hole: |> %.f(args)") {
+        auto dot = akkado::compile(R"(
+            osc("saw", 440) |> %.lp(800) |> out(%, %)
+        )");
+        auto pipe = akkado::compile(R"(
+            osc("saw", 440) |> lp(%, 800) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(pipe.success);
+        CHECK(dot.bytecode == pipe.bytecode);
+    }
+
+    SECTION("dot-call on hole with multiple args") {
+        auto dot = akkado::compile(R"(
+            osc("saw", 440) |> %.lp(800, 2.0) |> out(%, %)
+        )");
+        auto pipe = akkado::compile(R"(
+            osc("saw", 440) |> lp(%, 800, 2.0) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(pipe.success);
+        CHECK(dot.bytecode == pipe.bytecode);
+    }
+
+    SECTION("chained dot-calls on hole") {
+        auto dot = akkado::compile(R"(
+            osc("saw", 440) |> %.lp(800).abs() |> out(%, %)
+        )");
+        auto pipe = akkado::compile(R"(
+            osc("saw", 440) |> abs(lp(%, 800)) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(pipe.success);
+        CHECK(dot.bytecode == pipe.bytecode);
+    }
+
+    SECTION("dot-call on as-binding: as q |> q.f(args)") {
+        auto dot = akkado::compile(R"(
+            osc("saw", 440) as q |> q.lp(800) |> out(%, %)
+        )");
+        auto direct = akkado::compile(R"(
+            osc("saw", 440) as q |> lp(q, 800) |> out(%, %)
+        )");
+        REQUIRE(dot.success);
+        REQUIRE(direct.success);
+        CHECK(dot.bytecode == direct.bytecode);
     }
 }
 

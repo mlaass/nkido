@@ -52,18 +52,16 @@ private:
     // Helper: Deep clone a subtree
     NodeIndex clone_subtree(NodeIndex src_idx);
 
-    // Helper: Substitute all holes (%) with a replacement node
-    NodeIndex substitute_holes(NodeIndex node, NodeIndex replacement);
+    // Options for unified node substitution
+    struct SubstituteOpts {
+        NodeIndex replacement = NULL_NODE;
+        std::string binding_name;                    // empty = no binding match
+        NodeIndex identifier_to_replace = NULL_NODE; // NULL_NODE = no identity match
+        bool clone_on_hole = false;                  // true for as-binding (needs fresh copies)
+    };
 
-    // Helper: Substitute holes AND identifiers matching a binding name
-    // Used for 'as' bindings in pipes: expr as name |> ...
-    NodeIndex substitute_holes_and_binding(NodeIndex node, NodeIndex replacement,
-                                           const std::string& binding_name);
-
-    // Helper: Substitute holes AND a specific identifier node with replacement
-    // Used for pipe-to-lambda transformation where the identifier becomes the param
-    NodeIndex substitute_holes_and_identifier(NodeIndex node, NodeIndex replacement,
-                                               NodeIndex identifier_to_replace);
+    // Helper: Unified substitution of holes, binding names, and identifier nodes
+    NodeIndex substitute_nodes(NodeIndex node, const SubstituteOpts& opts);
 
     // Helper: Check if a subtree contains a hole
     bool contains_hole(NodeIndex node) const;
@@ -76,6 +74,7 @@ private:
     // Helper: Desugar method call to function call
     // Transforms: receiver.method(a, b) -> method(receiver, a, b)
     NodeIndex desugar_method_call(NodeIndex method_call_idx);
+
 
     // Helper: Validate argument count for builtin
     void validate_arguments(const std::string& func_name, const BuiltinInfo& builtin,
