@@ -1096,13 +1096,40 @@ NodeIndex Parser::parse_match_expr() {
         bool is_wildcard = false;
         bool has_guard = false;
 
+        bool is_range = false;
+        double range_low = 0.0;
+        double range_high = 0.0;
+
         if (has_scrutinee) {
             // Scrutinee form: parse pattern, then optional && guard
-            // Pattern: string, number, bool, or _ (wildcard)
+            // Pattern: string, number, -number, number..number, bool, or _ (wildcard)
             if (check(TokenType::String)) {
                 pattern = parse_string();
-            } else if (check(TokenType::Number)) {
+            } else if (check(TokenType::Number) || check(TokenType::Minus)) {
+                // Parse optionally-negative number literal
+                bool neg = check(TokenType::Minus);
+                if (neg) advance();  // consume '-'
+                double num_val = current().as_number();
                 pattern = parse_number();
+                if (neg) {
+                    num_val = -num_val;
+                    arena_[pattern].data = Node::NumberData{num_val, false};
+                }
+
+                // Check for range pattern: number..number
+                if (check(TokenType::DotDot)) {
+                    advance();  // consume '..'
+                    is_range = true;
+                    range_low = num_val;
+
+                    // Parse upper bound (optionally negative)
+                    bool neg_high = check(TokenType::Minus);
+                    if (neg_high) advance();
+                    double high_val = current().as_number();
+                    parse_number();  // consume upper bound (node discarded)
+                    if (neg_high) high_val = -high_val;
+                    range_high = high_val;
+                }
             } else if (check(TokenType::True) || check(TokenType::False)) {
                 pattern = parse_bool();
             } else if (check(TokenType::Underscore)) {
@@ -1162,7 +1189,7 @@ NodeIndex Parser::parse_match_expr() {
 
         // Create MatchArm node
         NodeIndex arm = make_node(NodeType::MatchArm, arm_tok);
-        arena_[arm].data = Node::MatchArmData{is_wildcard, has_guard, guard};
+        arena_[arm].data = Node::MatchArmData{is_wildcard, has_guard, guard, is_range, range_low, range_high};
         arena_.add_child(arm, pattern);
         if (body != NULL_NODE) {
             arena_.add_child(arm, body);

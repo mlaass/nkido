@@ -1,6 +1,6 @@
 # PRD: Akkado Language Extensions (Phases 1, 3, 4)
 
-> **Status: NOT STARTED** — No features from this PRD have been implemented yet (dot-call is 95% done but lacks tests).
+> **Status: IN PROGRESS** — Dot-call syntax (feature 1) is done. Range patterns (feature 7) are done. Remaining: const fn, TypedValue, match destructuring, pattern methods, expression defaults, record spreading.
 
 ## Overview
 

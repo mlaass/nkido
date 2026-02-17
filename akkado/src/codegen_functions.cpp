@@ -602,8 +602,36 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
             if (arm_data.is_wildcard) {
                 default_body = body;
             } else if (match_data.has_scrutinee) {
+                // Range pattern: check low <= scrutinee < high
+                if (arm_data.is_range) {
+                    // Extract numeric scrutinee value
+                    double scrutinee_val = 0.0;
+                    bool is_numeric = false;
+                    if (scrutinee_ptr != nullptr && scrutinee_ptr->type == NodeType::NumberLit) {
+                        scrutinee_val = scrutinee_ptr->as_number();
+                        is_numeric = true;
+                    }
+
+                    if (is_numeric && scrutinee_val >= arm_data.range_low && scrutinee_val < arm_data.range_high) {
+                        // Range matches - check guard if present
+                        bool guard_passes = true;
+                        if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
+                            const Node& guard_node = ast_->arena[arm_data.guard_node];
+                            if (guard_node.type == NodeType::BoolLit) {
+                                guard_passes = guard_node.as_bool();
+                            } else if (guard_node.type == NodeType::NumberLit) {
+                                guard_passes = guard_node.as_number() != 0.0;
+                            }
+                        }
+
+                        if (guard_passes && body != NULL_NODE) {
+                            std::uint16_t result = visit(body);
+                            node_buffers_[node] = result;
+                            return result;
+                        }
+                    }
+                } else if (pattern != NULL_NODE) {
                 // Scrutinee form: check pattern match
-                if (pattern != NULL_NODE) {
                     const Node& pattern_node = ast_->arena[pattern];
                     std::string pattern_key;
 
@@ -744,7 +772,65 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
                 // Build condition
                 std::uint16_t cond_buf = BufferAllocator::BUFFER_UNUSED;
 
-                if (match_data.has_scrutinee) {
+                if (match_data.has_scrutinee && arm_data.is_range) {
+                    // Range pattern: scrutinee >= low AND scrutinee < high
+                    // Emit PUSH_CONST for low bound
+                    std::uint16_t low_buf = buffers_.allocate();
+                    cedar::Instruction push_low{};
+                    push_low.opcode = cedar::Opcode::PUSH_CONST;
+                    push_low.out_buffer = low_buf;
+                    push_low.inputs[0] = 0xFFFF;
+                    push_low.inputs[1] = 0xFFFF;
+                    push_low.inputs[2] = 0xFFFF;
+                    push_low.inputs[3] = 0xFFFF;
+                    codegen::encode_const_value(push_low, static_cast<float>(arm_data.range_low));
+                    emit(push_low);
+
+                    // CMP_GTE: scrutinee >= low
+                    std::uint16_t gte_buf = buffers_.allocate();
+                    cedar::Instruction gte_inst{};
+                    gte_inst.opcode = cedar::Opcode::CMP_GTE;
+                    gte_inst.out_buffer = gte_buf;
+                    gte_inst.inputs[0] = scrutinee_buf;
+                    gte_inst.inputs[1] = low_buf;
+                    gte_inst.inputs[2] = 0xFFFF;
+                    gte_inst.inputs[3] = 0xFFFF;
+                    emit(gte_inst);
+
+                    // Emit PUSH_CONST for high bound
+                    std::uint16_t high_buf = buffers_.allocate();
+                    cedar::Instruction push_high{};
+                    push_high.opcode = cedar::Opcode::PUSH_CONST;
+                    push_high.out_buffer = high_buf;
+                    push_high.inputs[0] = 0xFFFF;
+                    push_high.inputs[1] = 0xFFFF;
+                    push_high.inputs[2] = 0xFFFF;
+                    push_high.inputs[3] = 0xFFFF;
+                    codegen::encode_const_value(push_high, static_cast<float>(arm_data.range_high));
+                    emit(push_high);
+
+                    // CMP_LT: scrutinee < high
+                    std::uint16_t lt_buf = buffers_.allocate();
+                    cedar::Instruction lt_inst{};
+                    lt_inst.opcode = cedar::Opcode::CMP_LT;
+                    lt_inst.out_buffer = lt_buf;
+                    lt_inst.inputs[0] = scrutinee_buf;
+                    lt_inst.inputs[1] = high_buf;
+                    lt_inst.inputs[2] = 0xFFFF;
+                    lt_inst.inputs[3] = 0xFFFF;
+                    emit(lt_inst);
+
+                    // LOGIC_AND: both conditions
+                    cond_buf = buffers_.allocate();
+                    cedar::Instruction and_inst{};
+                    and_inst.opcode = cedar::Opcode::LOGIC_AND;
+                    and_inst.out_buffer = cond_buf;
+                    and_inst.inputs[0] = gte_buf;
+                    and_inst.inputs[1] = lt_buf;
+                    and_inst.inputs[2] = 0xFFFF;
+                    and_inst.inputs[3] = 0xFFFF;
+                    emit(and_inst);
+                } else if (match_data.has_scrutinee) {
                     // Scrutinee form: eq(scrutinee, pattern)
                     std::uint16_t pattern_buf = visit(pattern);
 

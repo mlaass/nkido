@@ -636,6 +636,162 @@ TEST_CASE("Codegen: Match expressions - warnings", "[codegen][match]") {
     }
 }
 
+TEST_CASE("Codegen: Match expressions - range patterns", "[codegen][match][range]") {
+    SECTION("compile-time range match selects correct arm") {
+        auto result = akkado::compile(R"(
+            match(0.5) {
+                0.0..0.3: 1,
+                0.3..0.7: 2,
+                0.7..1.0: 3,
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Compile-time: should emit just the winning branch (2), no SELECT
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) == 0);
+        // Should emit PUSH_CONST 2.0
+        REQUIRE(insts.size() >= 1);
+        CHECK(decode_const_float(insts[0]) == 2.0f);
+    }
+
+    SECTION("half-open range excludes upper bound") {
+        // 0.3 should NOT match 0.0..0.3, but SHOULD match 0.3..0.7
+        auto result = akkado::compile(R"(
+            match(0.3) {
+                0.0..0.3: 1,
+                0.3..0.7: 2,
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) == 0);
+        CHECK(decode_const_float(insts[0]) == 2.0f);
+    }
+
+    SECTION("range match with lower bound exact match") {
+        // 0.0 should match 0.0..0.3
+        auto result = akkado::compile(R"(
+            match(0.0) {
+                0.0..0.3: 1,
+                0.3..0.7: 2,
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) == 0);
+        CHECK(decode_const_float(insts[0]) == 1.0f);
+    }
+
+    SECTION("range match falls through to wildcard") {
+        auto result = akkado::compile(R"(
+            match(1.5) {
+                0.0..0.3: 1,
+                0.3..0.7: 2,
+                0.7..1.0: 3,
+                _: 99
+            }
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) == 0);
+        CHECK(decode_const_float(insts[0]) == 99.0f);
+    }
+
+    SECTION("negative range patterns") {
+        auto result = akkado::compile(R"(
+            match(-0.5) {
+                -1.0..0.0: 1,
+                0.0..1.0: 2,
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) == 0);
+        CHECK(decode_const_float(insts[0]) == 1.0f);
+    }
+
+    SECTION("negative number pattern (non-range)") {
+        // Verify that standalone negative numbers work in match arms
+        auto result = akkado::compile(R"(
+            fn pick(x) -> match(x) {
+                -1: 10,
+                0: 20,
+                1: 30,
+                _: 0
+            }
+            pick(-1)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) == 0);
+    }
+
+    SECTION("runtime range match produces CMP_GTE, CMP_LT, LOGIC_AND, SELECT") {
+        auto result = akkado::compile(R"(
+            vel = saw(1)
+            match(vel) {
+                0.0..0.3: 1,
+                0.3..0.7: 2,
+                0.7..1.0: 3,
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Runtime range match should use CMP_GTE + CMP_LT + LOGIC_AND
+        CHECK(count_instructions(insts, cedar::Opcode::CMP_GTE) >= 1);
+        CHECK(count_instructions(insts, cedar::Opcode::CMP_LT) >= 1);
+        CHECK(count_instructions(insts, cedar::Opcode::LOGIC_AND) >= 1);
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) >= 1);
+    }
+
+    SECTION("runtime range match with guard uses extra LOGIC_AND") {
+        auto result = akkado::compile(R"(
+            vel = saw(1)
+            mode = tri(1)
+            match(vel) {
+                0.0..0.5 && mode > 0.5: 100,
+                0.5..1.0: 200,
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should have LOGIC_AND for range condition + guard combination
+        CHECK(count_instructions(insts, cedar::Opcode::LOGIC_AND) >= 2);
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) >= 1);
+    }
+
+    SECTION("compile-time range with function call") {
+        auto result = akkado::compile(R"(
+            fn velocity_layer(vel) -> match(vel) {
+                0.0..0.3: 1,
+                0.3..0.7: 2,
+                0.7..1.0: 3,
+                _: 0
+            }
+            velocity_layer(0.8)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // Should resolve at compile-time to 3 (no SELECT)
+        CHECK(count_instructions(insts, cedar::Opcode::SELECT) == 0);
+        // The result (3.0) should be one of the PUSH_CONST instructions
+        bool found_result = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST && decode_const_float(inst) == 3.0f) {
+                found_result = true;
+                break;
+            }
+        }
+        CHECK(found_result);
+    }
+}
+
 // =============================================================================
 // Pattern Tests (MiniLiteral)
 // =============================================================================

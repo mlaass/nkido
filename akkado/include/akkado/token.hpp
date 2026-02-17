@@ -73,6 +73,7 @@ enum class TokenType : std::uint8_t {
     Question,       // ? (for chance modifier)
     Tilde,          // ~ (rest in mini-notation)
     Underscore,     // _ (rest in mini-notation / partial application placeholder)
+    DotDot,         // .. (range in match patterns)
     DotDotDot,      // ... (variadic rest parameter prefix)
 
     // Mini-notation specific (lexed inside pattern strings)
@@ -133,6 +134,7 @@ constexpr std::string_view token_type_name(TokenType type) {
         case TokenType::Question:     return "Question";
         case TokenType::Tilde:        return "Tilde";
         case TokenType::Underscore:   return "Underscore";
+        case TokenType::DotDot:       return "DotDot";
         case TokenType::DotDotDot:    return "DotDotDot";
         case TokenType::MiniString:   return "MiniString";
         case TokenType::Directive:    return "Directive";

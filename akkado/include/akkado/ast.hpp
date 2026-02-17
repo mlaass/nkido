@@ -228,6 +228,9 @@ struct Node {
         bool is_wildcard;      // true for `_` pattern
         bool has_guard;        // true if `&&` guard follows pattern
         NodeIndex guard_node;  // Guard expression (NULL_NODE if no guard)
+        bool is_range = false;       // true for range pattern (low..high)
+        double range_low = 0.0;      // Lower bound (inclusive)
+        double range_high = 0.0;     // Upper bound (exclusive)
     };
 
     // Data for match expressions (track scrutinee vs guard-only form)
