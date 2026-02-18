@@ -457,6 +457,8 @@ std::optional<ConstValue> ConstEvaluator::eval_math_builtin(
         if (name == "cbrt") return ConstValue{std::cbrt(*x)};
         if (name == "mtof") return ConstValue{440.0 * std::pow(2.0, (*x - 69.0) / 12.0)};
         if (name == "ftom") return ConstValue{69.0 + 12.0 * std::log2(*x / 440.0)};
+        // Boolean NOT (desugared from !)
+        if (name == "bnot") return ConstValue{*x == 0.0 ? 1.0 : 0.0};
         if (name == "dbtoa") return ConstValue{std::pow(10.0, *x / 20.0)};
         if (name == "atodb") return ConstValue{20.0 * std::log10(*x)};
     }
@@ -478,12 +480,27 @@ std::optional<ConstValue> ConstEvaluator::eval_math_builtin(
             return ConstValue{*a / *b};
         }
         if (name == "pow") return ConstValue{std::pow(*a, *b)};
-        if (name == "mod") return ConstValue{std::fmod(*a, *b)};
+        if (name == "mod") {
+            if (*b == 0.0) {
+                error("E200", "Modulo by zero in const expression", loc);
+                return std::nullopt;
+            }
+            return ConstValue{std::fmod(*a, *b)};
+        }
         if (name == "atan2") return ConstValue{std::atan2(*a, *b)};
         if (name == "hypot") return ConstValue{std::hypot(*a, *b)};
         if (name == "min") return ConstValue{std::min(*a, *b)};
         if (name == "max") return ConstValue{std::max(*a, *b)};
-        if (name == "lerp") return ConstValue{*a + (*b - *a) * 0.5};  // lerp needs 3 args actually
+        // Comparison operators (desugared from ==, !=, <, >, <=, >=)
+        if (name == "eq") return ConstValue{*a == *b ? 1.0 : 0.0};
+        if (name == "neq") return ConstValue{*a != *b ? 1.0 : 0.0};
+        if (name == "lt") return ConstValue{*a < *b ? 1.0 : 0.0};
+        if (name == "gt") return ConstValue{*a > *b ? 1.0 : 0.0};
+        if (name == "lte") return ConstValue{*a <= *b ? 1.0 : 0.0};
+        if (name == "gte") return ConstValue{*a >= *b ? 1.0 : 0.0};
+        // Boolean operators (desugared from &&, ||)
+        if (name == "band") return ConstValue{(*a != 0.0 && *b != 0.0) ? 1.0 : 0.0};
+        if (name == "bor") return ConstValue{(*a != 0.0 || *b != 0.0) ? 1.0 : 0.0};
     }
 
     // Three-argument functions

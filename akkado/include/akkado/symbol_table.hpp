@@ -196,6 +196,9 @@ public:
     /// Define a const variable with a compile-time value
     bool define_const_variable(std::string_view name, const ConstValue& value);
 
+    /// Define a const variable placeholder (value not yet known)
+    bool define_const_placeholder(std::string_view name);
+
     /// Lookup a symbol by name (searches all scopes, innermost first)
     [[nodiscard]] std::optional<Symbol> lookup(std::string_view name) const;
 

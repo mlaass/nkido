@@ -104,6 +104,17 @@ bool SymbolTable::define_const_variable(std::string_view name, const ConstValue&
     return define(sym);
 }
 
+bool SymbolTable::define_const_placeholder(std::string_view name) {
+    Symbol sym{};
+    sym.kind = SymbolKind::Variable;
+    sym.name_hash = fnv1a_hash(name);
+    sym.name = std::string(name);
+    sym.buffer_index = 0xFFFF;
+    sym.is_const = true;
+    // const_value remains std::nullopt — not yet initialized
+    return define(sym);
+}
+
 std::optional<Symbol> SymbolTable::lookup(std::string_view name) const {
     return lookup(fnv1a_hash(name));
 }

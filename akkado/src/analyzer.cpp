@@ -284,8 +284,8 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
             error("E150", "Cannot reassign immutable variable '" + name + "'", n.location);
         }
 
-        // Register as a const variable (value will be evaluated during codegen)
-        symbols_.define_const_variable(name, 0.0);  // Placeholder value
+        // Register as a const placeholder (value not yet known; will be set during codegen)
+        symbols_.define_const_placeholder(name);
     }
 
     if (n.type == NodeType::FunctionDef) {
@@ -1375,23 +1375,23 @@ void SemanticAnalyzer::verify_const_purity(NodeIndex node, const std::string& co
         static const std::set<std::string> pure_builtins = {
             // Arithmetic (binary op desugaring)
             "add", "sub", "mul", "div", "pow",
+            // Comparison (binary op desugaring: ==, !=, <, >, <=, >=)
+            "eq", "neq", "lt", "gt", "lte", "gte",
+            // Boolean (op desugaring: &&, ||, !)
+            "band", "bor", "bnot",
             // Math
             "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-            "sqrt", "abs", "log", "log2", "log10", "exp", "exp2",
+            "sqrt", "abs", "log", "log10", "exp", "exp2",
             "floor", "ceil", "round", "trunc", "fract",
-            "min", "max", "clamp", "lerp", "sign",
-            "mod", "hypot", "cbrt",
+            "min", "max", "clamp", "sign",
             // Conversion
-            "mtof", "ftom", "dbtoa", "atodb",
+            "mtof",
             // Array operations (compile-time)
-            "range", "map", "fold", "sum", "len",
+            "range", "map", "sum", "len",
             "linspace", "harmonics", "random",
-            "take", "drop", "reverse", "rotate",
-            "zip", "zipWith", "repeat",
-            "sort", "normalize", "scale",
             "product", "mean",
             // Logic
-            "if", "select",
+            "select",
         };
 
         auto sym = symbols_.lookup(func_name);

@@ -263,3 +263,536 @@ TEST_CASE("Const: division by zero error", "[const]") {
     auto result = akkado::compile("const x = 1 / 0");
     CHECK_FALSE(result.success);
 }
+
+// Helper to check if a diagnostic with a specific code exists
+static bool has_error_code(const std::vector<akkado::Diagnostic>& diagnostics, const std::string& code) {
+    for (const auto& d : diagnostics) {
+        if (d.code == code) return true;
+    }
+    return false;
+}
+
+// Helper to find a PUSH_CONST with approximately the given value
+static bool has_const_approx(const std::vector<cedar::Instruction>& insts, float target, float margin = 0.01f) {
+    for (const auto& inst : insts) {
+        if (inst.opcode == cedar::Opcode::PUSH_CONST) {
+            if (std::abs(decode_const_float(inst) - target) < margin) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// =============================================================================
+// Group 1: Comparison and Boolean Operators (Bug 1)
+// Operators like >, <, ==, != desugar to gt(), lt(), eq(), neq() calls.
+// These must be in the purity whitelist AND implemented in const_eval.
+// =============================================================================
+
+TEST_CASE("Const: comparison in const fn (>)", "[const][bug1]") {
+    // a > b desugars to gt(a, b) which must be in purity whitelist
+    auto result = akkado::compile(R"(
+        const fn max2(a, b) -> select(a > b, a, b)
+        const v = max2(3, 7)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 7.0f));
+}
+
+TEST_CASE("Const: equality check (==)", "[const][bug1]") {
+    auto result = akkado::compile(R"(
+        const fn eq_check(x) -> select(x == 0, 1, 0)
+        const v = eq_check(0)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 1.0f));
+}
+
+TEST_CASE("Const: inequality check (!=)", "[const][bug1]") {
+    auto result = akkado::compile(R"(
+        const fn neq_check(x) -> select(x != 0, 1, 0)
+        const v = neq_check(5)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 1.0f));
+}
+
+TEST_CASE("Const: less than (<)", "[const][bug1]") {
+    auto result = akkado::compile(R"(
+        const fn is_neg(x) -> select(x < 0, 1, 0)
+        const v = is_neg(-5)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 1.0f));
+}
+
+TEST_CASE("Const: less-equal and greater-equal", "[const][bug1]") {
+    auto result = akkado::compile(R"(
+        const fn in_range(x, lo, hi) -> select(x >= lo, select(x <= hi, 1, 0), 0)
+        const v = in_range(5, 0, 10)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 1.0f));
+}
+
+TEST_CASE("Const: boolean AND (&&)", "[const][bug1]") {
+    // a && b desugars to band(a, b)
+    auto result = akkado::compile(R"(
+        const v = select(1 > 0 && 2 > 1, 10, 20)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 10.0f));
+}
+
+TEST_CASE("Const: boolean OR (||)", "[const][bug1]") {
+    // a || b desugars to bor(a, b)
+    auto result = akkado::compile(R"(
+        const v = select(0 > 1 || 2 > 1, 10, 20)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 10.0f));
+}
+
+TEST_CASE("Const: boolean NOT (!)", "[const][bug1]") {
+    // !a desugars to bnot(a)
+    auto result = akkado::compile(R"(
+        const v = select(!0, 10, 20)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 10.0f));
+}
+
+TEST_CASE("Const: complex condition with comparisons", "[const][bug1]") {
+    auto result = akkado::compile(R"(
+        const fn clamp2(x, lo, hi) -> select(x < lo, lo, select(x > hi, hi, x))
+        const v = clamp2(5, 0, 10)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 5.0f));
+}
+
+TEST_CASE("Const: comparison in const variable", "[const][bug1]") {
+    // Even simple const expressions with operators should work
+    auto result = akkado::compile("const v = select(3 > 2, 100, 200)");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 100.0f));
+}
+
+// =============================================================================
+// Group 2: Forward References and Ordering (Bug 2)
+// =============================================================================
+
+TEST_CASE("Const: forward reference gives error", "[const][bug2]") {
+    auto result = akkado::compile(R"(
+        const a = b * 2
+        const b = 50
+    )");
+    // Forward references should fail — b is not yet initialized when a is evaluated
+    CHECK_FALSE(result.success);
+}
+
+TEST_CASE("Const: sequential references work", "[const]") {
+    auto result = akkado::compile(R"(
+        const a = 10
+        const b = a * 2
+        const c = b + a
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 10.0f));
+    CHECK(has_const_approx(insts, 20.0f));
+    CHECK(has_const_approx(insts, 30.0f));
+}
+
+// =============================================================================
+// Group 3: Const Fn Interactions
+// =============================================================================
+
+TEST_CASE("Const fn: calling another const fn", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn sq(x) -> x * x
+        const fn sum_sq(a, b) -> sq(a) + sq(b)
+        const v = sum_sq(3, 4)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 25.0f));
+}
+
+TEST_CASE("Const fn: zero arguments", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn pi() -> acos(-1)
+        const p = pi()
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 3.14159f, 0.001f));
+}
+
+TEST_CASE("Const fn: all default arguments", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn freq(oct = 4) -> 440 * pow(2, oct - 4)
+        const f = freq()
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 440.0f));
+}
+
+TEST_CASE("Const fn: param shadows outer const", "[const]") {
+    auto result = akkado::compile(R"(
+        const x = 100
+        const fn use_x(x) -> x * 2
+        const v = use_x(5)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 10.0f));
+}
+
+TEST_CASE("Const fn: param name same as builtin", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn test_fn(sin) -> sin * 2
+        const v = test_fn(5)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 10.0f));
+}
+
+TEST_CASE("Const fn: block body with let", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn complex(x) -> {
+            y = x * 2
+            z = y + 1
+            z * z
+        }
+        const v = complex(3)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 49.0f));
+}
+
+TEST_CASE("Const fn: chained const fn calls", "[const]") {
+    // Test multiple const fns calling each other
+    auto result = akkado::compile(R"(
+        const fn square(x) -> x * x
+        const fn sum_of_squares(a, b) -> square(a) + square(b)
+        const fn hyp(a, b) -> sqrt(sum_of_squares(a, b))
+        const v = hyp(3, 4)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    // sqrt(9 + 16) = sqrt(25) = 5
+    CHECK(has_const_approx(insts, 5.0f));
+}
+
+TEST_CASE("Const fn: recursion depth limit", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn inf(x) -> inf(x + 1)
+        const v = inf(0)
+    )");
+    CHECK_FALSE(result.success);
+}
+
+// =============================================================================
+// Group 4: Match Expressions in Const
+// =============================================================================
+
+TEST_CASE("Const fn: match with scrutinee", "[const]") {
+    // match uses match(expr) { } syntax, not match expr { }
+    auto result = akkado::compile(R"(
+        const fn classify(n) -> match(n) { 0: 10, 1: 20, _: 30 }
+        const v = classify(1)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 20.0f));
+}
+
+TEST_CASE("Const fn: match with range pattern", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn classify(x) -> match(x) { 0..10: 1, 10..100: 2, _: 3 }
+        const c = classify(50)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 2.0f));
+}
+
+TEST_CASE("Const fn: match no arm matches returns 0", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn lookup(x) -> match(x) { 1: 100, 2: 200 }
+        const v = lookup(3)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 0.0f));
+}
+
+TEST_CASE("Const fn: match wildcard always matches", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn always(x) -> match(x) { _: 42 }
+        const v = always(99)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 42.0f));
+}
+
+// =============================================================================
+// Group 5: Array Operations in Const
+// =============================================================================
+
+TEST_CASE("Const: array literal", "[const]") {
+    auto result = akkado::compile("const freqs = [440, 880, 1320]");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(count_instructions(insts, cedar::Opcode::PUSH_CONST) >= 3);
+    CHECK(has_const_approx(insts, 440.0f));
+    CHECK(has_const_approx(insts, 880.0f));
+    CHECK(has_const_approx(insts, 1320.0f));
+}
+
+TEST_CASE("Const: empty array", "[const]") {
+    auto result = akkado::compile("const empty = []");
+    REQUIRE(result.success);
+}
+
+TEST_CASE("Const: sum/len/product/mean of array", "[const]") {
+    auto result = akkado::compile(R"(
+        const a = [1, 2, 3, 4, 5]
+        const s = sum(a)
+        const l = len(a)
+        const p = product(a)
+        const m = mean(a)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 15.0f));   // sum
+    CHECK(has_const_approx(insts, 5.0f));    // len
+    CHECK(has_const_approx(insts, 120.0f));  // product
+    CHECK(has_const_approx(insts, 3.0f));    // mean
+}
+
+TEST_CASE("Const: map with closure", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn scale_arr(arr, f) -> map(arr, (x) -> x * f)
+        const v = scale_arr([1, 2, 3], 100)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 100.0f));
+    CHECK(has_const_approx(insts, 200.0f));
+    CHECK(has_const_approx(insts, 300.0f));
+}
+
+TEST_CASE("Const: map then sum (manual fold)", "[const]") {
+    // fold has a builtin conflict (audio fold vs array fold), so test
+    // the equivalent operation using map + sum
+    auto result = akkado::compile(R"(
+        const v = sum(map(range(1, 6), (x) -> x * x))
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    // sum of squares 1..5 = 1+4+9+16+25 = 55
+    CHECK(has_const_approx(insts, 55.0f));
+}
+
+TEST_CASE("Const: reversed range", "[const]") {
+    auto result = akkado::compile("const r = range(5, 0)");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 5.0f));
+    CHECK(has_const_approx(insts, 4.0f));
+    CHECK(has_const_approx(insts, 3.0f));
+    CHECK(has_const_approx(insts, 2.0f));
+    CHECK(has_const_approx(insts, 1.0f));
+}
+
+// =============================================================================
+// Group 6: Pitch Literals
+// =============================================================================
+
+TEST_CASE("Const: pitch literal in const", "[const]") {
+    // Pitch literals in Akkado use quotes: 'C4'
+    auto result = akkado::compile(R"(
+        const freq = 'C4'
+        osc("sin", freq)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 261.626f, 0.1f));
+}
+
+TEST_CASE("Const fn: pitch literal as argument", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn octave_up(f) -> f * 2
+        const v = octave_up('A4')
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 880.0f, 0.1f));
+}
+
+// =============================================================================
+// Group 7: Error Cases
+// =============================================================================
+
+TEST_CASE("Const: string literal rejected", "[const]") {
+    auto result = akkado::compile(R"(const name = "hello")");
+    CHECK_FALSE(result.success);
+}
+
+TEST_CASE("Const: record literal rejected", "[const]") {
+    auto result = akkado::compile("const r = {freq: 440}");
+    CHECK_FALSE(result.success);
+}
+
+TEST_CASE("Const: reassignment rejected", "[const]") {
+    auto result = akkado::compile(R"(
+        const x = 5
+        const x = 10
+    )");
+    CHECK_FALSE(result.success);
+    CHECK(has_error_code(result.diagnostics, "E150"));
+}
+
+TEST_CASE("Const fn: too few arguments", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn f(a, b, c) -> a + b + c
+        const v = f(1, 2)
+    )");
+    CHECK_FALSE(result.success);
+}
+
+TEST_CASE("Const: non-const variable in const expr", "[const]") {
+    auto result = akkado::compile(R"(
+        x = param("f", 440)
+        const y = x + 1
+    )");
+    CHECK_FALSE(result.success);
+}
+
+TEST_CASE("Const fn: div by zero in const fn call", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn inv(x) -> 1 / x
+        const v = inv(0)
+    )");
+    CHECK_FALSE(result.success);
+}
+
+TEST_CASE("Const: mod not a builtin (fails E004)", "[const]") {
+    // mod is in const_eval but NOT registered as a builtin function
+    // This correctly fails at analysis time
+    auto result = akkado::compile("const x = mod(5, 3)");
+    CHECK_FALSE(result.success);
+}
+
+// =============================================================================
+// Group 8: Integration with Runtime Code
+// =============================================================================
+
+TEST_CASE("Const: used as osc frequency", "[const]") {
+    auto result = akkado::compile(R"(
+        const f = 440
+        osc("sin", f) |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 440.0f));
+}
+
+TEST_CASE("Const: used in multiply", "[const]") {
+    auto result = akkado::compile(R"(
+        const gain = 0.5
+        osc("sin", 440) |> % * gain |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 0.5f));
+}
+
+TEST_CASE("Const: array used as osc input", "[const]") {
+    auto result = akkado::compile(R"(
+        const freqs = [220, 440, 660]
+        osc("sin", freqs) |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 220.0f));
+    CHECK(has_const_approx(insts, 440.0f));
+    CHECK(has_const_approx(insts, 660.0f));
+}
+
+TEST_CASE("Const fn: with runtime arg falls back to inline", "[const]") {
+    auto result = akkado::compile(R"(
+        const fn dbl(x) -> x * 2
+        f = param("f", 440)
+        osc("sin", dbl(f)) |> out(%, %)
+    )");
+    REQUIRE(result.success);
+}
+
+// =============================================================================
+// Group 9: Edge Cases
+// =============================================================================
+
+TEST_CASE("Const: value is zero", "[const]") {
+    auto result = akkado::compile(R"(
+        const z = 0
+        const zz = z * 100
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 0.0f));
+}
+
+TEST_CASE("Const: parenthesized expression", "[const]") {
+    auto result = akkado::compile("const x = (2 + 3) * 4");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 20.0f));
+}
+
+TEST_CASE("Const: manual lerp expression", "[const]") {
+    // lerp is not a registered builtin, so test the equivalent manually
+    auto result = akkado::compile("const v = 0 + (100 - 0) * 0.25");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 25.0f));
+}
+
+TEST_CASE("Const: select as conditional (3-arg)", "[const]") {
+    // select(cond, then, else) is the conditional builtin
+    auto result = akkado::compile("const v = select(1, 42, 99)");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 42.0f));
+}
+
+TEST_CASE("Const: negative literal", "[const]") {
+    auto result = akkado::compile("const x = -42");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, -42.0f));
+}
+
+TEST_CASE("Const: unimplemented whitelisted fn fails", "[const][bug3]") {
+    // reverse passes purity check but is NOT implemented in ConstEvaluator
+    // This should fail at analysis (purity) or evaluation, not silently pass
+    auto result = akkado::compile("const x = reverse(range(0, 5))");
+    CHECK_FALSE(result.success);
+}
