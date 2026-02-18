@@ -47,3 +47,4 @@ web/static/wasm/enkido.wasm
 # Bundled SoundFonts (downloaded via web/scripts/download-soundfonts.sh)
 web/static/soundfonts/
 
+docs/*proposal.md
