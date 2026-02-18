@@ -29,7 +29,11 @@ struct UserFunctionInfo {
     NodeIndex def_node;   // Index of FunctionDef node (for inlining)
     bool has_rest_param = false;  // true if last param is ...rest
     bool returns_closure = false; // true if body is explicitly a Closure in source
+    bool is_const = false;  // true for const fn (compile-time evaluable)
 };
+
+/// Compile-time constant value (scalar or array)
+using ConstValue = std::variant<double, std::vector<double>>;
 
 // Forward-declare hash function (same as Cedar's FNV-1a)
 inline std::uint32_t fnv1a_hash(std::string_view str) noexcept {
@@ -124,6 +128,10 @@ struct Symbol {
     std::string name;              // Original name (for error messages)
     std::uint16_t buffer_index;    // Allocated buffer for variables/params
 
+    // Const variable support
+    bool is_const = false;
+    std::optional<ConstValue> const_value;
+
     // Multi-buffer support: all buffers if value is multi-buffer (empty = single)
     std::vector<std::uint16_t> multi_buffers;
 
@@ -184,6 +192,9 @@ public:
 
     /// Define a record variable
     bool define_record(std::string_view name, std::shared_ptr<RecordTypeInfo> record_type);
+
+    /// Define a const variable with a compile-time value
+    bool define_const_variable(std::string_view name, const ConstValue& value);
 
     /// Lookup a symbol by name (searches all scopes, innermost first)
     [[nodiscard]] std::optional<Symbol> lookup(std::string_view name) const;

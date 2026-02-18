@@ -276,6 +276,18 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
         }
     }
 
+    if (n.type == NodeType::ConstDecl) {
+        // Const variable declaration: const x = expr
+        const std::string& name = n.as_identifier();
+
+        if (symbols_.is_defined_in_current_scope(name)) {
+            error("E150", "Cannot reassign immutable variable '" + name + "'", n.location);
+        }
+
+        // Register as a const variable (value will be evaluated during codegen)
+        symbols_.define_const_variable(name, 0.0);  // Placeholder value
+    }
+
     if (n.type == NodeType::FunctionDef) {
         // Register the user-defined function
         const auto& fn_data = n.as_function_def();
@@ -289,6 +301,7 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
         func_info.name = fn_data.name;
         func_info.def_node = node;
         func_info.has_rest_param = fn_data.has_rest_param;
+        func_info.is_const = fn_data.is_const;
 
         NodeIndex child = n.first_child;
         std::size_t param_idx = 0;
@@ -1004,6 +1017,17 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
         }
     }
 
+    if (n.type == NodeType::ConstDecl) {
+        // Validate const declaration RHS
+        NodeIndex rhs = n.first_child;
+        if (rhs != NULL_NODE) {
+            // Verify purity of the RHS expression
+            verify_const_purity(rhs, "const variable");
+            resolve_and_validate(rhs);
+        }
+        return;
+    }
+
     if (n.type == NodeType::FunctionDef) {
         // Validate function definition: check no outer variable captures
         const auto& fn_data = n.as_function_def();
@@ -1036,6 +1060,11 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
         NodeIndex body = child;
         if (body != NULL_NODE) {
             check_closure_captures(body, params, n.location);
+
+            // Verify purity for const fn
+            if (fn_data.is_const) {
+                verify_const_purity(body, "const fn '" + fn_data.name + "'");
+            }
         }
 
         // Recurse to children while params are in scope
@@ -1332,6 +1361,63 @@ void SemanticAnalyzer::warning(const std::string& message, SourceLocation loc) {
     diag.filename = filename_;
     diag.location = loc;
     diagnostics_.push_back(std::move(diag));
+}
+
+void SemanticAnalyzer::verify_const_purity(NodeIndex node, const std::string& context) {
+    if (node == NULL_NODE) return;
+
+    const Node& n = output_arena_[node];
+
+    if (n.type == NodeType::Call) {
+        const std::string& func_name = n.as_identifier();
+
+        // Whitelist of pure functions allowed in const context
+        static const std::set<std::string> pure_builtins = {
+            // Arithmetic (binary op desugaring)
+            "add", "sub", "mul", "div", "pow",
+            // Math
+            "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+            "sqrt", "abs", "log", "log2", "log10", "exp", "exp2",
+            "floor", "ceil", "round", "trunc", "fract",
+            "min", "max", "clamp", "lerp", "sign",
+            "mod", "hypot", "cbrt",
+            // Conversion
+            "mtof", "ftom", "dbtoa", "atodb",
+            // Array operations (compile-time)
+            "range", "map", "fold", "sum", "len",
+            "linspace", "harmonics", "random",
+            "take", "drop", "reverse", "rotate",
+            "zip", "zipWith", "repeat",
+            "sort", "normalize", "scale",
+            "product", "mean",
+            // Logic
+            "if", "select",
+        };
+
+        auto sym = symbols_.lookup(func_name);
+        if (sym) {
+            if (sym->kind == SymbolKind::Builtin) {
+                if (pure_builtins.find(func_name) == pure_builtins.end()) {
+                    error("E202", "Non-pure function '" + func_name +
+                          "' cannot be used in " + context, n.location);
+                    return;
+                }
+            } else if (sym->kind == SymbolKind::UserFunction) {
+                if (!sym->user_function.is_const) {
+                    error("E202", "Non-const function '" + func_name +
+                          "' cannot be used in " + context, n.location);
+                    return;
+                }
+            }
+        }
+    }
+
+    // Recurse to children
+    NodeIndex child = n.first_child;
+    while (child != NULL_NODE) {
+        verify_const_purity(child, context);
+        child = output_arena_[child].next_sibling;
+    }
 }
 
 void SemanticAnalyzer::check_closure_captures(NodeIndex node,

@@ -87,6 +87,7 @@ void Parser::synchronize() {
         switch (current().type) {
             case TokenType::Post:
             case TokenType::Pat:
+            case TokenType::Const:
                 return;
             default:
                 break;
@@ -188,6 +189,19 @@ NodeIndex Parser::parse_statement() {
     // Check for directive
     if (check(TokenType::Directive)) {
         return parse_directive();
+    }
+
+    // Check for const declaration: const fn ... or const x = ...
+    if (match(TokenType::Const)) {
+        if (match(TokenType::Fn)) {
+            return parse_fn_def(/*is_const=*/true);
+        }
+        if (check(TokenType::Identifier)) {
+            Token name = advance();
+            return parse_const_decl(name);
+        }
+        error("Expected 'fn' or identifier after 'const'");
+        return NULL_NODE;
     }
 
     // Check for function definition
@@ -1206,10 +1220,25 @@ NodeIndex Parser::parse_match_expr() {
     return node;
 }
 
+// Const variable declaration: const x = expr
+NodeIndex Parser::parse_const_decl(const Token& name_token) {
+    consume(TokenType::Equals, "Expected '=' after const identifier");
+
+    NodeIndex node = make_node(NodeType::ConstDecl, name_token);
+    arena_[node].data = Node::IdentifierData{std::string(name_token.lexeme)};
+
+    NodeIndex value = parse_expression();
+    if (value != NULL_NODE) {
+        arena_.add_child(node, value);
+    }
+
+    return node;
+}
+
 // Function definition parsing
 // fn name(params) -> body
 // fn name(params) -> { block }
-NodeIndex Parser::parse_fn_def() {
+NodeIndex Parser::parse_fn_def(bool is_const) {
     Token fn_tok = previous();  // 'fn' was already consumed
 
     if (!check(TokenType::Identifier)) {
@@ -1243,7 +1272,8 @@ NodeIndex Parser::parse_fn_def() {
     arena_[node].data = Node::FunctionDefData{
         std::string(name_tok.lexeme),
         params.size(),
-        has_rest
+        has_rest,
+        is_const
     };
 
     // Add parameters as Identifier children (using ClosureParamData for those with defaults/rest)

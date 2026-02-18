@@ -2,6 +2,7 @@
 #include "akkado/codegen/codegen.hpp"  // Master include for all codegen helpers
 #include "akkado/builtins.hpp"
 #include "akkado/chord_parser.hpp"
+#include "akkado/const_eval.hpp"
 #include "akkado/pattern_eval.hpp"
 #include <cedar/vm/state_pool.hpp>
 #include <algorithm>
@@ -559,6 +560,90 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             return value_buffer;
         }
 
+        case NodeType::ConstDecl: {
+            // Const variable: evaluate RHS at compile time
+            const std::string& var_name = n.as_identifier();
+            NodeIndex value_idx = n.first_child;
+
+            if (value_idx == NULL_NODE) {
+                error("E104", "Invalid const declaration", n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+
+            // Evaluate at compile time using ConstEvaluator
+            ConstEvaluator evaluator(*ast_, *symbols_);
+            auto const_val = evaluator.evaluate(value_idx);
+
+            // Forward any diagnostics from const evaluator
+            for (const auto& diag : evaluator.diagnostics()) {
+                diagnostics_.push_back(diag);
+            }
+
+            if (!const_val) {
+                error("E203", "Failed to evaluate const expression for '" + var_name + "'",
+                      n.location);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
+
+            // Store const value in symbol table
+            symbols_->define_const_variable(var_name, *const_val);
+
+            // Emit PUSH_CONST instruction(s) for runtime access
+            if (std::holds_alternative<double>(*const_val)) {
+                float val = static_cast<float>(std::get<double>(*const_val));
+                std::uint16_t buf = codegen::emit_push_const(buffers_, instructions_, val);
+                if (buf == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    return BufferAllocator::BUFFER_UNUSED;
+                }
+                // Update symbol with buffer index
+                symbols_->define_variable(var_name, buf);
+                // Re-mark as const with value
+                auto sym = symbols_->lookup(var_name);
+                if (sym) {
+                    Symbol updated = *sym;
+                    updated.is_const = true;
+                    updated.const_value = *const_val;
+                    symbols_->define(updated);
+                }
+                source_locations_.push_back(n.location);
+                node_buffers_[node] = buf;
+                return buf;
+            } else {
+                // Array const value
+                const auto& arr = std::get<std::vector<double>>(*const_val);
+                std::vector<std::uint16_t> result_buffers;
+                for (double v : arr) {
+                    std::uint16_t buf = codegen::emit_push_const(buffers_, instructions_,
+                                                                  static_cast<float>(v));
+                    if (buf == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        return BufferAllocator::BUFFER_UNUSED;
+                    }
+                    source_locations_.push_back(n.location);
+                    result_buffers.push_back(buf);
+                }
+
+                // Register as multi-buffer and update symbol
+                std::uint16_t first_buf = result_buffers.empty() ?
+                    BufferAllocator::BUFFER_UNUSED : result_buffers[0];
+                if (!result_buffers.empty()) {
+                    register_multi_buffer(node, result_buffers);
+                    Symbol sym{};
+                    sym.kind = SymbolKind::Variable;
+                    sym.name = var_name;
+                    sym.name_hash = fnv1a_hash(var_name);
+                    sym.buffer_index = first_buf;
+                    sym.multi_buffers = std::move(result_buffers);
+                    sym.is_const = true;
+                    sym.const_value = *const_val;
+                    symbols_->define(sym);
+                }
+                node_buffers_[node] = first_buf;
+                return first_buf;
+            }
+        }
+
         case NodeType::Call: {
             // Function name is stored in the node's data, not as a child
             const std::string& func_name = n.as_identifier();
@@ -602,7 +687,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 {"transpose", &CodeGenerator::handle_transpose_call},
                 {"velocity",  &CodeGenerator::handle_velocity_call},
                 {"bank",      &CodeGenerator::handle_bank_call},
-                {"n",         &CodeGenerator::handle_n_call},
+                {"variant",   &CodeGenerator::handle_variant_call},
                 {"transport", &CodeGenerator::handle_transport_call},
                 {"tune",      &CodeGenerator::handle_tune_call},
                 // Parameter exposure builtins

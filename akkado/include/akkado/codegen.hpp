@@ -346,8 +346,8 @@ private:
     /// Handle bank(pattern, bank_name) - set sample bank for all events
     std::uint16_t handle_bank_call(NodeIndex node, const Node& n);
 
-    /// Handle n(pattern, variant) - set sample variant for all events
-    std::uint16_t handle_n_call(NodeIndex node, const Node& n);
+    /// Handle variant(pattern, index) - set sample variant for all events
+    std::uint16_t handle_variant_call(NodeIndex node, const Node& n);
 
     /// Handle transport(pattern, trig, step?, reset?) - trigger-driven pattern clock
     std::uint16_t handle_transport_call(NodeIndex node, const Node& n);

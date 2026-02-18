@@ -2071,13 +2071,13 @@ TEST_CASE("Pattern transform: velocity in chain", "[codegen][patterns]") {
     }
 }
 
-TEST_CASE("Pattern transform: bank/n in chain", "[codegen][patterns]") {
+TEST_CASE("Pattern transform: bank/variant in chain", "[codegen][patterns]") {
     SECTION("slow(bank(...)) compiles") {
         auto result = akkado::compile(R"(slow(bank(pat("bd sd"), "TR808"), 2))");
         CHECK(result.success);
     }
-    SECTION("slow(n(...)) compiles") {
-        auto result = akkado::compile(R"(slow(n(pat("bd sd"), 2), 2))");
+    SECTION("slow(variant(...)) compiles") {
+        auto result = akkado::compile(R"(slow(variant(pat("bd sd"), 2), 2))");
         CHECK(result.success);
     }
 }
@@ -3287,7 +3287,7 @@ TEST_CASE("Codegen: stereo pipeline examples", "[codegen][stereo]") {
 }
 
 // =============================================================================
-// Pattern bank() and n() modifier tests
+// Pattern bank() and variant() modifier tests
 // =============================================================================
 
 TEST_CASE("Pattern function: bank()", "[codegen][patterns][bank]") {
@@ -3346,9 +3346,9 @@ TEST_CASE("Pattern function: bank()", "[codegen][patterns][bank]") {
     }
 }
 
-TEST_CASE("Pattern function: n()", "[codegen][patterns][n]") {
-    SECTION("n requires pattern as first argument") {
-        auto result = akkado::compile("n(42, 0)");
+TEST_CASE("Pattern function: variant()", "[codegen][patterns][variant]") {
+    SECTION("variant requires pattern as first argument") {
+        auto result = akkado::compile("variant(42, 0)");
         CHECK(!result.success);
         bool found = false;
         for (const auto& d : result.diagnostics) {
@@ -3357,14 +3357,14 @@ TEST_CASE("Pattern function: n()", "[codegen][patterns][n]") {
         CHECK(found);
     }
 
-    SECTION("n accepts string literal as variant pattern") {
+    SECTION("variant accepts string literal as variant pattern") {
         // String literals are now valid pattern expressions (parsed as mini-notation)
-        auto result = akkado::compile(R"(n(pat("bd"), "1 2 3"))");
+        auto result = akkado::compile(R"(variant(pat("bd"), "1 2 3"))");
         CHECK(result.success);
     }
 
-    SECTION("n with fixed variant compiles") {
-        auto result = akkado::compile(R"(n(pat("bd bd bd"), 2))");
+    SECTION("variant with fixed index compiles") {
+        auto result = akkado::compile(R"(variant(pat("bd bd bd"), 2))");
         REQUIRE(result.success);
 
         auto insts = get_instructions(result);
@@ -3372,8 +3372,8 @@ TEST_CASE("Pattern function: n()", "[codegen][patterns][n]") {
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_STEP) != nullptr);
     }
 
-    SECTION("n populates required_samples_extended with variant info") {
-        auto result = akkado::compile(R"(n(pat("bd"), 3))");
+    SECTION("variant populates required_samples_extended with variant info") {
+        auto result = akkado::compile(R"(variant(pat("bd"), 3))");
         REQUIRE(result.success);
 
         // Check that required_samples_extended has entries with variant info
@@ -3387,28 +3387,28 @@ TEST_CASE("Pattern function: n()", "[codegen][patterns][n]") {
         CHECK(found_variant);
     }
 
-    SECTION("n via method call syntax") {
-        // pat("bd").n(2) should desugar to n(pat("bd"), 2)
-        auto result = akkado::compile(R"(pat("bd bd").n(2))");
+    SECTION("variant via method call syntax") {
+        // pat("bd").variant(2) should desugar to variant(pat("bd"), 2)
+        auto result = akkado::compile(R"(pat("bd bd").variant(2))");
         REQUIRE(result.success);
 
         auto insts = get_instructions(result);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_QUERY) != nullptr);
     }
 
-    SECTION("n with pattern variant (cycling)") {
-        // n(pat("bd bd bd"), pat("<c0 d0 e0>")) cycles variants per event
+    SECTION("variant with pattern index (cycling)") {
+        // variant(pat("bd bd bd"), pat("<c0 d0 e0>")) cycles variants per event
         // Note: Using note names since bare numbers in pat() are interpreted as samples
         // The variant values are taken from the frequency values in the variant pattern
-        auto result = akkado::compile(R"(n(pat("bd bd bd"), pat("<c0 d0 e0>")))");
+        auto result = akkado::compile(R"(variant(pat("bd bd bd"), pat("<c0 d0 e0>")))");
         REQUIRE(result.success);
 
         auto insts = get_instructions(result);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_QUERY) != nullptr);
     }
 
-    SECTION("n with negative variant fails") {
-        auto result = akkado::compile(R"(n(pat("bd"), -1))");
+    SECTION("variant with negative index fails") {
+        auto result = akkado::compile(R"(variant(pat("bd"), -1))");
         CHECK(!result.success);
         bool found = false;
         for (const auto& d : result.diagnostics) {
@@ -3418,12 +3418,12 @@ TEST_CASE("Pattern function: n()", "[codegen][patterns][n]") {
     }
 }
 
-TEST_CASE("Pattern function: bank and n chaining", "[codegen][patterns][bank][n]") {
-    SECTION("bank and n can be chained via pipe") {
+TEST_CASE("Pattern function: bank and variant chaining", "[codegen][patterns][bank][variant]") {
+    SECTION("bank and variant can be chained via pipe") {
         auto result = akkado::compile(R"(
             pat("bd sd hh")
             |> bank(%, "TR808")
-            |> n(%, 1)
+            |> variant(%, 1)
         )");
         REQUIRE(result.success);
 
@@ -3432,14 +3432,14 @@ TEST_CASE("Pattern function: bank and n chaining", "[codegen][patterns][bank][n]
         CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_QUERY) >= 1);
     }
 
-    SECTION("method chaining: bank().n()") {
+    SECTION("method chaining: bank().variant()") {
         // Note: Each transform recompiles the pattern, so bank info from earlier
         // in the chain doesn't propagate to later transforms. This is correct
-        // behavior - the outermost transform (n) determines the final sample mappings.
-        auto result = akkado::compile(R"(pat("bd sd").bank("TR909").n(2))");
+        // behavior - the outermost transform (variant) determines the final sample mappings.
+        auto result = akkado::compile(R"(pat("bd sd").bank("TR909").variant(2))");
         REQUIRE(result.success);
 
-        // Verify n() applied variant=2
+        // Verify variant() applied variant=2
         bool found_variant = false;
         for (const auto& sample : result.required_samples_extended) {
             if (sample.variant == 2) {

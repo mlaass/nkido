@@ -54,6 +54,7 @@ enum class NodeType : std::uint8_t {
 
     // Statements
     Assignment,     // x = expr
+    ConstDecl,      // const x = expr
     PostStmt,       // post(closure)
     Block,          // { statements... expr }
     FunctionDef,    // fn name(params) -> body
@@ -103,6 +104,7 @@ constexpr const char* node_type_name(NodeType type) {
         case NodeType::MiniEuclidean:  return "MiniEuclidean";
         case NodeType::MiniModified:   return "MiniModified";
         case NodeType::Assignment:     return "Assignment";
+        case NodeType::ConstDecl:      return "ConstDecl";
         case NodeType::PostStmt:    return "PostStmt";
         case NodeType::Block:       return "Block";
         case NodeType::FunctionDef: return "FunctionDef";
@@ -221,6 +223,7 @@ struct Node {
         std::string name;
         std::size_t param_count;  // Number of Identifier children before body
         bool has_rest_param = false;  // true if last param is ...rest
+        bool is_const = false;  // true for const fn
     };
 
     // Data for match arms (pattern: body, or pattern && guard: body)

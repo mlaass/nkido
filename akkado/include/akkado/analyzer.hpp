@@ -90,6 +90,9 @@ private:
                                  const std::vector<std::string>& param_names,
                                  const std::string& func_name);
 
+    // Helper: Verify that an expression is pure (allowed in const context)
+    void verify_const_purity(NodeIndex node, const std::string& context);
+
     // Helper: Check for variable captures in closure body
     void check_closure_captures(NodeIndex node, const std::set<std::string>& params,
                                 SourceLocation closure_loc);

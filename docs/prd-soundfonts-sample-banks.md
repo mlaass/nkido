@@ -59,8 +59,8 @@ pat("bd sd").bank("<TR808 TR909>") |> out(%, %)
 // Sample variants with colon syntax
 pat("bd:0 bd:1 bd:2 bd:3") |> out(%, %)
 
-// Or with n() modifier
-pat("bd").n("<0 1 2 3>") |> out(%, %)
+// Or with variant() modifier
+pat("bd").variant("<0 1 2 3>") |> out(%, %)
 ```
 
 ### 2.2 SoundFont Instruments
@@ -218,7 +218,7 @@ New pattern modifiers in mini-notation:
 
 struct MiniSampleData {
     std::string sample_name;   // "bd"
-    int variant = 0;           // From :N suffix or n() modifier
+    int variant = 0;           // From :N suffix or variant() modifier
     std::string bank;          // From .bank() modifier, empty = default
 };
 ```
@@ -592,8 +592,8 @@ Implement per [File Loading Abstraction PRD](prd-file-loading-abstraction.md):
 
 **Akkado:**
 1. Parse `:N` variant suffix in mini-notation
-2. Add `n()` modifier for variant selection
-3. Support variant patterns: `n("<0 1 2 3>")`
+2. Add `variant()` modifier for variant selection
+3. Support variant patterns: `variant("<0 1 2 3>")`
 
 **TypeScript:**
 4. ~~Track variant counts per sample~~ ✓ Done in BankRegistry
@@ -740,7 +740,7 @@ The following questions have been resolved with decisions documented in [File Lo
 
 - [ ] Banks load from URL/file/GitHub without errors
 - [ ] `pat("bd").bank("TR808")` plays correct sample
-- [ ] Sample variants accessible via `:N` and `n()`
+- [ ] Sample variants accessible via `:N` and `variant()`
 - [ ] SF2 files parse and list presets correctly
 - [ ] SoundFont playback has correct pitch across keyboard
 - [ ] Volume envelopes work (no clicks on note off)

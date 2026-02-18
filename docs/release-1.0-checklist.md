@@ -36,7 +36,7 @@
 - [x] Euclidean rhythms in patterns: `bd(3,8)`, `sd(3,8,1)`
 - [x] Pattern functions: `pat()`, `seq()`, `note()`, `timeline()`
 - [x] Pattern transformations: `slow`, `fast`, `rev`, `transpose`, `velocity`
-- [x] Sample bank/variant control: `bank()`, `n()`
+- [x] Sample bank/variant control: `bank()`, `variant()`
 - [ ] Microtonal mini-notation
 
 ### Sample Loading

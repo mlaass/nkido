@@ -120,7 +120,8 @@ private:
     NodeIndex parse_statement();
     NodeIndex parse_assignment(const Token& name_token);
     NodeIndex parse_post_stmt();
-    NodeIndex parse_fn_def();
+    NodeIndex parse_fn_def(bool is_const = false);
+    NodeIndex parse_const_decl(const Token& name_token);
     NodeIndex parse_directive();
 
     // Program parsing

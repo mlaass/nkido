@@ -1281,7 +1281,7 @@ static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
         return func_name == "pat" || func_name == "timeline" ||
                func_name == "slow" || func_name == "fast" ||
                func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
-               func_name == "bank" || func_name == "n" || func_name == "transport" ||
+               func_name == "bank" || func_name == "variant" || func_name == "transport" ||
                func_name == "tune";
     }
 
@@ -1351,7 +1351,7 @@ static bool compile_pattern_for_transform(
         bool is_transform = (func_name == "slow" || func_name == "fast" ||
                              func_name == "rev" || func_name == "transpose" ||
                              func_name == "velocity" || func_name == "bank" ||
-                             func_name == "n" || func_name == "tune");
+                             func_name == "variant" || func_name == "tune");
         if (is_transform) {
             // tune() sets context BEFORE compilation (not post-processing)
             if (func_name == "tune") {
@@ -1437,7 +1437,7 @@ static bool compile_pattern_for_transform(
                 for (auto& mapping : compiler.mutable_sample_mappings()) {
                     mapping.bank = *bank_name;
                 }
-            } else if (func_name == "n") {
+            } else if (func_name == "variant") {
                 auto variant = get_number_arg(ast, pat_node, 1);
                 if (!variant.has_value() || *variant < 0) return false;
                 for (auto& mapping : compiler.mutable_sample_mappings()) {
@@ -2145,22 +2145,22 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     return value_buf;
 }
 
-std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
-    // n(pattern, variant) - set sample variant for all events
+std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
+    // variant(pattern, index) - set sample variant for all events
     // Two cases:
-    //   1. n(pattern, number) - fixed variant for all events
-    //   2. n(pattern, pattern) - variant per-event from another pattern (TODO: future)
+    //   1. variant(pattern, number) - fixed variant for all events
+    //   2. variant(pattern, pattern) - variant per-event from another pattern
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
     NodeIndex variant_arg = get_pattern_arg(*ast_, n, 1);
 
     if (pattern_arg == NULL_NODE) {
-        error("E130", "n() requires a pattern as first argument", n.location);
+        error("E130", "variant() requires a pattern as first argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
     if (variant_arg == NULL_NODE) {
-        error("E131", "n() requires a variant number or pattern as second argument", n.location);
+        error("E131", "variant() requires an index number or pattern as second argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
@@ -2168,7 +2168,7 @@ std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
 
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
-        error("E133", "n() first argument must be a pattern", n.location);
+        error("E133", "variant() first argument must be a pattern", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
@@ -2180,11 +2180,11 @@ std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
     if (is_fixed_variant) {
         fixed_variant = static_cast<int>(variant_node.as_number());
         if (fixed_variant < 0) {
-            error("E131", "n() variant must be non-negative", n.location);
+            error("E131", "variant() index must be non-negative", n.location);
             return BufferAllocator::BUFFER_UNUSED;
         }
     } else if (variant_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, variant_arg)) {
-        error("E131", "n() second argument must be a number or pattern", n.location);
+        error("E131", "variant() second argument must be a number or pattern", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
@@ -2198,13 +2198,13 @@ std::uint16_t CodeGenerator::handle_n_call(NodeIndex node, const Node& n) {
     if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
-        error("E130", "n() failed to compile pattern argument", n.location);
+        error("E130", "variant() failed to compile pattern argument", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
     // Set up state ID
-    std::uint32_t n_count = call_counters_["n"]++;
-    push_path("n#" + std::to_string(n_count));
+    std::uint32_t variant_count = call_counters_["variant"]++;
+    push_path("variant#" + std::to_string(variant_count));
     std::uint32_t state_id = compute_state_id();
 
     auto sample_mappings = compiler.sample_mappings();

@@ -93,6 +93,17 @@ bool SymbolTable::define_record(std::string_view name, std::shared_ptr<RecordTyp
     return define(sym);
 }
 
+bool SymbolTable::define_const_variable(std::string_view name, const ConstValue& value) {
+    Symbol sym{};
+    sym.kind = SymbolKind::Variable;
+    sym.name_hash = fnv1a_hash(name);
+    sym.name = std::string(name);
+    sym.buffer_index = 0xFFFF;  // Will be assigned during codegen
+    sym.is_const = true;
+    sym.const_value = value;
+    return define(sym);
+}
+
 std::optional<Symbol> SymbolTable::lookup(std::string_view name) const {
     return lookup(fnv1a_hash(name));
 }

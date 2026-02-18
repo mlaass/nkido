@@ -3,15 +3,140 @@
 
 #include "akkado/codegen.hpp"
 #include "akkado/codegen/codegen.hpp"
+#include "akkado/const_eval.hpp"
 #include <cstring>
 
 namespace akkado {
 
 using codegen::encode_const_value;
+using codegen::emit_push_const;
+
+// Try to resolve an AST node to a compile-time constant value.
+// Returns nullopt if the node cannot be resolved at compile time.
+static std::optional<ConstValue> resolve_const_value(
+    const AstArena& arena, NodeIndex node, const SymbolTable& symbols) {
+
+    if (node == NULL_NODE) return std::nullopt;
+
+    const Node& n = arena[node];
+
+    switch (n.type) {
+        case NodeType::NumberLit:
+            return ConstValue{n.as_number()};
+
+        case NodeType::BoolLit:
+            return ConstValue{n.as_bool() ? 1.0 : 0.0};
+
+        case NodeType::PitchLit: {
+            double midi = static_cast<double>(n.as_pitch());
+            double hz = 440.0 * std::pow(2.0, (midi - 69.0) / 12.0);
+            return ConstValue{hz};
+        }
+
+        case NodeType::Identifier: {
+            std::string name;
+            if (std::holds_alternative<Node::IdentifierData>(n.data)) {
+                name = n.as_identifier();
+            }
+            if (name.empty()) return std::nullopt;
+
+            auto sym = symbols.lookup(name);
+            if (sym && sym->is_const && sym->const_value.has_value()) {
+                return *sym->const_value;
+            }
+            return std::nullopt;
+        }
+
+        case NodeType::ArrayLit: {
+            std::vector<double> elements;
+            NodeIndex child = n.first_child;
+            while (child != NULL_NODE) {
+                auto val = resolve_const_value(arena, child, symbols);
+                if (!val) return std::nullopt;
+                if (!std::holds_alternative<double>(*val)) return std::nullopt;
+                elements.push_back(std::get<double>(*val));
+                child = arena[child].next_sibling;
+            }
+            return ConstValue{std::move(elements)};
+        }
+
+        default:
+            return std::nullopt;
+    }
+}
 
 // User function call handler - inlines function bodies at call sites
 std::uint16_t CodeGenerator::handle_user_function_call(
     NodeIndex node, const Node& n, const UserFunctionInfo& func) {
+
+    // const fn: try compile-time evaluation if all args are const
+    if (func.is_const) {
+        std::vector<ConstValue> const_args;
+        bool all_const = true;
+
+        NodeIndex arg = n.first_child;
+        while (arg != NULL_NODE) {
+            NodeIndex arg_value = arg;
+            const Node& arg_node = ast_->arena[arg];
+            if (arg_node.type == NodeType::Argument) {
+                arg_value = arg_node.first_child;
+            }
+
+            auto cv = resolve_const_value(ast_->arena, arg_value, *symbols_);
+            if (!cv) {
+                all_const = false;
+                break;
+            }
+            const_args.push_back(std::move(*cv));
+            arg = ast_->arena[arg].next_sibling;
+        }
+
+        if (all_const) {
+            ConstEvaluator evaluator(*ast_, *symbols_);
+            auto result = evaluator.eval_const_fn_call(func, const_args, n.location);
+
+            for (const auto& diag : evaluator.diagnostics()) {
+                diagnostics_.push_back(diag);
+            }
+
+            if (result) {
+                if (std::holds_alternative<double>(*result)) {
+                    float val = static_cast<float>(std::get<double>(*result));
+                    std::uint16_t buf = emit_push_const(buffers_, instructions_, val);
+                    if (buf == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        return BufferAllocator::BUFFER_UNUSED;
+                    }
+                    source_locations_.push_back(n.location);
+                    node_buffers_[node] = buf;
+                    return buf;
+                } else {
+                    // Array result
+                    const auto& arr = std::get<std::vector<double>>(*result);
+                    std::vector<std::uint16_t> result_buffers;
+                    for (double v : arr) {
+                        std::uint16_t buf = emit_push_const(buffers_, instructions_,
+                                                             static_cast<float>(v));
+                        if (buf == BufferAllocator::BUFFER_UNUSED) {
+                            error("E101", "Buffer pool exhausted", n.location);
+                            return BufferAllocator::BUFFER_UNUSED;
+                        }
+                        source_locations_.push_back(n.location);
+                        result_buffers.push_back(buf);
+                    }
+                    std::uint16_t first = result_buffers.empty() ?
+                        BufferAllocator::BUFFER_UNUSED : result_buffers[0];
+                    if (!result_buffers.empty()) {
+                        register_multi_buffer(node, std::move(result_buffers));
+                    }
+                    node_buffers_[node] = first;
+                    return first;
+                }
+            }
+            // Fall through to normal inlining if const eval fails
+        }
+    }
+
 
     // Collect call arguments
     std::vector<NodeIndex> args;

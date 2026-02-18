@@ -3,7 +3,9 @@
 
 #include "akkado/codegen.hpp"
 #include "akkado/codegen/codegen.hpp"
+#include "akkado/const_eval.hpp"
 #include <algorithm>
+#include <cmath>
 
 namespace akkado {
 
@@ -13,6 +15,36 @@ using codegen::emit_zero;
 using codegen::emit_push_const;
 using codegen::extract_call_args;
 using codegen::get_input_buffers;
+
+// Try to resolve an AST node to a compile-time scalar constant.
+// Accepts NumberLit directly, or Identifier referencing a const variable.
+static std::optional<double> resolve_const_scalar(
+    const AstArena& arena, NodeIndex node, const SymbolTable& symbols) {
+
+    if (node == NULL_NODE) return std::nullopt;
+    const Node& n = arena[node];
+
+    if (n.type == NodeType::NumberLit) {
+        return n.as_number();
+    }
+
+    if (n.type == NodeType::Identifier) {
+        std::string name;
+        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
+            name = n.as_identifier();
+        }
+        if (!name.empty()) {
+            auto sym = symbols.lookup(name);
+            if (sym && sym->is_const && sym->const_value.has_value()) {
+                if (std::holds_alternative<double>(*sym->const_value)) {
+                    return std::get<double>(*sym->const_value);
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
 
 // Multi-buffer registration
 std::uint16_t CodeGenerator::register_multi_buffer(NodeIndex node, std::vector<std::uint16_t> buffers) {
@@ -576,16 +608,16 @@ std::uint16_t CodeGenerator::handle_range_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    const Node& start_val = ast_->arena[args.nodes[0]];
-    const Node& end_val = ast_->arena[args.nodes[1]];
+    auto start_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
+    auto end_val = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
 
-    if (start_val.type != NodeType::NumberLit || end_val.type != NodeType::NumberLit) {
-        error("E153", "range() arguments must be number literals", n.location);
+    if (!start_val || !end_val) {
+        error("E153", "range() arguments must be compile-time constants", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    int start = static_cast<int>(start_val.as_number());
-    int end = static_cast<int>(end_val.as_number());
+    int start = static_cast<int>(*start_val);
+    int end = static_cast<int>(*end_val);
 
     std::vector<std::uint16_t> result_buffers;
     int step = (start <= end) ? 1 : -1;
@@ -1304,21 +1336,19 @@ std::uint16_t CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n)
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // All arguments must be literals
-    const Node& start_node = ast_->arena[args.nodes[0]];
-    const Node& end_node = ast_->arena[args.nodes[1]];
-    const Node& n_node = ast_->arena[args.nodes[2]];
+    // All arguments must be compile-time constants
+    auto start_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
+    auto end_val = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
+    auto n_val = resolve_const_scalar(ast_->arena, args.nodes[2], *symbols_);
 
-    if (start_node.type != NodeType::NumberLit ||
-        end_node.type != NodeType::NumberLit ||
-        n_node.type != NodeType::NumberLit) {
-        error("E173", "linspace() arguments must be number literals", n.location);
+    if (!start_val || !end_val || !n_val) {
+        error("E173", "linspace() arguments must be compile-time constants", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    float start = static_cast<float>(start_node.as_number());
-    float end = static_cast<float>(end_node.as_number());
-    int count = static_cast<int>(n_node.as_number());
+    float start = static_cast<float>(*start_val);
+    float end = static_cast<float>(*end_val);
+    int count = static_cast<int>(*n_val);
 
     if (count <= 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
@@ -1350,13 +1380,14 @@ std::uint16_t CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    const Node& n_node = ast_->arena[args.nodes[0]];
-    if (n_node.type != NodeType::NumberLit) {
-        error("E175", "random() argument must be a number literal", n_node.location);
+    auto n_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
+    if (!n_val) {
+        error("E175", "random() argument must be a compile-time constant",
+              ast_->arena[args.nodes[0]].location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    int count = static_cast<int>(n_node.as_number());
+    int count = static_cast<int>(*n_val);
     if (count <= 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
         node_buffers_[node] = zero;
@@ -1392,16 +1423,16 @@ std::uint16_t CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    const Node& fund_node = ast_->arena[args.nodes[0]];
-    const Node& n_node = ast_->arena[args.nodes[1]];
+    auto fund_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
+    auto n_val = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
 
-    if (fund_node.type != NodeType::NumberLit || n_node.type != NodeType::NumberLit) {
-        error("E177", "harmonics() arguments must be number literals", n.location);
+    if (!fund_val || !n_val) {
+        error("E177", "harmonics() arguments must be compile-time constants", n.location);
         return BufferAllocator::BUFFER_UNUSED;
     }
 
-    float fundamental = static_cast<float>(fund_node.as_number());
-    int count = static_cast<int>(n_node.as_number());
+    float fundamental = static_cast<float>(*fund_val);
+    int count = static_cast<int>(*n_val);
 
     if (count <= 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
