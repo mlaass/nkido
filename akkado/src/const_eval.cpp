@@ -543,6 +543,17 @@ std::optional<ConstValue> ConstEvaluator::eval_const_fn_call(
             bindings_[func.params[i].name] = args[i];
         } else if (func.params[i].default_value.has_value()) {
             bindings_[func.params[i].name] = ConstValue{*func.params[i].default_value};
+        } else if (func.params[i].default_node != NULL_NODE) {
+            // Expression default: evaluate recursively
+            auto expr_result = eval(func.params[i].default_node);
+            if (!expr_result) {
+                error("E203", "Cannot evaluate default expression for const fn parameter '" +
+                      func.params[i].name + "'", loc);
+                bindings_ = saved_bindings;
+                depth_ = saved_depth;
+                return std::nullopt;
+            }
+            bindings_[func.params[i].name] = *expr_result;
         } else {
             error("E203", "Missing argument for const fn parameter '" +
                   func.params[i].name + "'", loc);

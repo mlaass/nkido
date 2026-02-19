@@ -252,6 +252,11 @@ struct Node {
         std::string field_name;  // The field being accessed
     };
 
+    // Data for record literals (with optional spread)
+    struct RecordLitData {
+        NodeIndex spread_source = NULL_NODE;  // {..expr, ...} — source record to spread
+    };
+
     // Data for pipe binding (expr as name)
     struct PipeBindingData {
         std::string binding_name;  // The name bound by 'as'
@@ -286,6 +291,7 @@ struct Node {
         MatchArmData,
         MatchExprData,
         RecordFieldData,
+        RecordLitData,
         FieldAccessData,
         PipeBindingData,
         HoleData,
@@ -359,6 +365,10 @@ struct Node {
 
     [[nodiscard]] const RecordFieldData& as_record_field() const {
         return std::get<RecordFieldData>(data);
+    }
+
+    [[nodiscard]] const RecordLitData& as_record_lit() const {
+        return std::get<RecordLitData>(data);
     }
 
     [[nodiscard]] const FieldAccessData& as_field_access() const {

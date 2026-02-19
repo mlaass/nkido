@@ -58,6 +58,7 @@ private:
         std::string binding_name;                    // empty = no binding match
         NodeIndex identifier_to_replace = NULL_NODE; // NULL_NODE = no identity match
         bool clone_on_hole = false;                  // true for as-binding (needs fresh copies)
+        NodeIndex binding_replacement = NULL_NODE;   // separate replacement for binding_name (stays constant through pipe chain)
     };
 
     // Helper: Unified substitution of holes, binding names, and identifier nodes

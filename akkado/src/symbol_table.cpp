@@ -151,11 +151,29 @@ void SymbolTable::update_function_nodes(const std::unordered_map<NodeIndex, Node
                 if (def_it != node_map.end()) {
                     sym.user_function.def_node = def_it->second;
                 }
+                // Update default_node in params
+                for (auto& param : sym.user_function.params) {
+                    if (param.default_node != NULL_NODE) {
+                        auto param_it = node_map.find(param.default_node);
+                        if (param_it != node_map.end()) {
+                            param.default_node = param_it->second;
+                        }
+                    }
+                }
             } else if (sym.kind == SymbolKind::FunctionValue) {
                 // Update closure_node for lambda variables
                 auto closure_it = node_map.find(sym.function_ref.closure_node);
                 if (closure_it != node_map.end()) {
                     sym.function_ref.closure_node = closure_it->second;
+                }
+                // Update default_node in params
+                for (auto& param : sym.function_ref.params) {
+                    if (param.default_node != NULL_NODE) {
+                        auto param_it = node_map.find(param.default_node);
+                        if (param_it != node_map.end()) {
+                            param.default_node = param_it->second;
+                        }
+                    }
                 }
             } else if (sym.kind == SymbolKind::Pattern) {
                 // Update pattern_node

@@ -79,18 +79,67 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
             auto record_type = std::make_shared<RecordTypeInfo>();
             record_type->source_node = rhs;
 
-            // Collect field names from RecordLit children (each is an Argument with RecordFieldData)
+            // Check for spread source: {..base, ...}
+            const Node& rec_node = (*input_ast_).arena[rhs];
+            if (std::holds_alternative<Node::RecordLitData>(rec_node.data)) {
+                const auto& rec_data = rec_node.as_record_lit();
+                if (rec_data.spread_source != NULL_NODE) {
+                    // Look up the spread source's record type
+                    const Node& spread_node = (*input_ast_).arena[rec_data.spread_source];
+                    if (spread_node.type == NodeType::Identifier) {
+                        std::string spread_name;
+                        if (std::holds_alternative<Node::IdentifierData>(spread_node.data)) {
+                            spread_name = spread_node.as_identifier();
+                        }
+                        auto spread_sym = symbols_.lookup(spread_name);
+                        if (spread_sym && spread_sym->kind == SymbolKind::Record && spread_sym->record_type) {
+                            // Copy fields from spread source
+                            for (const auto& f : spread_sym->record_type->fields) {
+                                record_type->fields.push_back(f);
+                            }
+                        }
+                    } else if (spread_node.type == NodeType::RecordLit) {
+                        // Inline record literal as spread source — collect its fields
+                        NodeIndex sf = spread_node.first_child;
+                        while (sf != NULL_NODE) {
+                            const Node& sfield = (*input_ast_).arena[sf];
+                            if (sfield.type == NodeType::Argument &&
+                                std::holds_alternative<Node::RecordFieldData>(sfield.data)) {
+                                RecordFieldInfo field_info;
+                                field_info.name = sfield.as_record_field().name;
+                                field_info.buffer_index = 0xFFFF;
+                                field_info.field_kind = SymbolKind::Variable;
+                                record_type->fields.push_back(std::move(field_info));
+                            }
+                            sf = (*input_ast_).arena[sf].next_sibling;
+                        }
+                    }
+                }
+            }
+
+            // Collect explicit field names from RecordLit children (each is an Argument with RecordFieldData)
+            // These override any spread fields with the same name
             NodeIndex field_node = (*input_ast_).arena[rhs].first_child;
             while (field_node != NULL_NODE) {
                 const Node& field = (*input_ast_).arena[field_node];
                 if (field.type == NodeType::Argument &&
                     std::holds_alternative<Node::RecordFieldData>(field.data)) {
                     const auto& field_data = field.as_record_field();
-                    RecordFieldInfo field_info;
-                    field_info.name = field_data.name;
-                    field_info.buffer_index = 0xFFFF;  // Will be set during codegen
-                    field_info.field_kind = SymbolKind::Variable;  // Default, may be updated
-                    record_type->fields.push_back(std::move(field_info));
+                    // Check if this field was already added from spread
+                    bool found = false;
+                    for (auto& existing : record_type->fields) {
+                        if (existing.name == field_data.name) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        RecordFieldInfo field_info;
+                        field_info.name = field_data.name;
+                        field_info.buffer_index = 0xFFFF;
+                        field_info.field_kind = SymbolKind::Variable;
+                        record_type->fields.push_back(std::move(field_info));
+                    }
                 }
                 field_node = (*input_ast_).arena[field_node].next_sibling;
             }
@@ -113,6 +162,11 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
                         param.default_value = cp.default_value;
                         param.default_string = cp.default_string;
                         param.is_rest = cp.is_rest;
+                        // Expression default is stored as child of param node
+                        if (child_node.first_child != NULL_NODE &&
+                            !cp.default_value.has_value() && !cp.default_string.has_value()) {
+                            param.default_node = child_node.first_child;
+                        }
                     } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
                         param.name = child_node.as_identifier();
                         param.default_value = std::nullopt;
@@ -246,6 +300,11 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
                                     param.default_value = cp.default_value;
                                     param.default_string = cp.default_string;
                                     param.is_rest = cp.is_rest;
+                                    // Expression default is stored as child of param node
+                                    if (child_node.first_child != NULL_NODE &&
+                                        !cp.default_value.has_value() && !cp.default_string.has_value()) {
+                                        param.default_node = child_node.first_child;
+                                    }
                                 } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
                                     param.name = child_node.as_identifier();
                                 } else {
@@ -314,6 +373,11 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
                 param.default_value = cp.default_value;
                 param.default_string = cp.default_string;
                 param.is_rest = cp.is_rest;
+                // Expression default is stored as child of param node
+                if (child_node.first_child != NULL_NODE &&
+                    !cp.default_value.has_value() && !cp.default_string.has_value()) {
+                    param.default_node = child_node.first_child;
+                }
             } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
                 param.name = child_node.as_identifier();
                 param.default_value = std::nullopt;
@@ -364,17 +428,35 @@ NodeIndex SemanticAnalyzer::rewrite_pipes(NodeIndex node) {
             return NULL_NODE;
         }
 
-        // Handle PipeBinding on LHS: expr as name |> ...
-        // This creates a named binding visible in the RHS
+        // Handle PipeBinding: expr as name |> ...
+        // The binding should be visible in ALL subsequent pipe stages,
+        // not just the immediate RHS. For left-associative pipe chains like
+        // ((A as r) |> B) |> C, we need to find the PipeBinding by walking
+        // the leftmost spine of nested pipes.
         std::string binding_name;
+        NodeIndex binding_value = NULL_NODE;  // original bound expression (for substitution)
         NodeIndex actual_lhs = lhs_idx;
 
         const Node& lhs_node = (*input_ast_).arena[lhs_idx];
         if (lhs_node.type == NodeType::PipeBinding) {
             const auto& binding_data = lhs_node.as_pipe_binding();
             binding_name = binding_data.binding_name;
-            // Get the actual expression inside the binding
             actual_lhs = lhs_node.first_child;
+            binding_value = actual_lhs;  // the expression being bound
+        } else {
+            // Walk down the leftmost spine of nested pipes to find a PipeBinding
+            NodeIndex walk = lhs_idx;
+            while (walk != NULL_NODE && (*input_ast_).arena[walk].type == NodeType::Pipe) {
+                NodeIndex inner_lhs = (*input_ast_).arena[walk].first_child;
+                if (inner_lhs != NULL_NODE &&
+                    (*input_ast_).arena[inner_lhs].type == NodeType::PipeBinding) {
+                    const auto& bd = (*input_ast_).arena[inner_lhs].as_pipe_binding();
+                    binding_name = bd.binding_name;
+                    binding_value = (*input_ast_).arena[inner_lhs].first_child;
+                    break;
+                }
+                walk = inner_lhs;
+            }
         }
 
         // Check if innermost LHS is an unbound identifier -> create closure
@@ -411,7 +493,18 @@ NodeIndex SemanticAnalyzer::rewrite_pipes(NodeIndex node) {
         // Also substitute binding name references with the LHS value
         NodeIndex new_rhs;
         if (!binding_name.empty()) {
-            new_rhs = substitute_nodes(rhs_idx, {new_lhs, binding_name, NULL_NODE, true});
+            // binding_value is an input AST node — clone_subtree in substitute_nodes
+            // will correctly clone it from input→output arena each time r is referenced.
+            // clone_on_hole must match whether PipeBinding is directly on LHS:
+            // - Direct binding: clone_on_hole=true (original behavior)
+            // - Inherited from inner pipe: clone_on_hole=false (replacement is already output arena)
+            bool direct_binding = (lhs_node.type == NodeType::PipeBinding);
+            SubstituteOpts opts;
+            opts.replacement = new_lhs;
+            opts.binding_name = binding_name;
+            opts.clone_on_hole = direct_binding;
+            opts.binding_replacement = binding_value;
+            new_rhs = substitute_nodes(rhs_idx, opts);
         } else {
             new_rhs = substitute_nodes(rhs_idx, {new_lhs});
         }
@@ -587,6 +680,17 @@ NodeIndex SemanticAnalyzer::clone_subtree(NodeIndex src_idx) {
         }
     }
 
+    // Handle RecordLit spread_source - it's stored in data, not as a child
+    if (src.type == NodeType::RecordLit &&
+        std::holds_alternative<Node::RecordLitData>(src.data)) {
+        const auto& rec_data = src.as_record_lit();
+        if (rec_data.spread_source != NULL_NODE) {
+            NodeIndex cloned_spread = clone_subtree(rec_data.spread_source);
+            auto& dst_data = std::get<Node::RecordLitData>(output_arena_[dst_idx].data);
+            dst_data.spread_source = cloned_spread;
+        }
+    }
+
     // Clone children
     NodeIndex src_child = src.first_child;
     NodeIndex prev_dst_child = NULL_NODE;
@@ -632,14 +736,16 @@ NodeIndex SemanticAnalyzer::substitute_nodes(NodeIndex node, const SubstituteOpt
         return opts.clone_on_hole ? clone_subtree(opts.replacement) : opts.replacement;
     }
 
-    // 2. Identifier matching binding_name → clone replacement
+    // 2. Identifier matching binding_name → clone binding_replacement (or replacement as fallback)
     if (!opts.binding_name.empty() && n.type == NodeType::Identifier) {
         std::string name;
         if (std::holds_alternative<Node::IdentifierData>(n.data)) {
             name = n.as_identifier();
         }
         if (name == opts.binding_name) {
-            return clone_subtree(opts.replacement);
+            NodeIndex bind_repl = (opts.binding_replacement != NULL_NODE)
+                ? opts.binding_replacement : opts.replacement;
+            return clone_subtree(bind_repl);
         }
     }
 
@@ -659,9 +765,12 @@ NodeIndex SemanticAnalyzer::substitute_nodes(NodeIndex node, const SubstituteOpt
         // For RHS: replacement becomes new_lhs, and drop identifier_to_replace
         // (standard pipe semantics: only holes in RHS get the LHS value)
         // But binding_name carries through (as-binding is visible in entire chain)
+        // binding_replacement stays constant — it always refers to the original bound value
         SubstituteOpts rhs_opts;
         rhs_opts.replacement = new_lhs;
         rhs_opts.binding_name = opts.binding_name;
+        rhs_opts.binding_replacement = (opts.binding_replacement != NULL_NODE)
+            ? opts.binding_replacement : opts.replacement;
         rhs_opts.identifier_to_replace = NULL_NODE;  // drop identity match for RHS
         rhs_opts.clone_on_hole = opts.clone_on_hole;
 
@@ -681,6 +790,17 @@ NodeIndex SemanticAnalyzer::substitute_nodes(NodeIndex node, const SubstituteOpt
             NodeIndex new_guard = substitute_nodes(arm_data.guard_node, opts);
             auto& dst_data = std::get<Node::MatchArmData>(output_arena_[new_node].data);
             dst_data.guard_node = new_guard;
+        }
+    }
+
+    // Handle RecordLit spread_source specially
+    if (n.type == NodeType::RecordLit &&
+        std::holds_alternative<Node::RecordLitData>(n.data)) {
+        const auto& rec_data = n.as_record_lit();
+        if (rec_data.spread_source != NULL_NODE) {
+            NodeIndex new_spread = substitute_nodes(rec_data.spread_source, opts);
+            auto& dst_data = std::get<Node::RecordLitData>(output_arena_[new_node].data);
+            dst_data.spread_source = new_spread;
         }
     }
 
@@ -865,6 +985,7 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
             for (const auto& param : fn.params) {
                 if (!param.default_value.has_value() &&
                     !param.default_string.has_value() &&
+                    param.default_node == NULL_NODE &&
                     !param.is_rest) {
                     min_args++;
                 }
@@ -1045,12 +1166,19 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
             std::string param_name;
             if (std::holds_alternative<Node::ClosureParamData>(child_node.data)) {
                 param_name = child_node.as_closure_param().name;
+                // Verify purity of expression defaults
+                const auto& cp = child_node.as_closure_param();
+                if (child_node.first_child != NULL_NODE &&
+                    !cp.default_value.has_value() && !cp.default_string.has_value()) {
+                    verify_const_purity(child_node.first_child,
+                        "default expression for parameter '" + param_name + "'");
+                }
             } else if (std::holds_alternative<Node::IdentifierData>(child_node.data)) {
                 param_name = child_node.as_identifier();
             }
             if (!param_name.empty()) {
                 params.insert(param_name);
-                symbols_.define_variable(param_name, 0xFFFF);
+                symbols_.define_parameter(param_name, 0xFFFF);
             }
             param_idx++;
             child = output_arena_[child].next_sibling;
@@ -1135,7 +1263,8 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                             error("E060", "Unknown field '" + field_name + "' on record. Available: " + available, n.location);
                         }
                     } else if (sym && sym->kind != SymbolKind::Record
-                             && sym->kind != SymbolKind::Pattern) {
+                             && sym->kind != SymbolKind::Pattern
+                             && sym->kind != SymbolKind::Parameter) {
                         error("E061", "Cannot access field '" + field_name + "' on non-record value", n.location);
                     }
                 }
@@ -1180,17 +1309,61 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                 auto record_type = std::make_shared<RecordTypeInfo>();
                 record_type->source_node = bound_expr;
 
+                // Check for spread source: {..base, ...}
+                if (std::holds_alternative<Node::RecordLitData>(expr_node.data)) {
+                    const auto& rec_data = expr_node.as_record_lit();
+                    if (rec_data.spread_source != NULL_NODE) {
+                        const Node& spread_node = output_arena_[rec_data.spread_source];
+                        if (spread_node.type == NodeType::Identifier) {
+                            std::string spread_name;
+                            if (std::holds_alternative<Node::IdentifierData>(spread_node.data)) {
+                                spread_name = spread_node.as_identifier();
+                            }
+                            auto spread_sym = symbols_.lookup(spread_name);
+                            if (spread_sym && spread_sym->kind == SymbolKind::Record && spread_sym->record_type) {
+                                for (const auto& f : spread_sym->record_type->fields) {
+                                    record_type->fields.push_back(f);
+                                }
+                            }
+                        } else if (spread_node.type == NodeType::RecordLit) {
+                            NodeIndex sf = spread_node.first_child;
+                            while (sf != NULL_NODE) {
+                                const Node& sfield = output_arena_[sf];
+                                if (sfield.type == NodeType::Argument &&
+                                    std::holds_alternative<Node::RecordFieldData>(sfield.data)) {
+                                    RecordFieldInfo field_info;
+                                    field_info.name = sfield.as_record_field().name;
+                                    field_info.buffer_index = 0xFFFF;
+                                    field_info.field_kind = SymbolKind::Variable;
+                                    record_type->fields.push_back(std::move(field_info));
+                                }
+                                sf = output_arena_[sf].next_sibling;
+                            }
+                        }
+                    }
+                }
+
+                // Collect explicit field names (override spread fields with same name)
                 NodeIndex field_node = expr_node.first_child;
                 while (field_node != NULL_NODE) {
                     const Node& field = output_arena_[field_node];
                     if (field.type == NodeType::Argument &&
                         std::holds_alternative<Node::RecordFieldData>(field.data)) {
                         const auto& field_data = field.as_record_field();
-                        RecordFieldInfo field_info;
-                        field_info.name = field_data.name;
-                        field_info.buffer_index = 0xFFFF;
-                        field_info.field_kind = SymbolKind::Variable;
-                        record_type->fields.push_back(std::move(field_info));
+                        bool found = false;
+                        for (auto& existing : record_type->fields) {
+                            if (existing.name == field_data.name) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            RecordFieldInfo field_info;
+                            field_info.name = field_data.name;
+                            field_info.buffer_index = 0xFFFF;
+                            field_info.field_kind = SymbolKind::Variable;
+                            record_type->fields.push_back(std::move(field_info));
+                        }
                     }
                     field_node = output_arena_[field_node].next_sibling;
                 }

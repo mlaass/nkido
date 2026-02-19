@@ -3679,3 +3679,298 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
         CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_QUERY) == 1);
     }
 }
+
+// =============================================================================
+// Codegen: Record spreading
+// =============================================================================
+
+TEST_CASE("Codegen: Record spreading", "[codegen][records]") {
+    SECTION("spread with override") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            r = {..base, freq: 880}
+            r.freq
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread with new field") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            r = {..base, pan: 0.5}
+            r.pan
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread all fields") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            r = {..base}
+            r.freq + r.vel
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("inline spread source") {
+        auto result = akkado::compile(R"(
+            r = {..{freq: 440}, vel: 0.8}
+            r.freq + r.vel
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread in pipe") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            r = {..base, freq: 880}
+            osc("sin", r.freq) |> % * r.vel |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+}
+
+// =============================================================================
+// Codegen: Expression defaults
+// =============================================================================
+
+TEST_CASE("Codegen: Expression defaults", "[codegen][fn]") {
+    SECTION("arithmetic expression default") {
+        auto result = akkado::compile(R"(
+            fn f(x, cut = 440 * 2) -> x + cut
+            f(1)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("const variable in expression default") {
+        auto result = akkado::compile(R"(
+            const BASE = 440
+            fn f(x, freq = BASE * 2) -> x + freq
+            f(1)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("const fn call in expression default") {
+        auto result = akkado::compile(R"(
+            const fn double(x) -> x * 2
+            fn f(x, cut = double(440)) -> x + cut
+            f(1)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("expression default not used when arg provided") {
+        auto result = akkado::compile(R"(
+            fn f(x, cut = 440 * 2) -> x + cut
+            f(1, 100)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("closure with expression default") {
+        auto result = akkado::compile(R"(
+            g = (x, cut = 440 * 2) -> x + cut
+            g(1)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("multiple expression defaults") {
+        auto result = akkado::compile(R"(
+            fn f(x, a = 1 + 1, b = 2 * 3) -> x + a + b
+            f(1)
+        )");
+        CHECK(result.success);
+    }
+}
+
+// =============================================================================
+// Codegen: Record spread interactions (F8 integration)
+// =============================================================================
+
+TEST_CASE("Codegen: Record spread interactions", "[codegen][records]") {
+    SECTION("field access on spread result") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            {..base, freq: 880}.freq
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread + as-binding in pipe") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            {..base, vel: 0.5} as r |> osc("sin", r.freq) |> % * r.vel |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread + dot-call") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            r = {..base, freq: 880}
+            osc("sin", r.freq).lp(1000) |> % * r.vel |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("nested spread (spread of spread)") {
+        auto result = akkado::compile(R"(
+            inner = {freq: 440}
+            mid = {..inner, vel: 0.8}
+            outer = {..mid, pan: 0.5}
+            outer.freq + outer.vel + outer.pan
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread overrides all fields") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            r = {..base, freq: 880, vel: 0.5}
+            osc("sin", r.freq) |> % * r.vel |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread + shorthand field") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440}
+            vel = 0.8
+            r = {..base, vel}
+            r.freq + r.vel
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread field used in match scrutinee") {
+        auto result = akkado::compile(R"(
+            base = {mode: 1, freq: 440}
+            r = {..base, mode: 2}
+            match(r.mode) {
+                1: 100,
+                2: 200,
+                _: 0
+            }
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("spread record passed as fn argument") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, vel: 0.8}
+            fn get_freq(r) -> r.freq
+            get_freq({..base, pan: 0.5})
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("error: spread non-record") {
+        auto result = akkado::compile(R"(
+            x = 42
+            r = {..x, vel: 0.8}
+        )");
+        CHECK_FALSE(result.success);
+    }
+
+    SECTION("two records in same pipe") {
+        auto result = akkado::compile(R"(
+            o = {freq: 440, type: "sin"}
+            f = {cutoff: 1000, res: 0.707}
+            osc(o.type, o.freq) |> lp(%, f.cutoff, f.res) |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+}
+
+// =============================================================================
+// Codegen: Expression default interactions (F6 integration)
+// =============================================================================
+
+TEST_CASE("Codegen: Expression default interactions", "[codegen][fn]") {
+    SECTION("expression default + pipe body") {
+        auto result = akkado::compile(R"(
+            fn f(x, gain = 1 + 1) -> x |> % * gain |> out(%, %)
+            osc("sin", 440) |> f(%) |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("expression default + as-binding") {
+        auto result = akkado::compile(R"(
+            fn amp(x, gain = 2 * 0.25) -> x * gain
+            osc("sin", 440) as sig |> amp(sig) |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("expression default + match body") {
+        auto result = akkado::compile(R"(
+            fn sel(x, mode = 1 + 0) -> match(mode) {
+                1: x,
+                2: x * 2,
+                _: 0
+            }
+            sel(440)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("expression default + dot-call") {
+        auto result = akkado::compile(R"(
+            fn amp(sig, gain = 1 + 1) -> sig * gain
+            osc("sin", 440).amp() |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("negation as default") {
+        auto result = akkado::compile(R"(
+            fn offset(x, y = -1) -> x + y
+            offset(10)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("parenthesized expression default") {
+        auto result = akkado::compile(R"(
+            fn scale(x, factor = (1 + 2) * 3) -> x * factor
+            scale(10)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("pitch literal as default") {
+        auto result = akkado::compile(R"(
+            fn my_osc(type, freq = 'C4') -> osc(type, freq)
+            my_osc("sin") |> out(%, %)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("closure expr default assigned then called") {
+        auto result = akkado::compile(R"(
+            g = (x, y = 10 * 2) -> x + y
+            g(1)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("multiple defaults, partial override") {
+        auto result = akkado::compile(R"(
+            fn f(x, a = 1 + 1, b = 2 * 3) -> x + a + b
+            f(1, 5)
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("expr default fn called multiple times") {
+        auto result = akkado::compile(R"(
+            fn f(x, scale = 2 + 2) -> x * scale
+            f(1) + f(2) + f(3, 10)
+        )");
+        CHECK(result.success);
+    }
+}

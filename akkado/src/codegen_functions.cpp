@@ -228,6 +228,41 @@ std::uint16_t CodeGenerator::handle_user_function_call(
             float default_val = static_cast<float>(*func.params[i].default_value);
             encode_const_value(push_inst, default_val);
             emit(push_inst);
+        } else if (func.params[i].default_node != NULL_NODE &&
+                   !func.params[i].default_string.has_value()) {
+            // Expression default: evaluate at compile time via ConstEvaluator
+            ConstEvaluator evaluator(*ast_, *symbols_);
+            auto result = evaluator.evaluate(func.params[i].default_node);
+
+            for (const auto& diag : evaluator.diagnostics()) {
+                diagnostics_.push_back(diag);
+            }
+
+            if (result) {
+                if (std::holds_alternative<double>(*result)) {
+                    float val = static_cast<float>(std::get<double>(*result));
+                    param_buf = emit_push_const(buffers_, instructions_, val);
+                    if (param_buf == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        param_literals_ = std::move(saved_param_literals);
+                        param_string_defaults_ = std::move(saved_param_string_defaults);
+                        return BufferAllocator::BUFFER_UNUSED;
+                    }
+                } else {
+                    // Array result — not supported as default
+                    error("E105", "Array expression defaults not yet supported for parameter '" +
+                          func.params[i].name + "'", n.location);
+                    param_literals_ = std::move(saved_param_literals);
+                    param_string_defaults_ = std::move(saved_param_string_defaults);
+                    return BufferAllocator::BUFFER_UNUSED;
+                }
+            } else {
+                error("E105", "Cannot evaluate default expression at compile time for parameter '" +
+                      func.params[i].name + "'", n.location);
+                param_literals_ = std::move(saved_param_literals);
+                param_string_defaults_ = std::move(saved_param_string_defaults);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
         } else if (func.params[i].default_string.has_value()) {
             // String default: doesn't produce audio — used for compile-time match dispatch
             param_buf = BufferAllocator::BUFFER_UNUSED;
@@ -260,6 +295,23 @@ std::uint16_t CodeGenerator::handle_user_function_call(
             auto fref_it = param_function_refs_.find(param_hash);
             if (fref_it != param_function_refs_.end()) {
                 symbols_->define_function_value(func.params[i].name, fref_it->second);
+            } else if (i < args.size()) {
+                // Check if the argument produced a record
+                auto rec_it = record_fields_.find(args[i]);
+                if (rec_it != record_fields_.end()) {
+                    auto record_type = std::make_shared<RecordTypeInfo>();
+                    record_type->source_node = args[i];
+                    for (const auto& [name, buffer] : rec_it->second) {
+                        RecordFieldInfo field_info;
+                        field_info.name = name;
+                        field_info.buffer_index = buffer;
+                        field_info.field_kind = SymbolKind::Variable;
+                        record_type->fields.push_back(std::move(field_info));
+                    }
+                    symbols_->define_record(func.params[i].name, record_type);
+                } else {
+                    symbols_->define_variable(func.params[i].name, param_bufs[i]);
+                }
             } else {
                 symbols_->define_variable(func.params[i].name, param_bufs[i]);
             }
@@ -393,6 +445,40 @@ std::uint16_t CodeGenerator::handle_function_value_call(
             float default_val = static_cast<float>(*func.params[i].default_value);
             encode_const_value(push_inst, default_val);
             emit(push_inst);
+        } else if (func.params[i].default_node != NULL_NODE &&
+                   !func.params[i].default_string.has_value()) {
+            // Expression default: evaluate at compile time via ConstEvaluator
+            ConstEvaluator evaluator(*ast_, *symbols_);
+            auto result = evaluator.evaluate(func.params[i].default_node);
+
+            for (const auto& diag : evaluator.diagnostics()) {
+                diagnostics_.push_back(diag);
+            }
+
+            if (result) {
+                if (std::holds_alternative<double>(*result)) {
+                    float val = static_cast<float>(std::get<double>(*result));
+                    param_buf = emit_push_const(buffers_, instructions_, val);
+                    if (param_buf == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        param_literals_ = std::move(saved_param_literals);
+                        param_string_defaults_ = std::move(saved_param_string_defaults);
+                        return BufferAllocator::BUFFER_UNUSED;
+                    }
+                } else {
+                    error("E105", "Array expression defaults not yet supported for parameter '" +
+                          func.params[i].name + "'", n.location);
+                    param_literals_ = std::move(saved_param_literals);
+                    param_string_defaults_ = std::move(saved_param_string_defaults);
+                    return BufferAllocator::BUFFER_UNUSED;
+                }
+            } else {
+                error("E105", "Cannot evaluate default expression at compile time for parameter '" +
+                      func.params[i].name + "'", n.location);
+                param_literals_ = std::move(saved_param_literals);
+                param_string_defaults_ = std::move(saved_param_string_defaults);
+                return BufferAllocator::BUFFER_UNUSED;
+            }
         } else if (func.params[i].default_string.has_value()) {
             // String default: doesn't produce audio — used for compile-time match dispatch
             param_buf = BufferAllocator::BUFFER_UNUSED;

@@ -601,12 +601,32 @@ NodeIndex Parser::parse_grouping() {
             }
             advance();
 
-            // Skip optional default value: = <literal>
+            // Skip optional default value: = <expression>
             if (check(TokenType::Equals)) {
                 advance();  // consume '='
-                if (check(TokenType::Number) || check(TokenType::String)) {
-                    advance();  // consume the literal
-                } else {
+                // Skip an arbitrary expression by balancing parens/brackets/braces
+                // and stopping at comma or closing paren at depth 0
+                int depth = 0;
+                bool valid = false;
+                while (!is_at_end()) {
+                    if (check(TokenType::LParen) || check(TokenType::LBracket) || check(TokenType::LBrace)) {
+                        depth++;
+                        advance();
+                    } else if (check(TokenType::RParen) || check(TokenType::RBracket) || check(TokenType::RBrace)) {
+                        if (depth == 0) {
+                            valid = true;
+                            break;  // This RParen closes the param list
+                        }
+                        depth--;
+                        advance();
+                    } else if (check(TokenType::Comma) && depth == 0) {
+                        valid = true;
+                        break;  // Next parameter
+                    } else {
+                        advance();
+                    }
+                }
+                if (!valid) {
                     looks_like_params = false;
                     break;
                 }
@@ -668,13 +688,20 @@ NodeIndex Parser::parse_closure() {
         for (const auto& param : params) {
             NodeIndex param_node = arena_.alloc(NodeType::Identifier, start_tok.location);
 
-            if (param.default_value.has_value() || param.default_string.has_value() || param.is_rest) {
-                // Parameter with default value, string default, or rest flag
+            if (param.default_value.has_value() || param.default_string.has_value() ||
+                param.is_rest || param.default_node != NULL_NODE) {
+                // Parameter with default value, string default, rest flag, or expression default
                 arena_[param_node].data = Node::ClosureParamData{
                     param.name, param.default_value, param.default_string, param.is_rest};
             } else {
                 // Simple parameter - use IdentifierData
                 arena_[param_node].data = Node::IdentifierData{param.name};
+            }
+
+            // Attach expression default as child of param node
+            if (param.default_node != NULL_NODE && !param.default_value.has_value() &&
+                !param.default_string.has_value()) {
+                arena_[param_node].first_child = param.default_node;
             }
 
             if (first_param == NULL_NODE) {
@@ -732,21 +759,31 @@ std::vector<ParsedParam> Parser::parse_param_list() {
 
         NodeIndex default_node_idx = NULL_NODE;
         if (match(TokenType::Equals)) {
-            // Parse default value (number or string literal)
-            if (check(TokenType::Number)) {
+            // Fast path: simple number literal (not followed by an operator)
+            // Uses advance() instead of parse_expression() to avoid orphaning arena nodes
+            if (check(TokenType::Number) &&
+                current_idx_ + 1 < tokens_.size() &&
+                (tokens_[current_idx_ + 1].type == TokenType::Comma ||
+                 tokens_[current_idx_ + 1].type == TokenType::RParen)) {
                 Token num_tok = advance();
                 default_value = std::get<NumericValue>(num_tok.value).value;
                 seen_default = true;
-            } else if (check(TokenType::String)) {
+            }
+            // Fast path: simple string literal (not followed by an operator)
+            else if (check(TokenType::String) &&
+                     current_idx_ + 1 < tokens_.size() &&
+                     (tokens_[current_idx_ + 1].type == TokenType::Comma ||
+                      tokens_[current_idx_ + 1].type == TokenType::RParen)) {
                 Token str_tok = advance();
                 default_string = str_tok.as_string();
                 seen_default = true;
-                // Allocate StringLit node in AST arena for codegen param_literals_
                 default_node_idx = arena_.alloc(NodeType::StringLit, str_tok.location);
                 arena_[default_node_idx].data = Node::StringData{*default_string};
-            } else {
-                error("Default parameter value must be a number or string literal");
-                break;
+            }
+            // Expression default: parse full expression (e.g. 440 * 2, mtof(60))
+            else {
+                default_node_idx = parse_expression();
+                seen_default = true;
             }
         } else if (seen_default) {
             // Required param after optional - error
@@ -1280,11 +1317,18 @@ NodeIndex Parser::parse_fn_def(bool is_const) {
     for (const auto& param : params) {
         NodeIndex param_node = arena_.alloc(NodeType::Identifier, name_tok.location);
 
-        if (param.default_value.has_value() || param.default_string.has_value() || param.is_rest) {
+        if (param.default_value.has_value() || param.default_string.has_value() ||
+            param.is_rest || param.default_node != NULL_NODE) {
             arena_[param_node].data = Node::ClosureParamData{
                 param.name, param.default_value, param.default_string, param.is_rest};
         } else {
             arena_[param_node].data = Node::IdentifierData{param.name};
+        }
+
+        // Attach expression default as child of param node
+        if (param.default_node != NULL_NODE && !param.default_value.has_value() &&
+            !param.default_string.has_value()) {
+            arena_[param_node].first_child = param.default_node;
         }
 
         arena_.add_child(node, param_node);
@@ -1324,7 +1368,7 @@ NodeIndex Parser::parse_directive() {
     return node;
 }
 
-// Record literal parsing: {field: value, ...} or {field, ...}
+// Record literal parsing: {field: value, ...} or {field, ...} or {..spread, field: value}
 NodeIndex Parser::parse_record_literal() {
     Token brace_tok = advance();  // consume '{'
     NodeIndex node = make_node(NodeType::RecordLit, brace_tok);
@@ -1335,52 +1379,66 @@ NodeIndex Parser::parse_record_literal() {
         return node;
     }
 
-    // Parse fields
+    // Check for spread: {..expr, ...}
+    NodeIndex spread_source = NULL_NODE;
+    if (check(TokenType::DotDot)) {
+        advance();  // consume '..'
+        spread_source = parse_expression();
+        // Consume comma after spread if present (before explicit fields)
+        match(TokenType::Comma);
+    }
+
+    // Store spread info on the RecordLit node
+    arena_[node].data = Node::RecordLitData{spread_source};
+
+    // Parse fields (if any remain after spread)
     std::set<std::string> seen_fields;  // Track duplicates
 
-    do {
-        if (!check(TokenType::Identifier)) {
-            error("Expected field name in record literal");
-            break;
-        }
-
-        Token field_tok = advance();
-        std::string field_name = std::string(field_tok.lexeme);
-
-        // Check for duplicate field names
-        if (seen_fields.count(field_name)) {
-            error_at(field_tok, "Duplicate field '" + field_name + "' in record literal");
-        }
-        seen_fields.insert(field_name);
-
-        // Create a node to hold the field (using Argument node type with RecordFieldData)
-        NodeIndex field_node = arena_.alloc(NodeType::Argument, field_tok.location);
-
-        // Check for shorthand {field} vs full {field: value}
-        if (check(TokenType::Colon)) {
-            advance();  // consume ':'
-
-            // Full form: field: value
-            arena_[field_node].data = Node::RecordFieldData{field_name, false};
-
-            // Parse the value expression
-            NodeIndex value = parse_expression();
-            if (value != NULL_NODE) {
-                arena_.add_child(field_node, value);
+    if (!check(TokenType::RBrace)) {
+        do {
+            if (!check(TokenType::Identifier)) {
+                error("Expected field name in record literal");
+                break;
             }
-        } else {
-            // Shorthand form: {field} - value is the identifier with same name
-            arena_[field_node].data = Node::RecordFieldData{field_name, true};
 
-            // Create identifier node for the value
-            NodeIndex ident = arena_.alloc(NodeType::Identifier, field_tok.location);
-            arena_[ident].data = Node::IdentifierData{field_name};
-            arena_.add_child(field_node, ident);
-        }
+            Token field_tok = advance();
+            std::string field_name = std::string(field_tok.lexeme);
 
-        arena_.add_child(node, field_node);
+            // Check for duplicate field names
+            if (seen_fields.count(field_name)) {
+                error_at(field_tok, "Duplicate field '" + field_name + "' in record literal");
+            }
+            seen_fields.insert(field_name);
 
-    } while (match(TokenType::Comma) && !check(TokenType::RBrace));
+            // Create a node to hold the field (using Argument node type with RecordFieldData)
+            NodeIndex field_node = arena_.alloc(NodeType::Argument, field_tok.location);
+
+            // Check for shorthand {field} vs full {field: value}
+            if (check(TokenType::Colon)) {
+                advance();  // consume ':'
+
+                // Full form: field: value
+                arena_[field_node].data = Node::RecordFieldData{field_name, false};
+
+                // Parse the value expression
+                NodeIndex value = parse_expression();
+                if (value != NULL_NODE) {
+                    arena_.add_child(field_node, value);
+                }
+            } else {
+                // Shorthand form: {field} - value is the identifier with same name
+                arena_[field_node].data = Node::RecordFieldData{field_name, true};
+
+                // Create identifier node for the value
+                NodeIndex ident = arena_.alloc(NodeType::Identifier, field_tok.location);
+                arena_[ident].data = Node::IdentifierData{field_name};
+                arena_.add_child(field_node, ident);
+            }
+
+            arena_.add_child(node, field_node);
+
+        } while (match(TokenType::Comma) && !check(TokenType::RBrace));
+    }
 
     consume(TokenType::RBrace, "Expected '}' after record fields");
     return node;

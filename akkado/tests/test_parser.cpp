@@ -1293,3 +1293,142 @@ TEST_CASE("Parser pipe binding", "[parser][records]") {
         CHECK(ast.arena[lhs].as_pipe_binding().binding_name == "x");
     }
 }
+
+// =============================================================================
+// Parser: Record spreading
+// =============================================================================
+
+TEST_CASE("Parser record spreading", "[parser][records]") {
+    SECTION("spread with override") {
+        auto ast = parse_ok(R"(
+            base = {freq: 440, vel: 0.8}
+            {..base, freq: 880}
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex record = ast.arena[stmt1].next_sibling;
+        REQUIRE(ast.arena[record].type == NodeType::RecordLit);
+        REQUIRE(std::holds_alternative<Node::RecordLitData>(ast.arena[record].data));
+        CHECK(ast.arena[record].as_record_lit().spread_source != NULL_NODE);
+
+        // Should have one explicit field (freq: 880)
+        NodeIndex field = ast.arena[record].first_child;
+        REQUIRE(field != NULL_NODE);
+        CHECK(ast.arena[field].as_record_field().name == "freq");
+    }
+
+    SECTION("spread only - no explicit fields") {
+        auto ast = parse_ok(R"(
+            base = {freq: 440}
+            {..base}
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex record = ast.arena[stmt1].next_sibling;
+        REQUIRE(ast.arena[record].type == NodeType::RecordLit);
+        CHECK(ast.arena[record].as_record_lit().spread_source != NULL_NODE);
+        // No explicit fields
+        CHECK(ast.arena[record].first_child == NULL_NODE);
+    }
+
+    SECTION("spread with new field") {
+        auto ast = parse_ok(R"(
+            base = {freq: 440}
+            {..base, pan: 0.5}
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex record = ast.arena[stmt1].next_sibling;
+        REQUIRE(ast.arena[record].type == NodeType::RecordLit);
+        CHECK(ast.arena[record].as_record_lit().spread_source != NULL_NODE);
+
+        NodeIndex field = ast.arena[record].first_child;
+        REQUIRE(field != NULL_NODE);
+        CHECK(ast.arena[field].as_record_field().name == "pan");
+    }
+
+    SECTION("inline spread source") {
+        auto ast = parse_ok("{..{freq: 440}, vel: 0.8}");
+        NodeIndex root = ast.root;
+        NodeIndex record = ast.arena[root].first_child;
+        REQUIRE(ast.arena[record].type == NodeType::RecordLit);
+        CHECK(ast.arena[record].as_record_lit().spread_source != NULL_NODE);
+    }
+
+    SECTION("record without spread has NULL spread_source") {
+        auto ast = parse_ok("{x: 1, y: 2}");
+        NodeIndex root = ast.root;
+        NodeIndex record = ast.arena[root].first_child;
+        REQUIRE(ast.arena[record].type == NodeType::RecordLit);
+        REQUIRE(std::holds_alternative<Node::RecordLitData>(ast.arena[record].data));
+        CHECK(ast.arena[record].as_record_lit().spread_source == NULL_NODE);
+    }
+}
+
+// =============================================================================
+// Parser: Expression defaults
+// =============================================================================
+
+TEST_CASE("Parser expression defaults", "[parser][fn]") {
+    SECTION("arithmetic expression default") {
+        auto ast = parse_ok("fn f(x, cut = 440 * 2) -> x");
+        NodeIndex root = ast.root;
+        NodeIndex fn_def = ast.arena[root].first_child;
+        REQUIRE(ast.arena[fn_def].type == NodeType::FunctionDef);
+
+        // Second param should have ClosureParamData (expression default)
+        NodeIndex param1 = ast.arena[fn_def].first_child;
+        NodeIndex param2 = ast.arena[param1].next_sibling;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param2].data));
+        const auto& cp = ast.arena[param2].as_closure_param();
+        CHECK(cp.name == "cut");
+        // Expression default: no numeric default_value
+        CHECK_FALSE(cp.default_value.has_value());
+        // But the param node should have a child (the expression AST)
+        CHECK(ast.arena[param2].first_child != NULL_NODE);
+    }
+
+    SECTION("function call expression default") {
+        auto ast = parse_ok("const fn mtof(n) -> 440 * 2 ^ ((n - 69) / 12)\nfn f(x, freq = mtof(60)) -> x");
+        NodeIndex root = ast.root;
+        NodeIndex fn_def1 = ast.arena[root].first_child;
+        NodeIndex fn_def2 = ast.arena[fn_def1].next_sibling;
+        REQUIRE(ast.arena[fn_def2].type == NodeType::FunctionDef);
+
+        NodeIndex param1 = ast.arena[fn_def2].first_child;
+        NodeIndex param2 = ast.arena[param1].next_sibling;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param2].data));
+        CHECK(ast.arena[param2].as_closure_param().name == "freq");
+        CHECK(ast.arena[param2].first_child != NULL_NODE);
+    }
+
+    SECTION("closure with expression default") {
+        auto ast = parse_ok("f = (x, cut = 440 * 2) -> x");
+        NodeIndex root = ast.root;
+        NodeIndex assign = ast.arena[root].first_child;
+        // The RHS is a Closure
+        NodeIndex closure = ast.arena[assign].first_child;
+        REQUIRE(closure != NULL_NODE);
+        REQUIRE(ast.arena[closure].type == NodeType::Closure);
+
+        // Params are before the body
+        NodeIndex param1 = ast.arena[closure].first_child;
+        NodeIndex param2 = ast.arena[param1].next_sibling;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param2].data));
+        CHECK(ast.arena[param2].as_closure_param().name == "cut");
+        CHECK(ast.arena[param2].first_child != NULL_NODE);
+    }
+
+    SECTION("simple literal defaults still work") {
+        auto ast = parse_ok("fn f(x, freq = 440) -> x");
+        NodeIndex root = ast.root;
+        NodeIndex fn_def = ast.arena[root].first_child;
+        NodeIndex param1 = ast.arena[fn_def].first_child;
+        NodeIndex param2 = ast.arena[param1].next_sibling;
+        REQUIRE(std::holds_alternative<Node::ClosureParamData>(ast.arena[param2].data));
+        const auto& cp = ast.arena[param2].as_closure_param();
+        CHECK(cp.name == "freq");
+        REQUIRE(cp.default_value.has_value());
+        CHECK_THAT(*cp.default_value, WithinRel(440.0));
+    }
+}

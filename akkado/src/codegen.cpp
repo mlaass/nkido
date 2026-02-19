@@ -1318,7 +1318,56 @@ std::uint16_t CodeGenerator::handle_record_literal(NodeIndex node, const Node& n
     std::unordered_map<std::string, std::uint16_t> field_buffers;
     std::uint16_t first_buffer = BufferAllocator::BUFFER_UNUSED;
 
-    // Iterate through field children (each is an Argument with RecordFieldData)
+    // Handle spread source: {..base, field: value}
+    if (std::holds_alternative<Node::RecordLitData>(n.data)) {
+        const auto& rec_data = n.as_record_lit();
+        if (rec_data.spread_source != NULL_NODE) {
+            // Visit the spread source expression
+            visit(rec_data.spread_source);
+
+            // Look up its record fields
+            const Node& spread_node = ast_->arena[rec_data.spread_source];
+            std::unordered_map<std::string, std::uint16_t>* source_fields = nullptr;
+
+            // Direct record literal or expression that produced record fields
+            auto direct_it = record_fields_.find(rec_data.spread_source);
+            if (direct_it != record_fields_.end()) {
+                source_fields = &direct_it->second;
+            } else if (spread_node.type == NodeType::Identifier) {
+                // Identifier — check symbol table for Record
+                std::string var_name;
+                if (std::holds_alternative<Node::IdentifierData>(spread_node.data)) {
+                    var_name = spread_node.as_identifier();
+                }
+                auto sym = symbols_->lookup(var_name);
+                if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
+                    auto rec_it = record_fields_.find(sym->record_type->source_node);
+                    if (rec_it == record_fields_.end()) {
+                        visit(sym->record_type->source_node);
+                        rec_it = record_fields_.find(sym->record_type->source_node);
+                    }
+                    if (rec_it != record_fields_.end()) {
+                        source_fields = &rec_it->second;
+                    }
+                }
+            }
+
+            if (source_fields) {
+                // Copy all fields from spread source
+                for (const auto& [name, buf] : *source_fields) {
+                    field_buffers[name] = buf;
+                    if (first_buffer == BufferAllocator::BUFFER_UNUSED) {
+                        first_buffer = buf;
+                    }
+                }
+            } else {
+                error("E140", "Spread source is not a record", ast_->arena[rec_data.spread_source].location);
+            }
+        }
+    }
+
+    // Iterate through explicit field children (each is an Argument with RecordFieldData)
+    // These override any spread fields with the same name
     NodeIndex field_node = n.first_child;
     while (field_node != NULL_NODE) {
         const Node& field = ast_->arena[field_node];
@@ -1335,7 +1384,7 @@ std::uint16_t CodeGenerator::handle_record_literal(NodeIndex node, const Node& n
                 // Generate code for the field value
                 std::uint16_t value_buffer = visit(value_node);
 
-                // Track this field's buffer
+                // Track this field's buffer (overrides spread if same name)
                 field_buffers[field_name] = value_buffer;
 
                 // Record first buffer for return value

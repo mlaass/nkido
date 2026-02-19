@@ -796,3 +796,140 @@ TEST_CASE("Const: unimplemented whitelisted fn fails", "[const][bug3]") {
     auto result = akkado::compile("const x = reverse(range(0, 5))");
     CHECK_FALSE(result.success);
 }
+
+// =============================================================================
+// Const: Expression defaults in const fn calls
+// =============================================================================
+
+TEST_CASE("Const: expression default in const fn", "[const]") {
+    SECTION("arithmetic expression default") {
+        auto result = akkado::compile(R"(
+            const fn f(x, cut = 440 * 2) -> x + cut
+            const y = f(1)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // f(1) = 1 + 880 = 881
+        CHECK(has_const_approx(insts, 881.0f));
+    }
+
+    SECTION("const fn call in default") {
+        auto result = akkado::compile(R"(
+            const fn double(x) -> x * 2
+            const fn f(x, cut = double(440)) -> x + cut
+            const y = f(1)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // f(1) = 1 + 880 = 881
+        CHECK(has_const_approx(insts, 881.0f));
+    }
+
+    SECTION("expression default overridden by explicit arg") {
+        auto result = akkado::compile(R"(
+            const fn f(x, cut = 440 * 2) -> x + cut
+            const y = f(1, 100)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // f(1, 100) = 1 + 100 = 101
+        CHECK(has_const_approx(insts, 101.0f));
+    }
+}
+
+// =============================================================================
+// Const: Expression default interactions (F6 integration)
+// =============================================================================
+
+TEST_CASE("Const: expression default interactions", "[const]") {
+    SECTION("nested const fn with expr default") {
+        auto result = akkado::compile(R"(
+            const fn base(oct = 4) -> 440 * pow(2, oct - 4)
+            const fn freq(note = 0, oct = 4) -> base(oct) * pow(2, note / 12)
+            const v = freq()
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // freq() -> base(4) * pow(2, 0/12) -> 440 * pow(2,0) * pow(2,0) -> 440
+        CHECK(has_const_approx(insts, 440.0f));
+    }
+
+    SECTION("expr default with const variable") {
+        auto result = akkado::compile(R"(
+            const S = pow(2, 1.0 / 12)
+            const fn up(f, steps = 1) -> f * pow(S, steps)
+            const v = up(440)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // up(440) = 440 * pow(pow(2,1/12), 1) = 440 * 2^(1/12) ≈ 466.16
+        CHECK(has_const_approx(insts, 466.16f, 0.1f));
+    }
+
+    SECTION("parenthesized expr default") {
+        auto result = akkado::compile(R"(
+            const fn f(x, factor = (1 + 2) * 3) -> x * factor
+            const v = f(10)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // f(10) = 10 * 9 = 90
+        CHECK(has_const_approx(insts, 90.0f));
+    }
+
+    SECTION("negation default in const fn") {
+        auto result = akkado::compile(R"(
+            const fn offset(x, y = -1) -> x + y
+            const v = offset(10)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // offset(10) = 10 + (-1) = 9
+        CHECK(has_const_approx(insts, 9.0f));
+    }
+
+    SECTION("math builtin in default") {
+        auto result = akkado::compile(R"(
+            const fn f(x, cut = 440 * pow(2, 3)) -> x + cut
+            const v = f(0)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // f(0) = 0 + 440*8 = 3520
+        CHECK(has_const_approx(insts, 3520.0f));
+    }
+
+    SECTION("default overridden in nested call") {
+        auto result = akkado::compile(R"(
+            const fn scale(x, f = 2 * 3) -> x * f
+            const fn apply(x) -> scale(x, 10)
+            const v = apply(5)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // apply(5) -> scale(5, 10) -> 5 * 10 = 50
+        CHECK(has_const_approx(insts, 50.0f));
+    }
+
+    SECTION("multiple defaults partial override") {
+        auto result = akkado::compile(R"(
+            const fn f(x, a = 1 + 1, b = 2 * 3) -> x + a + b
+            const v = f(100, 5)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // f(100, 5) = 100 + 5 + 6 = 111
+        CHECK(has_const_approx(insts, 111.0f));
+    }
+
+    SECTION("default with select/conditional") {
+        auto result = akkado::compile(R"(
+            const fn f(x, mode = select(1 > 0, 2, 3)) -> x * mode
+            const v = f(10)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        // select(true, 2, 3) -> 2; f(10) = 10 * 2 = 20
+        CHECK(has_const_approx(insts, 20.0f));
+    }
+}
