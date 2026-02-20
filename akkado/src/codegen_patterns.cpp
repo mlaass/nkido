@@ -1260,23 +1260,33 @@ static std::optional<std::string> get_string_arg(const Ast& ast, const Node& n, 
     return std::nullopt;
 }
 
-// Helper: Check if a node is a pattern-producing expression
-// Returns true for MiniLiteral or Call to pat/seq/timeline
-static bool is_pattern_expr(const Ast& ast, NodeIndex node) {
+// Helper: Check if a Call node calls a known pattern-producing function.
+// Does not check MiniLiteral or StringLit (those should be handled separately).
+static bool is_pattern_call(const Node& n) {
+    if (n.type != NodeType::Call) return false;
+    const std::string& func_name = n.as_identifier();
+    return func_name == "pat" || func_name == "timeline" ||
+           func_name == "slow" || func_name == "fast" ||
+           func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
+           func_name == "bank" || func_name == "variant" || func_name == "transport" ||
+           func_name == "tune";
+}
+
+// Helper: Check if a node is a pattern-producing expression.
+// Uses symbol table for Identifier nodes (type-based), AST checks for literals/calls.
+static bool is_pattern_node(const Ast& ast, const SymbolTable& symbols, NodeIndex node) {
     if (node == NULL_NODE) return false;
 
     const Node& n = ast.arena[node];
 
     if (n.type == NodeType::MiniLiteral) return true;
     if (n.type == NodeType::StringLit) return true;
+    if (is_pattern_call(n)) return true;
 
-    if (n.type == NodeType::Call) {
-        const std::string& func_name = n.as_identifier();
-        return func_name == "pat" || func_name == "timeline" ||
-               func_name == "slow" || func_name == "fast" ||
-               func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
-               func_name == "bank" || func_name == "variant" || func_name == "transport" ||
-               func_name == "tune";
+    // Identifier: check symbol table for Pattern kind
+    if (n.type == NodeType::Identifier) {
+        auto sym = symbols.lookup(n.as_identifier());
+        return sym && sym->kind == SymbolKind::Pattern;
     }
 
     return false;
@@ -1596,10 +1606,7 @@ TypedValue CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-
-    // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "slow() first argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -1666,10 +1673,7 @@ TypedValue CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-
-    // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "fast() first argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -1730,10 +1734,7 @@ TypedValue CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-
-    // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "rev() argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -1799,10 +1800,7 @@ TypedValue CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-
-    // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "transpose() first argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -1877,10 +1875,7 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-
-    // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "velocity() first argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -2025,10 +2020,7 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-
-    // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "bank() first argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -2160,10 +2152,7 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-
-    // Accept MiniLiteral or pattern-producing Call nodes
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "variant() first argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -2179,7 +2168,7 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
             error("E131", "variant() index must be non-negative", n.location);
             return TypedValue::void_val();
         }
-    } else if (variant_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, variant_arg)) {
+    } else if (!is_pattern_node(*ast_, *symbols_, variant_arg)) {
         error("E131", "variant() second argument must be a number or pattern", n.location);
         return TypedValue::void_val();
     }
@@ -2338,8 +2327,7 @@ TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "transport() first argument must be a pattern", n.location);
         return TypedValue::void_val();
     }
@@ -2507,8 +2495,7 @@ TypedValue CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    const Node& pat_node = ast_->arena[pattern_arg];
-    if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
         error("E133", "tune() second argument must be a pattern", n.location);
         return TypedValue::void_val();
     }

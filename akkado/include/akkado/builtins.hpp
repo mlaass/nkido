@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cedar/vm/instruction.hpp>
+#include "akkado/typed_value.hpp"
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -19,6 +20,55 @@ constexpr std::size_t MAX_BUILTIN_DEFAULTS = 5;
 /// Maximum number of extended parameters (stored in StatePool)
 constexpr std::size_t MAX_EXTENDED_PARAMS = 8;
 
+/// Parameter type annotation for builtin functions.
+/// Used for type checking arguments in the generic builtin call path.
+/// Default `Any` means no checking — opt-in annotation.
+enum class ParamValueType : std::uint8_t {
+    Any = 0,     // No checking (default)
+    Signal,      // Signal or Number (Number auto-promotes to constant buffer)
+    Pattern,     // Pattern only
+    String,      // Compile-time string only
+    Function,    // Function/closure reference
+    Array,       // Array type
+    Record,      // Record or Pattern (Pattern is subtype of Record)
+};
+
+/// Human-readable name for a ParamValueType (for error messages)
+constexpr const char* param_value_type_name(ParamValueType type) {
+    switch (type) {
+        case ParamValueType::Any:      return "Any";
+        case ParamValueType::Signal:   return "Signal";
+        case ParamValueType::Pattern:  return "Pattern";
+        case ParamValueType::String:   return "String";
+        case ParamValueType::Function: return "Function";
+        case ParamValueType::Array:    return "Array";
+        case ParamValueType::Record:   return "Record";
+    }
+    return "Unknown";
+}
+
+/// Check if actual ValueType is compatible with expected ParamValueType.
+/// Rules:
+///   Any       — always compatible
+///   Signal    — accepts Signal or Number (Number auto-promotes to constant buffer)
+///   Pattern   — accepts Pattern only
+///   String    — accepts String only
+///   Function  — accepts Function only
+///   Array     — accepts Array only
+///   Record    — accepts Record or Pattern (Pattern is structurally a record)
+inline bool type_compatible(ValueType actual, ParamValueType expected) {
+    switch (expected) {
+        case ParamValueType::Any:      return true;
+        case ParamValueType::Signal:   return actual == ValueType::Signal || actual == ValueType::Number;
+        case ParamValueType::Pattern:  return actual == ValueType::Pattern;
+        case ParamValueType::String:   return actual == ValueType::String;
+        case ParamValueType::Function: return actual == ValueType::Function;
+        case ParamValueType::Array:    return actual == ValueType::Array;
+        case ParamValueType::Record:   return actual == ValueType::Record || actual == ValueType::Pattern;
+    }
+    return false;
+}
+
 /// Metadata for a built-in function
 struct BuiltinInfo {
     cedar::Opcode opcode;       // VM opcode to emit
@@ -29,6 +79,7 @@ struct BuiltinInfo {
     std::array<float, MAX_BUILTIN_DEFAULTS> defaults;              // Default values (NaN = required)
     std::string_view description;  // One-line docstring for autocomplete
     std::uint8_t extended_param_count = 0;  // Parameters beyond inputs[5] (stored in ExtendedParams)
+    std::array<ParamValueType, MAX_BUILTIN_PARAMS> param_types = {};  // All Any by default
 
     /// Get total parameter count (required + optional)
     [[nodiscard]] std::uint8_t total_params() const {
@@ -513,7 +564,8 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
     {"out",     {cedar::Opcode::OUTPUT, 1, 1, false,
                  {"L", "R", "", "", "", ""},
                  {NAN, NAN, NAN},
-                 "Audio output (mono or stereo)"}},
+                 "Audio output (mono or stereo)", 0,
+                 {ParamValueType::Signal, ParamValueType::Signal}}},
 
     // Stereo Operations (handled specially by codegen for stereo signal propagation)
     // stereo(mono) creates stereo from mono by duplicating to both channels

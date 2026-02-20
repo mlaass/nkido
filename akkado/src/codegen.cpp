@@ -808,6 +808,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
             // Visit arguments (dependencies must be satisfied)
             std::vector<std::uint16_t> arg_buffers;
+            std::size_t arg_idx = 0;
             NodeIndex arg = n.first_child;
             while (arg != NULL_NODE) {
                 const Node& arg_node = ast_->arena[arg];
@@ -817,6 +818,21 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 }
                 TypedValue arg_tv = visit(arg_value);
                 arg_buffers.push_back(arg_tv.buffer);
+
+                // Type check against annotation (non-fatal — continue for max error reporting)
+                if (arg_idx < MAX_BUILTIN_PARAMS &&
+                    builtin->param_types[arg_idx] != ParamValueType::Any &&
+                    !arg_tv.error && arg_tv.type != ValueType::Void) {
+                    if (!type_compatible(arg_tv.type, builtin->param_types[arg_idx])) {
+                        error("E160", func_name + "() argument '" +
+                              std::string(builtin->param_names[arg_idx]) + "' expects " +
+                              param_value_type_name(builtin->param_types[arg_idx]) +
+                              ", got " + value_type_name(arg_tv.type),
+                              ast_->arena[arg_value].location);
+                    }
+                }
+
+                ++arg_idx;
                 arg = ast_->arena[arg].next_sibling;
             }
 
@@ -1596,27 +1612,24 @@ TypedValue CodeGenerator::handle_field_access(NodeIndex node, const Node& n) {
             return TypedValue::error_val();
         }
 
-        default:
-            break;
-    }
+        case ValueType::Signal:
+        case ValueType::Number:
+            error("E135", "Cannot access field '" + field_name + "' on " +
+                  std::string(value_type_name(expr_tv.type)) +
+                  " value. Field access requires a Pattern or Record", n.location);
+            return TypedValue::error_val();
 
-    // Fallback for Call expressions - check if they produced a typed result
-    if (expr.type == NodeType::Call || expr.type == NodeType::RecordLit || expr.type == NodeType::MiniLiteral) {
-        auto type_it = node_types_.find(expr_node);
-        if (type_it != node_types_.end()) {
-            if (type_it->second.type == ValueType::Pattern) {
-                TypedValue result = pattern_field(type_it->second, field_name);
-                if (!result.error) {
-                    return cache_and_return(node, result);
-                }
-            }
-            if (type_it->second.type == ValueType::Record && type_it->second.record) {
-                auto field_it = type_it->second.record->fields.find(field_name);
-                if (field_it != type_it->second.record->fields.end()) {
-                    return cache_and_return(node, field_it->second);
-                }
-            }
-        }
+        case ValueType::Array:
+            error("E135", "Cannot access field '" + field_name + "' on Array. "
+                  "Use indexing or array functions instead", n.location);
+            return TypedValue::error_val();
+
+        case ValueType::Function:
+        case ValueType::String:
+        case ValueType::Void:
+            error("E135", "Cannot access field '" + field_name + "' on " +
+                  std::string(value_type_name(expr_tv.type)) + " value", n.location);
+            return TypedValue::error_val();
     }
 
     error("E135", "Field access on expression type not supported", n.location);

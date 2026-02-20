@@ -140,6 +140,21 @@ struct TypedValue {
     }
 };
 
+/// Human-readable name for a ValueType (for error messages)
+constexpr const char* value_type_name(ValueType type) {
+    switch (type) {
+        case ValueType::Signal:   return "Signal";
+        case ValueType::Number:   return "Number";
+        case ValueType::Pattern:  return "Pattern";
+        case ValueType::Record:   return "Record";
+        case ValueType::Array:    return "Array";
+        case ValueType::String:   return "String";
+        case ValueType::Function: return "Function";
+        case ValueType::Void:     return "Void";
+    }
+    return "Unknown";
+}
+
 /// Extract all buffer indices from a typed value (for multi-buffer compat).
 /// Signal/Number → single buffer. Array → all element buffers. Pattern → freq buf only.
 std::vector<std::uint16_t> buffers_of(const TypedValue& tv);

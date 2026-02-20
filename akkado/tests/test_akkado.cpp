@@ -1807,3 +1807,320 @@ TEST_CASE("Function composition", "[akkado][fn][compose]") {
         CHECK(find_opcode(result.bytecode, cedar::Opcode::ADD));
     }
 }
+
+TEST_CASE("TypedValue type checking", "[akkado][types]") {
+    SECTION("out() accepts Signal arguments (Number auto-promotes)") {
+        // Number constants are valid Signal arguments
+        auto result = akkado::compile("out(0.5, 0.5)");
+        REQUIRE(result.success);
+    }
+
+    SECTION("out() accepts oscillator Signal arguments") {
+        auto result = akkado::compile("saw(440) |> out(%, %)");
+        REQUIRE(result.success);
+    }
+
+    SECTION("out() rejects String argument with E160") {
+        // out() is annotated Signal — passing a string should fail
+        auto result = akkado::compile(R"(out("hello"))");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E160"));
+    }
+
+    SECTION("out() rejects Function argument with E160") {
+        auto result = akkado::compile(R"(
+            fn f(x) -> x * 2
+            out(f)
+        )");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E160"));
+    }
+
+    SECTION("field access on Signal gives type-specific error") {
+        auto result = akkado::compile("saw(440).freq");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E135"));
+    }
+
+    SECTION("field access on pattern works") {
+        auto result = akkado::compile(R"(
+            pat("c4 e4 g4").freq |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("field access on record works") {
+        auto result = akkado::compile(R"(
+            r = {freq: 440, vel: 0.8}
+            r.freq |> saw(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("slow() accepts MiniLiteral pattern") {
+        auto result = akkado::compile(R"(
+            slow(pat("c4 e4"), 2).freq |> saw(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("slow() rejects non-pattern argument") {
+        auto result = akkado::compile("slow(440, 2)");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E133"));
+    }
+
+    SECTION("value_type_name returns correct names") {
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::Signal)) == "Signal");
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::Number)) == "Number");
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::Pattern)) == "Pattern");
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::Record)) == "Record");
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::Array)) == "Array");
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::String)) == "String");
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::Function)) == "Function");
+        CHECK(std::string(akkado::value_type_name(akkado::ValueType::Void)) == "Void");
+    }
+
+    SECTION("type_compatible follows subtyping rules") {
+        using akkado::ValueType;
+        using akkado::ParamValueType;
+        using akkado::type_compatible;
+
+        // Any accepts everything
+        CHECK(type_compatible(ValueType::Signal, ParamValueType::Any));
+        CHECK(type_compatible(ValueType::Pattern, ParamValueType::Any));
+        CHECK(type_compatible(ValueType::String, ParamValueType::Any));
+
+        // Signal accepts Signal and Number
+        CHECK(type_compatible(ValueType::Signal, ParamValueType::Signal));
+        CHECK(type_compatible(ValueType::Number, ParamValueType::Signal));
+        CHECK_FALSE(type_compatible(ValueType::Pattern, ParamValueType::Signal));
+        CHECK_FALSE(type_compatible(ValueType::String, ParamValueType::Signal));
+        CHECK_FALSE(type_compatible(ValueType::Function, ParamValueType::Signal));
+
+        // Pattern only accepts Pattern
+        CHECK(type_compatible(ValueType::Pattern, ParamValueType::Pattern));
+        CHECK_FALSE(type_compatible(ValueType::Signal, ParamValueType::Pattern));
+
+        // Record accepts Record and Pattern (Pattern is subtype)
+        CHECK(type_compatible(ValueType::Record, ParamValueType::Record));
+        CHECK(type_compatible(ValueType::Pattern, ParamValueType::Record));
+        CHECK_FALSE(type_compatible(ValueType::Signal, ParamValueType::Record));
+
+        // Exact match types
+        CHECK(type_compatible(ValueType::String, ParamValueType::String));
+        CHECK_FALSE(type_compatible(ValueType::Signal, ParamValueType::String));
+        CHECK(type_compatible(ValueType::Function, ParamValueType::Function));
+        CHECK_FALSE(type_compatible(ValueType::Signal, ParamValueType::Function));
+        CHECK(type_compatible(ValueType::Array, ParamValueType::Array));
+        CHECK_FALSE(type_compatible(ValueType::Signal, ParamValueType::Array));
+    }
+}
+
+TEST_CASE("TypedValue integration", "[akkado][types][integration]") {
+
+    // ── 1. Pattern type flow through pipe binding and field access ──
+
+    SECTION("pattern pipe binding with field access") {
+        auto result = akkado::compile(R"(
+            pat("c4 e4") as p |> saw(p.freq) |> % * p.vel |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("pattern transform result retains type through binding") {
+        auto result = akkado::compile(R"(
+            slow(pat("c4 e4"), 2) as p |> p.freq |> saw(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("chained pattern transforms preserve type") {
+        auto result = akkado::compile(R"(
+            pat("c4 e4") |> slow(%, 2) |> fast(%, 3) |> transpose(%, 5)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("nested pattern transform with field access") {
+        auto result = akkado::compile(R"(
+            slow(fast(pat("c4 e4"), 2), 3).freq |> saw(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    // ── 2. Record type flow through pipe binding and spreading ──
+
+    SECTION("record pipe binding with field access") {
+        auto result = akkado::compile(R"(
+            {freq: 440, amp: 0.5} as r |> saw(r.freq) |> % * r.amp |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("record spread preserves field types") {
+        auto result = akkado::compile(R"(
+            base = {freq: 440, amp: 0.5}
+            merged = {..base, amp: 0.8}
+            merged.freq |> saw(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("record field access on spread result") {
+        auto result = akkado::compile(R"(
+            base = {a: 100, b: 200}
+            merged = {..base, c: 300}
+            merged.a |> saw(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    // ── 3. Array + closure type interactions ──
+
+    SECTION("array in map preserves element types") {
+        auto result = akkado::compile(R"(
+            [440, 880, 1320] |> map(%, (f) -> saw(f)) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("len on non-array still errors") {
+        auto result = akkado::compile(R"(
+            saw(440) |> len(%)
+        )");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E122"));
+    }
+
+    SECTION("array pipe binding then map") {
+        auto result = akkado::compile(R"(
+            freqs = [440, 880]
+            freqs as arr |> map(arr, (f) -> saw(f)) |> sum(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    // ── 4. Closure capture type preservation ──
+
+    SECTION("closure captures record and accesses field") {
+        auto result = akkado::compile(R"(
+            r = {cutoff: 1000}
+            fn process(sig) -> lp(sig, r.cutoff)
+            saw(440) |> process(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("closure captures array and uses len") {
+        auto result = akkado::compile(R"(
+            notes = [440, 880, 1320]
+            fn voice_count() -> len(notes)
+            voice_count()
+        )");
+        REQUIRE(result.success);
+    }
+
+    // ── 5. Pattern transforms reject wrong types (negative tests) ──
+
+    SECTION("slow rejects Signal argument") {
+        auto result = akkado::compile("slow(saw(440), 2)");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E133"));
+    }
+
+    SECTION("fast rejects record argument") {
+        auto result = akkado::compile("fast({freq: 440}, 2)");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E133"));
+    }
+
+    SECTION("transpose rejects array argument") {
+        auto result = akkado::compile("transpose([440, 880], 5)");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E133"));
+    }
+
+    SECTION("rev rejects number") {
+        auto result = akkado::compile("rev(440)");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E133"));
+    }
+
+    // ── 6. Field access errors with type-specific messages ──
+
+    SECTION("field access on array gives type-specific error") {
+        auto result = akkado::compile("[1, 2, 3].freq");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E135"));
+    }
+
+    SECTION("field access on function caught by analyzer") {
+        auto result = akkado::compile(R"(
+            fn f(x) -> x * 2
+            f.name
+        )");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E061"));
+    }
+
+    SECTION("unknown field on record gives field list") {
+        auto result = akkado::compile(R"(
+            {a: 1, b: 2}.c
+        )");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E131"));
+    }
+
+    // ── 7. Stereo type interactions ──
+
+    SECTION("stereo signal accepted by out") {
+        auto result = akkado::compile(R"(
+            stereo(saw(440), saw(880)) |> out(%)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("pan result accepted by out") {
+        auto result = akkado::compile(R"(
+            saw(440) |> pan(%, 0.5) |> out(%)
+        )");
+        REQUIRE(result.success);
+    }
+
+    // ── 8. Match expression type flow ──
+
+    SECTION("match arms produce signal type") {
+        auto result = akkado::compile(R"(
+            x = param("x", 0, 0, 1)
+            match(1) {
+                1: saw(440)
+                2: saw(880)
+                _: saw(220)
+            } |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("match with record destructuring") {
+        auto result = akkado::compile(R"(
+            r = {a: 440, b: 880}
+            r as {a, b} |> saw(a) + saw(b) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    // ── 9. E160 type mismatch from generic builtin path ──
+
+    SECTION("out rejects Array argument") {
+        auto result = akkado::compile("out([1, 2, 3])");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E160"));
+    }
+
+    SECTION("out rejects Pattern argument") {
+        auto result = akkado::compile(R"(out(pat("c4")))");
+        REQUIRE_FALSE(result.success);
+        CHECK(has_diagnostic_code(result.diagnostics, "E160"));
+    }
+}
