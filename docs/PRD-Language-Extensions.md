@@ -1,6 +1,6 @@
 # PRD: Akkado Language Extensions (Phases 1, 3, 4)
 
-> **Status: IN PROGRESS** — Dot-call syntax (feature 1) is done. Range patterns (feature 7) are done. Remaining: const fn, TypedValue, match destructuring, pattern methods, expression defaults, record spreading.
+> **Status: COMPLETE** — All 8 features implemented.
 
 ## Overview
 
@@ -102,6 +102,8 @@ saw(440).gain(0.5)                          // → gain(saw(440), 0.5)
 ---
 
 ## 2. `const fn` — Compile-Time Pure Evaluation
+
+> **Status: Implemented** — `bda74f9`
 
 **User-defined functions that execute at compile time, producing constant values.**
 
@@ -307,6 +309,8 @@ const fn clamp01(x) -> match { x < 0: 0, x > 1: 1, _: x }
 
 ## 3. TypedValue Refactor
 
+> **Status: Implemented** — Phase 3A (`c733f66`), Phases 3B+3C (`57bf870`)
+
 **Change `visit()` to return `TypedValue` instead of `uint16_t`, enabling type checking and simplifying compound type handling.**
 
 ### Current State
@@ -394,6 +398,8 @@ See [Type System PRD](PRD-Compiler-Type-System.md) Section "Key Files" for the c
 ---
 
 ## 4. Match Destructuring
+
+> **Status: Implemented** — `cfbb699`
 
 **Destructure records in match arms and `as` bindings.**
 
@@ -544,6 +550,8 @@ match(x) {
 
 ## 5. Pattern Methods
 
+> **Status: Implemented** — via dot-call (`0dc05a3`) + TypedValue type checking (`57bf870`)
+
 **Pattern transforms callable as methods: `pat("c4 e4").slow(2).transpose(12)`**
 
 ### Specification
@@ -596,6 +604,8 @@ osc("sin", 440).slow(2)                    // ERROR: slow expects Pattern, got S
 ---
 
 ## 6. Expression Defaults
+
+> **Status: Implemented** — `695269e`
 
 **Function parameter defaults that are compile-time expressions, not just literals.**
 
@@ -807,6 +817,8 @@ match(vel) {
 
 ## 8. Record Spreading
 
+> **Status: Implemented** — `695269e`
+
 **Copy fields from an existing record with `..expr` in record literals.**
 
 ### Specification
@@ -908,43 +920,20 @@ s.c                                         // → 3
 
 ## Implementation Order
 
-Dependencies dictate this order:
+All features are now complete. Actual implementation order:
 
 ```
-Group 1 (independent — can parallelize):
-  1. Dot-call syntax ────── trivial, verify + test
-  7. Range patterns ──────── small, standalone
-  8. Record spreading ────── small, standalone (shares DotDot token with 7)
-
-Group 2 (sequential):
-  2. const fn ──────────────── medium, standalone
-  6. Expression defaults ──── small, depends on const fn's interpreter
-
-Group 3 (sequential, largest):
-  3A. TypedValue Phase A ──── big, change visit() return type
-  3B. TypedValue Phase B ──── medium, builtin type annotations
-  3C. TypedValue Phase C ──── medium, leverage types
-
-Group 4 (depends on Groups 1 + 3):
-  4. Match destructuring ──── medium (can start pre-3A as syntactic desugar)
-  5. Pattern methods ──────── trivial once 1 + 3C done
+ ✅ 1. Dot-call (verify + tests)
+ ✅ 2. Range patterns                     — 243d1e3
+ ✅ 3. const fn                           — bda74f9
+ ✅ 4. Expression defaults                — 695269e
+ ✅ 5. Record spreading                   — 695269e
+ ✅ 6. Match destructuring                — cfbb699
+ ✅ 7. TypedValue Phase A                 — c733f66
+ ✅ 8. TypedValue Phases B+C              — 57bf870
 ```
 
-**Recommended sequence:**
-
-```
- 1. Dot-call (verify + tests)          ← hours
- 2. Range patterns                     ← 1-2 days
- 3. Record spreading                   ← 1-2 days
- 4. const fn                           ← 3-5 days
- 5. Expression defaults                ← 1 day
- 6. TypedValue Phase A                 ← 5-7 days
- 7. TypedValue Phase B                 ← 2-3 days
- 8. Match destructuring                ← 2-3 days
- 9. TypedValue Phase C + Pattern methods ← 2-3 days
-```
-
-Features 7 and 8 share the `DotDot` token — implement 7 first since the lexer change is needed by both.
+Pattern methods (feature 5) are a natural consequence of dot-call + TypedValue — no separate commit needed.
 
 ---
 

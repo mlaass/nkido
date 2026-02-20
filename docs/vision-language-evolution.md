@@ -240,6 +240,8 @@ import "my-library" as lib     // namespace import: lib.reverb(...)
 
 #### 2.2 Dot-Call Syntax (Method-Style)
 
+> **Status: Implemented** — `0dc05a3`
+
 **Motivation:** `x.f(args)` → `f(x, args)` enables natural chaining without `|>` and `%`.
 
 **Proposed syntax:**
@@ -257,6 +259,8 @@ saw(440) |> lp(%, 800) |> delay(%, 0.3, 0.5)
 **Complexity:** Low. Parser rewrite only. The AST node type already exists.
 
 #### 2.3 `const fn` — Compile-Time Pure Evaluation
+
+> **Status: Implemented** — `bda74f9`
 
 **Motivation:** Array generators (`linspace`, `harmonics`, `random`) and tuning tables need compile-time computation. Currently they're codegen special-cases that only work with literal arguments.
 
@@ -367,6 +371,8 @@ fn my_chorus(sig, rate = 0.5, depth = 0.5) -> {
 
 #### 2.6 Type System
 
+> **Status: Implemented** — Phase 3A (`c733f66`), Phases 3B+3C (`57bf870`)
+
 **Status:** Already has a PRD (`docs/PRD-Compiler-Type-System.md`). The core proposal: `visit()` returns `TypedValue` instead of `uint16_t`, with 8 built-in types (Signal, Number, Pattern, Record, Array, String, Function, Void).
 
 **What it unlocks for language evolution:**
@@ -379,6 +385,8 @@ fn my_chorus(sig, rate = 0.5, depth = 0.5) -> {
 **Complexity:** High. Touches every codegen path. The PRD estimates 2-3 weeks of focused work.
 
 #### 2.7 Match Destructuring
+
+> **Status: Implemented** — `cfbb699`
 
 **Motivation:** Pattern events are records with fields. Destructuring makes event-driven code more ergonomic.
 
@@ -405,6 +413,8 @@ fn process(event) -> match(event) {
 **Complexity:** Low-Medium. Parser change + symbol table binding. No new opcodes.
 
 #### 2.8 Pattern Methods and Transforms
+
+> **Status: Implemented** — via dot-call + TypedValue type checking (`57bf870`)
 
 **Motivation:** Pattern transforms (`slow`, `fast`, `rev`, `transpose`) are currently free functions with codegen special-cases. With the type system, they can be method-style calls that the compiler recognizes on Pattern values.
 
@@ -476,6 +486,8 @@ template fn feedback_delay(sig, time, fb, process) -> {
 
 ### 3.1 `fn` Defaults: Allow Expression Defaults
 
+> **Status: Implemented** — `695269e`
+
 Currently defaults must be literals: `fn f(x, cut = 1000)`. Allow constant expressions:
 
 ```akkado
@@ -488,6 +500,8 @@ fn f(x, freqs = harmonics(440, 5)) -> sum(...)   // array generator
 
 ### 3.2 `match`: Range Patterns
 
+> **Status: Implemented** — `243d1e3`
+
 ```akkado
 match(velocity) {
     0.0..0.3: "soft"
@@ -499,7 +513,9 @@ match(velocity) {
 
 **Compiles to:** `CMP_GTE`/`CMP_LT` + `LOGIC_AND` for range checks. Sugar over existing comparison opcodes.
 
-### 3.3 Records: Computed Field Access
+### 3.3 Records: Computed Field Access and Spreading
+
+> **Status: Implemented** (record spreading) — `695269e`
 
 Allow constructing records with computed field values and spreading:
 
@@ -584,22 +600,22 @@ Every proposed construct is additive. Existing Akkado programs continue to compi
 ```
 Phase 1 (compiler-only, no VM changes):
   1a. Module/import system ─── enables stdlib migration
-  1b. Dot-call syntax ──────── parser rewrite, low risk
-  1c. const fn ─────────────── compile-time evaluation
+  ✅ 1b. Dot-call syntax ──────── parser rewrite, low risk
+  ✅ 1c. const fn ─────────────── compile-time evaluation
 
 Phase 2 (VM work, high impact):
   2a. User-defined state ───── STATE_READ/STATE_WRITE opcodes
   2b. Raw delay line ───────── DELAY_LINE_* opcodes
 
 Phase 3 (type system foundation):
-  3a. TypedValue refactor ──── per existing PRD
-  3b. Match destructuring ──── parser + symbol table
-  3c. Pattern methods ──────── type-aware dot-call
+  ✅ 3a. TypedValue refactor ──── per existing PRD
+  ✅ 3b. Match destructuring ──── parser + symbol table
+  ✅ 3c. Pattern methods ──────── type-aware dot-call
 
 Phase 4 (polish):
-  4a. Expression defaults ──── const fn prerequisite
-  4b. Range patterns ───────── sugar over comparisons
-  4c. Record spreading ─────── compile-time field merge
+  ✅ 4a. Expression defaults ──── const fn prerequisite
+  ✅ 4b. Range patterns ───────── sugar over comparisons
+  ✅ 4c. Record spreading ─────── compile-time field merge
 ```
 
-Each phase is independently valuable. Phase 1 can ship immediately with zero risk to the VM. Phase 2 is the transformative step. Phases 3-4 are refinements that build on the foundation.
+Phases 1 (except module/import), 3, and 4 are complete. Remaining work: module/import system (1a) and Phase 2 (user-defined state + raw delay lines).
