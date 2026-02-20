@@ -701,7 +701,7 @@ private:
 // ============================================================================
 
 // Handle MiniLiteral (pattern) nodes
-std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
     NodeIndex pattern_node = n.first_child;
     NodeIndex closure_node = NULL_NODE;
 
@@ -711,15 +711,12 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
 
     if (pattern_node == NULL_NODE) {
         error("E114", "Pattern has no parsed content", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::uint32_t pat_count = call_counters_["pat"]++;
     push_path("pat#" + std::to_string(pat_count));
     std::uint32_t state_id = compute_state_id();
-
-    // Record state_id for poly() to link to upstream pattern
-    pattern_state_ids_[node] = state_id;
 
     // Use the SequenceCompiler for lazy queryable patterns
     SequenceCompiler compiler(ast_->arena, sample_registry_);
@@ -733,8 +730,7 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
             error("E101", "Buffer pool exhausted", n.location);
         }
         pop_path();
-        node_buffers_[node] = out;
-        return out;
+        return cache_and_return(node, TypedValue::signal(out));
     }
 
     // Collect required samples
@@ -756,7 +752,7 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SEQPAT_QUERY instruction (queries pattern at block boundaries)
@@ -780,10 +776,11 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
     }
 
     // Emit single-voice SEQPAT_STEP/GATE/TYPE (voice 0 only)
-    if (!emit_per_voice_seqpat(node, state_id, max_voices, value_buf, velocity_buf,
-                                trigger_buf, is_sample_pattern, n.location)) {
+    auto pattern_payload = emit_per_voice_seqpat(node, state_id, max_voices, value_buf, velocity_buf,
+                                                  trigger_buf, is_sample_pattern, n.location);
+    if (!pattern_payload) {
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Store sequence program initialization data
@@ -811,7 +808,7 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
             output_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
             pop_path();
-            return value_buf;  // Return value buffer as fallback
+            return TypedValue::signal(value_buf);  // Return value buffer as fallback
         }
 
         // Set pitch to 1.0 for sample playback
@@ -867,12 +864,11 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
         if (param_names.size() >= 3) symbols_->define_variable(param_names[2], value_buf);
 
         if (body != NULL_NODE) {
-            result_buf = visit(body);
+            result_buf = visit(body).buffer;
         }
     }
 
     pop_path();
-    node_buffers_[node] = result_buf;
 
     // If closure is present, clear polyphonic tracking since the user
     // processes pattern events manually through closure parameters
@@ -880,12 +876,14 @@ std::uint16_t CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) 
         polyphonic_pattern_nodes_.erase(node);
     }
 
-    return result_buf;
+    pattern_payload->state_id = state_id;
+    pattern_payload->cycle_length = cycle_length;
+    return cache_and_return(node, TypedValue::make_pattern(pattern_payload, result_buf));
 }
 
 
-// Emit single-voice SEQPAT_STEP/GATE/TYPE (voice 0) and register record fields
-bool CodeGenerator::emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id,
+// Emit single-voice SEQPAT_STEP/GATE/TYPE (voice 0) and build PatternPayload
+std::shared_ptr<PatternPayload> CodeGenerator::emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id,
                                            std::uint8_t max_voices,
                                            std::uint16_t value_buf, std::uint16_t velocity_buf,
                                            std::uint16_t trigger_buf,
@@ -897,7 +895,7 @@ bool CodeGenerator::emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id
     if (gate_buf == BufferAllocator::BUFFER_UNUSED ||
         type_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", loc);
-        return false;
+        return nullptr;
     }
 
     cedar::Instruction step_inst{};
@@ -933,43 +931,39 @@ bool CodeGenerator::emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id
     type_inst.state_id = state_id;
     emit(type_inst);
 
-    // Store monophonic record fields (voice 0)
-    std::unordered_map<std::string, std::uint16_t> pattern_fields;
-    pattern_fields["freq"] = value_buf;
-    pattern_fields["vel"] = velocity_buf;
-    pattern_fields["trig"] = trigger_buf;
-    pattern_fields["gate"] = gate_buf;
-    record_fields_[node] = std::move(pattern_fields);
-
-    return true;
+    // Build PatternPayload with monophonic fields (voice 0)
+    auto payload = std::make_shared<PatternPayload>();
+    payload->fields[PatternPayload::FREQ] = value_buf;
+    payload->fields[PatternPayload::VEL] = velocity_buf;
+    payload->fields[PatternPayload::TRIG] = trigger_buf;
+    payload->fields[PatternPayload::GATE] = gate_buf;
+    payload->fields[PatternPayload::TYPE] = type_buf;
+    return payload;
 }
 
 // Handle pattern variable reference
-std::uint16_t CodeGenerator::handle_pattern_reference(const std::string& name,
-                                                       NodeIndex pattern_node,
-                                                       SourceLocation loc) {
+TypedValue CodeGenerator::handle_pattern_reference(const std::string& name,
+                                                    NodeIndex pattern_node,
+                                                    SourceLocation loc) {
     if (pattern_node == NULL_NODE) {
         error("E123", "Pattern variable '" + name + "' has invalid pattern node", loc);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pattern_n = ast_->arena[pattern_node];
     if (pattern_n.type != NodeType::MiniLiteral) {
         error("E124", "Pattern variable '" + name + "' does not refer to a pattern", loc);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     push_path(name);
     std::uint32_t state_id = compute_state_id();
 
-    // Record state_id for poly() to link to upstream pattern
-    pattern_state_ids_[pattern_node] = state_id;
-
     NodeIndex mini_pattern = pattern_n.first_child;
     if (mini_pattern == NULL_NODE) {
         error("E114", "Pattern has no parsed content", loc);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Use the SequenceCompiler
@@ -981,7 +975,7 @@ std::uint16_t CodeGenerator::handle_pattern_reference(const std::string& name,
             error("E101", "Buffer pool exhausted", loc);
         }
         pop_path();
-        return out;
+        return TypedValue::signal(out);
     }
 
     // Collect required samples
@@ -1003,7 +997,7 @@ std::uint16_t CodeGenerator::handle_pattern_reference(const std::string& name,
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", loc);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SEQPAT_QUERY
@@ -1026,10 +1020,11 @@ std::uint16_t CodeGenerator::handle_pattern_reference(const std::string& name,
         polyphonic_pattern_nodes_[pattern_node] = {loc, max_voices};
     }
 
-    if (!emit_per_voice_seqpat(pattern_node, state_id, max_voices, value_buf, velocity_buf,
-                                trigger_buf, is_sample_pattern, loc)) {
+    auto pattern_payload = emit_per_voice_seqpat(pattern_node, state_id, max_voices, value_buf, velocity_buf,
+                                                  trigger_buf, is_sample_pattern, loc);
+    if (!pattern_payload) {
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Store sequence program
@@ -1045,15 +1040,17 @@ std::uint16_t CodeGenerator::handle_pattern_reference(const std::string& name,
     state_inits_.push_back(std::move(seq_init));
 
     pop_path();
-    return value_buf;
+    pattern_payload->state_id = state_id;
+    pattern_payload->cycle_length = cycle_length;
+    return cache_and_return(pattern_node, TypedValue::make_pattern(pattern_payload, value_buf));
 }
 
 // Handle chord() calls - uses SEQPAT system via SequenceCompiler
-std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     NodeIndex arg = n.first_child;
     if (arg == NULL_NODE) {
         error("E125", "chord() requires exactly 1 argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& arg_node = ast_->arena[arg];
@@ -1061,14 +1058,14 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
 
     if (str_node == NULL_NODE) {
         error("E125", "chord() requires a string argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& str_n = ast_->arena[str_node];
     if (str_n.type != NodeType::StringLit) {
         error("E126", "chord() argument must be a string literal (e.g., \"Am\", \"C7 F G\")",
               str_n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::string chord_str = str_n.as_string();
@@ -1087,7 +1084,7 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
 
     if (pattern_root == NULL_NODE) {
         error("E127", "Failed to parse chord pattern: \"" + chord_str + "\"", str_n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Use SequenceCompiler to compile the chord pattern (same as pat())
@@ -1102,7 +1099,7 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     if (!compiler.compile(pattern_root)) {
         error("E127", "Failed to compile chord pattern: \"" + chord_str + "\"", str_n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Determine cycle length from top-level element count
@@ -1119,7 +1116,7 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SEQPAT_QUERY instruction
@@ -1150,7 +1147,7 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
         type_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction step_inst{};
@@ -1186,14 +1183,6 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     type_inst.state_id = state_id;
     emit(type_inst);
 
-    // Store monophonic record fields (voice 0)
-    std::unordered_map<std::string, std::uint16_t> pattern_fields;
-    pattern_fields["freq"] = value_buf;
-    pattern_fields["vel"] = velocity_buf;
-    pattern_fields["trig"] = trigger_buf;
-    pattern_fields["gate"] = gate_buf;
-    record_fields_[node] = std::move(pattern_fields);
-
     // Store sequence program initialization data
     StateInitData seq_init;
     seq_init.state_id = state_id;
@@ -1207,13 +1196,18 @@ std::uint16_t CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
-    // Record state_id for poly() to link to upstream pattern
-    pattern_state_ids_[node] = state_id;
-
     pop_path();
 
-    node_buffers_[node] = value_buf;
-    return value_buf;
+    // Build PatternPayload with monophonic fields
+    auto payload = std::make_shared<PatternPayload>();
+    payload->fields[PatternPayload::FREQ] = value_buf;
+    payload->fields[PatternPayload::VEL] = velocity_buf;
+    payload->fields[PatternPayload::TRIG] = trigger_buf;
+    payload->fields[PatternPayload::GATE] = gate_buf;
+    // TYPE stays 0xFFFF
+    payload->state_id = state_id;
+    payload->cycle_length = cycle_length;
+    return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
 }
 
 // ============================================================================
@@ -1483,14 +1477,13 @@ static bool compile_pattern_for_transform(
 
 // Helper: Emit a compiled pattern with transformations applied
 // This is the common code for emitting SEQPAT_QUERY/SEQPAT_STEP
-static std::uint16_t emit_pattern_with_state(
+static TypedValue emit_pattern_with_state(
     CodeGenerator& gen,
     BufferAllocator& buffers,
     std::vector<cedar::Instruction>& instructions,
     std::vector<StateInitData>& state_inits,
     std::set<std::string>& required_samples,
-    std::unordered_map<NodeIndex, std::uint16_t>& node_buffers,
-    std::unordered_map<NodeIndex, std::unordered_map<std::string, std::uint16_t>>& record_fields,
+    std::unordered_map<NodeIndex, TypedValue>& node_types,
     NodeIndex node,
     std::uint32_t state_id,
     float cycle_length,
@@ -1513,7 +1506,7 @@ static std::uint16_t emit_pattern_with_state(
     if (value_buf == BufferAllocator::BUFFER_UNUSED ||
         velocity_buf == BufferAllocator::BUFFER_UNUSED ||
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SEQPAT_QUERY instruction
@@ -1536,7 +1529,7 @@ static std::uint16_t emit_pattern_with_state(
     for (std::uint8_t voice = 0; voice < max_voices; ++voice) {
         std::uint16_t voice_value_buf = (voice == 0) ? value_buf : buffers.allocate();
         if (voice_value_buf == BufferAllocator::BUFFER_UNUSED) {
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         cedar::Instruction step_inst{};
@@ -1566,15 +1559,18 @@ static std::uint16_t emit_pattern_with_state(
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits.push_back(std::move(seq_init));
 
-    // Store pattern field buffers for %.field access
-    std::unordered_map<std::string, std::uint16_t> pattern_fields;
-    pattern_fields["freq"] = value_buf;
-    pattern_fields["vel"] = velocity_buf;
-    pattern_fields["trig"] = trigger_buf;
-    record_fields[node] = std::move(pattern_fields);
+    // Build PatternPayload
+    auto payload = std::make_shared<PatternPayload>();
+    payload->fields[PatternPayload::FREQ] = value_buf;
+    payload->fields[PatternPayload::VEL] = velocity_buf;
+    payload->fields[PatternPayload::TRIG] = trigger_buf;
+    // GATE and TYPE stay 0xFFFF (not emitted by this helper)
+    payload->state_id = state_id;
+    payload->cycle_length = cycle_length;
 
-    node_buffers[node] = value_buf;
-    return value_buf;
+    auto tv = TypedValue::make_pattern(payload, value_buf);
+    node_types[node] = tv;
+    return tv;
 }
 
 // Helper to emit instruction (wrapper for member function access)
@@ -1583,7 +1579,7 @@ static void emit_instruction_helper(std::vector<cedar::Instruction>& instruction
     instructions.push_back(inst);
 }
 
-std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
     // slow(pattern, factor) - stretch pattern by factor
     // Multiplies all event times, durations, and cycle_length by factor
 
@@ -1592,12 +1588,12 @@ std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
 
     if (pattern_arg == NULL_NODE) {
         error("E130", "slow() requires a pattern as first argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (!factor.has_value() || *factor <= 0) {
         error("E131", "slow() requires a positive number as second argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
@@ -1605,7 +1601,7 @@ std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "slow() first argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the pattern (may include inner transforms applied recursively)
@@ -1619,7 +1615,7 @@ std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "slow() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -1638,22 +1634,22 @@ std::uint16_t CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
     cycle_length *= slow_factor;
 
     const Node& pattern = ast_->arena[pattern_node];
-    std::uint16_t result = emit_pattern_with_state(
+    auto result_tv = emit_pattern_with_state(
         *this, buffers_, instructions_, state_inits_, required_samples_,
-        node_buffers_, record_fields_, node, state_id, cycle_length,
+        node_types_, node, state_id, cycle_length,
         compiler, sequence_events, pattern.location, n.location,
         emit_instruction_helper);
 
     pop_path();
 
-    if (result == BufferAllocator::BUFFER_UNUSED) {
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
         error("E101", "Buffer pool exhausted", n.location);
     }
 
-    return result;
+    return result_tv;
 }
 
-std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
     // fast(pattern, factor) - compress pattern by factor
     // Divides all event times, durations, and cycle_length by factor
 
@@ -1662,12 +1658,12 @@ std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
 
     if (pattern_arg == NULL_NODE) {
         error("E130", "fast() requires a pattern as first argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (!factor.has_value() || *factor <= 0) {
         error("E131", "fast() requires a positive number as second argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
@@ -1675,7 +1671,7 @@ std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "fast() first argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the pattern (may include inner transforms applied recursively)
@@ -1689,7 +1685,7 @@ std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "fast() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -1708,22 +1704,22 @@ std::uint16_t CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
     cycle_length /= fast_factor;
 
     const Node& pattern = ast_->arena[pattern_node];
-    std::uint16_t result = emit_pattern_with_state(
+    auto result_tv = emit_pattern_with_state(
         *this, buffers_, instructions_, state_inits_, required_samples_,
-        node_buffers_, record_fields_, node, state_id, cycle_length,
+        node_types_, node, state_id, cycle_length,
         compiler, sequence_events, pattern.location, n.location,
         emit_instruction_helper);
 
     pop_path();
 
-    if (result == BufferAllocator::BUFFER_UNUSED) {
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
         error("E101", "Buffer pool exhausted", n.location);
     }
 
-    return result;
+    return result_tv;
 }
 
-std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
     // rev(pattern) - reverse event order in pattern
     // Reverses the start times: new_time = cycle_duration - old_time - old_duration
 
@@ -1731,7 +1727,7 @@ std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
 
     if (pattern_arg == NULL_NODE) {
         error("E130", "rev() requires a pattern as argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
@@ -1739,7 +1735,7 @@ std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "rev() argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the pattern (may include inner transforms applied recursively)
@@ -1753,7 +1749,7 @@ std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "rev() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -1771,22 +1767,22 @@ std::uint16_t CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
     }
 
     const Node& pattern = ast_->arena[pattern_node];
-    std::uint16_t result = emit_pattern_with_state(
+    auto result_tv = emit_pattern_with_state(
         *this, buffers_, instructions_, state_inits_, required_samples_,
-        node_buffers_, record_fields_, node, state_id, cycle_length,
+        node_types_, node, state_id, cycle_length,
         compiler, sequence_events, pattern.location, n.location,
         emit_instruction_helper);
 
     pop_path();
 
-    if (result == BufferAllocator::BUFFER_UNUSED) {
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
         error("E101", "Buffer pool exhausted", n.location);
     }
 
-    return result;
+    return result_tv;
 }
 
-std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n) {
     // transpose(pattern, semitones) - shift all pitches by semitones
     // Converts frequency to MIDI, adds semitones, converts back to frequency
 
@@ -1795,12 +1791,12 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
 
     if (pattern_arg == NULL_NODE) {
         error("E130", "transpose() requires a pattern as first argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (!semitones.has_value()) {
         error("E131", "transpose() requires a number as second argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
@@ -1808,7 +1804,7 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "transpose() first argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the pattern (may include inner transforms applied recursively)
@@ -1822,7 +1818,7 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "transpose() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -1847,22 +1843,22 @@ std::uint16_t CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n
     }
 
     const Node& pattern = ast_->arena[pattern_node];
-    std::uint16_t result = emit_pattern_with_state(
+    auto result_tv = emit_pattern_with_state(
         *this, buffers_, instructions_, state_inits_, required_samples_,
-        node_buffers_, record_fields_, node, state_id, cycle_length,
+        node_types_, node, state_id, cycle_length,
         compiler, sequence_events, pattern.location, n.location,
         emit_instruction_helper);
 
     pop_path();
 
-    if (result == BufferAllocator::BUFFER_UNUSED) {
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
         error("E101", "Buffer pool exhausted", n.location);
     }
 
-    return result;
+    return result_tv;
 }
 
-std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     // velocity(pattern, vel) - set velocity on all events
     // Note: This currently doesn't modify velocity since velocity is not stored
     // in cedar::Event. Instead, we'd need to emit instructions that multiply
@@ -1873,12 +1869,12 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
 
     if (pattern_arg == NULL_NODE) {
         error("E130", "velocity() requires a pattern as first argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (!vel.has_value() || *vel < 0 || *vel > 1) {
         error("E131", "velocity() requires a number between 0 and 1 as second argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
@@ -1886,7 +1882,7 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "velocity() first argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the pattern (may include inner transforms applied recursively)
@@ -1900,7 +1896,7 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "velocity() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -1925,7 +1921,7 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
         pop_path();
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SEQPAT_QUERY instruction
@@ -1960,7 +1956,7 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
         scaled_velocity_buf == BufferAllocator::BUFFER_UNUSED) {
         pop_path();
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Push the velocity constant
@@ -1999,20 +1995,20 @@ std::uint16_t CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n)
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
-    // Store pattern field buffers for %.field access
-    // Use the scaled velocity buffer
-    std::unordered_map<std::string, std::uint16_t> pattern_fields;
-    pattern_fields["freq"] = value_buf;
-    pattern_fields["vel"] = scaled_velocity_buf;  // Use scaled velocity
-    pattern_fields["trig"] = trigger_buf;
-    record_fields_[node] = std::move(pattern_fields);
-
     pop_path();
-    node_buffers_[node] = value_buf;
-    return value_buf;
+
+    // Build PatternPayload with scaled velocity
+    auto payload = std::make_shared<PatternPayload>();
+    payload->fields[PatternPayload::FREQ] = value_buf;
+    payload->fields[PatternPayload::VEL] = scaled_velocity_buf;  // Use scaled velocity
+    payload->fields[PatternPayload::TRIG] = trigger_buf;
+    // GATE and TYPE stay 0xFFFF
+    payload->state_id = state_id;
+    payload->cycle_length = cycle_length;
+    return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
 }
 
-std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     // bank(pattern, bank_name) - set sample bank for all events
     // Sets the bank field on all sample mappings for deferred resolution
 
@@ -2021,12 +2017,12 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
 
     if (pattern_arg == NULL_NODE) {
         error("E130", "bank() requires a pattern as first argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (!bank_name.has_value()) {
         error("E131", "bank() requires a string as second argument (e.g., \"TR808\")", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
@@ -2034,7 +2030,7 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "bank() first argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the pattern (may include inner transforms applied recursively)
@@ -2048,7 +2044,7 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "bank() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -2078,7 +2074,7 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
         pop_path();
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SEQPAT_QUERY instruction
@@ -2133,19 +2129,19 @@ std::uint16_t CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
         }
     }
 
-    // Store pattern field buffers for %.field access
-    std::unordered_map<std::string, std::uint16_t> pattern_fields;
-    pattern_fields["freq"] = value_buf;
-    pattern_fields["vel"] = velocity_buf;
-    pattern_fields["trig"] = trigger_buf;
-    record_fields_[node] = std::move(pattern_fields);
-
     pop_path();
-    node_buffers_[node] = value_buf;
-    return value_buf;
+
+    // Build PatternPayload
+    auto payload = std::make_shared<PatternPayload>();
+    payload->fields[PatternPayload::FREQ] = value_buf;
+    payload->fields[PatternPayload::VEL] = velocity_buf;
+    payload->fields[PatternPayload::TRIG] = trigger_buf;
+    payload->state_id = state_id;
+    payload->cycle_length = cycle_length;
+    return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
 }
 
-std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
     // variant(pattern, index) - set sample variant for all events
     // Two cases:
     //   1. variant(pattern, number) - fixed variant for all events
@@ -2156,12 +2152,12 @@ std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) 
 
     if (pattern_arg == NULL_NODE) {
         error("E130", "variant() requires a pattern as first argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (variant_arg == NULL_NODE) {
         error("E131", "variant() requires an index number or pattern as second argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
@@ -2169,7 +2165,7 @@ std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) 
     // Accept MiniLiteral or pattern-producing Call nodes
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "variant() first argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Check variant argument type
@@ -2181,11 +2177,11 @@ std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) 
         fixed_variant = static_cast<int>(variant_node.as_number());
         if (fixed_variant < 0) {
             error("E131", "variant() index must be non-negative", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     } else if (variant_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, variant_arg)) {
         error("E131", "variant() second argument must be a number or pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the main pattern (may include inner transforms applied recursively)
@@ -2199,7 +2195,7 @@ std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) 
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "variant() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -2265,7 +2261,7 @@ std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) 
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
         pop_path();
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SEQPAT_QUERY instruction
@@ -2320,39 +2316,39 @@ std::uint16_t CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) 
         }
     }
 
-    // Store pattern field buffers for %.field access
-    std::unordered_map<std::string, std::uint16_t> pattern_fields;
-    pattern_fields["freq"] = value_buf;
-    pattern_fields["vel"] = velocity_buf;
-    pattern_fields["trig"] = trigger_buf;
-    record_fields_[node] = std::move(pattern_fields);
-
     pop_path();
-    node_buffers_[node] = value_buf;
-    return value_buf;
+
+    // Build PatternPayload
+    auto payload = std::make_shared<PatternPayload>();
+    payload->fields[PatternPayload::FREQ] = value_buf;
+    payload->fields[PatternPayload::VEL] = velocity_buf;
+    payload->fields[PatternPayload::TRIG] = trigger_buf;
+    payload->state_id = state_id;
+    payload->cycle_length = cycle_length;
+    return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
 }
 
-std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
     // transport(pattern, trig, step?, reset?) - trigger-driven pattern clock
     // Decouples pattern from global BPM by using trigger edges to advance
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
     if (pattern_arg == NULL_NODE) {
         error("E130", "transport() requires a pattern as first argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "transport() first argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Second arg: trigger signal (required)
     NodeIndex trig_arg = get_pattern_arg(*ast_, n, 1);
     if (trig_arg == NULL_NODE) {
         error("E131", "transport() requires a trigger signal as second argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Third arg: step size (optional, default 1.0)
@@ -2372,7 +2368,7 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "transport() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state IDs
@@ -2386,23 +2382,23 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     bool is_sample_pattern = compiler.is_sample_pattern();
 
     // Visit trigger argument
-    std::uint16_t trig_buf = visit(trig_arg);
+    std::uint16_t trig_buf = visit(trig_arg).buffer;
     if (trig_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Failed to compile trigger argument", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Visit optional step argument
     std::uint16_t step_buf = BufferAllocator::BUFFER_UNUSED;
     if (step_arg != NULL_NODE) {
-        step_buf = visit(step_arg);
+        step_buf = visit(step_arg).buffer;
     }
 
     // Visit optional reset argument
     std::uint16_t reset_buf = BufferAllocator::BUFFER_UNUSED;
     if (reset_arg != NULL_NODE) {
-        reset_buf = visit(reset_arg);
+        reset_buf = visit(reset_arg).buffer;
     }
 
     // Allocate beat_pos output buffer
@@ -2410,7 +2406,7 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     if (beat_pos_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Pack cycle_length into two uint16_t halves
@@ -2455,15 +2451,16 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
         trigger_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit per-voice SEQPAT_STEP/GATE/TYPE with clock override
     std::uint8_t max_voices = compiler.max_voices();
-    if (!emit_per_voice_seqpat(node, seq_state_id, max_voices, value_buf, velocity_buf,
-                                trigger_buf, is_sample_pattern, n.location, beat_pos_buf)) {
+    auto pattern_payload = emit_per_voice_seqpat(node, seq_state_id, max_voices, value_buf, velocity_buf,
+                                                  trigger_buf, is_sample_pattern, n.location, beat_pos_buf);
+    if (!pattern_payload) {
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Store sequence program initialization data
@@ -2481,11 +2478,12 @@ std::uint16_t CodeGenerator::handle_transport_call(NodeIndex node, const Node& n
     state_inits_.push_back(std::move(seq_init));
 
     pop_path();
-    node_buffers_[node] = value_buf;
-    return value_buf;
+    pattern_payload->state_id = seq_state_id;
+    pattern_payload->cycle_length = cycle_length;
+    return cache_and_return(node, TypedValue::make_pattern(pattern_payload, value_buf));
 }
 
-std::uint16_t CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
     // tune(tuning_name, pattern) - apply microtonal tuning context to a pattern
     // tuning_name is a string like "31edo", "24edo"
     // The tuning context affects how micro_offset is resolved to Hz
@@ -2495,24 +2493,24 @@ std::uint16_t CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
 
     if (!tuning_name.has_value()) {
         error("E130", "tune() requires a tuning name string as first argument (e.g., \"31edo\")", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (pattern_arg == NULL_NODE) {
         error("E131", "tune() requires a pattern as second argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto tuning = parse_tuning(*tuning_name);
     if (!tuning.has_value()) {
         error("E132", "Unknown tuning: '" + *tuning_name + "'. Use format like '31edo', '24edo'", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& pat_node = ast_->arena[pattern_arg];
     if (pat_node.type != NodeType::MiniLiteral && !is_pattern_expr(*ast_, pattern_arg)) {
         error("E133", "tune() second argument must be a pattern", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Compile the pattern with the tuning context set
@@ -2528,7 +2526,7 @@ std::uint16_t CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
                                         compiler, pattern_node, num_elements,
                                         sequence_events, cycle_length)) {
         error("E130", "tune() failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Set up state ID
@@ -2537,22 +2535,22 @@ std::uint16_t CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
     std::uint32_t state_id = compute_state_id();
 
     const Node& pattern = ast_->arena[pattern_node];
-    std::uint16_t result = emit_pattern_with_state(
+    auto result_tv = emit_pattern_with_state(
         *this, buffers_, instructions_, state_inits_, required_samples_,
-        node_buffers_, record_fields_, node, state_id, cycle_length,
+        node_types_, node, state_id, cycle_length,
         compiler, sequence_events, pattern.location, n.location,
         emit_instruction_helper);
 
     pop_path();
 
-    if (result == BufferAllocator::BUFFER_UNUSED) {
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
         error("E101", "Buffer pool exhausted", n.location);
     }
 
-    return result;
+    return result_tv;
 }
 
-std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n) {
     // soundfont(pattern, "file.sf2", preset) - SoundFont playback
     // The pattern provides gate, freq, velocity signals via polyphonic fields.
     // The file is a string literal (SF2 filename) resolved at compile time.
@@ -2565,7 +2563,7 @@ std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n
     if (pattern_arg == NULL_NODE) {
         error("E130", "soundfont() requires a pattern as first argument "
               "(e.g., pat(\"c4 e4 g4\") |> soundfont(%, \"piano.sf2\", 0))", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Arg 1: filename (string literal)
@@ -2573,46 +2571,41 @@ std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n
     if (!filename.has_value()) {
         error("E131", "soundfont() requires a filename string as second argument "
               "(e.g., \"piano.sf2\")", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Arg 2: preset index (number literal)
     auto preset_opt = get_number_arg(*ast_, n, 2);
     if (!preset_opt.has_value()) {
         error("E132", "soundfont() requires a preset number as third argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
     int preset_index = static_cast<int>(*preset_opt);
 
-    // Visit pattern argument — this compiles the pattern and creates record fields
-    std::uint16_t pattern_buf = visit(pattern_arg);
-    if (pattern_buf == BufferAllocator::BUFFER_UNUSED) {
+    // Visit pattern argument — this compiles the pattern and creates typed value
+    auto pattern_tv = visit(pattern_arg);
+    if (pattern_tv.buffer == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Failed to compile pattern argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    // Get pattern's record fields (gate, freq, vel)
-    auto fields_it = record_fields_.find(pattern_arg);
-    if (fields_it == record_fields_.end()) {
+    // Get pattern's fields (gate, freq, vel) from PatternPayload
+    if (!pattern_tv.pattern) {
         error("E133", "soundfont() first argument must be a pattern that produces "
               "gate/freq/vel fields", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    const auto& fields = fields_it->second;
-    auto gate_it = fields.find("gate");
-    auto freq_it = fields.find("freq");
-    auto vel_it = fields.find("vel");
+    const auto& pat_fields = pattern_tv.pattern->fields;
+    std::uint16_t gate_buf = pat_fields[PatternPayload::GATE];
+    std::uint16_t freq_buf = pat_fields[PatternPayload::FREQ];
+    std::uint16_t vel_buf = pat_fields[PatternPayload::VEL];
 
-    if (gate_it == fields.end() || freq_it == fields.end() || vel_it == fields.end()) {
+    if (gate_buf == 0xFFFF || freq_buf == 0xFFFF || vel_buf == 0xFFFF) {
         error("E133", "soundfont() pattern is missing required fields (gate, freq, vel)",
               n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
-
-    std::uint16_t gate_buf = gate_it->second;
-    std::uint16_t freq_buf = freq_it->second;
-    std::uint16_t vel_buf = vel_it->second;
 
     // Find or assign SF2 slot index (deduplicate by filename)
     std::uint8_t sf_slot = 0;
@@ -2640,7 +2633,7 @@ std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n
     if (preset_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
     source_locations_.push_back(current_source_loc_);
 
@@ -2649,7 +2642,7 @@ std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit SOUNDFONT_VOICE instruction
@@ -2666,8 +2659,7 @@ std::uint16_t CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n
     emit(sf_inst);
 
     pop_path();
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 } // namespace akkado

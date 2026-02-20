@@ -20,8 +20,6 @@ void CodeGenerator::register_stereo(NodeIndex node, std::uint16_t left, std::uin
     stereo_outputs_[node] = {left, right};
     // Also register by buffer index for variable propagation
     stereo_buffer_pairs_[left] = right;
-    // Also register as multi-buffer for compatibility with existing array expansion
-    multi_buffers_[node] = {left, right};
 }
 
 bool CodeGenerator::is_stereo(NodeIndex node) const {
@@ -30,9 +28,9 @@ bool CodeGenerator::is_stereo(NodeIndex node) const {
         return true;
     }
     // Fallback: check if the node's buffer is a stereo left channel
-    auto buf_it = node_buffers_.find(node);
-    if (buf_it != node_buffers_.end()) {
-        return stereo_buffer_pairs_.find(buf_it->second) != stereo_buffer_pairs_.end();
+    auto buf_it = node_types_.find(node);
+    if (buf_it != node_types_.end()) {
+        return stereo_buffer_pairs_.find(buf_it->second.buffer) != stereo_buffer_pairs_.end();
     }
     return false;
 }
@@ -48,21 +46,16 @@ CodeGenerator::StereoBuffers CodeGenerator::get_stereo_buffers(NodeIndex node) c
         return it->second;
     }
     // Fallback: check buffer-based tracking
-    auto buf_it = node_buffers_.find(node);
-    if (buf_it != node_buffers_.end()) {
-        auto pair_it = stereo_buffer_pairs_.find(buf_it->second);
+    auto buf_it = node_types_.find(node);
+    if (buf_it != node_types_.end()) {
+        auto pair_it = stereo_buffer_pairs_.find(buf_it->second.buffer);
         if (pair_it != stereo_buffer_pairs_.end()) {
-            return {buf_it->second, pair_it->second};
+            return {buf_it->second.buffer, pair_it->second};
         }
     }
-    // Fallback: if it's a multi-buffer with exactly 2 elements, treat as stereo
-    auto mb_it = multi_buffers_.find(node);
-    if (mb_it != multi_buffers_.end() && mb_it->second.size() == 2) {
-        return {mb_it->second[0], mb_it->second[1]};
-    }
     // Not stereo - return same buffer for both (mono)
-    if (buf_it != node_buffers_.end()) {
-        return {buf_it->second, buf_it->second};
+    if (buf_it != node_types_.end()) {
+        return {buf_it->second.buffer, buf_it->second.buffer};
     }
     return {BufferAllocator::BUFFER_UNUSED, BufferAllocator::BUFFER_UNUSED};
 }
@@ -82,12 +75,12 @@ CodeGenerator::StereoBuffers CodeGenerator::get_stereo_buffers_by_buffer(std::ui
 
 // stereo(mono) -> duplicate mono to both L and R
 // stereo(left, right) -> create stereo pair from two signals
-std::uint16_t CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1, 2);
 
     if (!args.valid || args.nodes.empty()) {
         error("E160", "stereo() requires 1 or 2 arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::uint16_t left_buf, right_buf;
@@ -95,7 +88,7 @@ std::uint16_t CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
     if (args.nodes.size() == 1) {
         // stereo(mono) - check if input is already stereo
         NodeIndex mono_node = args.nodes[0];
-        std::uint16_t mono_buf = visit(mono_node);
+        std::uint16_t mono_buf = visit(mono_node).buffer;
 
         // Check stereo by both node and buffer (buffer fallback for pipe chains)
         bool input_is_stereo = is_stereo(mono_node) || is_stereo_buffer(mono_buf);
@@ -109,8 +102,7 @@ std::uint16_t CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
                 stereo = get_stereo_buffers_by_buffer(mono_buf);
             }
             register_stereo(node, stereo.left, stereo.right);
-            node_buffers_[node] = stereo.left;
-            return stereo.left;
+            return cache_and_return(node, TypedValue::signal(stereo.left));
         }
 
         // Mono input - allocate two new buffers and copy
@@ -120,7 +112,7 @@ std::uint16_t CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
         if (left_buf == BufferAllocator::BUFFER_UNUSED ||
             right_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         // Emit COPY instructions to duplicate mono to both channels
@@ -128,26 +120,25 @@ std::uint16_t CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
         emit(cedar::Instruction::make_unary(cedar::Opcode::COPY, right_buf, mono_buf));
     } else {
         // stereo(left, right) - use provided buffers directly
-        left_buf = visit(args.nodes[0]);
-        right_buf = visit(args.nodes[1]);
+        left_buf = visit(args.nodes[0]).buffer;
+        right_buf = visit(args.nodes[1]).buffer;
     }
 
     register_stereo(node, left_buf, right_buf);
-    node_buffers_[node] = left_buf;
-    return left_buf;
+    return cache_and_return(node, TypedValue::signal(left_buf));
 }
 
 // left(stereo) -> extract left channel
-std::uint16_t CodeGenerator::handle_left_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_left_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1, 1);
 
     if (!args.valid || args.nodes.empty()) {
         error("E161", "left() requires 1 argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex stereo_node = args.nodes[0];
-    std::uint16_t buf = visit(stereo_node);
+    std::uint16_t buf = visit(stereo_node).buffer;
 
     // Check stereo by both node and buffer (buffer fallback for pipe chains)
     bool input_is_stereo = is_stereo(stereo_node) || is_stereo_buffer(buf);
@@ -159,26 +150,24 @@ std::uint16_t CodeGenerator::handle_left_call(NodeIndex node, const Node& n) {
         } else {
             stereo = get_stereo_buffers_by_buffer(buf);
         }
-        node_buffers_[node] = stereo.left;
-        return stereo.left;
+        return cache_and_return(node, TypedValue::signal(stereo.left));
     }
 
     // Not stereo - return the mono signal as-is
-    node_buffers_[node] = buf;
-    return buf;
+    return cache_and_return(node, TypedValue::signal(buf));
 }
 
 // right(stereo) -> extract right channel
-std::uint16_t CodeGenerator::handle_right_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_right_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1, 1);
 
     if (!args.valid || args.nodes.empty()) {
         error("E163", "right() requires 1 argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex stereo_node = args.nodes[0];
-    std::uint16_t buf = visit(stereo_node);
+    std::uint16_t buf = visit(stereo_node).buffer;
 
     // Check stereo by both node and buffer (buffer fallback for pipe chains)
     bool input_is_stereo = is_stereo(stereo_node) || is_stereo_buffer(buf);
@@ -190,26 +179,24 @@ std::uint16_t CodeGenerator::handle_right_call(NodeIndex node, const Node& n) {
         } else {
             stereo = get_stereo_buffers_by_buffer(buf);
         }
-        node_buffers_[node] = stereo.right;
-        return stereo.right;
+        return cache_and_return(node, TypedValue::signal(stereo.right));
     }
 
     // Not stereo - return the mono signal as-is
-    node_buffers_[node] = buf;
-    return buf;
+    return cache_and_return(node, TypedValue::signal(buf));
 }
 
 // pan(mono, position) -> create stereo from mono with panning
-std::uint16_t CodeGenerator::handle_pan_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_pan_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2, 2);
 
     if (!args.valid || args.nodes.size() < 2) {
         error("E165", "pan() requires 2 arguments: pan(mono, position)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t mono_buf = visit(args.nodes[0]);
-    std::uint16_t pos_buf = visit(args.nodes[1]);
+    std::uint16_t mono_buf = visit(args.nodes[0]).buffer;
+    std::uint16_t pos_buf = visit(args.nodes[1]).buffer;
 
     // Allocate two adjacent output buffers for stereo
     std::uint16_t left_buf = buffers_.allocate();
@@ -218,13 +205,13 @@ std::uint16_t CodeGenerator::handle_pan_call(NodeIndex node, const Node& n) {
     if (left_buf == BufferAllocator::BUFFER_UNUSED ||
         right_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Ensure right_buf = left_buf + 1 (required by PAN opcode)
     if (right_buf != left_buf + 1) {
         error("E166", "Internal error: stereo buffer allocation not adjacent", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit PAN instruction
@@ -240,17 +227,16 @@ std::uint16_t CodeGenerator::handle_pan_call(NodeIndex node, const Node& n) {
     emit(inst);
 
     register_stereo(node, left_buf, right_buf);
-    node_buffers_[node] = left_buf;
-    return left_buf;
+    return cache_and_return(node, TypedValue::signal(left_buf));
 }
 
 // width(stereo, amount) or width(L, R, amount) -> adjust stereo width
-std::uint16_t CodeGenerator::handle_width_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_width_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2, 3);
 
     if (!args.valid || args.nodes.size() < 2) {
         error("E168", "width() requires 2 or 3 arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::uint16_t left_buf, right_buf, width_buf;
@@ -259,7 +245,7 @@ std::uint16_t CodeGenerator::handle_width_call(NodeIndex node, const Node& n) {
         // width(stereo, amount) - convenience form
         NodeIndex stereo_node = args.nodes[0];
         visit(stereo_node);
-        width_buf = visit(args.nodes[1]);
+        width_buf = visit(args.nodes[1]).buffer;
 
         if (is_stereo(stereo_node)) {
             auto stereo = get_stereo_buffers(stereo_node);
@@ -267,19 +253,19 @@ std::uint16_t CodeGenerator::handle_width_call(NodeIndex node, const Node& n) {
             right_buf = stereo.right;
         } else {
             // Mono input - treat as stereo with same signal on both channels
-            auto it = node_buffers_.find(stereo_node);
-            if (it == node_buffers_.end()) {
+            auto it = node_types_.find(stereo_node);
+            if (it == node_types_.end()) {
                 error("E167", "width() first argument is not a signal", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
-            left_buf = it->second;
-            right_buf = it->second;
+            left_buf = it->second.buffer;
+            right_buf = it->second.buffer;
         }
     } else {
         // width(L, R, amount) - explicit form
-        left_buf = visit(args.nodes[0]);
-        right_buf = visit(args.nodes[1]);
-        width_buf = visit(args.nodes[2]);
+        left_buf = visit(args.nodes[0]).buffer;
+        right_buf = visit(args.nodes[1]).buffer;
+        width_buf = visit(args.nodes[2]).buffer;
     }
 
     // Allocate output buffers
@@ -289,12 +275,12 @@ std::uint16_t CodeGenerator::handle_width_call(NodeIndex node, const Node& n) {
     if (out_left == BufferAllocator::BUFFER_UNUSED ||
         out_right == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (out_right != out_left + 1) {
         error("E166", "Internal error: stereo buffer allocation not adjacent", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit WIDTH instruction
@@ -310,17 +296,16 @@ std::uint16_t CodeGenerator::handle_width_call(NodeIndex node, const Node& n) {
     emit(inst);
 
     register_stereo(node, out_left, out_right);
-    node_buffers_[node] = out_left;
-    return out_left;
+    return cache_and_return(node, TypedValue::signal(out_left));
 }
 
 // ms_encode(stereo) or ms_encode(L, R) -> convert to mid/side
-std::uint16_t CodeGenerator::handle_ms_encode_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_ms_encode_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1, 2);
 
     if (!args.valid || args.nodes.empty()) {
         error("E170", "ms_encode() requires 1 or 2 arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::uint16_t left_buf, right_buf;
@@ -336,18 +321,18 @@ std::uint16_t CodeGenerator::handle_ms_encode_call(NodeIndex node, const Node& n
             right_buf = stereo.right;
         } else {
             // Mono - mid = signal, side = 0
-            auto it = node_buffers_.find(stereo_node);
-            if (it == node_buffers_.end()) {
+            auto it = node_types_.find(stereo_node);
+            if (it == node_types_.end()) {
                 error("E169", "ms_encode() argument is not a signal", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
-            left_buf = it->second;
-            right_buf = it->second;
+            left_buf = it->second.buffer;
+            right_buf = it->second.buffer;
         }
     } else {
         // ms_encode(L, R) - explicit form
-        left_buf = visit(args.nodes[0]);
-        right_buf = visit(args.nodes[1]);
+        left_buf = visit(args.nodes[0]).buffer;
+        right_buf = visit(args.nodes[1]).buffer;
     }
 
     // Allocate output buffers (mid, side)
@@ -357,12 +342,12 @@ std::uint16_t CodeGenerator::handle_ms_encode_call(NodeIndex node, const Node& n
     if (out_mid == BufferAllocator::BUFFER_UNUSED ||
         out_side == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (out_side != out_mid + 1) {
         error("E166", "Internal error: stereo buffer allocation not adjacent", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit MS_ENCODE instruction
@@ -379,17 +364,16 @@ std::uint16_t CodeGenerator::handle_ms_encode_call(NodeIndex node, const Node& n
 
     // Register as stereo-like (mid/side pair)
     register_stereo(node, out_mid, out_side);
-    node_buffers_[node] = out_mid;
-    return out_mid;
+    return cache_and_return(node, TypedValue::signal(out_mid));
 }
 
 // ms_decode(ms) or ms_decode(M, S) -> convert mid/side to stereo
-std::uint16_t CodeGenerator::handle_ms_decode_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_ms_decode_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1, 2);
 
     if (!args.valid || args.nodes.empty()) {
         error("E172", "ms_decode() requires 1 or 2 arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::uint16_t mid_buf, side_buf;
@@ -405,17 +389,17 @@ std::uint16_t CodeGenerator::handle_ms_decode_call(NodeIndex node, const Node& n
             side_buf = stereo.right;  // Treat as S
         } else {
             // Mono - just return as-is (mid only, no side info)
-            auto it = node_buffers_.find(ms_node);
-            if (it == node_buffers_.end()) {
+            auto it = node_types_.find(ms_node);
+            if (it == node_types_.end()) {
                 error("E171", "ms_decode() argument is not a signal", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
-            mid_buf = it->second;
+            mid_buf = it->second.buffer;
             // Allocate a zero buffer for side
             side_buf = buffers_.allocate();
             if (side_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
             cedar::Instruction zero_inst{};
             zero_inst.opcode = cedar::Opcode::PUSH_CONST;
@@ -429,8 +413,8 @@ std::uint16_t CodeGenerator::handle_ms_decode_call(NodeIndex node, const Node& n
         }
     } else {
         // ms_decode(M, S) - explicit form
-        mid_buf = visit(args.nodes[0]);
-        side_buf = visit(args.nodes[1]);
+        mid_buf = visit(args.nodes[0]).buffer;
+        side_buf = visit(args.nodes[1]).buffer;
     }
 
     // Allocate output buffers (left, right)
@@ -440,12 +424,12 @@ std::uint16_t CodeGenerator::handle_ms_decode_call(NodeIndex node, const Node& n
     if (out_left == BufferAllocator::BUFFER_UNUSED ||
         out_right == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (out_right != out_left + 1) {
         error("E166", "Internal error: stereo buffer allocation not adjacent", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit MS_DECODE instruction
@@ -461,24 +445,23 @@ std::uint16_t CodeGenerator::handle_ms_decode_call(NodeIndex node, const Node& n
     emit(inst);
 
     register_stereo(node, out_left, out_right);
-    node_buffers_[node] = out_left;
-    return out_left;
+    return cache_and_return(node, TypedValue::signal(out_left));
 }
 
 // pingpong(stereo, time, fb) or pingpong(L, R, time, fb, width?) -> true stereo ping-pong delay
-std::uint16_t CodeGenerator::handle_pingpong_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_pingpong_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 3, 5);
 
     if (!args.valid || args.nodes.size() < 3) {
         error("E175", "pingpong() requires at least 3 arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::uint16_t left_buf, right_buf, time_buf, fb_buf, width_buf = BufferAllocator::BUFFER_UNUSED;
 
     // Check first argument to determine form
     NodeIndex first_node = args.nodes[0];
-    std::uint16_t first_buf = visit(first_node);
+    std::uint16_t first_buf = visit(first_node).buffer;
 
     // Check stereo by both node and buffer
     bool first_is_stereo = is_stereo(first_node) || is_stereo_buffer(first_buf);
@@ -495,31 +478,31 @@ std::uint16_t CodeGenerator::handle_pingpong_call(NodeIndex node, const Node& n)
         left_buf = stereo.left;
         right_buf = stereo.right;
 
-        time_buf = visit(args.nodes[1]);
-        fb_buf = visit(args.nodes[2]);
+        time_buf = visit(args.nodes[1]).buffer;
+        fb_buf = visit(args.nodes[2]).buffer;
 
         if (args.nodes.size() >= 4) {
-            width_buf = visit(args.nodes[3]);
+            width_buf = visit(args.nodes[3]).buffer;
         }
     } else {
         // pingpong(L, R, time, fb, width?)
         if (args.nodes.size() < 4) {
             error("E173", "pingpong() requires at least 4 arguments: pingpong(L, R, time, fb)", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
-        auto it = node_buffers_.find(first_node);
-        if (it == node_buffers_.end()) {
+        auto it = node_types_.find(first_node);
+        if (it == node_types_.end()) {
             error("E174", "pingpong() first argument is not a signal", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
-        left_buf = it->second;
-        right_buf = visit(args.nodes[1]);
-        time_buf = visit(args.nodes[2]);
-        fb_buf = visit(args.nodes[3]);
+        left_buf = it->second.buffer;
+        right_buf = visit(args.nodes[1]).buffer;
+        time_buf = visit(args.nodes[2]).buffer;
+        fb_buf = visit(args.nodes[3]).buffer;
 
         if (args.nodes.size() >= 5) {
-            width_buf = visit(args.nodes[4]);
+            width_buf = visit(args.nodes[4]).buffer;
         }
     }
 
@@ -530,12 +513,12 @@ std::uint16_t CodeGenerator::handle_pingpong_call(NodeIndex node, const Node& n)
     if (out_left == BufferAllocator::BUFFER_UNUSED ||
         out_right == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (out_right != out_left + 1) {
         error("E166", "Internal error: stereo buffer allocation not adjacent", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Generate state_id for the stateful delay
@@ -558,8 +541,7 @@ std::uint16_t CodeGenerator::handle_pingpong_call(NodeIndex node, const Node& n)
     emit(inst);
 
     register_stereo(node, out_left, out_right);
-    node_buffers_[node] = out_left;
-    return out_left;
+    return cache_and_return(node, TypedValue::signal(out_left));
 }
 
 }  // namespace akkado

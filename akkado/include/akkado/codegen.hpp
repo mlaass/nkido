@@ -4,6 +4,7 @@
 #include "diagnostics.hpp"
 #include "symbol_table.hpp"
 #include "sample_registry.hpp"
+#include "typed_value.hpp"
 #include <cedar/vm/instruction.hpp>
 #include <cedar/opcodes/sequence.hpp>
 #include <cstdint>
@@ -215,8 +216,14 @@ public:
 
 private:
     /// Visit AST node and emit instructions
-    /// Returns the buffer index containing this node's result
-    std::uint16_t visit(NodeIndex node);
+    /// Returns a TypedValue with buffer index and type metadata
+    TypedValue visit(NodeIndex node);
+
+    /// Cache a TypedValue for a node and return it
+    TypedValue cache_and_return(NodeIndex node, TypedValue tv) {
+        node_types_[node] = tv;
+        return tv;
+    }
 
     /// Emit a single instruction
     void emit(const cedar::Instruction& inst);
@@ -239,18 +246,18 @@ private:
     [[nodiscard]] bool is_compile_time_match(NodeIndex node, const Node& n) const;
 
     /// Handle compile-time match - evaluate patterns and guards, emit only winning branch
-    std::uint16_t handle_compile_time_match(NodeIndex node, const Node& n);
+    TypedValue handle_compile_time_match(NodeIndex node, const Node& n);
 
     /// Handle runtime match - emit all branches and build nested select chain
-    std::uint16_t handle_runtime_match(NodeIndex node, const Node& n);
+    TypedValue handle_runtime_match(NodeIndex node, const Node& n);
 
-    /// Get record field buffers for a node (record literal, pattern, identifier to record/pattern)
-    /// Returns nullptr if node has no record fields
-    const std::unordered_map<std::string, std::uint16_t>* get_record_fields(NodeIndex node);
+    /// Get the TypedValue for a node (checks node_types_ cache, then follows symbol table)
+    /// Returns nullptr if node has no typed value
+    const TypedValue* get_node_type(NodeIndex node) const;
 
-    /// Bind destructured fields from a record/pattern node into the symbol table
+    /// Bind destructured fields from a record/pattern TypedValue into the symbol table
     /// Returns true if all fields were bound, false on error
-    bool bind_destructure_fields(NodeIndex source_node,
+    bool bind_destructure_fields(const TypedValue& source_tv,
                                  const std::vector<std::string>& fields,
                                  SourceLocation loc);
 
@@ -262,59 +269,32 @@ private:
     [[nodiscard]] bool is_fm_modulated(std::uint16_t freq_buffer) const;
 
     /// Handle len() function calls - compile-time array length
-    /// Returns the number of elements in an array literal.
-    /// @param node The Call node
-    /// @param n The Node reference
-    /// @return Output buffer index with constant length value
-    std::uint16_t handle_len_call(NodeIndex node, const Node& n);
+    TypedValue handle_len_call(NodeIndex node, const Node& n);
 
     /// Handle user-defined function calls - inline expansion
-    /// @param node The Call node
-    /// @param n The Node reference
-    /// @param func The user function info from symbol table
-    /// @return Output buffer index
-    std::uint16_t handle_user_function_call(NodeIndex node, const Node& n,
-                                            const UserFunctionInfo& func);
+    TypedValue handle_user_function_call(NodeIndex node, const Node& n,
+                                         const UserFunctionInfo& func);
 
     /// Handle FunctionValue calls - inline expansion of lambda assigned to variable
-    /// @param node The Call node
-    /// @param n The Node reference
-    /// @param func The function reference from symbol table
-    /// @return Output buffer index
-    std::uint16_t handle_function_value_call(NodeIndex node, const Node& n,
-                                              const FunctionRef& func);
+    TypedValue handle_function_value_call(NodeIndex node, const Node& n,
+                                           const FunctionRef& func);
 
     /// Handle Closure nodes - allocate buffers for parameters and generate body
-    /// @param node The Closure node
-    /// @param n The Node reference
-    /// @return Output buffer index
-    std::uint16_t handle_closure(NodeIndex node, const Node& n);
+    TypedValue handle_closure(NodeIndex node, const Node& n);
 
     /// Handle MatchExpr nodes - compile-time match resolution
-    /// @param node The MatchExpr node
-    /// @param n The Node reference
-    /// @return Output buffer index
-    std::uint16_t handle_match_expr(NodeIndex node, const Node& n);
+    TypedValue handle_match_expr(NodeIndex node, const Node& n);
 
     /// Handle pattern variable reference
     /// Emits pattern code for the stored pattern.
-    /// @param name The pattern variable name (for path tracking)
-    /// @param pattern_node The MiniLiteral node index
-    /// @param loc Source location for error reporting
-    /// @return Output buffer index (pitch or sample_id)
-    std::uint16_t handle_pattern_reference(const std::string& name, NodeIndex pattern_node,
-                                           SourceLocation loc);
+    TypedValue handle_pattern_reference(const std::string& name, NodeIndex pattern_node,
+                                        SourceLocation loc);
 
     /// Handle chord() function calls - Strudel-compatible chord expansion
-    /// chord("Am") -> array of MIDI notes
-    /// chord("Am C7 F") -> pattern of chord arrays
-    /// @param node The Call node
-    /// @param n The Node reference
-    /// @return Output buffer index
-    std::uint16_t handle_chord_call(NodeIndex node, const Node& n);
+    TypedValue handle_chord_call(NodeIndex node, const Node& n);
 
     /// Handle MiniLiteral (pattern) nodes - pat("c4 e4 g4"), etc.
-    std::uint16_t handle_mini_literal(NodeIndex node, const Node& n);
+    TypedValue handle_mini_literal(NodeIndex node, const Node& n);
 
     /// Emit per-voice SEQPAT_STEP/GATE/TYPE instructions and register polyphonic fields
     /// Shared helper used by handle_mini_literal and handle_pattern_reference
@@ -326,119 +306,120 @@ private:
     /// @param trigger_buf Pre-allocated buffer for voice 0 trigger
     /// @param is_sample_pattern Whether this is a sample pattern (skips polyphonic registration)
     /// @param loc Source location for error reporting
-    /// @return true on success, false on buffer exhaustion
-    bool emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id,
-                               std::uint8_t max_voices,
-                               std::uint16_t value_buf, std::uint16_t velocity_buf,
-                               std::uint16_t trigger_buf,
-                               bool is_sample_pattern, SourceLocation loc,
-                               std::uint16_t clock_override = 0xFFFF);
+    /// @return PatternPayload on success, nullptr on buffer exhaustion
+    std::shared_ptr<PatternPayload> emit_per_voice_seqpat(
+        NodeIndex node, std::uint32_t state_id,
+        std::uint8_t max_voices,
+        std::uint16_t value_buf, std::uint16_t velocity_buf,
+        std::uint16_t trigger_buf,
+        bool is_sample_pattern, SourceLocation loc,
+        std::uint16_t clock_override = 0xFFFF);
 
     // ============================================================================
     // Pattern transformation handlers
     // ============================================================================
 
     /// Handle slow(pattern, factor) - stretch pattern by factor
-    std::uint16_t handle_slow_call(NodeIndex node, const Node& n);
+    TypedValue handle_slow_call(NodeIndex node, const Node& n);
 
     /// Handle fast(pattern, factor) - compress pattern by factor
-    std::uint16_t handle_fast_call(NodeIndex node, const Node& n);
+    TypedValue handle_fast_call(NodeIndex node, const Node& n);
 
     /// Handle rev(pattern) - reverse event order
-    std::uint16_t handle_rev_call(NodeIndex node, const Node& n);
+    TypedValue handle_rev_call(NodeIndex node, const Node& n);
 
     /// Handle transpose(pattern, semitones) - shift pitches by semitones
-    std::uint16_t handle_transpose_call(NodeIndex node, const Node& n);
+    TypedValue handle_transpose_call(NodeIndex node, const Node& n);
 
     /// Handle velocity(pattern, vel) - set velocity on all events
-    std::uint16_t handle_velocity_call(NodeIndex node, const Node& n);
+    TypedValue handle_velocity_call(NodeIndex node, const Node& n);
 
     /// Handle bank(pattern, bank_name) - set sample bank for all events
-    std::uint16_t handle_bank_call(NodeIndex node, const Node& n);
+    TypedValue handle_bank_call(NodeIndex node, const Node& n);
 
     /// Handle variant(pattern, index) - set sample variant for all events
-    std::uint16_t handle_variant_call(NodeIndex node, const Node& n);
+    TypedValue handle_variant_call(NodeIndex node, const Node& n);
 
     /// Handle transport(pattern, trig, step?, reset?) - trigger-driven pattern clock
-    std::uint16_t handle_transport_call(NodeIndex node, const Node& n);
+    TypedValue handle_transport_call(NodeIndex node, const Node& n);
 
     /// Handle tune(tuning_name, pattern) - apply microtonal tuning to pattern
-    std::uint16_t handle_tune_call(NodeIndex node, const Node& n);
+    TypedValue handle_tune_call(NodeIndex node, const Node& n);
 
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
-    std::uint16_t handle_tap_delay_call(NodeIndex node, const Node& n);
+    TypedValue handle_tap_delay_call(NodeIndex node, const Node& n);
 
     /// Handle soundfont(file, preset) - SoundFont playback
     /// Special-cased: extracts filename/preset at compile time, emits SOUNDFONT_VOICE
-    std::uint16_t handle_soundfont_call(NodeIndex node, const Node& n);
+    TypedValue handle_soundfont_call(NodeIndex node, const Node& n);
 
     /// Handle poly(voices, instrument) / mono(instrument) / legato(instrument)
     /// Emits POLY_BEGIN, inlines instrument body, emits POLY_END
-    std::uint16_t handle_poly_call(NodeIndex node, const Node& n);
+    TypedValue handle_poly_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Stereo handlers
     // ============================================================================
 
     /// Handle stereo(mono) or stereo(left, right) - create stereo signal
-    std::uint16_t handle_stereo_call(NodeIndex node, const Node& n);
+    TypedValue handle_stereo_call(NodeIndex node, const Node& n);
 
     /// Handle left(stereo) - extract left channel
-    std::uint16_t handle_left_call(NodeIndex node, const Node& n);
+    TypedValue handle_left_call(NodeIndex node, const Node& n);
 
     /// Handle right(stereo) - extract right channel
-    std::uint16_t handle_right_call(NodeIndex node, const Node& n);
+    TypedValue handle_right_call(NodeIndex node, const Node& n);
 
     /// Handle pan(mono, pos) - pan mono to stereo
-    std::uint16_t handle_pan_call(NodeIndex node, const Node& n);
+    TypedValue handle_pan_call(NodeIndex node, const Node& n);
 
     /// Handle width(stereo, amount) - adjust stereo width (convenience wrapper)
-    std::uint16_t handle_width_call(NodeIndex node, const Node& n);
+    TypedValue handle_width_call(NodeIndex node, const Node& n);
 
     /// Handle ms_encode(stereo) - convert to mid/side (convenience wrapper)
-    std::uint16_t handle_ms_encode_call(NodeIndex node, const Node& n);
+    TypedValue handle_ms_encode_call(NodeIndex node, const Node& n);
 
     /// Handle ms_decode(ms) - convert mid/side to stereo (convenience wrapper)
-    std::uint16_t handle_ms_decode_call(NodeIndex node, const Node& n);
+    TypedValue handle_ms_decode_call(NodeIndex node, const Node& n);
 
     /// Handle pingpong(stereo, time, fb) - true stereo ping-pong delay
-    std::uint16_t handle_pingpong_call(NodeIndex node, const Node& n);
+    TypedValue handle_pingpong_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Parameter exposure handlers
     // ============================================================================
 
     /// Handle param(name, default, min?, max?) - continuous slider parameter
-    std::uint16_t handle_param_call(NodeIndex node, const Node& n);
+    TypedValue handle_param_call(NodeIndex node, const Node& n);
 
     /// Handle button(name) - momentary button parameter
-    std::uint16_t handle_button_call(NodeIndex node, const Node& n);
+    TypedValue handle_button_call(NodeIndex node, const Node& n);
 
     /// Handle toggle(name, default?) - boolean toggle parameter
-    std::uint16_t handle_toggle_call(NodeIndex node, const Node& n);
+    TypedValue handle_toggle_call(NodeIndex node, const Node& n);
 
     /// Handle select(name, opt1, opt2, ...) - selection dropdown parameter
-    std::uint16_t handle_select_call(NodeIndex node, const Node& n);
+    TypedValue handle_select_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Visualization exposure handlers
     // ============================================================================
 
     /// Handle pianoroll(signal, name?) - attach piano roll visualization
-    std::uint16_t handle_pianoroll_call(NodeIndex node, const Node& n);
+    TypedValue handle_pianoroll_call(NodeIndex node, const Node& n);
 
     /// Handle oscilloscope(signal, name?) - attach oscilloscope visualization
-    std::uint16_t handle_oscilloscope_call(NodeIndex node, const Node& n);
+    TypedValue handle_oscilloscope_call(NodeIndex node, const Node& n);
 
     /// Handle waveform(signal, name?) - attach waveform visualization
-    std::uint16_t handle_waveform_call(NodeIndex node, const Node& n);
+    TypedValue handle_waveform_call(NodeIndex node, const Node& n);
 
     /// Handle spectrum(signal, name?) - attach spectrum visualization
-    std::uint16_t handle_spectrum_call(NodeIndex node, const Node& n);
+    TypedValue handle_spectrum_call(NodeIndex node, const Node& n);
 
     /// Handle compose(f, g, ...) - function composition
-    std::uint16_t handle_compose_call(NodeIndex node, const Node& n);
+    TypedValue handle_compose_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Directive handlers
@@ -446,8 +427,8 @@ private:
 
     /// Handle compiler directives ($polyphony, etc.)
     /// Processes the directive and updates compiler options.
-    /// @return BUFFER_UNUSED (directives don't produce values)
-    std::uint16_t handle_directive(NodeIndex node, const Node& n);
+    /// @return void TypedValue (directives don't produce values)
+    TypedValue handle_directive(NodeIndex node, const Node& n);
 
     // Context
     CompilerOptions options_;  // Compiler options set by directives
@@ -479,11 +460,9 @@ private:
     // Track required SoundFont files
     std::vector<RequiredSoundFont> required_soundfonts_;
 
-    // Map from AST node index to output buffer index
-    std::unordered_map<NodeIndex, std::uint16_t> node_buffers_;
-
-    // Map from pattern node → state_id (for linking POLY to upstream pattern)
-    std::unordered_map<NodeIndex, std::uint32_t> pattern_state_ids_;
+    // Map from AST node index to typed result (replaces node_buffers_, record_fields_,
+    // multi_buffers_, array_lengths_, pattern_state_ids_)
+    std::unordered_map<NodeIndex, TypedValue> node_types_;
 
     // Map from parameter name hash to literal AST node (for inline match resolution)
     // Only populated during user function calls when the argument is a literal
@@ -507,12 +486,6 @@ private:
     // When a multi-buffer argument is passed to a function, this maps the parameter name
     // to the original argument node so that multi-buffer info can be looked up later.
     std::unordered_map<std::uint32_t, NodeIndex> param_multi_buffer_sources_;
-
-    // ============================================================================
-    // Multi-buffer support for polyphonic arrays (map/sum)
-    // ============================================================================
-    // Track nodes that produce multiple buffers (arrays/chords for polyphony)
-    std::unordered_map<NodeIndex, std::vector<std::uint16_t>> multi_buffers_;
 
     // ============================================================================
     // Stereo signal tracking
@@ -543,11 +516,11 @@ private:
     /// Get stereo buffer pair by left buffer index
     [[nodiscard]] StereoBuffers get_stereo_buffers_by_buffer(std::uint16_t buffer) const;
 
-    /// Register a node as producing multiple buffers
-    /// @return First buffer index (for compatibility with single-buffer code)
-    std::uint16_t register_multi_buffer(NodeIndex node, std::vector<std::uint16_t> buffers);
+    // ============================================================================
+    // Multi-buffer compatibility helpers (backed by node_types_)
+    // ============================================================================
 
-    /// Check if a node produces multiple buffers
+    /// Check if a node produces multiple buffers (Array type or stereo fallback)
     [[nodiscard]] bool is_multi_buffer(NodeIndex node) const;
 
     /// Get all buffers produced by a multi-buffer node
@@ -574,115 +547,102 @@ private:
                                       SourceLocation loc);
 
     /// Handle map(array, fn) call - apply function to each element
-    std::uint16_t handle_map_call(NodeIndex node, const Node& n);
+    TypedValue handle_map_call(NodeIndex node, const Node& n);
 
     /// Handle sum(array) call - reduce array by addition
-    std::uint16_t handle_sum_call(NodeIndex node, const Node& n);
+    TypedValue handle_sum_call(NodeIndex node, const Node& n);
 
     /// Handle fold(array, fn, init) call - reduce array with binary function
-    std::uint16_t handle_fold_call(NodeIndex node, const Node& n);
+    TypedValue handle_fold_call(NodeIndex node, const Node& n);
 
     /// Handle zipWith(a, b, fn) call - combine arrays element-wise with function
-    std::uint16_t handle_zipWith_call(NodeIndex node, const Node& n);
+    TypedValue handle_zipWith_call(NodeIndex node, const Node& n);
 
     /// Handle zip(a, b) call - interleave two arrays
-    std::uint16_t handle_zip_call(NodeIndex node, const Node& n);
+    TypedValue handle_zip_call(NodeIndex node, const Node& n);
 
     /// Handle take(n, array) call - take first n elements
-    std::uint16_t handle_take_call(NodeIndex node, const Node& n);
+    TypedValue handle_take_call(NodeIndex node, const Node& n);
 
     /// Handle drop(n, array) call - drop first n elements
-    std::uint16_t handle_drop_call(NodeIndex node, const Node& n);
+    TypedValue handle_drop_call(NodeIndex node, const Node& n);
 
     /// Handle reverse(array) call - reverse array order
-    std::uint16_t handle_reverse_call(NodeIndex node, const Node& n);
+    TypedValue handle_reverse_call(NodeIndex node, const Node& n);
 
     /// Handle range(start, end) call - generate integer array
-    std::uint16_t handle_range_call(NodeIndex node, const Node& n);
+    TypedValue handle_range_call(NodeIndex node, const Node& n);
 
     /// Handle repeat(value, n) call - repeat value n times
-    std::uint16_t handle_repeat_call(NodeIndex node, const Node& n);
+    TypedValue handle_repeat_call(NodeIndex node, const Node& n);
 
     /// Handle spread(n, source) call - force specific voice count
-    std::uint16_t handle_spread_call(NodeIndex node, const Node& n);
+    TypedValue handle_spread_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Array reduction operations
     // ============================================================================
 
     /// Handle product(array) call - multiply all elements
-    std::uint16_t handle_product_call(NodeIndex node, const Node& n);
+    TypedValue handle_product_call(NodeIndex node, const Node& n);
 
     /// Handle mean(array) call - average of elements
-    std::uint16_t handle_mean_call(NodeIndex node, const Node& n);
+    TypedValue handle_mean_call(NodeIndex node, const Node& n);
 
     /// Handle min/max calls - either binary or reduction depending on args
-    std::uint16_t handle_minmax_call(NodeIndex node, const Node& n);
+    TypedValue handle_minmax_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Array transformation operations
     // ============================================================================
 
     /// Handle rotate(array, n) call - rotate elements by n positions
-    std::uint16_t handle_rotate_call(NodeIndex node, const Node& n);
+    TypedValue handle_rotate_call(NodeIndex node, const Node& n);
 
     /// Handle shuffle(array) call - deterministic random permutation
-    std::uint16_t handle_shuffle_call(NodeIndex node, const Node& n);
+    TypedValue handle_shuffle_call(NodeIndex node, const Node& n);
 
     /// Handle sort(array) call - sort elements in ascending order
-    std::uint16_t handle_sort_call(NodeIndex node, const Node& n);
+    TypedValue handle_sort_call(NodeIndex node, const Node& n);
 
     /// Handle normalize(array) call - scale to 0-1 range
-    std::uint16_t handle_normalize_call(NodeIndex node, const Node& n);
+    TypedValue handle_normalize_call(NodeIndex node, const Node& n);
 
     /// Handle scale(array, lo, hi) call - map to new range
-    std::uint16_t handle_scale_call(NodeIndex node, const Node& n);
+    TypedValue handle_scale_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Array generation operations
     // ============================================================================
 
     /// Handle linspace(start, end, n) call - N evenly spaced values
-    std::uint16_t handle_linspace_call(NodeIndex node, const Node& n);
+    TypedValue handle_linspace_call(NodeIndex node, const Node& n);
 
     /// Handle random(n) call - N random values (deterministic by path)
-    std::uint16_t handle_random_call(NodeIndex node, const Node& n);
+    TypedValue handle_random_call(NodeIndex node, const Node& n);
 
     /// Handle harmonics(fundamental, n) call - harmonic series
-    std::uint16_t handle_harmonics_call(NodeIndex node, const Node& n);
+    TypedValue handle_harmonics_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Binary operation broadcasting
     // ============================================================================
 
     /// Handle binary operations (add, sub, mul, div, pow) with array broadcasting
-    std::uint16_t handle_binary_op_call(NodeIndex node, const Node& n);
+    TypedValue handle_binary_op_call(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Record support
     // ============================================================================
 
     /// Handle record literal nodes - expand to multiple buffers
-    /// @param node The RecordLit node
-    /// @param n The Node reference
-    /// @return First buffer index (for single-buffer compatibility)
-    std::uint16_t handle_record_literal(NodeIndex node, const Node& n);
+    TypedValue handle_record_literal(NodeIndex node, const Node& n);
 
     /// Handle field access nodes - resolve to correct field buffer
-    /// @param node The FieldAccess node
-    /// @param n The Node reference
-    /// @return Buffer index of the accessed field
-    std::uint16_t handle_field_access(NodeIndex node, const Node& n);
+    TypedValue handle_field_access(NodeIndex node, const Node& n);
 
     /// Handle pipe binding nodes - create buffer alias for named binding
-    /// @param node The PipeBinding node
-    /// @param n The Node reference
-    /// @return Buffer index of the bound expression
-    std::uint16_t handle_pipe_binding(NodeIndex node, const Node& n);
-
-    // Map from record node to field name -> buffer index
-    // Used to track field buffers for record literals
-    std::unordered_map<NodeIndex, std::unordered_map<std::string, std::uint16_t>> record_fields_;
+    TypedValue handle_pipe_binding(NodeIndex node, const Node& n);
 
     // ============================================================================
     // Polyphonic pattern error tracking
@@ -694,32 +654,6 @@ private:
         std::uint8_t max_voices;
     };
     std::unordered_map<NodeIndex, PolyPatternInfo> polyphonic_pattern_nodes_;
-
-    // ============================================================================
-    // Array length tracking (compile-time)
-    // ============================================================================
-    // Track array lengths per buffer (0 = scalar audio buffer)
-    // Arrays reuse BufferPool buffers - elements stored at indices 0..length-1
-    std::unordered_map<std::uint16_t, std::uint8_t> array_lengths_;
-
-    /// Check if a buffer holds an array (vs scalar audio signal)
-    [[nodiscard]] bool is_array_buffer(std::uint16_t buf) const {
-        auto it = array_lengths_.find(buf);
-        return it != array_lengths_.end() && it->second > 0;
-    }
-
-    /// Get the length of an array buffer (0 if not an array)
-    [[nodiscard]] std::uint8_t get_array_length(std::uint16_t buf) const {
-        auto it = array_lengths_.find(buf);
-        return (it != array_lengths_.end()) ? it->second : 0;
-    }
-
-    /// Register a buffer as holding an array of given length
-    void set_array_length(std::uint16_t buf, std::uint8_t length) {
-        if (length > 0) {
-            array_lengths_[buf] = length;
-        }
-    }
 
     /// Apply a binary function reference to two buffer arguments
     /// @param ref The function reference containing closure/body info

@@ -103,20 +103,20 @@ static std::string extract_options_json(const AstArena& arena, NodeIndex arg_nod
 // pianoroll(signal, name?, options?) - Piano roll pattern visualization
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_pianoroll_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_pianoroll_call(NodeIndex node, const Node& n) {
     // 1. Get signal argument (required)
     NodeIndex signal_arg = n.first_child;
     if (signal_arg == NULL_NODE) {
         error("E170", "pianoroll() requires a signal argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex signal_node = unwrap_argument(ast_->arena, signal_arg);
 
     // 2. Visit signal to get its buffer - pass through
-    std::uint16_t signal_buf = visit(signal_node);
+    std::uint16_t signal_buf = visit(signal_node).buffer;
     if (signal_buf == BufferAllocator::BUFFER_UNUSED) {
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // 3. Extract optional name argument
@@ -155,28 +155,27 @@ std::uint16_t CodeGenerator::handle_pianoroll_call(NodeIndex node, const Node& n
     viz_decls_.push_back(std::move(decl));
 
     // 8. Signal passes through unchanged
-    node_buffers_[node] = signal_buf;
-    return signal_buf;
+    return cache_and_return(node, TypedValue::signal(signal_buf));
 }
 
 // ============================================================================
 // oscilloscope(signal, name?, options?) - Time-domain oscilloscope visualization
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_oscilloscope_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_oscilloscope_call(NodeIndex node, const Node& n) {
     // 1. Get signal argument (required)
     NodeIndex signal_arg = n.first_child;
     if (signal_arg == NULL_NODE) {
         error("E171", "oscilloscope() requires a signal argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex signal_node = unwrap_argument(ast_->arena, signal_arg);
 
     // 2. Visit signal to get its buffer
-    std::uint16_t signal_buf = visit(signal_node);
+    std::uint16_t signal_buf = visit(signal_node).buffer;
     if (signal_buf == BufferAllocator::BUFFER_UNUSED) {
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // 3. Extract optional name argument
@@ -213,7 +212,7 @@ std::uint16_t CodeGenerator::handle_oscilloscope_call(NodeIndex node, const Node
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction probe_inst{};
@@ -227,28 +226,27 @@ std::uint16_t CodeGenerator::handle_oscilloscope_call(NodeIndex node, const Node
     probe_inst.state_id = state_id;
     emit(probe_inst);
 
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 // ============================================================================
 // waveform(signal, name?, options?) - Time-domain waveform visualization (longer window)
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_waveform_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_waveform_call(NodeIndex node, const Node& n) {
     // 1. Get signal argument (required)
     NodeIndex signal_arg = n.first_child;
     if (signal_arg == NULL_NODE) {
         error("E172", "waveform() requires a signal argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex signal_node = unwrap_argument(ast_->arena, signal_arg);
 
     // 2. Visit signal to get its buffer
-    std::uint16_t signal_buf = visit(signal_node);
+    std::uint16_t signal_buf = visit(signal_node).buffer;
     if (signal_buf == BufferAllocator::BUFFER_UNUSED) {
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // 3. Extract optional name argument
@@ -285,7 +283,7 @@ std::uint16_t CodeGenerator::handle_waveform_call(NodeIndex node, const Node& n)
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction probe_inst{};
@@ -299,28 +297,27 @@ std::uint16_t CodeGenerator::handle_waveform_call(NodeIndex node, const Node& n)
     probe_inst.state_id = state_id;
     emit(probe_inst);
 
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 // ============================================================================
 // spectrum(signal, name?, options?) - Frequency-domain FFT visualization
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_spectrum_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_spectrum_call(NodeIndex node, const Node& n) {
     // 1. Get signal argument (required)
     NodeIndex signal_arg = n.first_child;
     if (signal_arg == NULL_NODE) {
         error("E173", "spectrum() requires a signal argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex signal_node = unwrap_argument(ast_->arena, signal_arg);
 
     // 2. Visit signal to get its buffer
-    std::uint16_t signal_buf = visit(signal_node);
+    std::uint16_t signal_buf = visit(signal_node).buffer;
     if (signal_buf == BufferAllocator::BUFFER_UNUSED) {
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // 3. Extract optional name argument
@@ -357,7 +354,7 @@ std::uint16_t CodeGenerator::handle_spectrum_call(NodeIndex node, const Node& n)
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction probe_inst{};
@@ -371,8 +368,7 @@ std::uint16_t CodeGenerator::handle_spectrum_call(NodeIndex node, const Node& n)
     probe_inst.state_id = state_id;
     emit(probe_inst);
 
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 }  // namespace akkado

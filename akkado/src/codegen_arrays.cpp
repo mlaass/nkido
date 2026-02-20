@@ -46,45 +46,6 @@ static std::optional<double> resolve_const_scalar(
     return std::nullopt;
 }
 
-// Multi-buffer registration
-std::uint16_t CodeGenerator::register_multi_buffer(NodeIndex node, std::vector<std::uint16_t> buffers) {
-    if (buffers.empty()) return BufferAllocator::BUFFER_UNUSED;
-    multi_buffers_[node] = std::move(buffers);
-    return multi_buffers_[node][0];
-}
-
-bool CodeGenerator::is_multi_buffer(NodeIndex node) const {
-    // First check node-based tracking
-    auto it = multi_buffers_.find(node);
-    if (it != multi_buffers_.end() && it->second.size() > 1) {
-        return true;
-    }
-    // Fallback: check if the node's buffer is a stereo left channel
-    auto buf_it = node_buffers_.find(node);
-    if (buf_it != node_buffers_.end()) {
-        return is_stereo_buffer(buf_it->second);
-    }
-    return false;
-}
-
-std::vector<std::uint16_t> CodeGenerator::get_multi_buffers(NodeIndex node) const {
-    // First check node-based tracking
-    auto it = multi_buffers_.find(node);
-    if (it != multi_buffers_.end()) return it->second;
-
-    // Fallback: check buffer-based stereo tracking
-    auto buf_it = node_buffers_.find(node);
-    if (buf_it != node_buffers_.end() && buf_it->second != BufferAllocator::BUFFER_UNUSED) {
-        // Check if this is a stereo buffer
-        auto pair_it = stereo_buffer_pairs_.find(buf_it->second);
-        if (pair_it != stereo_buffer_pairs_.end()) {
-            return {buf_it->second, pair_it->second};
-        }
-        return {buf_it->second};
-    }
-    return {};
-}
-
 // Apply lambda to single buffer
 std::uint16_t CodeGenerator::apply_lambda(NodeIndex lambda_node, std::uint16_t arg_buf) {
     const Node& lambda = ast_->arena[lambda_node];
@@ -127,12 +88,12 @@ std::uint16_t CodeGenerator::apply_lambda(NodeIndex lambda_node, std::uint16_t a
     symbols_->push_scope();
     symbols_->define_variable(param_names[0], arg_buf);
 
-    auto saved_node_buffers = std::move(node_buffers_);
-    node_buffers_.clear();
+    auto saved_node_types = std::move(node_types_);
+    node_types_.clear();
 
-    std::uint16_t result = visit(body);
+    std::uint16_t result = visit(body).buffer;
 
-    node_buffers_ = std::move(saved_node_buffers);
+    node_types_ = std::move(saved_node_types);
     symbols_->pop_scope();
 
     return result;
@@ -216,13 +177,13 @@ std::uint16_t CodeGenerator::apply_function_ref(const FunctionRef& ref, std::uin
     }
     symbols_->define_variable(ref.params[0].name, arg_buf);
 
-    auto saved_node_buffers = std::move(node_buffers_);
-    node_buffers_.clear();
+    auto saved_node_types = std::move(node_types_);
+    node_types_.clear();
 
     std::uint16_t result = BufferAllocator::BUFFER_UNUSED;
 
     if (ref.is_user_function) {
-        if (ref.closure_node != NULL_NODE) result = visit(ref.closure_node);
+        if (ref.closure_node != NULL_NODE) result = visit(ref.closure_node).buffer;
     } else {
         const Node& closure = ast_->arena[ref.closure_node];
         NodeIndex child = closure.first_child;
@@ -239,10 +200,10 @@ std::uint16_t CodeGenerator::apply_function_ref(const FunctionRef& ref, std::uin
             body = child;
             break;
         }
-        if (body != NULL_NODE) result = visit(body);
+        if (body != NULL_NODE) result = visit(body).buffer;
     }
 
-    node_buffers_ = std::move(saved_node_buffers);
+    node_types_ = std::move(saved_node_types);
     symbols_->pop_scope();
 
     return result;
@@ -265,13 +226,13 @@ std::uint16_t CodeGenerator::apply_binary_function_ref(const FunctionRef& ref,
     symbols_->define_variable(ref.params[0].name, arg_buf1);
     symbols_->define_variable(ref.params[1].name, arg_buf2);
 
-    auto saved_node_buffers = std::move(node_buffers_);
-    node_buffers_.clear();
+    auto saved_node_types = std::move(node_types_);
+    node_types_.clear();
 
     std::uint16_t result = BufferAllocator::BUFFER_UNUSED;
 
     if (ref.is_user_function) {
-        if (ref.closure_node != NULL_NODE) result = visit(ref.closure_node);
+        if (ref.closure_node != NULL_NODE) result = visit(ref.closure_node).buffer;
     } else {
         const Node& closure = ast_->arena[ref.closure_node];
         NodeIndex child = closure.first_child;
@@ -288,55 +249,60 @@ std::uint16_t CodeGenerator::apply_binary_function_ref(const FunctionRef& ref,
             body = child;
             break;
         }
-        if (body != NULL_NODE) result = visit(body);
+        if (body != NULL_NODE) result = visit(body).buffer;
     }
 
-    node_buffers_ = std::move(saved_node_buffers);
+    node_types_ = std::move(saved_node_types);
     symbols_->pop_scope();
 
     return result;
 }
 
 // Finalize array result (helper)
-static std::uint16_t finalize_result(
-    CodeGenerator* cg,
-    BufferAllocator& buffers,
-    std::vector<cedar::Instruction>& instructions,
+static TypedValue finalize_result(
     NodeIndex node,
     std::vector<std::uint16_t> result_buffers,
-    std::unordered_map<NodeIndex, std::uint16_t>& node_buffers,
-    std::unordered_map<NodeIndex, std::vector<std::uint16_t>>& multi_buffers
+    std::unordered_map<NodeIndex, TypedValue>& node_types,
+    BufferAllocator& buffers,
+    std::vector<cedar::Instruction>& instructions
 ) {
     if (result_buffers.empty()) {
         std::uint16_t zero = emit_zero(buffers, instructions);
-        node_buffers[node] = zero;
-        return zero;
+        auto tv = TypedValue::signal(zero);
+        node_types[node] = tv;
+        return tv;
     }
     if (result_buffers.size() == 1) {
-        node_buffers[node] = result_buffers[0];
-        return result_buffers[0];
+        auto tv = TypedValue::signal(result_buffers[0]);
+        node_types[node] = tv;
+        return tv;
     }
     std::uint16_t first_buf = result_buffers[0];
-    multi_buffers[node] = std::move(result_buffers);
-    node_buffers[node] = first_buf;
-    return first_buf;
+    std::vector<TypedValue> elements;
+    elements.reserve(result_buffers.size());
+    for (auto buf : result_buffers) {
+        elements.push_back(TypedValue::signal(buf));
+    }
+    auto tv = TypedValue::make_array(std::move(elements), first_buf);
+    node_types[node] = tv;
+    return tv;
 }
 
 // map(array, fn)
-std::uint16_t CodeGenerator::handle_map_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_map_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E133", "map() requires 2 arguments: map(array, fn)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto func_ref = resolve_function_arg(args.nodes[1]);
     if (!func_ref) {
         error("E130", "map() second argument must be a function", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
         push_path("map#" + std::to_string(call_counters_["map"]++));
@@ -344,8 +310,7 @@ std::uint16_t CodeGenerator::handle_map_call(NodeIndex node, const Node& n) {
         std::uint16_t result = apply_function_ref(*func_ref, array_buf, n.location);
         pop_path();
         pop_path();
-        node_buffers_[node] = result;
-        return result;
+        return cache_and_return(node, TypedValue::signal(result));
     }
 
     auto element_buffers = get_multi_buffers(args.nodes[0]);
@@ -359,49 +324,45 @@ std::uint16_t CodeGenerator::handle_map_call(NodeIndex node, const Node& n) {
     }
     pop_path();
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // sum(array)
-std::uint16_t CodeGenerator::handle_sum_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_sum_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E134", "sum() requires 1 argument: sum(array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.empty()) {
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.empty()) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
-    if (buffers.size() == 1) {
-        node_buffers_[node] = buffers[0];
-        return buffers[0];
+    if (elem_bufs.size() == 1) {
+        return cache_and_return(node, TypedValue::signal(elem_bufs[0]));
     }
 
-    std::uint16_t result = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
+    std::uint16_t result = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
         std::uint16_t sum_buf = buffers_.allocate();
         if (sum_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         cedar::Instruction add_inst{};
         add_inst.opcode = cedar::Opcode::ADD;
         add_inst.out_buffer = sum_buf;
         add_inst.inputs[0] = result;
-        add_inst.inputs[1] = buffers[i];
+        add_inst.inputs[1] = elem_bufs[i];
         add_inst.inputs[2] = 0xFFFF;
         add_inst.inputs[3] = 0xFFFF;
         add_inst.state_id = 0;
@@ -410,64 +371,61 @@ std::uint16_t CodeGenerator::handle_sum_call(NodeIndex node, const Node& n) {
         result = sum_buf;
     }
 
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, TypedValue::signal(result));
 }
 
 // fold(array, fn, init)
-std::uint16_t CodeGenerator::handle_fold_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_fold_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 3);
     if (!args.valid) {
         error("E142", "fold() requires 3 arguments: fold(array, fn, init)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto func_ref = resolve_function_arg(args.nodes[1]);
     if (!func_ref) {
         error("E143", "fold() second argument must be a binary function", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
-    std::uint16_t init_buf = visit(args.nodes[2]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
+    std::uint16_t init_buf = visit(args.nodes[2]).buffer;
 
-    auto buffers = is_multi_buffer(args.nodes[0]) ?
+    auto elem_bufs = is_multi_buffer(args.nodes[0]) ?
         get_multi_buffers(args.nodes[0]) : std::vector<std::uint16_t>{array_buf};
 
-    if (buffers.empty()) {
-        node_buffers_[node] = init_buf;
-        return init_buf;
+    if (elem_bufs.empty()) {
+        return cache_and_return(node, TypedValue::signal(init_buf));
     }
 
     push_path("fold#" + std::to_string(call_counters_["fold"]++));
     std::uint16_t result = init_buf;
-    for (std::size_t i = 0; i < buffers.size(); ++i) {
+    for (std::size_t i = 0; i < elem_bufs.size(); ++i) {
         push_path("step" + std::to_string(i));
-        result = apply_binary_function_ref(*func_ref, result, buffers[i], n.location);
+        result = apply_binary_function_ref(*func_ref, result, elem_bufs[i], n.location);
         pop_path();
     }
     pop_path();
 
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, TypedValue::signal(result));
 }
 
 // zipWith(a, b, fn)
-std::uint16_t CodeGenerator::handle_zipWith_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_zipWith_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 3);
     if (!args.valid) {
         error("E144", "zipWith() requires 3 arguments: zipWith(a, b, fn)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto func_ref = resolve_function_arg(args.nodes[2]);
     if (!func_ref) {
         error("E145", "zipWith() third argument must be a binary function", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t buf_a = visit(args.nodes[0]);
-    std::uint16_t buf_b = visit(args.nodes[1]);
+    std::uint16_t buf_a = visit(args.nodes[0]).buffer;
+    std::uint16_t buf_b = visit(args.nodes[1]).buffer;
 
     auto buffers_a = is_multi_buffer(args.nodes[0]) ?
         get_multi_buffers(args.nodes[0]) : std::vector<std::uint16_t>{buf_a};
@@ -477,8 +435,7 @@ std::uint16_t CodeGenerator::handle_zipWith_call(NodeIndex node, const Node& n) 
     std::size_t len = std::min(buffers_a.size(), buffers_b.size());
     if (len == 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
 
     push_path("zipWith#" + std::to_string(call_counters_["zipWith"]++));
@@ -490,20 +447,19 @@ std::uint16_t CodeGenerator::handle_zipWith_call(NodeIndex node, const Node& n) 
     }
     pop_path();
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // zip(a, b) - interleave
-std::uint16_t CodeGenerator::handle_zip_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_zip_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E146", "zip() requires 2 arguments: zip(a, b)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t buf_a = visit(args.nodes[0]);
-    std::uint16_t buf_b = visit(args.nodes[1]);
+    std::uint16_t buf_a = visit(args.nodes[0]).buffer;
+    std::uint16_t buf_b = visit(args.nodes[1]).buffer;
 
     auto buffers_a = is_multi_buffer(args.nodes[0]) ?
         get_multi_buffers(args.nodes[0]) : std::vector<std::uint16_t>{buf_a};
@@ -519,93 +475,89 @@ std::uint16_t CodeGenerator::handle_zip_call(NodeIndex node, const Node& n) {
         result_buffers.push_back(buffers_b[i]);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // take(n, array)
-std::uint16_t CodeGenerator::handle_take_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_take_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E147", "take() requires 2 arguments: take(n, array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& n_val = ast_->arena[args.nodes[0]];
     if (n_val.type != NodeType::NumberLit) {
         error("E148", "take() first argument must be a number literal", n_val.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::size_t count = static_cast<std::size_t>(n_val.as_number());
-    std::uint16_t array_buf = visit(args.nodes[1]);
+    std::uint16_t array_buf = visit(args.nodes[1]).buffer;
 
-    auto buffers = is_multi_buffer(args.nodes[1]) ?
+    auto elem_bufs = is_multi_buffer(args.nodes[1]) ?
         get_multi_buffers(args.nodes[1]) : std::vector<std::uint16_t>{array_buf};
 
-    count = std::min(count, buffers.size());
-    std::vector<std::uint16_t> result_buffers(buffers.begin(), buffers.begin() + count);
+    count = std::min(count, elem_bufs.size());
+    std::vector<std::uint16_t> result_buffers(elem_bufs.begin(), elem_bufs.begin() + count);
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // drop(n, array)
-std::uint16_t CodeGenerator::handle_drop_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_drop_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E149", "drop() requires 2 arguments: drop(n, array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& n_val = ast_->arena[args.nodes[0]];
     if (n_val.type != NodeType::NumberLit) {
         error("E150", "drop() first argument must be a number literal", n_val.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::size_t count = static_cast<std::size_t>(n_val.as_number());
-    std::uint16_t array_buf = visit(args.nodes[1]);
+    std::uint16_t array_buf = visit(args.nodes[1]).buffer;
 
-    auto buffers = is_multi_buffer(args.nodes[1]) ?
+    auto elem_bufs = is_multi_buffer(args.nodes[1]) ?
         get_multi_buffers(args.nodes[1]) : std::vector<std::uint16_t>{array_buf};
 
-    count = std::min(count, buffers.size());
-    std::vector<std::uint16_t> result_buffers(buffers.begin() + count, buffers.end());
+    count = std::min(count, elem_bufs.size());
+    std::vector<std::uint16_t> result_buffers(elem_bufs.begin() + count, elem_bufs.end());
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // reverse(array)
-std::uint16_t CodeGenerator::handle_reverse_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_reverse_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E151", "reverse() requires 1 argument: reverse(array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    std::reverse(buffers.begin(), buffers.end());
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    std::reverse(elem_bufs.begin(), elem_bufs.end());
 
-    std::uint16_t first_buf = register_multi_buffer(node, std::move(buffers));
-    node_buffers_[node] = first_buf;
-    return first_buf;
+    std::vector<TypedValue> elements;
+    for (auto b : elem_bufs) elements.push_back(TypedValue::signal(b));
+    return cache_and_return(node, TypedValue::make_array(std::move(elements), elem_bufs[0]));
 }
 
 // range(start, end)
-std::uint16_t CodeGenerator::handle_range_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_range_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E152", "range() requires 2 arguments: range(start, end)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto start_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
@@ -613,7 +565,7 @@ std::uint16_t CodeGenerator::handle_range_call(NodeIndex node, const Node& n) {
 
     if (!start_val || !end_val) {
         error("E153", "range() arguments must be compile-time constants", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     int start = static_cast<int>(*start_val);
@@ -626,7 +578,7 @@ std::uint16_t CodeGenerator::handle_range_call(NodeIndex node, const Node& n) {
         std::uint16_t buf = buffers_.allocate();
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         cedar::Instruction inst{};
@@ -642,66 +594,65 @@ std::uint16_t CodeGenerator::handle_range_call(NodeIndex node, const Node& n) {
         result_buffers.push_back(buf);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // repeat(value, n)
-std::uint16_t CodeGenerator::handle_repeat_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_repeat_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E154", "repeat() requires 2 arguments: repeat(value, n)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& n_val = ast_->arena[args.nodes[1]];
     if (n_val.type != NodeType::NumberLit) {
         error("E155", "repeat() second argument must be a number literal", n_val.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::size_t count = static_cast<std::size_t>(n_val.as_number());
-    std::uint16_t value_buf = visit(args.nodes[0]);
+    std::uint16_t value_buf = visit(args.nodes[0]).buffer;
 
     if (count == 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
     if (count == 1) {
-        node_buffers_[node] = value_buf;
-        return value_buf;
+        return cache_and_return(node, TypedValue::signal(value_buf));
     }
 
-    std::vector<std::uint16_t> result_buffers(count, value_buf);
-    std::uint16_t first_buf = register_multi_buffer(node, std::move(result_buffers));
-    node_buffers_[node] = first_buf;
-    return first_buf;
+    std::vector<TypedValue> elements;
+    elements.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        elements.push_back(TypedValue::signal(value_buf));
+    }
+    return cache_and_return(node, TypedValue::make_array(std::move(elements), value_buf));
 }
 
 // spread(n, source) - force specific voice count (pad with zeros or truncate)
-std::uint16_t CodeGenerator::handle_spread_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_spread_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E178", "spread() requires 2 arguments: spread(n, source)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // First argument (n) must be a compile-time constant
     const Node& n_val = ast_->arena[args.nodes[0]];
     if (n_val.type != NodeType::NumberLit) {
         error("E179", "spread() first argument must be a number literal", n_val.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     int target_count = static_cast<int>(n_val.as_number());
     if (target_count < 1 || target_count > 128) {
         error("E180", "spread() count must be between 1 and 128", n_val.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Visit the source to get its buffers
-    std::uint16_t source_buf = visit(args.nodes[1]);
+    std::uint16_t source_buf = visit(args.nodes[1]).buffer;
 
     // Get source buffers (multi-buffer or single)
     std::vector<std::uint16_t> source_buffers;
@@ -730,7 +681,7 @@ std::uint16_t CodeGenerator::handle_spread_call(NodeIndex node, const Node& n) {
             std::uint16_t zero_buf = emit_zero(buffers_, instructions_);
             if (zero_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
             result_buffers.push_back(zero_buf);
         }
@@ -738,23 +689,22 @@ std::uint16_t CodeGenerator::handle_spread_call(NodeIndex node, const Node& n) {
 
     // If single result, just return it
     if (result_buffers.size() == 1) {
-        node_buffers_[node] = result_buffers[0];
-        return result_buffers[0];
+        return cache_and_return(node, TypedValue::signal(result_buffers[0]));
     }
 
     // Register as multi-buffer result
-    std::uint16_t first_buf = register_multi_buffer(node, std::move(result_buffers));
-    node_buffers_[node] = first_buf;
-    return first_buf;
+    std::vector<TypedValue> elements;
+    for (auto b : result_buffers) elements.push_back(TypedValue::signal(b));
+    return cache_and_return(node, TypedValue::make_array(std::move(elements), result_buffers[0]));
 }
 
 // Handles len(arr) calls - returns compile-time array length
-std::uint16_t CodeGenerator::handle_len_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_len_call(NodeIndex node, const Node& n) {
     // Get the argument
     NodeIndex arg = n.first_child;
     if (arg == NULL_NODE) {
         error("E120", "len() requires exactly 1 argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Unwrap Argument node if present
@@ -766,7 +716,7 @@ std::uint16_t CodeGenerator::handle_len_call(NodeIndex node, const Node& n) {
 
     if (arr_node == NULL_NODE) {
         error("E120", "len() requires an array argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     const Node& arr = ast_->arena[arr_node];
@@ -790,18 +740,18 @@ std::uint16_t CodeGenerator::handle_len_call(NodeIndex node, const Node& n) {
         } else {
             error("E141", "len() requires an array, but '" + name + "' is not an array",
                   arr.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     } else {
         error("E122", "len() argument must be an array", arr.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit the length as a constant
     std::uint16_t out = buffers_.allocate();
     if (out == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction inst{};
@@ -816,8 +766,7 @@ std::uint16_t CodeGenerator::handle_len_call(NodeIndex node, const Node& n) {
     encode_const_value(inst, len_value);
     emit(inst);
 
-    node_buffers_[node] = out;
-    return out;
+    return cache_and_return(node, TypedValue::signal(out));
 }
 
 // ============================================================================
@@ -861,29 +810,29 @@ static std::uint16_t emit_binary_op(
     return out;
 }
 
-std::uint16_t CodeGenerator::handle_binary_op_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_binary_op_call(NodeIndex node, const Node& n) {
     std::string func_name;
     if (std::holds_alternative<Node::IdentifierData>(n.data)) {
         func_name = n.as_identifier();
     } else {
         error("E160", "Invalid binary operation call", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Opcode op = binary_name_to_opcode(func_name);
     if (op == cedar::Opcode::NOP) {
         error("E161", "Unknown binary operation: " + func_name, n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E162", func_name + "() requires 2 arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t buf_a = visit(args.nodes[0]);
-    std::uint16_t buf_b = visit(args.nodes[1]);
+    std::uint16_t buf_a = visit(args.nodes[0]).buffer;
+    std::uint16_t buf_b = visit(args.nodes[1]).buffer;
 
     bool a_multi = is_multi_buffer(args.nodes[0]);
     bool b_multi = is_multi_buffer(args.nodes[1]);
@@ -891,8 +840,7 @@ std::uint16_t CodeGenerator::handle_binary_op_call(NodeIndex node, const Node& n
     // Neither is array - standard scalar operation
     if (!a_multi && !b_multi) {
         std::uint16_t result = emit_binary_op(buffers_, instructions_, op, buf_a, buf_b);
-        node_buffers_[node] = result;
-        return result;
+        return cache_and_return(node, TypedValue::signal(result));
     }
 
     auto buffers_a = a_multi ? get_multi_buffers(args.nodes[0])
@@ -910,13 +858,12 @@ std::uint16_t CodeGenerator::handle_binary_op_call(NodeIndex node, const Node& n
         std::uint16_t res = emit_binary_op(buffers_, instructions_, op, a, b);
         if (res == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
         result_buffers.push_back(res);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // ============================================================================
@@ -924,97 +871,89 @@ std::uint16_t CodeGenerator::handle_binary_op_call(NodeIndex node, const Node& n
 // ============================================================================
 
 // product(array) - multiply all elements
-std::uint16_t CodeGenerator::handle_product_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_product_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E163", "product() requires 1 argument: product(array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
         // Single element - return as-is
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.empty()) {
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.empty()) {
         // Product of empty array is 1.0 (multiplicative identity)
         std::uint16_t one = emit_push_const(buffers_, instructions_, 1.0f);
-        node_buffers_[node] = one;
-        return one;
+        return cache_and_return(node, TypedValue::signal(one));
     }
-    if (buffers.size() == 1) {
-        node_buffers_[node] = buffers[0];
-        return buffers[0];
+    if (elem_bufs.size() == 1) {
+        return cache_and_return(node, TypedValue::signal(elem_bufs[0]));
     }
 
-    std::uint16_t result = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
-        result = emit_binary_op(buffers_, instructions_, cedar::Opcode::MUL, result, buffers[i]);
+    std::uint16_t result = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
+        result = emit_binary_op(buffers_, instructions_, cedar::Opcode::MUL, result, elem_bufs[i]);
         if (result == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     }
 
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, TypedValue::signal(result));
 }
 
 // mean(array) - average of elements
-std::uint16_t CodeGenerator::handle_mean_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_mean_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E164", "mean() requires 1 argument: mean(array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
         // Single element - return as-is
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.empty()) {
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.empty()) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
-    if (buffers.size() == 1) {
-        node_buffers_[node] = buffers[0];
-        return buffers[0];
+    if (elem_bufs.size() == 1) {
+        return cache_and_return(node, TypedValue::signal(elem_bufs[0]));
     }
 
     // Sum all elements
-    std::uint16_t sum_buf = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
-        sum_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::ADD, sum_buf, buffers[i]);
+    std::uint16_t sum_buf = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
+        sum_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::ADD, sum_buf, elem_bufs[i]);
         if (sum_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     }
 
     // Divide by length
-    std::uint16_t len_buf = emit_push_const(buffers_, instructions_, static_cast<float>(buffers.size()));
+    std::uint16_t len_buf = emit_push_const(buffers_, instructions_, static_cast<float>(elem_bufs.size()));
     if (len_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::uint16_t result = emit_binary_op(buffers_, instructions_, cedar::Opcode::DIV, sum_buf, len_buf);
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, TypedValue::signal(result));
 }
 
 // min/max with array support - either binary or reduction
-std::uint16_t CodeGenerator::handle_minmax_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_minmax_call(NodeIndex node, const Node& n) {
     std::string func_name;
     if (std::holds_alternative<Node::IdentifierData>(n.data)) {
         func_name = n.as_identifier();
@@ -1025,50 +964,45 @@ std::uint16_t CodeGenerator::handle_minmax_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1, 2);
     if (!args.valid || args.nodes.empty()) {
         error("E165", func_name + "() requires 1 or 2 arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Two arguments: standard binary min/max
     if (args.nodes.size() == 2) {
-        std::uint16_t buf_a = visit(args.nodes[0]);
-        std::uint16_t buf_b = visit(args.nodes[1]);
+        std::uint16_t buf_a = visit(args.nodes[0]).buffer;
+        std::uint16_t buf_b = visit(args.nodes[1]).buffer;
         std::uint16_t result = emit_binary_op(buffers_, instructions_, op, buf_a, buf_b);
-        node_buffers_[node] = result;
-        return result;
+        return cache_and_return(node, TypedValue::signal(result));
     }
 
     // Single argument: reduction over array
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
         // Single element - return as-is
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.empty()) {
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.empty()) {
         // min/max of empty array - return 0
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
-    if (buffers.size() == 1) {
-        node_buffers_[node] = buffers[0];
-        return buffers[0];
+    if (elem_bufs.size() == 1) {
+        return cache_and_return(node, TypedValue::signal(elem_bufs[0]));
     }
 
-    std::uint16_t result = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
-        result = emit_binary_op(buffers_, instructions_, op, result, buffers[i]);
+    std::uint16_t result = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
+        result = emit_binary_op(buffers_, instructions_, op, result, elem_bufs[i]);
         if (result == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     }
 
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, TypedValue::signal(result));
 }
 
 // ============================================================================
@@ -1076,37 +1010,35 @@ std::uint16_t CodeGenerator::handle_minmax_call(NodeIndex node, const Node& n) {
 // ============================================================================
 
 // rotate(array, n) - rotate elements by n positions
-std::uint16_t CodeGenerator::handle_rotate_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_rotate_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E166", "rotate() requires 2 arguments: rotate(array, n)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // n must be a literal
     const Node& n_val = ast_->arena[args.nodes[1]];
     if (n_val.type != NodeType::NumberLit) {
         error("E167", "rotate() second argument must be a number literal", n_val.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     int offset = static_cast<int>(n_val.as_number());
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
         // Single element - return as-is
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.empty() || buffers.size() == 1) {
-        std::uint16_t first_buf = buffers.empty() ? emit_zero(buffers_, instructions_) : buffers[0];
-        node_buffers_[node] = first_buf;
-        return first_buf;
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.empty() || elem_bufs.size() == 1) {
+        std::uint16_t first_buf = elem_bufs.empty() ? emit_zero(buffers_, instructions_) : elem_bufs[0];
+        return cache_and_return(node, TypedValue::signal(first_buf));
     }
 
-    int len = static_cast<int>(buffers.size());
+    int len = static_cast<int>(elem_bufs.size());
     // Normalize offset (positive = rotate right, negative = rotate left)
     offset = ((offset % len) + len) % len;
 
@@ -1114,56 +1046,52 @@ std::uint16_t CodeGenerator::handle_rotate_call(NodeIndex node, const Node& n) {
     for (int i = 0; i < len; ++i) {
         // rotate right by offset: element at i comes from (i - offset + len) % len
         int src_idx = (i - offset + len) % len;
-        result.push_back(buffers[static_cast<std::size_t>(src_idx)]);
+        result.push_back(elem_bufs[static_cast<std::size_t>(src_idx)]);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result), node_types_, buffers_, instructions_);
 }
 
 // shuffle(array) - deterministic random permutation
-std::uint16_t CodeGenerator::handle_shuffle_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_shuffle_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E168", "shuffle() requires 1 argument: shuffle(array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.size() <= 1) {
-        std::uint16_t first_buf = buffers.empty() ? emit_zero(buffers_, instructions_) : buffers[0];
-        node_buffers_[node] = first_buf;
-        return first_buf;
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.size() <= 1) {
+        std::uint16_t first_buf = elem_bufs.empty() ? emit_zero(buffers_, instructions_) : elem_bufs[0];
+        return cache_and_return(node, TypedValue::signal(first_buf));
     }
 
     // Use semantic path hash as seed for deterministic shuffle
     std::uint32_t seed = compute_state_id();
 
     // Fisher-Yates shuffle with simple LCG
-    std::vector<std::uint16_t> result = buffers;
+    std::vector<std::uint16_t> result = elem_bufs;
     for (std::size_t i = result.size() - 1; i > 0; --i) {
         seed = seed * 1103515245 + 12345;  // Simple LCG
         std::size_t j = (seed >> 16) % (i + 1);
         std::swap(result[i], result[j]);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result), node_types_, buffers_, instructions_);
 }
 
 // sort(array) - sort elements in ascending order (compile-time constants only)
-std::uint16_t CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E169", "sort() requires 1 argument: sort(array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // For compile-time sort, we need to extract literal values
@@ -1171,9 +1099,8 @@ std::uint16_t CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
     const Node& arr_node = ast_->arena[args.nodes[0]];
     if (arr_node.type != NodeType::ArrayLit) {
         // For non-literals, just pass through (can't sort at compile time)
-        std::uint16_t array_buf = visit(args.nodes[0]);
-        node_buffers_[node] = array_buf;
-        return array_buf;
+        std::uint16_t array_buf = visit(args.nodes[0]).buffer;
+        return cache_and_return(node, TypedValue::signal(array_buf));
     }
 
     // Extract literal values
@@ -1185,17 +1112,15 @@ std::uint16_t CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
             values.push_back({static_cast<float>(elem_node.as_number()), elem});
         } else {
             // Non-literal element - can't sort at compile time
-            std::uint16_t array_buf = visit(args.nodes[0]);
-            node_buffers_[node] = array_buf;
-            return array_buf;
+            std::uint16_t array_buf = visit(args.nodes[0]).buffer;
+            return cache_and_return(node, TypedValue::signal(array_buf));
         }
         elem = ast_->arena[elem].next_sibling;
     }
 
     if (values.empty()) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
 
     // Sort by value
@@ -1208,49 +1133,46 @@ std::uint16_t CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
         std::uint16_t buf = emit_push_const(buffers_, instructions_, val);
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
         result_buffers.push_back(buf);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // normalize(array) - scale to 0-1 range
-std::uint16_t CodeGenerator::handle_normalize_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_normalize_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E170", "normalize() requires 1 argument: normalize(array)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
         // Single element normalizes to 0 (or could be 1, convention varies)
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.size() <= 1) {
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.size() <= 1) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
 
     // Find min
-    std::uint16_t min_buf = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
-        min_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MIN, min_buf, buffers[i]);
+    std::uint16_t min_buf = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
+        min_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MIN, min_buf, elem_bufs[i]);
     }
 
     // Find max
-    std::uint16_t max_buf = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
-        max_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MAX, max_buf, buffers[i]);
+    std::uint16_t max_buf = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
+        max_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MAX, max_buf, elem_bufs[i]);
     }
 
     // range = max - min
@@ -1258,51 +1180,48 @@ std::uint16_t CodeGenerator::handle_normalize_call(NodeIndex node, const Node& n
 
     // Normalize each element: (elem - min) / range
     std::vector<std::uint16_t> result_buffers;
-    for (auto buf : buffers) {
+    for (auto buf : elem_bufs) {
         std::uint16_t shifted = emit_binary_op(buffers_, instructions_, cedar::Opcode::SUB, buf, min_buf);
         std::uint16_t normalized = emit_binary_op(buffers_, instructions_, cedar::Opcode::DIV, shifted, range_buf);
         result_buffers.push_back(normalized);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // scale(array, lo, hi) - map to new range
-std::uint16_t CodeGenerator::handle_scale_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_scale_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 3);
     if (!args.valid) {
         error("E171", "scale() requires 3 arguments: scale(array, lo, hi)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
-    std::uint16_t array_buf = visit(args.nodes[0]);
-    std::uint16_t lo_buf = visit(args.nodes[1]);
-    std::uint16_t hi_buf = visit(args.nodes[2]);
+    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
+    std::uint16_t lo_buf = visit(args.nodes[1]).buffer;
+    std::uint16_t hi_buf = visit(args.nodes[2]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
         // Single element - just return lo (or could interpolate)
-        node_buffers_[node] = lo_buf;
-        return lo_buf;
+        return cache_and_return(node, TypedValue::signal(lo_buf));
     }
 
-    auto buffers = get_multi_buffers(args.nodes[0]);
-    if (buffers.size() <= 1) {
-        node_buffers_[node] = lo_buf;
-        return lo_buf;
+    auto elem_bufs = get_multi_buffers(args.nodes[0]);
+    if (elem_bufs.size() <= 1) {
+        return cache_and_return(node, TypedValue::signal(lo_buf));
     }
 
     // First normalize to 0-1
     // Find min
-    std::uint16_t min_buf = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
-        min_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MIN, min_buf, buffers[i]);
+    std::uint16_t min_buf = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
+        min_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MIN, min_buf, elem_bufs[i]);
     }
 
     // Find max
-    std::uint16_t max_buf = buffers[0];
-    for (std::size_t i = 1; i < buffers.size(); ++i) {
-        max_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MAX, max_buf, buffers[i]);
+    std::uint16_t max_buf = elem_bufs[0];
+    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
+        max_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MAX, max_buf, elem_bufs[i]);
     }
 
     // range = max - min
@@ -1312,7 +1231,7 @@ std::uint16_t CodeGenerator::handle_scale_call(NodeIndex node, const Node& n) {
 
     // Scale each element: ((elem - min) / src_range) * dst_range + lo
     std::vector<std::uint16_t> result_buffers;
-    for (auto buf : buffers) {
+    for (auto buf : elem_bufs) {
         std::uint16_t shifted = emit_binary_op(buffers_, instructions_, cedar::Opcode::SUB, buf, min_buf);
         std::uint16_t normalized = emit_binary_op(buffers_, instructions_, cedar::Opcode::DIV, shifted, src_range);
         std::uint16_t scaled = emit_binary_op(buffers_, instructions_, cedar::Opcode::MUL, normalized, dst_range);
@@ -1320,8 +1239,7 @@ std::uint16_t CodeGenerator::handle_scale_call(NodeIndex node, const Node& n) {
         result_buffers.push_back(result);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // ============================================================================
@@ -1329,11 +1247,11 @@ std::uint16_t CodeGenerator::handle_scale_call(NodeIndex node, const Node& n) {
 // ============================================================================
 
 // linspace(start, end, n) - N evenly spaced values
-std::uint16_t CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 3);
     if (!args.valid) {
         error("E172", "linspace() requires 3 arguments: linspace(start, end, n)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // All arguments must be compile-time constants
@@ -1343,7 +1261,7 @@ std::uint16_t CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n)
 
     if (!start_val || !end_val || !n_val) {
         error("E173", "linspace() arguments must be compile-time constants", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     float start = static_cast<float>(*start_val);
@@ -1352,8 +1270,7 @@ std::uint16_t CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n)
 
     if (count <= 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
 
     std::vector<std::uint16_t> result_buffers;
@@ -1363,35 +1280,33 @@ std::uint16_t CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n)
         std::uint16_t buf = emit_push_const(buffers_, instructions_, val);
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
         result_buffers.push_back(buf);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // random(n) - N random values (deterministic by path)
-std::uint16_t CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 1);
     if (!args.valid) {
         error("E174", "random() requires 1 argument: random(n)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto n_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
     if (!n_val) {
         error("E175", "random() argument must be a compile-time constant",
               ast_->arena[args.nodes[0]].location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     int count = static_cast<int>(*n_val);
     if (count <= 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
 
     // Use semantic path hash as seed for deterministic random values
@@ -1406,21 +1321,20 @@ std::uint16_t CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
         std::uint16_t buf = emit_push_const(buffers_, instructions_, val);
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
         result_buffers.push_back(buf);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 // harmonics(fundamental, n) - harmonic series
-std::uint16_t CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2);
     if (!args.valid) {
         error("E176", "harmonics() requires 2 arguments: harmonics(fundamental, n)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     auto fund_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
@@ -1428,7 +1342,7 @@ std::uint16_t CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n
 
     if (!fund_val || !n_val) {
         error("E177", "harmonics() arguments must be compile-time constants", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     float fundamental = static_cast<float>(*fund_val);
@@ -1436,8 +1350,7 @@ std::uint16_t CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n
 
     if (count <= 0) {
         std::uint16_t zero = emit_zero(buffers_, instructions_);
-        node_buffers_[node] = zero;
-        return zero;
+        return cache_and_return(node, TypedValue::signal(zero));
     }
 
     std::vector<std::uint16_t> result_buffers;
@@ -1446,13 +1359,12 @@ std::uint16_t CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n
         std::uint16_t buf = emit_push_const(buffers_, instructions_, harmonic);
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
         result_buffers.push_back(buf);
     }
 
-    return finalize_result(this, buffers_, instructions_, node, std::move(result_buffers),
-                           node_buffers_, multi_buffers_);
+    return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
 } // namespace akkado

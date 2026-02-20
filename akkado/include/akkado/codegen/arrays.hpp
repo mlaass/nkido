@@ -69,47 +69,57 @@ inline CallArgs extract_call_args(
 
 // Finalize multi-buffer array result:
 // - Empty vector: emit zero constant
-// - Single element: return directly
-// - Multiple elements: register as multi-buffer
-// Returns the first buffer index for the result
+// - Single element: return as Signal
+// - Multiple elements: return as Array
+// Returns a TypedValue for the result
 [[gnu::always_inline]]
-inline std::uint16_t finalize_array_result(
-    CodeGenerator& cg,
-    BufferAllocator& buffers,
-    std::vector<cedar::Instruction>& instructions,
+inline TypedValue finalize_array_result(
     NodeIndex node,
     std::vector<std::uint16_t> result_buffers,
-    std::unordered_map<NodeIndex, std::uint16_t>& node_buffers,
-    std::unordered_map<NodeIndex, std::vector<std::uint16_t>>& multi_buffers
+    std::unordered_map<NodeIndex, TypedValue>& node_types,
+    BufferAllocator& buffers,
+    std::vector<cedar::Instruction>& instructions
 ) {
     if (result_buffers.empty()) {
         std::uint16_t zero = emit_zero(buffers, instructions);
-        node_buffers[node] = zero;
-        return zero;
+        auto tv = TypedValue::signal(zero);
+        node_types[node] = tv;
+        return tv;
     }
 
     if (result_buffers.size() == 1) {
-        node_buffers[node] = result_buffers[0];
-        return result_buffers[0];
+        auto tv = TypedValue::signal(result_buffers[0]);
+        node_types[node] = tv;
+        return tv;
     }
 
-    // Register as multi-buffer and return first
     std::uint16_t first_buf = result_buffers[0];
-    multi_buffers[node] = std::move(result_buffers);
-    node_buffers[node] = first_buf;
-    return first_buf;
+    std::vector<TypedValue> elements;
+    elements.reserve(result_buffers.size());
+    for (auto buf : result_buffers) {
+        elements.push_back(TypedValue::signal(buf));
+    }
+    auto tv = TypedValue::make_array(std::move(elements), first_buf);
+    node_types[node] = tv;
+    return tv;
 }
 
 // Get input buffers from a node (handles both single and multi-buffer sources)
+// Checks the node_types map for Array typed values
 [[gnu::always_inline]]
 inline std::vector<std::uint16_t> get_input_buffers(
     NodeIndex array_node,
     std::uint16_t single_buf,
-    const std::unordered_map<NodeIndex, std::vector<std::uint16_t>>& multi_buffers
+    const std::unordered_map<NodeIndex, TypedValue>& node_types
 ) {
-    auto it = multi_buffers.find(array_node);
-    if (it != multi_buffers.end() && it->second.size() > 1) {
-        return it->second;
+    auto it = node_types.find(array_node);
+    if (it != node_types.end() && it->second.type == ValueType::Array && it->second.array) {
+        std::vector<std::uint16_t> bufs;
+        bufs.reserve(it->second.array->elements.size());
+        for (const auto& elem : it->second.array->elements) {
+            bufs.push_back(elem.buffer);
+        }
+        if (bufs.size() > 1) return bufs;
     }
     return {single_buf};
 }

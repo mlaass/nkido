@@ -2,6 +2,7 @@
 
 #include "builtins.hpp"
 #include "ast.hpp"
+#include "typed_value.hpp"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -152,6 +153,9 @@ struct Symbol {
 
     // Only valid if kind == Record
     std::shared_ptr<RecordTypeInfo> record_type;
+
+    // Full typed value from codegen (for pipe bindings, patterns, records)
+    std::optional<TypedValue> typed_value;
 };
 
 /// Scoped symbol table with lexical scoping

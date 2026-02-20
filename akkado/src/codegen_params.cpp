@@ -44,12 +44,12 @@ static NodeIndex next_arg(const AstArena& arena, NodeIndex arg_node) {
 // param(name, default, min?, max?) - Continuous parameter (slider)
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_param_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_param_call(NodeIndex node, const Node& n) {
     // 1. Extract name argument (must be string literal)
     NodeIndex name_arg = n.first_child;
     if (name_arg == NULL_NODE) {
         error("E150", "param() requires a name argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex name_value = unwrap_argument(ast_->arena, name_arg);
@@ -57,7 +57,7 @@ std::uint16_t CodeGenerator::handle_param_call(NodeIndex node, const Node& n) {
 
     if (name_node.type != NodeType::StringLit) {
         error("E151", "param() name must be a string literal", name_node.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::string name = std::string(name_node.as_string());
@@ -116,7 +116,7 @@ std::uint16_t CodeGenerator::handle_param_call(NodeIndex node, const Node& n) {
     std::uint16_t fallback_buf = buffers_.allocate();
     if (fallback_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction push_inst{};
@@ -133,7 +133,7 @@ std::uint16_t CodeGenerator::handle_param_call(NodeIndex node, const Node& n) {
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction env_inst{};
@@ -146,20 +146,19 @@ std::uint16_t CodeGenerator::handle_param_call(NodeIndex node, const Node& n) {
     env_inst.state_id = name_hash;       // Parameter lookup key
     emit(env_inst);
 
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 // ============================================================================
 // button(name) - Momentary button (1 while pressed, 0 otherwise)
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_button_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_button_call(NodeIndex node, const Node& n) {
     // 1. Extract name
     NodeIndex name_arg = n.first_child;
     if (name_arg == NULL_NODE) {
         error("E152", "button() requires a name argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex name_value = unwrap_argument(ast_->arena, name_arg);
@@ -167,7 +166,7 @@ std::uint16_t CodeGenerator::handle_button_call(NodeIndex node, const Node& n) {
 
     if (name_node.type != NodeType::StringLit) {
         error("E153", "button() name must be a string literal", name_node.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::string name = std::string(name_node.as_string());
@@ -194,7 +193,7 @@ std::uint16_t CodeGenerator::handle_button_call(NodeIndex node, const Node& n) {
     std::uint16_t fallback_buf = buffers_.allocate();
     if (fallback_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction push_inst{};
@@ -211,7 +210,7 @@ std::uint16_t CodeGenerator::handle_button_call(NodeIndex node, const Node& n) {
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction env_inst{};
@@ -224,20 +223,19 @@ std::uint16_t CodeGenerator::handle_button_call(NodeIndex node, const Node& n) {
     env_inst.state_id = name_hash;
     emit(env_inst);
 
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 // ============================================================================
 // toggle(name, default?) - Boolean toggle (click to flip)
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_toggle_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_toggle_call(NodeIndex node, const Node& n) {
     // 1. Extract name
     NodeIndex name_arg = n.first_child;
     if (name_arg == NULL_NODE) {
         error("E154", "toggle() requires a name argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex name_value = unwrap_argument(ast_->arena, name_arg);
@@ -245,7 +243,7 @@ std::uint16_t CodeGenerator::handle_toggle_call(NodeIndex node, const Node& n) {
 
     if (name_node.type != NodeType::StringLit) {
         error("E155", "toggle() name must be a string literal", name_node.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::string name = std::string(name_node.as_string());
@@ -280,7 +278,7 @@ std::uint16_t CodeGenerator::handle_toggle_call(NodeIndex node, const Node& n) {
     std::uint16_t fallback_buf = buffers_.allocate();
     if (fallback_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction push_inst{};
@@ -297,7 +295,7 @@ std::uint16_t CodeGenerator::handle_toggle_call(NodeIndex node, const Node& n) {
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction env_inst{};
@@ -310,8 +308,7 @@ std::uint16_t CodeGenerator::handle_toggle_call(NodeIndex node, const Node& n) {
     env_inst.state_id = name_hash;
     emit(env_inst);
 
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 // ============================================================================
@@ -319,12 +316,12 @@ std::uint16_t CodeGenerator::handle_toggle_call(NodeIndex node, const Node& n) {
 // Returns integer index (0, 1, 2, ...) of selected option
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
     // 1. Extract name
     NodeIndex name_arg = n.first_child;
     if (name_arg == NULL_NODE) {
         error("E156", "dropdown() requires a name argument", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     NodeIndex name_value = unwrap_argument(ast_->arena, name_arg);
@@ -332,7 +329,7 @@ std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
 
     if (name_node.type != NodeType::StringLit) {
         error("E157", "dropdown() name must be a string literal", name_node.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     std::string name = std::string(name_node.as_string());
@@ -348,7 +345,7 @@ std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
 
         if (opt_node.type != NodeType::StringLit) {
             error("E158", "dropdown() options must be string literals", opt_node.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         options.push_back(std::string(opt_node.as_string()));
@@ -358,7 +355,7 @@ std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
     // 3. Validate at least one option
     if (options.empty()) {
         error("E159", "dropdown() requires at least one option", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // 4. Record declaration (deduplicate)
@@ -383,7 +380,7 @@ std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
     std::uint16_t fallback_buf = buffers_.allocate();
     if (fallback_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction push_inst{};
@@ -400,7 +397,7 @@ std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     cedar::Instruction env_inst{};
@@ -413,8 +410,7 @@ std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
     env_inst.state_id = name_hash;
     emit(env_inst);
 
-    node_buffers_[node] = out_buf;
-    return out_buf;
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 }  // namespace akkado

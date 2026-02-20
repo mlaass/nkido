@@ -46,13 +46,10 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     filename_ = std::string(filename);
     path_stack_.clear();
     anonymous_counter_ = 0;
-    node_buffers_.clear();
+    node_types_.clear();
     call_counters_.clear();
     param_function_refs_.clear();
-    multi_buffers_.clear();
-    pattern_state_ids_.clear();
     polyphonic_pattern_nodes_.clear();
-    array_lengths_.clear();
     current_source_loc_ = {};
     options_ = CompilerOptions{};  // Reset compiler options
 
@@ -88,12 +85,12 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
             std::move(param_decls_), std::move(viz_decls_), success};
 }
 
-std::uint16_t CodeGenerator::visit(NodeIndex node) {
-    if (node == NULL_NODE) return BufferAllocator::BUFFER_UNUSED;
+TypedValue CodeGenerator::visit(NodeIndex node) {
+    if (node == NULL_NODE) return TypedValue::void_val();
 
     // Check if already visited
-    auto it = node_buffers_.find(node);
-    if (it != node_buffers_.end()) {
+    auto it = node_types_.find(node);
+    if (it != node_types_.end()) {
         return it->second;
     }
 
@@ -106,20 +103,19 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
         case NodeType::Program: {
             // Visit all statements
             NodeIndex child = n.first_child;
-            std::uint16_t last_buffer = BufferAllocator::BUFFER_UNUSED;
+            TypedValue last = TypedValue::void_val();
             while (child != NULL_NODE) {
-                last_buffer = visit(child);
+                last = visit(child);
                 child = ast_->arena[child].next_sibling;
             }
-            return last_buffer;
+            return last;
         }
 
         case NodeType::StringLit: {
             // String literals are compile-time only (used for match patterns, osc type, etc.)
-            // They don't have a runtime representation - return BUFFER_UNUSED.
-            // The actual string value is accessed via as_string() during compile-time resolution.
-            node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
-            return BufferAllocator::BUFFER_UNUSED;
+            // They don't have a runtime representation - return string TypedValue.
+            auto tv = TypedValue::string_val(0);
+            return cache_and_return(node, tv);
         }
 
         case NodeType::NumberLit: {
@@ -127,7 +123,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             std::uint16_t out = buffers_.allocate();
             if (out == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             cedar::Instruction inst{};
@@ -143,8 +139,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             encode_const_value(inst, value);
 
             emit(inst);
-            node_buffers_[node] = out;
-            return out;
+            return cache_and_return(node, TypedValue::number(out));
         }
 
         case NodeType::BoolLit: {
@@ -152,7 +147,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             std::uint16_t out = buffers_.allocate();
             if (out == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             cedar::Instruction inst{};
@@ -167,8 +162,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             encode_const_value(inst, value);
 
             emit(inst);
-            node_buffers_[node] = out;
-            return out;
+            return cache_and_return(node, TypedValue::number(out));
         }
 
         case NodeType::PitchLit: {
@@ -178,10 +172,9 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 buffers_, instructions_, midi_value);
             if (freq_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
-            node_buffers_[node] = freq_buf;
-            return freq_buf;
+            return cache_and_return(node, TypedValue::signal(freq_buf));
         }
 
         case NodeType::ChordLit: {
@@ -193,10 +186,9 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 buffers_, instructions_, midi_value);
             if (freq_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
-            node_buffers_[node] = freq_buf;
-            return freq_buf;
+            return cache_and_return(node, TypedValue::signal(freq_buf));
         }
 
         case NodeType::ArrayLit: {
@@ -207,7 +199,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 std::uint16_t out = buffers_.allocate();
                 if (out == BufferAllocator::BUFFER_UNUSED) {
                     error("E101", "Buffer pool exhausted", n.location);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::error_val();
                 }
                 cedar::Instruction inst{};
                 inst.opcode = cedar::Opcode::PUSH_CONST;
@@ -218,29 +210,27 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 inst.inputs[3] = 0xFFFF;
                 encode_const_value(inst, 0.0f);
                 emit(inst);
-                node_buffers_[node] = out;
-                return out;
+                return cache_and_return(node, TypedValue::signal(out));
             }
 
-            // Visit all elements and collect buffers
-            std::vector<std::uint16_t> element_buffers;
+            // Visit all elements and collect TypedValues
+            std::vector<TypedValue> elements;
             NodeIndex elem = first_elem;
             while (elem != NULL_NODE) {
-                std::uint16_t elem_buf = visit(elem);
-                element_buffers.push_back(elem_buf);
+                TypedValue elem_tv = visit(elem);
+                elements.push_back(elem_tv);
                 elem = ast_->arena[elem].next_sibling;
             }
 
-            if (element_buffers.size() == 1) {
+            if (elements.size() == 1) {
                 // Single element - return directly
-                node_buffers_[node] = element_buffers[0];
-                return element_buffers[0];
+                return cache_and_return(node, elements[0]);
             }
 
-            // Multi-element array - register as multi-buffer
-            std::uint16_t first_buf = register_multi_buffer(node, std::move(element_buffers));
-            node_buffers_[node] = first_buf;
-            return first_buf;
+            // Multi-element array
+            std::uint16_t first_buf = elements[0].buffer;
+            auto tv = TypedValue::make_array(std::move(elements), first_buf);
+            return cache_and_return(node, tv);
         }
 
         case NodeType::Index: {
@@ -248,32 +238,29 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             NodeIndex arr_node = n.first_child;
             if (arr_node == NULL_NODE) {
                 error("E111", "Invalid index expression: no array", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             // Get the index node (second child via next_sibling)
             NodeIndex idx_node = ast_->arena[arr_node].next_sibling;
             if (idx_node == NULL_NODE) {
                 error("E111", "Invalid index expression: no index", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
-            // Visit array first to populate multi_buffers_ / array_lengths_
-            std::uint16_t arr_buf = visit(arr_node);
+            // Visit array first to populate type info
+            TypedValue arr_tv = visit(arr_node);
 
             // Check if we have a compile-time known array
             std::uint8_t arr_len = 0;
-            if (is_multi_buffer(arr_node)) {
-                auto buffers = get_multi_buffers(arr_node);
-                arr_len = static_cast<std::uint8_t>(buffers.size());
-            } else if (is_array_buffer(arr_buf)) {
-                arr_len = get_array_length(arr_buf);
+            if (arr_tv.type == ValueType::Array && arr_tv.array) {
+                arr_len = static_cast<std::uint8_t>(arr_tv.array->elements.size());
             }
 
             // Check if index is a constant number
             const Node& idx = ast_->arena[idx_node];
             if (idx.type == NodeType::NumberLit && arr_len > 0) {
-                // Constant index - use ARRAY_UNPACK or direct multi-buffer access
+                // Constant index - direct array element access
                 int idx_val = static_cast<int>(idx.as_number());
 
                 // Handle negative indices (wrap)
@@ -283,25 +270,23 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     idx_val = idx_val % arr_len;
                 }
 
-                // For multi-buffer arrays (compile-time unrolled), return the specific buffer
-                if (is_multi_buffer(arr_node)) {
-                    auto buffers = get_multi_buffers(arr_node);
-                    std::uint16_t result = buffers[static_cast<std::size_t>(idx_val)];
-                    node_buffers_[node] = result;
-                    return result;
+                // For compile-time unrolled arrays, return the specific element
+                if (arr_tv.type == ValueType::Array && arr_tv.array) {
+                    TypedValue result = arr_tv.array->elements[static_cast<std::size_t>(idx_val)];
+                    return cache_and_return(node, result);
                 }
 
                 // For runtime arrays, emit ARRAY_UNPACK
                 std::uint16_t out = buffers_.allocate();
                 if (out == BufferAllocator::BUFFER_UNUSED) {
                     error("E101", "Buffer pool exhausted", n.location);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::error_val();
                 }
 
                 cedar::Instruction unpack_inst{};
                 unpack_inst.opcode = cedar::Opcode::ARRAY_UNPACK;
                 unpack_inst.out_buffer = out;
-                unpack_inst.inputs[0] = arr_buf;
+                unpack_inst.inputs[0] = arr_tv.buffer;
                 unpack_inst.inputs[1] = 0xFFFF;
                 unpack_inst.inputs[2] = 0xFFFF;
                 unpack_inst.inputs[3] = 0xFFFF;
@@ -310,16 +295,16 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 unpack_inst.state_id = 0;
                 emit(unpack_inst);
 
-                node_buffers_[node] = out;
-                return out;
+                return cache_and_return(node, TypedValue::signal(out));
             }
 
             // Dynamic index - need to emit ARRAY_INDEX for per-sample indexing
             // This requires the array to be packed into a single buffer
+            std::uint16_t arr_buf = arr_tv.buffer;
 
-            // If we have a multi-buffer array, we need to pack it first using ARRAY_PACK
-            if (is_multi_buffer(arr_node)) {
-                auto buffers = get_multi_buffers(arr_node);
+            // If we have an array TypedValue, we need to pack it first using ARRAY_PACK
+            if (arr_tv.type == ValueType::Array && arr_tv.array) {
+                auto buffers = buffers_of(arr_tv);
                 arr_len = static_cast<std::uint8_t>(buffers.size());
 
                 // Pack multi-buffer into single array buffer
@@ -327,7 +312,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 std::uint16_t packed_buf = buffers_.allocate();
                 if (packed_buf == BufferAllocator::BUFFER_UNUSED) {
                     error("E101", "Buffer pool exhausted", n.location);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::error_val();
                 }
 
                 // Pack first 5 elements
@@ -347,7 +332,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     std::uint16_t new_packed = buffers_.allocate();
                     if (new_packed == BufferAllocator::BUFFER_UNUSED) {
                         error("E101", "Buffer pool exhausted", n.location);
-                        return BufferAllocator::BUFFER_UNUSED;
+                        return TypedValue::error_val();
                     }
 
                     cedar::Instruction push_inst{};
@@ -366,22 +351,21 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 }
 
                 arr_buf = packed_buf;
-                set_array_length(arr_buf, arr_len);
             }
 
             // Now emit ARRAY_INDEX for dynamic per-sample indexing
-            std::uint16_t idx_buf = visit(idx_node);
+            TypedValue idx_tv = visit(idx_node);
             std::uint16_t out = buffers_.allocate();
             if (out == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             // Create a constant buffer with the array length for ARRAY_INDEX
             std::uint16_t len_buf = buffers_.allocate();
             if (len_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             cedar::Instruction len_inst{};
@@ -398,7 +382,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             index_inst.opcode = cedar::Opcode::ARRAY_INDEX;
             index_inst.out_buffer = out;
             index_inst.inputs[0] = arr_buf;
-            index_inst.inputs[1] = idx_buf;
+            index_inst.inputs[1] = idx_tv.buffer;
             index_inst.inputs[2] = len_buf;  // Array length
             index_inst.inputs[3] = 0xFFFF;
             index_inst.inputs[4] = 0xFFFF;
@@ -406,8 +390,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             index_inst.state_id = 0;
             emit(index_inst);
 
-            node_buffers_[node] = out;
-            return out;
+            return cache_and_return(node, TypedValue::signal(out));
         }
 
         case NodeType::Identifier: {
@@ -416,26 +399,33 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
             if (!sym) {
                 error("E102", "Undefined identifier: '" + name + "'", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             if (sym->kind == SymbolKind::Variable || sym->kind == SymbolKind::Parameter) {
                 // Return the buffer index from the symbol table
-                // (should have been set during Assignment processing)
                 std::uint16_t buf = sym->buffer_index;
-                node_buffers_[node] = buf;
+                TypedValue tv = TypedValue::signal(buf);
 
                 // Propagate multi-buffer info from symbol to this identifier node
                 if (!sym->multi_buffers.empty()) {
-                    register_multi_buffer(node, sym->multi_buffers);
+                    std::vector<TypedValue> elements;
+                    for (auto b : sym->multi_buffers) {
+                        elements.push_back(TypedValue::signal(b));
+                    }
+                    tv = TypedValue::make_array(std::move(elements), buf);
                 }
 
-                return buf;
+                // Check if symbol has a typed_value (from pipe binding)
+                if (sym->typed_value) {
+                    tv = *sym->typed_value;
+                }
+
+                return cache_and_return(node, tv);
             }
 
             if (sym->kind == SymbolKind::Pattern) {
                 // Pattern variable - generate code for this pattern
-                // Use the stored pattern_node to generate code
                 return handle_pattern_reference(name, sym->pattern.pattern_node, n.location);
             }
 
@@ -443,9 +433,13 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 if (sym->array.source_node == NULL_NODE) {
                     // Synthetic array (rest param) — buffers already computed
                     if (!sym->array.buffer_indices.empty()) {
-                        register_multi_buffer(node, sym->array.buffer_indices);
-                        node_buffers_[node] = sym->array.buffer_indices[0];
-                        return sym->array.buffer_indices[0];
+                        std::vector<TypedValue> elements;
+                        for (auto b : sym->array.buffer_indices) {
+                            elements.push_back(TypedValue::signal(b));
+                        }
+                        auto tv = TypedValue::make_array(std::move(elements),
+                                                          sym->array.buffer_indices[0]);
+                        return cache_and_return(node, tv);
                     }
                     // Empty rest → zero
                     auto zero_buf = buffers_.allocate();
@@ -458,50 +452,34 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     push_zero.inputs[3] = 0xFFFF;
                     codegen::encode_const_value(push_zero, 0.0f);
                     emit(push_zero);
-                    node_buffers_[node] = zero_buf;
-                    return zero_buf;
+                    return cache_and_return(node, TypedValue::signal(zero_buf));
                 }
 
                 // Array variable - visit the source node to generate array code
-                std::uint16_t first_buf = visit(sym->array.source_node);
-
-                // Propagate multi-buffer association from source to this identifier
-                if (is_multi_buffer(sym->array.source_node)) {
-                    auto buffers = get_multi_buffers(sym->array.source_node);
-                    register_multi_buffer(node, buffers);
-                }
-
-                node_buffers_[node] = first_buf;
-                return first_buf;
+                TypedValue source_tv = visit(sym->array.source_node);
+                return cache_and_return(node, source_tv);
             }
 
             if (sym->kind == SymbolKind::Record && sym->record_type) {
                 // Record variable - check if we've already generated code for it
-                auto rec_it = record_fields_.find(sym->record_type->source_node);
-                if (rec_it != record_fields_.end()) {
-                    // Already generated - return first field buffer
-                    if (!rec_it->second.empty()) {
-                        std::uint16_t first_buf = rec_it->second.begin()->second;
-                        node_buffers_[node] = first_buf;
-                        return first_buf;
-                    }
+                auto type_it = node_types_.find(sym->record_type->source_node);
+                if (type_it != node_types_.end() && type_it->second.type == ValueType::Record) {
+                    return cache_and_return(node, type_it->second);
                 }
 
                 // Not yet generated - visit the source node
-                std::uint16_t first_buf = visit(sym->record_type->source_node);
-                node_buffers_[node] = first_buf;
-                return first_buf;
+                TypedValue source_tv = visit(sym->record_type->source_node);
+                return cache_and_return(node, source_tv);
             }
 
             if (sym->kind == SymbolKind::FunctionValue || sym->kind == SymbolKind::UserFunction) {
                 // Function values are handled specially in map() and other HOFs
-                // Return BUFFER_UNUSED since functions don't have runtime values
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::function_val();
             }
 
             // Builtins without args? Shouldn't happen for identifiers
             error("E103", "Cannot use builtin as value: '" + name + "'", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
         }
 
         case NodeType::Assignment: {
@@ -511,7 +489,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
             if (value_idx == NULL_NODE) {
                 error("E104", "Invalid assignment", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             const std::string& var_name = n.as_identifier();
@@ -521,15 +499,14 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             if (sym && sym->kind == SymbolKind::Pattern) {
                 // Pattern assignments don't emit code here - the pattern is
                 // evaluated when the variable is referenced
-                node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
-                return BufferAllocator::BUFFER_UNUSED;
+                return cache_and_return(node, TypedValue::void_val());
             }
 
             // Push variable name onto path for semantic IDs
             push_path(var_name);
 
             // Generate code for the value expression
-            std::uint16_t value_buffer = visit(value_idx);
+            TypedValue value_tv = visit(value_idx);
 
             pop_path();
 
@@ -537,27 +514,35 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             if (pending_function_ref_) {
                 symbols_->define_function_value(var_name, *pending_function_ref_);
                 pending_function_ref_ = std::nullopt;
-                node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
-                return BufferAllocator::BUFFER_UNUSED;
+                return cache_and_return(node, TypedValue::function_val());
             }
 
             // Update symbol table with the buffer index and multi-buffer info
             if (sym && (sym->kind == SymbolKind::Variable || sym->kind == SymbolKind::Parameter)) {
-                if (is_multi_buffer(value_idx)) {
+                if (value_tv.type == ValueType::Array && value_tv.array) {
                     Symbol new_sym;
                     new_sym.kind = SymbolKind::Variable;
                     new_sym.name = var_name;
                     new_sym.name_hash = fnv1a_hash(var_name);
-                    new_sym.buffer_index = value_buffer;
-                    new_sym.multi_buffers = get_multi_buffers(value_idx);
+                    new_sym.buffer_index = value_tv.buffer;
+                    new_sym.multi_buffers = buffers_of(value_tv);
+                    new_sym.typed_value = value_tv;
+                    symbols_->define(new_sym);
+                } else if (value_tv.type == ValueType::Record || value_tv.type == ValueType::Pattern) {
+                    // Preserve rich type info through symbol table
+                    Symbol new_sym;
+                    new_sym.kind = SymbolKind::Variable;
+                    new_sym.name = var_name;
+                    new_sym.name_hash = fnv1a_hash(var_name);
+                    new_sym.buffer_index = value_tv.buffer;
+                    new_sym.typed_value = value_tv;
                     symbols_->define(new_sym);
                 } else {
-                    symbols_->define_variable(var_name, value_buffer);
+                    symbols_->define_variable(var_name, value_tv.buffer);
                 }
             }
 
-            node_buffers_[node] = value_buffer;
-            return value_buffer;
+            return cache_and_return(node, value_tv);
         }
 
         case NodeType::ConstDecl: {
@@ -567,7 +552,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
             if (value_idx == NULL_NODE) {
                 error("E104", "Invalid const declaration", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             // Evaluate at compile time using ConstEvaluator
@@ -582,7 +567,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             if (!const_val) {
                 error("E203", "Failed to evaluate const expression for '" + var_name + "'",
                       n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             // Store const value in symbol table
@@ -594,41 +579,44 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 std::uint16_t buf = codegen::emit_push_const(buffers_, instructions_, val);
                 if (buf == BufferAllocator::BUFFER_UNUSED) {
                     error("E101", "Buffer pool exhausted", n.location);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::error_val();
                 }
                 // Update symbol with buffer index
                 symbols_->define_variable(var_name, buf);
                 // Re-mark as const with value
-                auto sym = symbols_->lookup(var_name);
-                if (sym) {
-                    Symbol updated = *sym;
+                auto sym2 = symbols_->lookup(var_name);
+                if (sym2) {
+                    Symbol updated = *sym2;
                     updated.is_const = true;
                     updated.const_value = *const_val;
                     symbols_->define(updated);
                 }
                 source_locations_.push_back(n.location);
-                node_buffers_[node] = buf;
-                return buf;
+                return cache_and_return(node, TypedValue::number(buf));
             } else {
                 // Array const value
                 const auto& arr = std::get<std::vector<double>>(*const_val);
-                std::vector<std::uint16_t> result_buffers;
+                std::vector<TypedValue> result_elements;
                 for (double v : arr) {
                     std::uint16_t buf = codegen::emit_push_const(buffers_, instructions_,
                                                                   static_cast<float>(v));
                     if (buf == BufferAllocator::BUFFER_UNUSED) {
                         error("E101", "Buffer pool exhausted", n.location);
-                        return BufferAllocator::BUFFER_UNUSED;
+                        return TypedValue::error_val();
                     }
                     source_locations_.push_back(n.location);
-                    result_buffers.push_back(buf);
+                    result_elements.push_back(TypedValue::number(buf));
                 }
 
-                // Register as multi-buffer and update symbol
-                std::uint16_t first_buf = result_buffers.empty() ?
-                    BufferAllocator::BUFFER_UNUSED : result_buffers[0];
-                if (!result_buffers.empty()) {
-                    register_multi_buffer(node, result_buffers);
+                // Register as array and update symbol
+                std::uint16_t first_buf = result_elements.empty() ?
+                    BufferAllocator::BUFFER_UNUSED : result_elements[0].buffer;
+                if (!result_elements.empty()) {
+                    std::vector<std::uint16_t> result_buffers;
+                    for (const auto& e : result_elements) result_buffers.push_back(e.buffer);
+
+                    auto tv = TypedValue::make_array(std::move(result_elements), first_buf);
+
                     Symbol sym{};
                     sym.kind = SymbolKind::Variable;
                     sym.name = var_name;
@@ -637,10 +625,11 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     sym.multi_buffers = std::move(result_buffers);
                     sym.is_const = true;
                     sym.const_value = *const_val;
+                    sym.typed_value = tv;
                     symbols_->define(sym);
+                    return cache_and_return(node, tv);
                 }
-                node_buffers_[node] = first_buf;
-                return first_buf;
+                return cache_and_return(node, TypedValue::void_val());
             }
         }
 
@@ -652,8 +641,6 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             SourceLocation call_loc = current_source_loc_;
 
             // Check user-defined functions FIRST (allows stdlib osc to work)
-            // This enables the stdlib osc() to be defined in user-space and
-            // also allows users to shadow stdlib definitions.
             auto sym = symbols_->lookup(func_name);
             if (sym && sym->kind == SymbolKind::UserFunction) {
                 return handle_user_function_call(node, n, sym->user_function);
@@ -665,7 +652,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             }
 
             // Dispatch table for special function handlers
-            using Handler = std::uint16_t (CodeGenerator::*)(NodeIndex, const Node&);
+            using Handler = TypedValue (CodeGenerator::*)(NodeIndex, const Node&);
             static const std::unordered_map<std::string_view, Handler> special_handlers = {
                 {"len",     &CodeGenerator::handle_len_call},
                 {"chord",   &CodeGenerator::handle_chord_call},
@@ -755,21 +742,21 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 NodeIndex arg = n.first_child;
                 if (arg == NULL_NODE) {
                     error("E135", "mtof() requires 1 argument", n.location);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::error_val();
                 }
 
                 const Node& arg_node = ast_->arena[arg];
                 NodeIndex midi_node = (arg_node.type == NodeType::Argument) ?
                                       arg_node.first_child : arg;
 
-                // Visit to populate multi_buffers_ map
-                (void)visit(midi_node);
+                // Visit to populate type info
+                TypedValue midi_tv = visit(midi_node);
 
                 // Check if input is multi-buffer (e.g., from chord())
-                if (is_multi_buffer(midi_node)) {
-                    auto midi_buffers = get_multi_buffers(midi_node);
-                    std::vector<std::uint16_t> freq_buffers;
-                    freq_buffers.reserve(midi_buffers.size());
+                if (midi_tv.type == ValueType::Array && midi_tv.array) {
+                    auto midi_buffers = buffers_of(midi_tv);
+                    std::vector<TypedValue> freq_elements;
+                    freq_elements.reserve(midi_buffers.size());
 
                     // Restore call location for emitting mtof instructions
                     current_source_loc_ = call_loc;
@@ -778,7 +765,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                         std::uint16_t freq_buf = buffers_.allocate();
                         if (freq_buf == BufferAllocator::BUFFER_UNUSED) {
                             error("E101", "Buffer pool exhausted", n.location);
-                            return BufferAllocator::BUFFER_UNUSED;
+                            return TypedValue::error_val();
                         }
 
                         cedar::Instruction mtof_inst{};
@@ -791,12 +778,12 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                         mtof_inst.state_id = 0;
                         emit(mtof_inst);
 
-                        freq_buffers.push_back(freq_buf);
+                        freq_elements.push_back(TypedValue::signal(freq_buf));
                     }
 
-                    std::uint16_t first_buf = register_multi_buffer(node, std::move(freq_buffers));
-                    node_buffers_[node] = first_buf;
-                    return first_buf;
+                    std::uint16_t first_buf = freq_elements[0].buffer;
+                    auto tv = TypedValue::make_array(std::move(freq_elements), first_buf);
+                    return cache_and_return(node, tv);
                 }
 
                 // Single buffer case - fall through to normal handling
@@ -806,7 +793,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
             if (!builtin) {
                 error("E107", "Unknown function: '" + func_name + "'", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             // For stateful functions, push path BEFORE visiting children
@@ -828,8 +815,8 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 if (arg_node.type == NodeType::Argument) {
                     arg_value = arg_node.first_child;
                 }
-                std::uint16_t buf = visit(arg_value);
-                arg_buffers.push_back(buf);
+                TypedValue arg_tv = visit(arg_value);
+                arg_buffers.push_back(arg_tv.buffer);
                 arg = ast_->arena[arg].next_sibling;
             }
 
@@ -899,10 +886,10 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     if (arg_n.type == NodeType::Identifier) {
                         const std::string& name = arg_n.as_identifier();
                         std::uint32_t param_hash = fnv1a_hash(name);
-                        auto it = param_multi_buffer_sources_.find(param_hash);
-                        if (it != param_multi_buffer_sources_.end()) {
+                        auto pit = param_multi_buffer_sources_.find(param_hash);
+                        if (pit != param_multi_buffer_sources_.end()) {
                             // This parameter was bound to a multi-buffer argument
-                            NodeIndex source_node = it->second;
+                            NodeIndex source_node = pit->second;
                             if (is_multi_buffer(source_node)) {
                                 expansion_arg_idx = static_cast<int>(i);
                                 expansion_buffers = get_multi_buffers(source_node);
@@ -919,7 +906,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
                 // If we have an expansion argument, generate N instances
                 if (expansion_arg_idx >= 0 && expansion_buffers.size() > 1) {
-                    std::vector<std::uint16_t> result_buffers;
+                    std::vector<TypedValue> result_elements;
                     std::size_t n_params = builtin->total_params();
 
                     for (std::size_t i = 0; i < expansion_buffers.size(); ++i) {
@@ -938,7 +925,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                                     error("E101", "Buffer pool exhausted", n.location);
                                     pop_path();
                                     if (pushed_path) pop_path();
-                                    return BufferAllocator::BUFFER_UNUSED;
+                                    return TypedValue::error_val();
                                 }
                                 cedar::Instruction push_inst{};
                                 push_inst.opcode = cedar::Opcode::PUSH_CONST;
@@ -959,7 +946,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                             error("E101", "Buffer pool exhausted", n.location);
                             pop_path();
                             if (pushed_path) pop_path();
-                            return BufferAllocator::BUFFER_UNUSED;
+                            return TypedValue::error_val();
                         }
 
                         // Build instruction for this instance
@@ -984,26 +971,26 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                         inst.state_id = compute_state_id();
                         emit(inst);
 
-                        result_buffers.push_back(inst_out);
+                        result_elements.push_back(TypedValue::signal(inst_out));
                         pop_path();
                     }
 
                     // Pop the outer stateful path
                     if (pushed_path) pop_path();
 
-                    // Register as multi-buffer result
-                    std::uint16_t first_buf = register_multi_buffer(node, std::move(result_buffers));
+                    // Build array result
+                    std::uint16_t first_buf = result_elements[0].buffer;
+                    auto tv = TypedValue::make_array(std::move(result_elements), first_buf);
 
                     // If the expansion was from a stereo source, also register as stereo
                     if (is_stereo_expansion) {
-                        auto bufs = get_multi_buffers(node);
+                        auto bufs = buffers_of(tv);
                         if (bufs.size() == 2) {
                             stereo_outputs_[node] = {bufs[0], bufs[1]};
                         }
                     }
 
-                    node_buffers_[node] = first_buf;
-                    return first_buf;
+                    return cache_and_return(node, tv);
                 }
             }
 
@@ -1020,7 +1007,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                     if (default_buf == BufferAllocator::BUFFER_UNUSED) {
                         error("E101", "Buffer pool exhausted", n.location);
                         if (pushed_path) pop_path();
-                        return BufferAllocator::BUFFER_UNUSED;
+                        return TypedValue::error_val();
                     }
 
                     cedar::Instruction push_inst{};
@@ -1044,7 +1031,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             if (out == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
                 if (pushed_path) pop_path();
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             // Build instruction
@@ -1110,8 +1097,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
             }
 
             emit(inst);
-            node_buffers_[node] = out;
-            return out;
+            return cache_and_return(node, TypedValue::signal(out));
         }
 
         case NodeType::BinaryOp: {
@@ -1123,16 +1109,16 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
             if (lhs == NULL_NODE || rhs == NULL_NODE) {
                 error("E108", "Invalid binary operation", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
-            std::uint16_t lhs_buf = visit(lhs);
-            std::uint16_t rhs_buf = visit(rhs);
+            TypedValue lhs_tv = visit(lhs);
+            TypedValue rhs_tv = visit(rhs);
 
             std::uint16_t out = buffers_.allocate();
             if (out == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::error_val();
             }
 
             // Map BinOp to opcode
@@ -1145,55 +1131,53 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
                 case BinOp::Pow: opcode = cedar::Opcode::POW; break;
                 default:
                     error("E109", "Unknown binary operator", n.location);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::error_val();
             }
 
-            emit(cedar::Instruction::make_binary(opcode, out, lhs_buf, rhs_buf));
-            node_buffers_[node] = out;
-            return out;
+            emit(cedar::Instruction::make_binary(opcode, out, lhs_tv.buffer, rhs_tv.buffer));
+            return cache_and_return(node, TypedValue::signal(out));
         }
 
         case NodeType::Hole: {
             // Holes should have been substituted by the analyzer
             error("E110", "Hole '%' in unexpected context", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
         }
 
         case NodeType::Block: {
             // Visit all statements in block
             NodeIndex child = n.first_child;
-            std::uint16_t last_buffer = BufferAllocator::BUFFER_UNUSED;
+            TypedValue last = TypedValue::void_val();
             while (child != NULL_NODE) {
-                last_buffer = visit(child);
+                last = visit(child);
                 child = ast_->arena[child].next_sibling;
             }
-            node_buffers_[node] = last_buffer;
-            return last_buffer;
+            return cache_and_return(node, last);
         }
 
         // Unsupported for MVP
         case NodeType::Pipe:
             error("E111", "Pipe should have been rewritten", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
 
         case NodeType::Closure:
             return handle_closure(node, n);
 
         case NodeType::MethodCall:
             error("E113", "Method calls not supported in MVP", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
 
         case NodeType::MiniLiteral:
             return handle_mini_literal(node, n);
 
         case NodeType::PostStmt:
             error("E115", "Post statements not supported in MVP", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
 
         case NodeType::FunctionDef:
             // Function definitions don't generate code directly
             // They're registered in the symbol table for inline expansion
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
 
         case NodeType::MatchExpr:
             return handle_match_expr(node, n);
@@ -1201,7 +1185,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
         case NodeType::MatchArm:
             // MatchArm nodes are handled by MatchExpr, not visited directly
             error("E122", "Match arm visited outside of match expression", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
 
         case NodeType::RecordLit:
             return handle_record_literal(node, n);
@@ -1217,7 +1201,7 @@ std::uint16_t CodeGenerator::visit(NodeIndex node) {
 
         default:
             error("E199", "Unsupported node type", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
     }
 }
 
@@ -1274,8 +1258,6 @@ void CodeGenerator::warn(const std::string& code, const std::string& message,
 }
 
 // FM Detection: Check if buffer was produced by audio-rate source (recursively traces arithmetic)
-// Note: is_audio_rate_producer, is_upgradeable_oscillator, upgrade_for_fm are inline helpers
-// in akkado/codegen/fm_detection.hpp
 bool CodeGenerator::is_fm_modulated(std::uint16_t freq_buffer) const {
     for (const auto& inst : instructions_) {
         if (inst.out_buffer == freq_buffer) {
@@ -1304,18 +1286,120 @@ bool CodeGenerator::is_fm_modulated(std::uint16_t freq_buffer) const {
     return false;
 }
 
-// Array HOF implementations (map, sum, fold, zipWith, zip, take, drop, reverse, range, repeat)
-// and multi-buffer support functions are in codegen_arrays.cpp
+// Multi-buffer compatibility helpers (backed by node_types_)
+bool CodeGenerator::is_multi_buffer(NodeIndex node) const {
+    auto it = node_types_.find(node);
+    if (it != node_types_.end()) {
+        if (it->second.type == ValueType::Array && it->second.array &&
+            it->second.array->elements.size() > 1) {
+            return true;
+        }
+    }
+    // Fallback: check if the node's buffer is a stereo left channel
+    if (it != node_types_.end() && it->second.buffer != BufferAllocator::BUFFER_UNUSED) {
+        return stereo_buffer_pairs_.find(it->second.buffer) != stereo_buffer_pairs_.end();
+    }
+    return false;
+}
+
+std::vector<std::uint16_t> CodeGenerator::get_multi_buffers(NodeIndex node) const {
+    auto it = node_types_.find(node);
+    if (it != node_types_.end()) {
+        if (it->second.type == ValueType::Array && it->second.array) {
+            return buffers_of(it->second);
+        }
+        // Fallback: check buffer-based stereo tracking
+        if (it->second.buffer != BufferAllocator::BUFFER_UNUSED) {
+            auto pair_it = stereo_buffer_pairs_.find(it->second.buffer);
+            if (pair_it != stereo_buffer_pairs_.end()) {
+                return {it->second.buffer, pair_it->second};
+            }
+            return {it->second.buffer};
+        }
+    }
+    return {};
+}
+
+// Get the TypedValue for a node (checks cache, then follows symbol table)
+const TypedValue* CodeGenerator::get_node_type(NodeIndex node) const {
+    auto it = node_types_.find(node);
+    if (it != node_types_.end()) {
+        return &it->second;
+    }
+
+    // If it's an identifier, follow symbol table
+    const Node& n = ast_->arena[node];
+    if (n.type == NodeType::Identifier) {
+        std::string var_name;
+        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
+            var_name = n.as_identifier();
+        }
+        auto sym = symbols_->lookup(var_name);
+        if (sym && sym->typed_value) {
+            return &*sym->typed_value;
+        }
+        if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
+            auto rec_it = node_types_.find(sym->record_type->source_node);
+            if (rec_it != node_types_.end()) {
+                return &rec_it->second;
+            }
+        }
+        if (sym && sym->kind == SymbolKind::Pattern) {
+            auto pat_it = node_types_.find(sym->pattern.pattern_node);
+            if (pat_it != node_types_.end()) {
+                return &pat_it->second;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+// Bind destructured fields from a record/pattern TypedValue into the symbol table
+bool CodeGenerator::bind_destructure_fields(
+    const TypedValue& source_tv,
+    const std::vector<std::string>& fields,
+    SourceLocation loc)
+{
+    if (source_tv.type == ValueType::Record && source_tv.record) {
+        for (const auto& field : fields) {
+            auto field_it = source_tv.record->fields.find(field);
+            if (field_it == source_tv.record->fields.end()) {
+                error("E141", "Destructure field '" + field + "' not found in record", loc);
+                return false;
+            }
+            symbols_->define_variable(field, field_it->second.buffer);
+        }
+        return true;
+    }
+
+    if (source_tv.type == ValueType::Pattern && source_tv.pattern) {
+        for (const auto& field : fields) {
+            int idx = pattern_field_index(field);
+            if (idx < 0 || source_tv.pattern->fields[static_cast<std::size_t>(idx)] == 0xFFFF) {
+                error("E141", "Destructure field '" + field + "' not found in pattern", loc);
+                return false;
+            }
+            symbols_->define_variable(field, source_tv.pattern->fields[static_cast<std::size_t>(idx)]);
+        }
+        return true;
+    }
+
+    error("E140", "Cannot destructure: scrutinee has no record fields", loc);
+    return false;
+}
+
+// Array HOF implementations are in codegen_arrays.cpp
 
 // ============================================================================
 // Record support implementation
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_record_literal(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_record_literal(NodeIndex node, const Node& n) {
     // Record literals expand to multiple buffers - one per field
-    // We track the field->buffer mapping in record_fields_ for later field access
+    // We track the field->TypedValue mapping in RecordPayload
 
-    std::unordered_map<std::string, std::uint16_t> field_buffers;
+    std::unordered_map<std::string, TypedValue> field_values;
     std::uint16_t first_buffer = BufferAllocator::BUFFER_UNUSED;
 
     // Handle spread source: {..base, field: value}
@@ -1323,45 +1407,67 @@ std::uint16_t CodeGenerator::handle_record_literal(NodeIndex node, const Node& n
         const auto& rec_data = n.as_record_lit();
         if (rec_data.spread_source != NULL_NODE) {
             // Visit the spread source expression
-            visit(rec_data.spread_source);
+            TypedValue spread_tv = visit(rec_data.spread_source);
 
-            // Look up its record fields
-            const Node& spread_node = ast_->arena[rec_data.spread_source];
-            std::unordered_map<std::string, std::uint16_t>* source_fields = nullptr;
-
-            // Direct record literal or expression that produced record fields
-            auto direct_it = record_fields_.find(rec_data.spread_source);
-            if (direct_it != record_fields_.end()) {
-                source_fields = &direct_it->second;
-            } else if (spread_node.type == NodeType::Identifier) {
-                // Identifier — check symbol table for Record
-                std::string var_name;
-                if (std::holds_alternative<Node::IdentifierData>(spread_node.data)) {
-                    var_name = spread_node.as_identifier();
-                }
-                auto sym = symbols_->lookup(var_name);
-                if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
-                    auto rec_it = record_fields_.find(sym->record_type->source_node);
-                    if (rec_it == record_fields_.end()) {
-                        visit(sym->record_type->source_node);
-                        rec_it = record_fields_.find(sym->record_type->source_node);
-                    }
-                    if (rec_it != record_fields_.end()) {
-                        source_fields = &rec_it->second;
-                    }
-                }
-            }
-
-            if (source_fields) {
-                // Copy all fields from spread source
-                for (const auto& [name, buf] : *source_fields) {
-                    field_buffers[name] = buf;
+            // If the spread source is a record, copy its fields
+            if (spread_tv.type == ValueType::Record && spread_tv.record) {
+                for (const auto& [name, tv] : spread_tv.record->fields) {
+                    field_values[name] = tv;
                     if (first_buffer == BufferAllocator::BUFFER_UNUSED) {
-                        first_buffer = buf;
+                        first_buffer = tv.buffer;
+                    }
+                }
+            } else if (spread_tv.type == ValueType::Pattern && spread_tv.pattern) {
+                // Pattern as spread source - extract known fields
+                static const char* field_names[] = {"freq", "vel", "trig", "gate", "type"};
+                for (int i = 0; i < 5; ++i) {
+                    if (spread_tv.pattern->fields[i] != 0xFFFF) {
+                        field_values[field_names[i]] = TypedValue::signal(spread_tv.pattern->fields[i]);
+                        if (first_buffer == BufferAllocator::BUFFER_UNUSED) {
+                            first_buffer = spread_tv.pattern->fields[i];
+                        }
                     }
                 }
             } else {
-                error("E140", "Spread source is not a record", ast_->arena[rec_data.spread_source].location);
+                // Follow symbol table for identifier spread sources
+                const Node& spread_node = ast_->arena[rec_data.spread_source];
+                if (spread_node.type == NodeType::Identifier) {
+                    std::string var_name;
+                    if (std::holds_alternative<Node::IdentifierData>(spread_node.data)) {
+                        var_name = spread_node.as_identifier();
+                    }
+                    auto sym = symbols_->lookup(var_name);
+                    if (sym && sym->typed_value && sym->typed_value->type == ValueType::Record &&
+                        sym->typed_value->record) {
+                        for (const auto& [name, tv] : sym->typed_value->record->fields) {
+                            field_values[name] = tv;
+                            if (first_buffer == BufferAllocator::BUFFER_UNUSED) {
+                                first_buffer = tv.buffer;
+                            }
+                        }
+                    } else if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
+                        auto rec_it = node_types_.find(sym->record_type->source_node);
+                        if (rec_it == node_types_.end()) {
+                            visit(sym->record_type->source_node);
+                            rec_it = node_types_.find(sym->record_type->source_node);
+                        }
+                        if (rec_it != node_types_.end() && rec_it->second.type == ValueType::Record &&
+                            rec_it->second.record) {
+                            for (const auto& [name, tv] : rec_it->second.record->fields) {
+                                field_values[name] = tv;
+                                if (first_buffer == BufferAllocator::BUFFER_UNUSED) {
+                                    first_buffer = tv.buffer;
+                                }
+                            }
+                        } else {
+                            error("E140", "Spread source is not a record", ast_->arena[rec_data.spread_source].location);
+                        }
+                    } else {
+                        error("E140", "Spread source is not a record", ast_->arena[rec_data.spread_source].location);
+                    }
+                } else {
+                    error("E140", "Spread source is not a record", ast_->arena[rec_data.spread_source].location);
+                }
             }
         }
     }
@@ -1382,14 +1488,14 @@ std::uint16_t CodeGenerator::handle_record_literal(NodeIndex node, const Node& n
             NodeIndex value_node = field.first_child;
             if (value_node != NULL_NODE) {
                 // Generate code for the field value
-                std::uint16_t value_buffer = visit(value_node);
+                TypedValue value_tv = visit(value_node);
 
-                // Track this field's buffer (overrides spread if same name)
-                field_buffers[field_name] = value_buffer;
+                // Track this field's value (overrides spread if same name)
+                field_values[field_name] = value_tv;
 
                 // Record first buffer for return value
                 if (first_buffer == BufferAllocator::BUFFER_UNUSED) {
-                    first_buffer = value_buffer;
+                    first_buffer = value_tv.buffer;
                 }
             }
         }
@@ -1397,18 +1503,13 @@ std::uint16_t CodeGenerator::handle_record_literal(NodeIndex node, const Node& n
         field_node = ast_->arena[field_node].next_sibling;
     }
 
-    // Store field->buffer mapping for this record
-    record_fields_[node] = std::move(field_buffers);
-
-    // Return first buffer (for single-buffer compatibility)
-    node_buffers_[node] = first_buffer;
-    return first_buffer;
+    // Build Record TypedValue
+    auto tv = TypedValue::make_record(std::move(field_values), first_buffer);
+    return cache_and_return(node, tv);
 }
 
-std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_field_access(NodeIndex node, const Node& n) {
     // Field access: expr.field
-    // We need to resolve the field name to the correct buffer
-
     const auto& field_data = n.as_field_access();
     const std::string& field_name = field_data.field_name;
 
@@ -1416,165 +1517,114 @@ std::uint16_t CodeGenerator::handle_field_access(NodeIndex node, const Node& n) 
     NodeIndex expr_node = n.first_child;
     if (expr_node == NULL_NODE) {
         error("E130", "Invalid field access: no expression", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::error_val();
     }
 
+    // Visit expression to get its TypedValue
+    TypedValue expr_tv = visit(expr_node);
+
+    // Also check the symbol table for richer type info
     const Node& expr = ast_->arena[expr_node];
-
-    // Case 1: Direct record literal - visit it first, then look up in record_fields_
-    if (expr.type == NodeType::RecordLit) {
-        // Visit to generate code and populate record_fields_
-        visit(expr_node);
-
-        auto it = record_fields_.find(expr_node);
-        if (it != record_fields_.end()) {
-            auto field_it = it->second.find(field_name);
-            if (field_it != it->second.end()) {
-                std::uint16_t field_buffer = field_it->second;
-                node_buffers_[node] = field_buffer;
-                return field_buffer;
-            }
-        }
-        error("E131", "Unknown field '" + field_name + "' in record literal", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
-    }
-
-    // Case 1b: Pattern literal (MiniLiteral) - patterns have .freq, .vel, .trig fields
-    if (expr.type == NodeType::MiniLiteral) {
-        // Visit to generate code and populate record_fields_
-        visit(expr_node);
-
-        // Monophonic pattern - return single buffer
-        auto it = record_fields_.find(expr_node);
-        if (it != record_fields_.end()) {
-            auto field_it = it->second.find(field_name);
-            if (field_it != it->second.end()) {
-                std::uint16_t field_buffer = field_it->second;
-                node_buffers_[node] = field_buffer;
-                return field_buffer;
-            }
-        }
-        error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
-    }
-
-    // Case 2: Identifier reference - look up in symbol table
     if (expr.type == NodeType::Identifier) {
         std::string var_name;
         if (std::holds_alternative<Node::IdentifierData>(expr.data)) {
             var_name = expr.as_identifier();
         }
-
         auto sym = symbols_->lookup(var_name);
 
-        // Case 2b: Pattern variable - generate pattern code and resolve fields
+        // Pattern variable - generate pattern code
         if (sym && sym->kind == SymbolKind::Pattern) {
-            // Generate pattern code
-            handle_pattern_reference(var_name, sym->pattern.pattern_node, n.location);
-
-            // Monophonic record_fields_
-            auto rec_it = record_fields_.find(sym->pattern.pattern_node);
-            if (rec_it != record_fields_.end()) {
-                auto field_it = rec_it->second.find(field_name);
-                if (field_it != rec_it->second.end()) {
-                    std::uint16_t field_buffer = field_it->second;
-                    node_buffers_[node] = field_buffer;
-                    return field_buffer;
+            TypedValue pat_tv = handle_pattern_reference(var_name, sym->pattern.pattern_node, n.location);
+            if (pat_tv.type == ValueType::Pattern) {
+                TypedValue result = pattern_field(pat_tv, field_name);
+                if (!result.error) {
+                    return cache_and_return(node, result);
                 }
             }
             error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::error_val();
         }
 
-        // Case 2c: Variable/Parameter with record_fields_ (e.g. pipe-bound pattern)
-        if (sym && (sym->kind == SymbolKind::Variable || sym->kind == SymbolKind::Parameter)) {
-            // Check if the identifier node itself has record_fields_ (from visit)
-            visit(expr_node);  // Ensure Identifier has been visited
-            auto rec_it = record_fields_.find(expr_node);
-            if (rec_it != record_fields_.end()) {
-                auto field_it = rec_it->second.find(field_name);
-                if (field_it != rec_it->second.end()) {
-                    std::uint16_t field_buffer = field_it->second;
-                    node_buffers_[node] = field_buffer;
-                    return field_buffer;
-                }
-            }
+        // Check symbol's typed_value for richer type info
+        if (sym && sym->typed_value) {
+            expr_tv = *sym->typed_value;
         }
 
-        // Case 2d: Record variable
+        // Record variable
         if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
-            // Make sure the record's fields have been generated
-            auto rec_it = record_fields_.find(sym->record_type->source_node);
-            if (rec_it == record_fields_.end()) {
-                // Need to generate the record first
+            auto rec_it = node_types_.find(sym->record_type->source_node);
+            if (rec_it == node_types_.end()) {
                 visit(sym->record_type->source_node);
-                rec_it = record_fields_.find(sym->record_type->source_node);
+                rec_it = node_types_.find(sym->record_type->source_node);
             }
+            if (rec_it != node_types_.end()) {
+                expr_tv = rec_it->second;
+            }
+        }
+    }
 
-            if (rec_it != record_fields_.end()) {
-                auto field_it = rec_it->second.find(field_name);
-                if (field_it != rec_it->second.end()) {
-                    std::uint16_t field_buffer = field_it->second;
-                    node_buffers_[node] = field_buffer;
-                    return field_buffer;
+    // Type-based dispatch
+    switch (expr_tv.type) {
+        case ValueType::Pattern: {
+            TypedValue result = pattern_field(expr_tv, field_name);
+            if (!result.error) {
+                return cache_and_return(node, result);
+            }
+            error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
+            return TypedValue::error_val();
+        }
+
+        case ValueType::Record: {
+            if (expr_tv.record) {
+                auto field_it = expr_tv.record->fields.find(field_name);
+                if (field_it != expr_tv.record->fields.end()) {
+                    return cache_and_return(node, field_it->second);
                 }
             }
-
-            // Field not found - build error message
+            // Build error message with available fields
             std::string available;
-            auto field_names = sym->record_type->field_names();
-            for (size_t i = 0; i < field_names.size(); ++i) {
-                if (i > 0) available += ", ";
-                available += field_names[i];
+            if (expr_tv.record) {
+                bool first = true;
+                for (const auto& [name, _] : expr_tv.record->fields) {
+                    if (!first) available += ", ";
+                    available += name;
+                    first = false;
+                }
             }
-            error("E131", "Unknown field '" + field_name + "' on record '" + var_name + "'. Available: " + available, n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            error("E131", "Unknown field '" + field_name + "'" +
+                  (available.empty() ? "" : ". Available: " + available), n.location);
+            return TypedValue::error_val();
         }
 
-        // Not a record or pattern - error
-        error("E133", "Cannot access field '" + field_name + "' on '" + var_name + "'", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        default:
+            break;
     }
 
-    // Case 3: Call expression - check for pattern-producing calls (chord, pat, etc.)
-    if (expr.type == NodeType::Call) {
-        // Visit to generate code and populate record_fields_
-        visit(expr_node);
-
-        // Check for record_fields_ (monophonic pattern result)
-        auto it = record_fields_.find(expr_node);
-        if (it != record_fields_.end()) {
-            auto field_it = it->second.find(field_name);
-            if (field_it != it->second.end()) {
-                std::uint16_t field_buffer = field_it->second;
-                node_buffers_[node] = field_buffer;
-                return field_buffer;
+    // Fallback for Call expressions - check if they produced a typed result
+    if (expr.type == NodeType::Call || expr.type == NodeType::RecordLit || expr.type == NodeType::MiniLiteral) {
+        auto type_it = node_types_.find(expr_node);
+        if (type_it != node_types_.end()) {
+            if (type_it->second.type == ValueType::Pattern) {
+                TypedValue result = pattern_field(type_it->second, field_name);
+                if (!result.error) {
+                    return cache_and_return(node, result);
+                }
+            }
+            if (type_it->second.type == ValueType::Record && type_it->second.record) {
+                auto field_it = type_it->second.record->fields.find(field_name);
+                if (field_it != type_it->second.record->fields.end()) {
+                    return cache_and_return(node, field_it->second);
+                }
             }
         }
-
-        error("E137", "Field access not supported on this call result", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
     }
 
-    // Case 4: Chained field access (a.b.c) - the expr is a FieldAccess
-    if (expr.type == NodeType::FieldAccess) {
-        // The expr_buffer contains the result of the nested field access
-        // For nested records, we need to look up the field on the nested record type
-        // For MVP, we return expr_buffer if the nested access succeeded
-        // TODO: Proper nested record field resolution
-        error("E134", "Nested field access not fully supported in MVP", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
-    }
-
-    // Case 5: Other expression types - not supported for field access in MVP
     error("E135", "Field access on expression type not supported", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    return TypedValue::error_val();
 }
 
-std::uint16_t CodeGenerator::handle_pipe_binding(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_pipe_binding(NodeIndex node, const Node& n) {
     // Pipe binding: expr as name
-    // The binding creates a symbol for 'name' that references the buffer(s) of expr
-
     const auto& binding_data = n.as_pipe_binding();
     const std::string& binding_name = binding_data.binding_name;
 
@@ -1582,86 +1632,90 @@ std::uint16_t CodeGenerator::handle_pipe_binding(NodeIndex node, const Node& n) 
     NodeIndex expr_node = n.first_child;
     if (expr_node == NULL_NODE) {
         error("E140", "Invalid pipe binding: no expression", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::error_val();
     }
 
     // Generate code for the expression
-    std::uint16_t expr_buffer = visit(expr_node);
+    TypedValue expr_tv = visit(expr_node);
 
-    // Check if the expression is a record
-    const Node& expr = ast_->arena[expr_node];
-    bool bound_as_record = false;
+    // Bind with full type info in symbol table
+    if (expr_tv.type == ValueType::Record && expr_tv.record) {
+        // Record binding
+        auto record_type = std::make_shared<RecordTypeInfo>();
+        record_type->source_node = expr_node;
+        for (const auto& [name, tv] : expr_tv.record->fields) {
+            RecordFieldInfo field_info;
+            field_info.name = name;
+            field_info.buffer_index = tv.buffer;
+            field_info.field_kind = SymbolKind::Variable;
+            record_type->fields.push_back(std::move(field_info));
+        }
+        symbols_->define_record(binding_name, record_type);
 
-    if (expr.type == NodeType::RecordLit) {
-        // For records, we need to update the symbol table with the record type
-        // so that subsequent field accesses can resolve correctly
-        auto rec_it = record_fields_.find(expr_node);
-        if (rec_it != record_fields_.end()) {
-            // Create a record type for this binding
-            auto record_type = std::make_shared<RecordTypeInfo>();
-            record_type->source_node = expr_node;
-
-            // Populate field info from the existing field buffers
-            for (const auto& [name, buffer] : rec_it->second) {
-                RecordFieldInfo field_info;
-                field_info.name = name;
-                field_info.buffer_index = buffer;
-                field_info.field_kind = SymbolKind::Variable;
-                record_type->fields.push_back(std::move(field_info));
+        // Also store typed_value for richer access
+        auto sym = symbols_->lookup(binding_name);
+        if (sym) {
+            Symbol updated = *sym;
+            updated.typed_value = expr_tv;
+            symbols_->define(updated);
+        }
+    } else if (expr_tv.type == ValueType::Pattern) {
+        // Pattern binding - store as variable with typed_value
+        Symbol new_sym;
+        new_sym.kind = SymbolKind::Variable;
+        new_sym.name = binding_name;
+        new_sym.name_hash = fnv1a_hash(binding_name);
+        new_sym.buffer_index = expr_tv.buffer;
+        new_sym.typed_value = expr_tv;
+        symbols_->define(new_sym);
+    } else if (expr_tv.type == ValueType::Array && expr_tv.array) {
+        Symbol new_sym;
+        new_sym.kind = SymbolKind::Variable;
+        new_sym.name = binding_name;
+        new_sym.name_hash = fnv1a_hash(binding_name);
+        new_sym.buffer_index = expr_tv.buffer;
+        new_sym.multi_buffers = buffers_of(expr_tv);
+        new_sym.typed_value = expr_tv;
+        symbols_->define(new_sym);
+    } else {
+        // Also check if identifier propagates record type from symbol
+        const Node& expr = ast_->arena[expr_node];
+        if (expr.type == NodeType::Identifier) {
+            std::string var_name;
+            if (std::holds_alternative<Node::IdentifierData>(expr.data)) {
+                var_name = expr.as_identifier();
             }
-
-            symbols_->define_record(binding_name, record_type);
-            bound_as_record = true;
-
-            // Also store the mapping for this binding's field access
-            record_fields_[node] = rec_it->second;
-        }
-    } else if (expr.type == NodeType::Identifier) {
-        // Propagate the type from the identifier
-        std::string var_name;
-        if (std::holds_alternative<Node::IdentifierData>(expr.data)) {
-            var_name = expr.as_identifier();
-        }
-
-        auto sym = symbols_->lookup(var_name);
-        if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
-            // Bind the same record type to the new name
-            symbols_->define_record(binding_name, sym->record_type);
-            bound_as_record = true;
-
-            // Propagate field buffers
-            auto rec_it = record_fields_.find(sym->record_type->source_node);
-            if (rec_it != record_fields_.end()) {
-                record_fields_[node] = rec_it->second;
+            auto sym = symbols_->lookup(var_name);
+            if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
+                symbols_->define_record(binding_name, sym->record_type);
+                // Propagate typed_value
+                auto new_sym_opt = symbols_->lookup(binding_name);
+                if (new_sym_opt) {
+                    Symbol updated = *new_sym_opt;
+                    // Get the TypedValue for the source record
+                    auto rec_it = node_types_.find(sym->record_type->source_node);
+                    if (rec_it != node_types_.end()) {
+                        updated.typed_value = rec_it->second;
+                    }
+                    symbols_->define(updated);
+                }
+            } else {
+                symbols_->define_variable(binding_name, expr_tv.buffer);
             }
-        }
-    }
-
-    // For non-record bindings, bind as variable with multi-buffer propagation
-    if (!bound_as_record) {
-        if (is_multi_buffer(expr_node)) {
-            Symbol new_sym;
-            new_sym.kind = SymbolKind::Variable;
-            new_sym.name = binding_name;
-            new_sym.name_hash = fnv1a_hash(binding_name);
-            new_sym.buffer_index = expr_buffer;
-            new_sym.multi_buffers = get_multi_buffers(expr_node);
-            symbols_->define(new_sym);
         } else {
-            symbols_->define_variable(binding_name, expr_buffer);
+            symbols_->define_variable(binding_name, expr_tv.buffer);
         }
     }
 
-    // Return the expression buffer
-    node_buffers_[node] = expr_buffer;
-    return expr_buffer;
+    // Return the expression typed value
+    return cache_and_return(node, expr_tv);
 }
 
 // ============================================================================
 // Directive handling
 // ============================================================================
 
-std::uint16_t CodeGenerator::handle_directive(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_directive(NodeIndex node, const Node& n) {
     const auto& dir_data = n.as_directive();
     const std::string& dir_name = dir_data.name;
 
@@ -1670,19 +1724,19 @@ std::uint16_t CodeGenerator::handle_directive(NodeIndex node, const Node& n) {
         NodeIndex arg = n.first_child;
         if (arg == NULL_NODE) {
             error("E150", "$polyphony requires an argument", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         const Node& arg_node = ast_->arena[arg];
         if (arg_node.type != NodeType::NumberLit) {
             error("E151", "$polyphony argument must be a number literal", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         int value = static_cast<int>(arg_node.as_number());
         if (value < 1 || value > 32) {
             error("E152", "$polyphony value must be between 1 and 32", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         options_.default_polyphony = static_cast<std::uint8_t>(value);
@@ -1691,8 +1745,7 @@ std::uint16_t CodeGenerator::handle_directive(NodeIndex node, const Node& n) {
     }
 
     // Directives don't produce values
-    node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
-    return BufferAllocator::BUFFER_UNUSED;
+    return cache_and_return(node, TypedValue::void_val());
 }
 
 } // namespace akkado

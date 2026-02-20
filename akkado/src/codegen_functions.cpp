@@ -66,7 +66,7 @@ static std::optional<ConstValue> resolve_const_value(
 }
 
 // User function call handler - inlines function bodies at call sites
-std::uint16_t CodeGenerator::handle_user_function_call(
+TypedValue CodeGenerator::handle_user_function_call(
     NodeIndex node, const Node& n, const UserFunctionInfo& func) {
 
     // const fn: try compile-time evaluation if all args are const
@@ -105,11 +105,10 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                     std::uint16_t buf = emit_push_const(buffers_, instructions_, val);
                     if (buf == BufferAllocator::BUFFER_UNUSED) {
                         error("E101", "Buffer pool exhausted", n.location);
-                        return BufferAllocator::BUFFER_UNUSED;
+                        return TypedValue::void_val();
                     }
                     source_locations_.push_back(n.location);
-                    node_buffers_[node] = buf;
-                    return buf;
+                    return cache_and_return(node, TypedValue::number(buf));
                 } else {
                     // Array result
                     const auto& arr = std::get<std::vector<double>>(*result);
@@ -119,18 +118,17 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                                                              static_cast<float>(v));
                         if (buf == BufferAllocator::BUFFER_UNUSED) {
                             error("E101", "Buffer pool exhausted", n.location);
-                            return BufferAllocator::BUFFER_UNUSED;
+                            return TypedValue::void_val();
                         }
                         source_locations_.push_back(n.location);
                         result_buffers.push_back(buf);
                     }
                     std::uint16_t first = result_buffers.empty() ?
                         BufferAllocator::BUFFER_UNUSED : result_buffers[0];
-                    if (!result_buffers.empty()) {
-                        register_multi_buffer(node, std::move(result_buffers));
-                    }
-                    node_buffers_[node] = first;
-                    return first;
+                    std::vector<TypedValue> elements;
+                    for (auto b : result_buffers) elements.push_back(TypedValue::signal(b));
+                    auto tv = TypedValue::make_array(std::move(elements), first);
+                    return cache_and_return(node, tv);
                 }
             }
             // Fall through to normal inlining if const eval fails
@@ -175,7 +173,7 @@ std::uint16_t CodeGenerator::handle_user_function_call(
             // Rest parameter: collect all remaining arguments
             rest_param_name = func.params[i].name;
             for (std::size_t j = i; j < args.size(); ++j) {
-                std::uint16_t buf = visit(args[j]);
+                std::uint16_t buf = visit(args[j]).buffer;
                 rest_buffers.push_back(buf);
             }
             param_buf = rest_buffers.empty() ? BufferAllocator::BUFFER_UNUSED : rest_buffers[0];
@@ -200,7 +198,7 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                 }
 
                 // Visit argument in caller's scope
-                param_buf = visit(args[i]);
+                param_buf = visit(args[i]).buffer;
 
                 // Track multi-buffer arguments for polyphonic propagation
                 if (is_multi_buffer(args[i])) {
@@ -214,7 +212,7 @@ std::uint16_t CodeGenerator::handle_user_function_call(
             if (param_buf == BufferAllocator::BUFFER_UNUSED) {
                 error("E101", "Buffer pool exhausted", n.location);
                 param_literals_ = std::move(saved_param_literals);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
 
             cedar::Instruction push_inst{};
@@ -246,7 +244,7 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                         error("E101", "Buffer pool exhausted", n.location);
                         param_literals_ = std::move(saved_param_literals);
                         param_string_defaults_ = std::move(saved_param_string_defaults);
-                        return BufferAllocator::BUFFER_UNUSED;
+                        return TypedValue::void_val();
                     }
                 } else {
                     // Array result — not supported as default
@@ -254,14 +252,14 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                           func.params[i].name + "'", n.location);
                     param_literals_ = std::move(saved_param_literals);
                     param_string_defaults_ = std::move(saved_param_string_defaults);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::void_val();
                 }
             } else {
                 error("E105", "Cannot evaluate default expression at compile time for parameter '" +
                       func.params[i].name + "'", n.location);
                 param_literals_ = std::move(saved_param_literals);
                 param_string_defaults_ = std::move(saved_param_string_defaults);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
         } else if (func.params[i].default_string.has_value()) {
             // String default: doesn't produce audio — used for compile-time match dispatch
@@ -274,7 +272,7 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                   func.params[i].name + "'", n.location);
             param_literals_ = std::move(saved_param_literals);
             param_string_defaults_ = std::move(saved_param_string_defaults);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         param_bufs.push_back(param_buf);
@@ -297,16 +295,18 @@ std::uint16_t CodeGenerator::handle_user_function_call(
                 symbols_->define_function_value(func.params[i].name, fref_it->second);
             } else if (i < args.size()) {
                 // Check if the argument produced a record
-                auto rec_it = record_fields_.find(args[i]);
-                if (rec_it != record_fields_.end()) {
+                auto type_it = node_types_.find(args[i]);
+                if (type_it != node_types_.end() && type_it->second.type == ValueType::Record) {
                     auto record_type = std::make_shared<RecordTypeInfo>();
                     record_type->source_node = args[i];
-                    for (const auto& [name, buffer] : rec_it->second) {
-                        RecordFieldInfo field_info;
-                        field_info.name = name;
-                        field_info.buffer_index = buffer;
-                        field_info.field_kind = SymbolKind::Variable;
-                        record_type->fields.push_back(std::move(field_info));
+                    if (type_it->second.record) {
+                        for (const auto& [name, field_tv] : type_it->second.record->fields) {
+                            RecordFieldInfo field_info;
+                            field_info.name = name;
+                            field_info.buffer_index = field_tv.buffer;
+                            field_info.field_kind = SymbolKind::Variable;
+                            record_type->fields.push_back(std::move(field_info));
+                        }
                     }
                     symbols_->define_record(func.params[i].name, record_type);
                 } else {
@@ -350,26 +350,25 @@ std::uint16_t CodeGenerator::handle_user_function_call(
         param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
         param_function_refs_ = std::move(saved_param_function_refs);
 
-        node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
-        return BufferAllocator::BUFFER_UNUSED;
+        return cache_and_return(node, TypedValue::function_val());
     }
 
-    // Save node_buffers_ state before visiting body.
+    // Save node_types_ state before visiting body.
     // This is necessary because function bodies are shared AST nodes that may be
     // visited multiple times with different parameter bindings.
-    auto saved_node_buffers = std::move(node_buffers_);
-    node_buffers_.clear();
+    auto saved_node_types = std::move(node_types_);
+    node_types_.clear();
 
     // Visit function body (inline expansion)
-    std::uint16_t result = BufferAllocator::BUFFER_UNUSED;
+    TypedValue result_tv = TypedValue::void_val();
     if (func.body_node != NULL_NODE) {
-        result = visit(func.body_node);
+        result_tv = visit(func.body_node);
     }
 
-    // Restore node_buffers_ (keep new entries but restore old ones)
-    for (auto& [k, v] : saved_node_buffers) {
-        if (node_buffers_.find(k) == node_buffers_.end()) {
-            node_buffers_[k] = v;
+    // Restore node_types_ (keep new entries but restore old ones)
+    for (auto& [k, v] : saved_node_types) {
+        if (node_types_.find(k) == node_types_.end()) {
+            node_types_[k] = v;
         }
     }
 
@@ -380,12 +379,11 @@ std::uint16_t CodeGenerator::handle_user_function_call(
     param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
     param_function_refs_ = std::move(saved_param_function_refs);
 
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, result_tv);
 }
 
 // FunctionValue (lambda variable) call handler - inlines closure bodies at call sites
-std::uint16_t CodeGenerator::handle_function_value_call(
+TypedValue CodeGenerator::handle_function_value_call(
     NodeIndex node, const Node& n, const FunctionRef& func) {
 
     // Collect call arguments
@@ -423,7 +421,7 @@ std::uint16_t CodeGenerator::handle_function_value_call(
             }
 
             // Visit argument in caller's scope
-            param_buf = visit(args[i]);
+            param_buf = visit(args[i]).buffer;
         } else if (func.params[i].default_value.has_value()) {
             // Use numeric default value
             param_buf = buffers_.allocate();
@@ -431,7 +429,7 @@ std::uint16_t CodeGenerator::handle_function_value_call(
                 error("E101", "Buffer pool exhausted", n.location);
                 param_literals_ = std::move(saved_param_literals);
                 param_string_defaults_ = std::move(saved_param_string_defaults);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
 
             cedar::Instruction push_inst{};
@@ -463,21 +461,21 @@ std::uint16_t CodeGenerator::handle_function_value_call(
                         error("E101", "Buffer pool exhausted", n.location);
                         param_literals_ = std::move(saved_param_literals);
                         param_string_defaults_ = std::move(saved_param_string_defaults);
-                        return BufferAllocator::BUFFER_UNUSED;
+                        return TypedValue::void_val();
                     }
                 } else {
                     error("E105", "Array expression defaults not yet supported for parameter '" +
                           func.params[i].name + "'", n.location);
                     param_literals_ = std::move(saved_param_literals);
                     param_string_defaults_ = std::move(saved_param_string_defaults);
-                    return BufferAllocator::BUFFER_UNUSED;
+                    return TypedValue::void_val();
                 }
             } else {
                 error("E105", "Cannot evaluate default expression at compile time for parameter '" +
                       func.params[i].name + "'", n.location);
                 param_literals_ = std::move(saved_param_literals);
                 param_string_defaults_ = std::move(saved_param_string_defaults);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
         } else if (func.params[i].default_string.has_value()) {
             // String default: doesn't produce audio — used for compile-time match dispatch
@@ -490,7 +488,7 @@ std::uint16_t CodeGenerator::handle_function_value_call(
                   func.params[i].name + "'", n.location);
             param_literals_ = std::move(saved_param_literals);
             param_string_defaults_ = std::move(saved_param_string_defaults);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
 
         param_bufs.push_back(param_buf);
@@ -510,21 +508,23 @@ std::uint16_t CodeGenerator::handle_function_value_call(
     std::uint32_t count = call_counters_[callee_name]++;
     push_path(callee_name + "#" + std::to_string(count));
 
-    // Save node_buffers_ state before visiting body
-    auto saved_node_buffers = std::move(node_buffers_);
-    node_buffers_.clear();
+    // Save node_types_ state before visiting body
+    auto saved_node_types = std::move(node_types_);
+    node_types_.clear();
 
-    std::uint16_t result = BufferAllocator::BUFFER_UNUSED;
+    TypedValue result_tv = TypedValue::void_val();
 
     // Handle composed functions: apply each function in the chain sequentially
     if (!func.compose_chain.empty()) {
         // First function gets the call argument(s)
+        std::uint16_t result = BufferAllocator::BUFFER_UNUSED;
         if (!param_bufs.empty()) {
             result = param_bufs[0];
         }
         for (const auto& chain_ref : func.compose_chain) {
             result = apply_function_ref(chain_ref, result, n.location);
         }
+        result_tv = TypedValue::signal(result);
     } else {
         // Normal function value call
         // Find the body node
@@ -548,14 +548,14 @@ std::uint16_t CodeGenerator::handle_function_value_call(
 
         // Visit closure body (inline expansion)
         if (body != NULL_NODE) {
-            result = visit(body);
+            result_tv = visit(body);
         }
     }
 
-    // Restore node_buffers_
-    for (auto& [k, v] : saved_node_buffers) {
-        if (node_buffers_.find(k) == node_buffers_.end()) {
-            node_buffers_[k] = v;
+    // Restore node_types_
+    for (auto& [k, v] : saved_node_types) {
+        if (node_types_.find(k) == node_types_.end()) {
+            node_types_[k] = v;
         }
     }
 
@@ -565,12 +565,11 @@ std::uint16_t CodeGenerator::handle_function_value_call(
     param_literals_ = std::move(saved_param_literals);
     param_string_defaults_ = std::move(saved_param_string_defaults);
 
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, result_tv);
 }
 
 // Handle compose(f, g, ...) - create a composed function reference
-std::uint16_t CodeGenerator::handle_compose_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_compose_call(NodeIndex node, const Node& n) {
     // Collect function arguments
     std::vector<FunctionRef> refs;
     NodeIndex arg = n.first_child;
@@ -583,7 +582,7 @@ std::uint16_t CodeGenerator::handle_compose_call(NodeIndex node, const Node& n) 
         auto ref = resolve_function_arg(arg_value);
         if (!ref) {
             error("E140", "compose() arguments must be functions or closures", arg_node.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
         refs.push_back(*ref);
         arg = ast_->arena[arg].next_sibling;
@@ -591,7 +590,7 @@ std::uint16_t CodeGenerator::handle_compose_call(NodeIndex node, const Node& n) 
 
     if (refs.size() < 2) {
         error("E141", "compose() requires at least 2 function arguments", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Build composed FunctionRef: first function's params, chain of all refs
@@ -603,12 +602,11 @@ std::uint16_t CodeGenerator::handle_compose_call(NodeIndex node, const Node& n) 
     composed.compose_chain = refs;  // Store entire chain
 
     pending_function_ref_ = composed;
-    node_buffers_[node] = BufferAllocator::BUFFER_UNUSED;
-    return BufferAllocator::BUFFER_UNUSED;
+    return cache_and_return(node, TypedValue::function_val());
 }
 
 // Handle Closure nodes - allocate buffers for parameters and generate body
-std::uint16_t CodeGenerator::handle_closure(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_closure(NodeIndex node, const Node& n) {
     // For simple closures: allocate buffers for parameters, then generate body
     // Find parameters and body
     // Parameters may be stored as IdentifierData or ClosureParamData
@@ -637,7 +635,7 @@ std::uint16_t CodeGenerator::handle_closure(NodeIndex node, const Node& n) {
 
     if (body == NULL_NODE) {
         error("E112", "Closure has no body", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Allocate input buffers for parameters and bind them
@@ -645,16 +643,15 @@ std::uint16_t CodeGenerator::handle_closure(NodeIndex node, const Node& n) {
         std::uint16_t param_buf = buffers_.allocate();
         if (param_buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
         // Update symbol table with actual buffer index
         symbols_->define_variable(param, param_buf);
     }
 
     // Generate code for body
-    std::uint16_t body_buf = visit(body);
-    node_buffers_[node] = body_buf;
-    return body_buf;
+    auto body_tv = visit(body);
+    return cache_and_return(node, body_tv);
 }
 
 // Check if a match expression can be resolved at compile time
@@ -746,65 +743,8 @@ bool CodeGenerator::is_compile_time_match(NodeIndex node, const Node& n) const {
     return true;
 }
 
-// Get record field buffers for a node (handles record literals, patterns, identifiers)
-const std::unordered_map<std::string, std::uint16_t>*
-CodeGenerator::get_record_fields(NodeIndex node) {
-    // Direct lookup
-    auto it = record_fields_.find(node);
-    if (it != record_fields_.end()) {
-        return &it->second;
-    }
-
-    // If it's an identifier, follow symbol table
-    const Node& n = ast_->arena[node];
-    if (n.type == NodeType::Identifier) {
-        std::string var_name;
-        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
-            var_name = n.as_identifier();
-        }
-        auto sym = symbols_->lookup(var_name);
-        if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
-            auto rec_it = record_fields_.find(sym->record_type->source_node);
-            if (rec_it != record_fields_.end()) {
-                return &rec_it->second;
-            }
-        }
-        if (sym && sym->kind == SymbolKind::Pattern) {
-            auto rec_it = record_fields_.find(sym->pattern.pattern_node);
-            if (rec_it != record_fields_.end()) {
-                return &rec_it->second;
-            }
-        }
-    }
-
-    return nullptr;
-}
-
-// Bind destructured fields from a record/pattern into the symbol table
-bool CodeGenerator::bind_destructure_fields(
-    NodeIndex source_node,
-    const std::vector<std::string>& fields,
-    SourceLocation loc)
-{
-    const auto* field_map = get_record_fields(source_node);
-    if (!field_map) {
-        error("E140", "Cannot destructure: scrutinee has no record fields", loc);
-        return false;
-    }
-
-    for (const auto& field : fields) {
-        auto field_it = field_map->find(field);
-        if (field_it == field_map->end()) {
-            error("E141", "Destructure field '" + field + "' not found in record", loc);
-            return false;
-        }
-        symbols_->define_variable(field, field_it->second);
-    }
-    return true;
-}
-
 // Handle compile-time match - evaluate patterns and guards, emit only winning branch
-std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_compile_time_match(NodeIndex node, const Node& n) {
     const auto& match_data = n.as_match_expr();
 
     NodeIndex first_arm = n.first_child;
@@ -872,7 +812,7 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
             } else if (arm_data.is_destructure && match_data.has_scrutinee) {
                 // Destructuring pattern: always matches, bind fields from scrutinee
                 NodeIndex scrutinee_node = n.first_child;
-                visit(scrutinee_node);  // ensure record_fields_ populated
+                auto scrutinee_tv = visit(scrutinee_node);  // ensure node_types_ populated
 
                 // Check guard if present
                 bool guard_passes = true;
@@ -887,11 +827,10 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
 
                 if (guard_passes && body != NULL_NODE) {
                     symbols_->push_scope();
-                    bind_destructure_fields(scrutinee_node, arm_data.destructure_fields, arm_node.location);
-                    std::uint16_t result = visit(body);
+                    bind_destructure_fields(scrutinee_tv, arm_data.destructure_fields, arm_node.location);
+                    auto result_tv = visit(body);
                     symbols_->pop_scope();
-                    node_buffers_[node] = result;
-                    return result;
+                    return cache_and_return(node, result_tv);
                 }
             } else if (match_data.has_scrutinee) {
                 // Range pattern: check low <= scrutinee < high
@@ -917,9 +856,8 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
                         }
 
                         if (guard_passes && body != NULL_NODE) {
-                            std::uint16_t result = visit(body);
-                            node_buffers_[node] = result;
-                            return result;
+                            auto result_tv = visit(body);
+                            return cache_and_return(node, result_tv);
                         }
                     }
                 } else if (pattern != NULL_NODE) {
@@ -948,9 +886,8 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
                         }
 
                         if (guard_passes && body != NULL_NODE) {
-                            std::uint16_t result = visit(body);
-                            node_buffers_[node] = result;
-                            return result;
+                            auto result_tv = visit(body);
+                            return cache_and_return(node, result_tv);
                         }
                     }
                 }
@@ -966,9 +903,8 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
                     }
 
                     if (guard_passes && body != NULL_NODE) {
-                        std::uint16_t result = visit(body);
-                        node_buffers_[node] = result;
-                        return result;
+                        auto result_tv = visit(body);
+                        return cache_and_return(node, result_tv);
                     }
                 }
             }
@@ -978,17 +914,16 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
 
     // No match found - use default if available
     if (default_body != NULL_NODE) {
-        std::uint16_t result = visit(default_body);
-        node_buffers_[node] = result;
-        return result;
+        auto result_tv = visit(default_body);
+        return cache_and_return(node, result_tv);
     }
 
     error("E121", "No matching pattern in match expression", n.location);
-    return BufferAllocator::BUFFER_UNUSED;
+    return TypedValue::void_val();
 }
 
 // Handle runtime match - emit all branches and build nested select chain
-std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n) {
     const auto& match_data = n.as_match_expr();
 
     // Check for missing wildcard arm and warn
@@ -1019,7 +954,7 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
     // Visit scrutinee if present
     std::uint16_t scrutinee_buf = BufferAllocator::BUFFER_UNUSED;
     if (match_data.has_scrutinee) {
-        scrutinee_buf = visit(n.first_child);
+        scrutinee_buf = visit(n.first_child).buffer;
     }
 
     // Collect all arms: condition buffer, body buffer, is_wildcard
@@ -1045,13 +980,16 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
             if (arm_data.is_destructure && match_data.has_scrutinee) {
                 symbols_->push_scope();
                 has_destr_scope = true;
-                bind_destructure_fields(n.first_child, arm_data.destructure_fields, arm_node.location);
+                auto* scrutinee_type = get_node_type(n.first_child);
+                if (scrutinee_type) {
+                    bind_destructure_fields(*scrutinee_type, arm_data.destructure_fields, arm_node.location);
+                }
             }
 
             // Visit body first (all branches compute in DSP)
             std::uint16_t body_buf = BufferAllocator::BUFFER_UNUSED;
             if (body != NULL_NODE) {
-                body_buf = visit(body);
+                body_buf = visit(body).buffer;
             } else {
                 // Empty body -> emit 0.0
                 body_buf = buffers_.allocate();
@@ -1072,7 +1010,7 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
             } else if (arm_data.is_destructure) {
                 // Destructuring arm: always matches unless guarded
                 if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
-                    std::uint16_t guard_buf = visit(arm_data.guard_node);
+                    std::uint16_t guard_buf = visit(arm_data.guard_node).buffer;
                     if (has_destr_scope) symbols_->pop_scope();
                     arms.push_back({guard_buf, body_buf, false});
                 } else {
@@ -1144,7 +1082,7 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
                     emit(and_inst);
                 } else if (match_data.has_scrutinee) {
                     // Scrutinee form: eq(scrutinee, pattern)
-                    std::uint16_t pattern_buf = visit(pattern);
+                    std::uint16_t pattern_buf = visit(pattern).buffer;
 
                     cond_buf = buffers_.allocate();
                     cedar::Instruction eq_inst{};
@@ -1158,13 +1096,13 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
                 } else {
                     // Guard-only form: condition is the guard itself
                     if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
-                        cond_buf = visit(arm_data.guard_node);
+                        cond_buf = visit(arm_data.guard_node).buffer;
                     }
                 }
 
                 // If there's a guard, AND it with the pattern condition
                 if (arm_data.has_guard && arm_data.guard_node != NULL_NODE && match_data.has_scrutinee) {
-                    std::uint16_t guard_buf = visit(arm_data.guard_node);
+                    std::uint16_t guard_buf = visit(arm_data.guard_node).buffer;
 
                     std::uint16_t combined_buf = buffers_.allocate();
                     cedar::Instruction and_inst{};
@@ -1186,7 +1124,7 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
 
     if (arms.empty()) {
         error("E122", "Match expression has no arms", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Build nested select chain (reverse order)
@@ -1231,12 +1169,11 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
         }
     }
 
-    node_buffers_[node] = result;
-    return result;
+    return cache_and_return(node, TypedValue::signal(result));
 }
 
 // Handle MatchExpr nodes - dispatch to compile-time or runtime handling
-std::uint16_t CodeGenerator::handle_match_expr(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_match_expr(NodeIndex node, const Node& n) {
     // Check if match expression data exists
     if (!std::holds_alternative<Node::MatchExprData>(n.data)) {
         // Legacy: no MatchExprData, assume scrutinee form without guards
@@ -1255,7 +1192,7 @@ std::uint16_t CodeGenerator::handle_match_expr(NodeIndex node, const Node& n) {
 // Also handles tap_delay_ms and tap_delay_smp variants with different time units.
 // Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
 // Both opcodes share the same state_id to operate on the same delay buffer
-std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n) {
     // Extract function name to determine time unit
     const std::string& func_name = n.as_identifier();
 
@@ -1283,14 +1220,14 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
 
     if (args.size() < 4) {
         error("E301", func_name + "() requires 4 arguments: " + func_name + "(in, time, fb, processor)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Validate that processor (4th arg) is a Closure
     const Node& processor_node = ast_->arena[args[3]];
     if (processor_node.type != NodeType::Closure) {
         error("E302", "tap_delay() 4th argument must be a closure: (x) -> ...", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Extract closure parameter (must have exactly 1 parameter)
@@ -1323,12 +1260,12 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
 
     if (param_count != 1) {
         error("E303", "tap_delay() processor closure must have exactly 1 parameter", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     if (closure_body == NULL_NODE) {
         error("E304", "tap_delay() processor closure has no body", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Push path for semantic ID tracking (before TAP)
@@ -1340,9 +1277,9 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     std::uint32_t delay_state_id = compute_state_id();
 
     // Visit input arguments (in, time, fb)
-    std::uint16_t in_buf = visit(args[0]);
-    std::uint16_t time_buf = visit(args[1]);
-    std::uint16_t fb_buf = visit(args[2]);
+    std::uint16_t in_buf = visit(args[0]).buffer;
+    std::uint16_t time_buf = visit(args[1]).buffer;
+    std::uint16_t fb_buf = visit(args[2]).buffer;
 
     // Handle optional dry/wet arguments (args[4], args[5])
     // Default: dry=0.0, wet=1.0 (100% wet, backward compatible)
@@ -1350,10 +1287,10 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     std::uint16_t wet_buf = BufferAllocator::BUFFER_UNUSED;
 
     if (args.size() > 4) {
-        dry_buf = visit(args[4]);
+        dry_buf = visit(args[4]).buffer;
     }
     if (args.size() > 5) {
-        wet_buf = visit(args[5]);
+        wet_buf = visit(args[5]).buffer;
     }
 
     // Allocate output buffer for DELAY_TAP
@@ -1361,7 +1298,7 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     if (tap_out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit DELAY_TAP instruction
@@ -1387,15 +1324,15 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     // Push semantic context for nested opcodes
     push_path("fb");
 
-    // Save node_buffers_ state before visiting closure body
-    auto saved_node_buffers = std::move(node_buffers_);
-    node_buffers_.clear();
+    // Save node_types_ state before visiting closure body
+    auto saved_node_types = std::move(node_types_);
+    node_types_.clear();
 
     // Compile the closure body (feedback chain)
-    std::uint16_t processed_buf = visit(closure_body);
+    std::uint16_t processed_buf = visit(closure_body).buffer;
 
-    // Restore node_buffers_
-    node_buffers_ = std::move(saved_node_buffers);
+    // Restore node_types_
+    node_types_ = std::move(saved_node_types);
 
     // Pop semantic context
     pop_path();
@@ -1408,7 +1345,7 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     if (write_out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Emit DELAY_WRITE instruction
@@ -1431,13 +1368,12 @@ std::uint16_t CodeGenerator::handle_tap_delay_call(NodeIndex node, const Node& n
     // Pop the outer path
     pop_path();
 
-    node_buffers_[node] = write_out_buf;
-    return write_out_buf;
+    return cache_and_return(node, TypedValue::signal(write_out_buf));
 }
 
 // Handle poly(voices, instrument) / mono(instrument) / legato(instrument)
 // Emits POLY_BEGIN, inlines instrument body, emits POLY_END
-std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
+TypedValue CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     using codegen::extract_call_args;
 
     const std::string& func_name = n.as_identifier();
@@ -1455,7 +1391,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
         } else {
             error("E400", func_name + "() requires 1-2 arguments: " + func_name + "(instrument) or " + func_name + "(input, instrument)", n.location);
         }
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Parse arguments based on func_name and arg count
@@ -1475,7 +1411,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
             instrument_arg = args.nodes[1];
         } else {
             error("E400", "poly() requires 2-3 arguments", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     } else {
         // mono/legato: 1 arg = (fn), 2 args = (input, fn)
@@ -1486,7 +1422,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
             instrument_arg = args.nodes[0];
         } else {
             error("E400", func_name + "() requires 1-2 arguments", n.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     }
 
@@ -1497,23 +1433,22 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
             int v = static_cast<int>(vn.as_number());
             if (v < 1 || v > 32) {
                 error("E401", "Voice count must be between 1 and 32", vn.location);
-                return BufferAllocator::BUFFER_UNUSED;
+                return TypedValue::void_val();
             }
             max_voices = static_cast<std::uint8_t>(v);
         } else {
             error("E402", "Voice count must be a number literal", vn.location);
-            return BufferAllocator::BUFFER_UNUSED;
+            return TypedValue::void_val();
         }
     }
 
     // Visit pattern input if present (emits SEQPAT_QUERY etc.)
     std::uint32_t seq_state_id = 0;
     if (pattern_arg != NULL_NODE) {
-        (void)visit(pattern_arg);
-        // Look up pattern state_id from the visited pattern node
-        auto pit = pattern_state_ids_.find(pattern_arg);
-        if (pit != pattern_state_ids_.end()) {
-            seq_state_id = pit->second;
+        auto pat_tv = visit(pattern_arg);
+        // Look up pattern state_id from TypedValue
+        if (pat_tv.pattern) {
+            seq_state_id = pat_tv.pattern->state_id;
         }
         // Consume polyphonic tracking — poly() handles voice allocation at runtime
         polyphonic_pattern_nodes_.erase(pattern_arg);
@@ -1523,14 +1458,14 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     auto func_ref = resolve_function_arg(instrument_arg);
     if (!func_ref) {
         error("E403", func_name + "() instrument argument must be a function with 3 parameters (freq, gate, vel)", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Validate exactly 3 parameters
     if (func_ref->params.size() != 3) {
         error("E404", func_name + "() instrument function must have exactly 3 parameters (freq, gate, vel), got " +
               std::to_string(func_ref->params.size()), n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Allocate scratch buffers for voice parameters and output
@@ -1543,7 +1478,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
 
     if (mix_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
 
     // Push semantic path for unique state_id
@@ -1577,9 +1512,9 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
         symbols_->define_variable(capture.name, capture.buffer_index);
     }
 
-    // Save node_buffers_ state before visiting body
-    auto saved_node_buffers = std::move(node_buffers_);
-    node_buffers_.clear();
+    // Save node_types_ state before visiting body
+    auto saved_node_types = std::move(node_types_);
+    node_types_.clear();
 
     // Record body start instruction index
     std::size_t body_start = instructions_.size();
@@ -1588,7 +1523,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     std::uint16_t body_result = BufferAllocator::BUFFER_UNUSED;
     if (func_ref->is_user_function) {
         // User function: body is directly the body_node
-        body_result = visit(func_ref->closure_node);
+        body_result = visit(func_ref->closure_node).buffer;
     } else {
         // Closure: find body (last child of closure node)
         const Node& closure_node = ast_->arena[func_ref->closure_node];
@@ -1605,7 +1540,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
             child = ast_->arena[child].next_sibling;
         }
         if (body != NULL_NODE) {
-            body_result = visit(body);
+            body_result = visit(body).buffer;
         }
     }
 
@@ -1626,10 +1561,10 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     // Record body end
     std::size_t body_end = instructions_.size();
 
-    // Restore node_buffers_
-    for (auto& [k, v] : saved_node_buffers) {
-        if (node_buffers_.find(k) == node_buffers_.end()) {
-            node_buffers_[k] = v;
+    // Restore node_types_
+    for (auto& [k, v] : saved_node_types) {
+        if (node_types_.find(k) == node_types_.end()) {
+            node_types_[k] = v;
         }
     }
 
@@ -1641,7 +1576,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     if (body_length > 255) {
         error("E405", "Poly instrument body too large (max 255 instructions)", n.location);
         pop_path();
-        return BufferAllocator::BUFFER_UNUSED;
+        return TypedValue::void_val();
     }
     instructions_[poly_begin_idx].rate = static_cast<std::uint8_t>(body_length);
 
@@ -1670,8 +1605,7 @@ std::uint16_t CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     poly_init.poly_steal_strategy = 0;  // oldest
     state_inits_.push_back(std::move(poly_init));
 
-    node_buffers_[node] = mix_buf;
-    return mix_buf;
+    return cache_and_return(node, TypedValue::signal(mix_buf));
 }
 
 } // namespace akkado
