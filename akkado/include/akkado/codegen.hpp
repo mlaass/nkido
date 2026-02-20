@@ -244,6 +244,16 @@ private:
     /// Handle runtime match - emit all branches and build nested select chain
     std::uint16_t handle_runtime_match(NodeIndex node, const Node& n);
 
+    /// Get record field buffers for a node (record literal, pattern, identifier to record/pattern)
+    /// Returns nullptr if node has no record fields
+    const std::unordered_map<std::string, std::uint16_t>* get_record_fields(NodeIndex node);
+
+    /// Bind destructured fields from a record/pattern node into the symbol table
+    /// Returns true if all fields were bound, false on error
+    bool bind_destructure_fields(NodeIndex source_node,
+                                 const std::vector<std::string>& fields,
+                                 SourceLocation loc);
+
     /// FM Detection: Automatically upgrade oscillators to 4x when FM is detected
     /// @param freq_buffer The buffer index containing the frequency input
     /// @return true if the frequency input traces back to an audio-rate source

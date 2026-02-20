@@ -436,11 +436,13 @@ NodeIndex SemanticAnalyzer::rewrite_pipes(NodeIndex node) {
         std::string binding_name;
         NodeIndex binding_value = NULL_NODE;  // original bound expression (for substitution)
         NodeIndex actual_lhs = lhs_idx;
+        std::vector<std::string> destructure_fields;
 
         const Node& lhs_node = (*input_ast_).arena[lhs_idx];
         if (lhs_node.type == NodeType::PipeBinding) {
             const auto& binding_data = lhs_node.as_pipe_binding();
             binding_name = binding_data.binding_name;
+            destructure_fields = binding_data.destructure_fields;
             actual_lhs = lhs_node.first_child;
             binding_value = actual_lhs;  // the expression being bound
         } else {
@@ -452,6 +454,7 @@ NodeIndex SemanticAnalyzer::rewrite_pipes(NodeIndex node) {
                     (*input_ast_).arena[inner_lhs].type == NodeType::PipeBinding) {
                     const auto& bd = (*input_ast_).arena[inner_lhs].as_pipe_binding();
                     binding_name = bd.binding_name;
+                    destructure_fields = bd.destructure_fields;
                     binding_value = (*input_ast_).arena[inner_lhs].first_child;
                     break;
                 }
@@ -504,6 +507,7 @@ NodeIndex SemanticAnalyzer::rewrite_pipes(NodeIndex node) {
             opts.binding_name = binding_name;
             opts.clone_on_hole = direct_binding;
             opts.binding_replacement = binding_value;
+            opts.destructure_fields = destructure_fields;
             new_rhs = substitute_nodes(rhs_idx, opts);
         } else {
             new_rhs = substitute_nodes(rhs_idx, {new_lhs});
@@ -749,6 +753,26 @@ NodeIndex SemanticAnalyzer::substitute_nodes(NodeIndex node, const SubstituteOpt
         }
     }
 
+    // 2b. Identifier matching a destructure field → rewrite to binding.field access
+    if (!opts.destructure_fields.empty() && n.type == NodeType::Identifier) {
+        std::string name;
+        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
+            name = n.as_identifier();
+        }
+        for (const auto& field : opts.destructure_fields) {
+            if (name == field) {
+                // Rewrite `field` → `__destr_N.field` (FieldAccess on the binding)
+                NodeIndex bind_repl = (opts.binding_replacement != NULL_NODE)
+                    ? opts.binding_replacement : opts.replacement;
+                NodeIndex base = clone_subtree(bind_repl);
+                NodeIndex field_access = output_arena_.alloc(NodeType::FieldAccess, n.location);
+                output_arena_[field_access].data = Node::FieldAccessData{field};
+                output_arena_[field_access].first_child = base;
+                return field_access;
+            }
+        }
+    }
+
     // 3. Node identity match → return replacement directly
     if (opts.identifier_to_replace != NULL_NODE && node == opts.identifier_to_replace) {
         return opts.replacement;
@@ -773,6 +797,7 @@ NodeIndex SemanticAnalyzer::substitute_nodes(NodeIndex node, const SubstituteOpt
             ? opts.binding_replacement : opts.replacement;
         rhs_opts.identifier_to_replace = NULL_NODE;  // drop identity match for RHS
         rhs_opts.clone_on_hole = opts.clone_on_hole;
+        rhs_opts.destructure_fields = opts.destructure_fields;
 
         NodeIndex new_rhs = substitute_nodes(src_rhs, rhs_opts);
 
@@ -1466,8 +1491,17 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
     }
 
     // Special handling for MatchArm: skip pattern, validate guard and body
+    // For destructuring arms, push scope with field bindings
     if (n.type == NodeType::MatchArm) {
         const auto& arm_data = n.as_match_arm();
+
+        // Destructuring arms: define field names in a new scope
+        if (arm_data.is_destructure && !arm_data.destructure_fields.empty()) {
+            symbols_.push_scope();
+            for (const auto& field : arm_data.destructure_fields) {
+                symbols_.define_variable(field, 0xFFFF);
+            }
+        }
 
         // Validate guard expression if present
         if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
@@ -1481,6 +1515,10 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
             if (body != NULL_NODE) {
                 resolve_and_validate(body);
             }
+        }
+
+        if (arm_data.is_destructure && !arm_data.destructure_fields.empty()) {
+            symbols_.pop_scope();
         }
         return;
     }

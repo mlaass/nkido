@@ -59,6 +59,7 @@ private:
         NodeIndex identifier_to_replace = NULL_NODE; // NULL_NODE = no identity match
         bool clone_on_hole = false;                  // true for as-binding (needs fresh copies)
         NodeIndex binding_replacement = NULL_NODE;   // separate replacement for binding_name (stays constant through pipe chain)
+        std::vector<std::string> destructure_fields; // field names from `as {f1, f2}` destructuring
     };
 
     // Helper: Unified substitution of holes, binding names, and identifier nodes

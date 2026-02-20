@@ -234,6 +234,8 @@ struct Node {
         bool is_range = false;       // true for range pattern (low..high)
         double range_low = 0.0;      // Lower bound (inclusive)
         double range_high = 0.0;     // Upper bound (exclusive)
+        bool is_destructure = false;                    // true for {field, ...} pattern
+        std::vector<std::string> destructure_fields;    // field names to bind
     };
 
     // Data for match expressions (track scrutinee vs guard-only form)
@@ -257,9 +259,10 @@ struct Node {
         NodeIndex spread_source = NULL_NODE;  // {..expr, ...} — source record to spread
     };
 
-    // Data for pipe binding (expr as name)
+    // Data for pipe binding (expr as name, or expr as {field1, field2})
     struct PipeBindingData {
         std::string binding_name;  // The name bound by 'as'
+        std::vector<std::string> destructure_fields;  // empty for normal binding
     };
 
     // Data for hole with optional field access (%.field)

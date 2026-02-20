@@ -2524,6 +2524,57 @@ TEST_CASE("Codegen: Match expressions", "[codegen]") {
     }
 }
 
+TEST_CASE("Codegen: Match destructuring", "[codegen][match][destructure]") {
+    SECTION("destructure record - compile time") {
+        auto result = akkado::compile(R"(
+            r = {freq: 440, vel: 0.8}
+            match(r) {
+                {freq, vel}: freq
+                _: 0
+            }
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("destructure with expression body") {
+        auto result = akkado::compile(R"(
+            r = {a: 10, b: 20}
+            match(r) {
+                {a, b}: a + b
+                _: 0
+            }
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("destructure with guard") {
+        auto result = akkado::compile(R"(
+            r = {freq: 440, vel: 0.8}
+            match(r) {
+                {freq, vel} && true: freq * vel
+                _: 0
+            }
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("as destructuring in pipe") {
+        auto result = akkado::compile(R"(
+            r = {a: 100, b: 200}
+            r as {a, b} |> a + b
+        )");
+        CHECK(result.success);
+    }
+
+    SECTION("as destructuring single field") {
+        auto result = akkado::compile(R"(
+            r = {val: 42}
+            r as {val} |> val * 2
+        )");
+        CHECK(result.success);
+    }
+}
+
 TEST_CASE("Codegen: Pattern transformations", "[codegen]") {
     // Pattern transformations require literal patterns as first argument
     SECTION("slow transformation") {

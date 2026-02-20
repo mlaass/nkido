@@ -408,6 +408,54 @@ TEST_CASE("Akkado match expressions", "[akkado][match]") {
     }
 }
 
+TEST_CASE("Akkado match destructuring", "[akkado][match][destructure]") {
+    SECTION("destructure record in match arm") {
+        auto result = akkado::compile(R"(
+            r = {freq: 440, vel: 0.8}
+            match(r) {
+                {freq, vel}: freq
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        // Runtime match: record variable isn't a literal, so uses runtime path
+        // Should emit at least the record fields + body + default
+        REQUIRE(result.bytecode.size() >= 2 * sizeof(cedar::Instruction));
+    }
+
+    SECTION("destructure record - second field") {
+        auto result = akkado::compile(R"(
+            r = {freq: 440, vel: 0.8}
+            match(r) {
+                {freq, vel}: vel
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        REQUIRE(result.bytecode.size() >= 2 * sizeof(cedar::Instruction));
+    }
+
+    SECTION("destructure with expression body") {
+        auto result = akkado::compile(R"(
+            r = {freq: 440, vel: 0.5}
+            match(r) {
+                {freq, vel}: freq * vel
+                _: 0
+            }
+        )");
+        REQUIRE(result.success);
+        REQUIRE(result.bytecode.size() >= 3 * sizeof(cedar::Instruction));
+    }
+
+    SECTION("as destructuring binding in pipe") {
+        auto result = akkado::compile(R"(
+            r = {a: 100, b: 200}
+            r as {a, b} |> a + b
+        )");
+        REQUIRE(result.success);
+    }
+}
+
 TEST_CASE("Akkado user-defined functions", "[akkado][fn]") {
     SECTION("simple function definition and call") {
         auto result = akkado::compile(R"(

@@ -727,6 +727,97 @@ TEST_CASE("Parser match expressions", "[parser]") {
     }
 }
 
+TEST_CASE("Parser match destructuring", "[parser][destructure]") {
+    SECTION("destructuring pattern with two fields") {
+        auto ast = parse_ok(R"(
+            match(r) {
+                {freq, vel}: freq * vel
+                _: 0
+            }
+        )");
+        NodeIndex match = ast.arena[ast.root].first_child;
+        REQUIRE(ast.arena[match].type == NodeType::MatchExpr);
+
+        NodeIndex scrutinee = ast.arena[match].first_child;
+        NodeIndex arm = ast.arena[scrutinee].next_sibling;
+        REQUIRE(ast.arena[arm].type == NodeType::MatchArm);
+
+        const auto& arm_data = ast.arena[arm].as_match_arm();
+        CHECK(arm_data.is_destructure == true);
+        CHECK(arm_data.is_wildcard == false);
+        REQUIRE(arm_data.destructure_fields.size() == 2);
+        CHECK(arm_data.destructure_fields[0] == "freq");
+        CHECK(arm_data.destructure_fields[1] == "vel");
+    }
+
+    SECTION("destructuring pattern with guard") {
+        auto ast = parse_ok(R"(
+            match(r) {
+                {freq, vel} && vel > 0.5: freq
+                _: 0
+            }
+        )");
+        NodeIndex match = ast.arena[ast.root].first_child;
+        NodeIndex scrutinee = ast.arena[match].first_child;
+        NodeIndex arm = ast.arena[scrutinee].next_sibling;
+
+        const auto& arm_data = ast.arena[arm].as_match_arm();
+        CHECK(arm_data.is_destructure == true);
+        CHECK(arm_data.has_guard == true);
+        CHECK(arm_data.guard_node != NULL_NODE);
+        REQUIRE(arm_data.destructure_fields.size() == 2);
+        CHECK(arm_data.destructure_fields[0] == "freq");
+        CHECK(arm_data.destructure_fields[1] == "vel");
+    }
+
+    SECTION("single field destructuring") {
+        auto ast = parse_ok(R"(
+            match(r) {
+                {freq}: freq
+                _: 0
+            }
+        )");
+        NodeIndex match = ast.arena[ast.root].first_child;
+        NodeIndex scrutinee = ast.arena[match].first_child;
+        NodeIndex arm = ast.arena[scrutinee].next_sibling;
+
+        const auto& arm_data = ast.arena[arm].as_match_arm();
+        CHECK(arm_data.is_destructure == true);
+        REQUIRE(arm_data.destructure_fields.size() == 1);
+        CHECK(arm_data.destructure_fields[0] == "freq");
+    }
+}
+
+TEST_CASE("Parser as destructuring", "[parser][destructure]") {
+    SECTION("as destructuring binding") {
+        auto ast = parse_ok("1 as {freq, vel} |> freq + vel");
+        NodeIndex root = ast.root;
+        NodeIndex pipe = ast.arena[root].first_child;
+        REQUIRE(ast.arena[pipe].type == NodeType::Pipe);
+
+        NodeIndex lhs = ast.arena[pipe].first_child;
+        REQUIRE(ast.arena[lhs].type == NodeType::PipeBinding);
+
+        const auto& binding = ast.arena[lhs].as_pipe_binding();
+        // Should have auto-generated temp name
+        CHECK(binding.binding_name.substr(0, 8) == "__destr_");
+        REQUIRE(binding.destructure_fields.size() == 2);
+        CHECK(binding.destructure_fields[0] == "freq");
+        CHECK(binding.destructure_fields[1] == "vel");
+    }
+
+    SECTION("as destructuring single field") {
+        auto ast = parse_ok("1 as {x} |> x");
+        NodeIndex pipe = ast.arena[ast.root].first_child;
+        NodeIndex lhs = ast.arena[pipe].first_child;
+        REQUIRE(ast.arena[lhs].type == NodeType::PipeBinding);
+
+        const auto& binding = ast.arena[lhs].as_pipe_binding();
+        REQUIRE(binding.destructure_fields.size() == 1);
+        CHECK(binding.destructure_fields[0] == "x");
+    }
+}
+
 TEST_CASE("Parser arrays", "[parser][array]") {
     SECTION("empty array") {
         auto ast = parse_ok("[]");

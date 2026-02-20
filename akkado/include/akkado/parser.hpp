@@ -145,6 +145,7 @@ private:
 
     std::size_t current_idx_ = 0;
     bool panic_mode_ = false;
+    std::size_t destr_counter_ = 0;  // unique counter for destructuring temp bindings
 };
 
 /// Convenience function to parse source code

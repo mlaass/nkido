@@ -319,9 +319,29 @@ NodeIndex Parser::parse_precedence(Precedence prec) {
         if (check(TokenType::As) && prec <= Precedence::Pipe) {
             Token as_tok = advance();  // consume 'as'
 
-            if (!check(TokenType::Identifier)) {
-                error("Expected identifier after 'as'");
-            } else {
+            if (check(TokenType::LBrace)) {
+                // as {field1, field2, ...} — destructuring binding
+                advance();  // consume '{'
+                std::vector<std::string> destr_fields;
+                while (!check(TokenType::RBrace) && !is_at_end()) {
+                    if (!check(TokenType::Identifier)) {
+                        error("Expected field name in destructuring binding");
+                        break;
+                    }
+                    destr_fields.push_back(std::string(current().lexeme));
+                    advance();
+                    if (!check(TokenType::RBrace)) {
+                        consume(TokenType::Comma, "Expected ',' between destructuring fields");
+                    }
+                }
+                consume(TokenType::RBrace, "Expected '}' after destructuring fields");
+
+                std::string temp_name = "__destr_" + std::to_string(destr_counter_++);
+                NodeIndex binding = make_node(NodeType::PipeBinding, as_tok);
+                arena_[binding].data = Node::PipeBindingData{temp_name, std::move(destr_fields)};
+                arena_.add_child(binding, left);
+                left = binding;
+            } else if (check(TokenType::Identifier)) {
                 Token name_tok = advance();
 
                 // Wrap 'left' in a PipeBinding node
@@ -330,6 +350,8 @@ NodeIndex Parser::parse_precedence(Precedence prec) {
                 arena_.add_child(binding, left);
 
                 left = binding;
+            } else {
+                error("Expected identifier or '{' after 'as'");
             }
             continue;  // Continue to check for |> or other operators
         }
@@ -1150,11 +1172,32 @@ NodeIndex Parser::parse_match_expr() {
         bool is_range = false;
         double range_low = 0.0;
         double range_high = 0.0;
+        bool is_destructure = false;
+        std::vector<std::string> destructure_fields;
 
         if (has_scrutinee) {
             // Scrutinee form: parse pattern, then optional && guard
-            // Pattern: string, number, -number, number..number, bool, or _ (wildcard)
-            if (check(TokenType::String)) {
+            // Pattern: string, number, -number, number..number, bool, {field,...}, or _ (wildcard)
+            if (check(TokenType::LBrace)) {
+                // Destructuring pattern: { ident, ident, ... }
+                advance();  // consume '{'
+                is_destructure = true;
+                while (!check(TokenType::RBrace) && !is_at_end()) {
+                    if (!check(TokenType::Identifier)) {
+                        error("Expected field name in destructuring pattern");
+                        break;
+                    }
+                    destructure_fields.push_back(std::string(current().lexeme));
+                    advance();
+                    if (!check(TokenType::RBrace)) {
+                        consume(TokenType::Comma, "Expected ',' between destructuring fields");
+                    }
+                }
+                consume(TokenType::RBrace, "Expected '}' after destructuring fields");
+                // Create a placeholder pattern node
+                pattern = make_node(NodeType::Identifier, arm_tok);
+                arena_[pattern].data = Node::IdentifierData{"_destructure"};
+            } else if (check(TokenType::String)) {
                 pattern = parse_string();
             } else if (check(TokenType::Number) || check(TokenType::Minus)) {
                 // Parse optionally-negative number literal
@@ -1240,7 +1283,7 @@ NodeIndex Parser::parse_match_expr() {
 
         // Create MatchArm node
         NodeIndex arm = make_node(NodeType::MatchArm, arm_tok);
-        arena_[arm].data = Node::MatchArmData{is_wildcard, has_guard, guard, is_range, range_low, range_high};
+        arena_[arm].data = Node::MatchArmData{is_wildcard, has_guard, guard, is_range, range_low, range_high, is_destructure, std::move(destructure_fields)};
         arena_.add_child(arm, pattern);
         if (body != NULL_NODE) {
             arena_.add_child(arm, body);

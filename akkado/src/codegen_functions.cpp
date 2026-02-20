@@ -746,6 +746,63 @@ bool CodeGenerator::is_compile_time_match(NodeIndex node, const Node& n) const {
     return true;
 }
 
+// Get record field buffers for a node (handles record literals, patterns, identifiers)
+const std::unordered_map<std::string, std::uint16_t>*
+CodeGenerator::get_record_fields(NodeIndex node) {
+    // Direct lookup
+    auto it = record_fields_.find(node);
+    if (it != record_fields_.end()) {
+        return &it->second;
+    }
+
+    // If it's an identifier, follow symbol table
+    const Node& n = ast_->arena[node];
+    if (n.type == NodeType::Identifier) {
+        std::string var_name;
+        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
+            var_name = n.as_identifier();
+        }
+        auto sym = symbols_->lookup(var_name);
+        if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
+            auto rec_it = record_fields_.find(sym->record_type->source_node);
+            if (rec_it != record_fields_.end()) {
+                return &rec_it->second;
+            }
+        }
+        if (sym && sym->kind == SymbolKind::Pattern) {
+            auto rec_it = record_fields_.find(sym->pattern.pattern_node);
+            if (rec_it != record_fields_.end()) {
+                return &rec_it->second;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+// Bind destructured fields from a record/pattern into the symbol table
+bool CodeGenerator::bind_destructure_fields(
+    NodeIndex source_node,
+    const std::vector<std::string>& fields,
+    SourceLocation loc)
+{
+    const auto* field_map = get_record_fields(source_node);
+    if (!field_map) {
+        error("E140", "Cannot destructure: scrutinee has no record fields", loc);
+        return false;
+    }
+
+    for (const auto& field : fields) {
+        auto field_it = field_map->find(field);
+        if (field_it == field_map->end()) {
+            error("E141", "Destructure field '" + field + "' not found in record", loc);
+            return false;
+        }
+        symbols_->define_variable(field, field_it->second);
+    }
+    return true;
+}
+
 // Handle compile-time match - evaluate patterns and guards, emit only winning branch
 std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Node& n) {
     const auto& match_data = n.as_match_expr();
@@ -812,6 +869,30 @@ std::uint16_t CodeGenerator::handle_compile_time_match(NodeIndex node, const Nod
 
             if (arm_data.is_wildcard) {
                 default_body = body;
+            } else if (arm_data.is_destructure && match_data.has_scrutinee) {
+                // Destructuring pattern: always matches, bind fields from scrutinee
+                NodeIndex scrutinee_node = n.first_child;
+                visit(scrutinee_node);  // ensure record_fields_ populated
+
+                // Check guard if present
+                bool guard_passes = true;
+                if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
+                    const Node& guard_node = ast_->arena[arm_data.guard_node];
+                    if (guard_node.type == NodeType::BoolLit) {
+                        guard_passes = guard_node.as_bool();
+                    } else if (guard_node.type == NodeType::NumberLit) {
+                        guard_passes = guard_node.as_number() != 0.0;
+                    }
+                }
+
+                if (guard_passes && body != NULL_NODE) {
+                    symbols_->push_scope();
+                    bind_destructure_fields(scrutinee_node, arm_data.destructure_fields, arm_node.location);
+                    std::uint16_t result = visit(body);
+                    symbols_->pop_scope();
+                    node_buffers_[node] = result;
+                    return result;
+                }
             } else if (match_data.has_scrutinee) {
                 // Range pattern: check low <= scrutinee < high
                 if (arm_data.is_range) {
@@ -923,7 +1004,7 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
         const Node& arm_node = ast_->arena[arm];
         if (arm_node.type == NodeType::MatchArm) {
             const auto& arm_data = arm_node.as_match_arm();
-            if (arm_data.is_wildcard) {
+            if (arm_data.is_wildcard || (arm_data.is_destructure && !arm_data.has_guard)) {
                 has_wildcard = true;
                 break;
             }
@@ -959,6 +1040,14 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
             NodeIndex body = (pattern != NULL_NODE) ?
                             ast_->arena[pattern].next_sibling : NULL_NODE;
 
+            // Bind destructured fields before visiting body/guard (they may reference them)
+            bool has_destr_scope = false;
+            if (arm_data.is_destructure && match_data.has_scrutinee) {
+                symbols_->push_scope();
+                has_destr_scope = true;
+                bind_destructure_fields(n.first_child, arm_data.destructure_fields, arm_node.location);
+            }
+
             // Visit body first (all branches compute in DSP)
             std::uint16_t body_buf = BufferAllocator::BUFFER_UNUSED;
             if (body != NULL_NODE) {
@@ -978,7 +1067,19 @@ std::uint16_t CodeGenerator::handle_runtime_match(NodeIndex node, const Node& n)
             }
 
             if (arm_data.is_wildcard) {
+                if (has_destr_scope) symbols_->pop_scope();
                 arms.push_back({BufferAllocator::BUFFER_UNUSED, body_buf, true});
+            } else if (arm_data.is_destructure) {
+                // Destructuring arm: always matches unless guarded
+                if (arm_data.has_guard && arm_data.guard_node != NULL_NODE) {
+                    std::uint16_t guard_buf = visit(arm_data.guard_node);
+                    if (has_destr_scope) symbols_->pop_scope();
+                    arms.push_back({guard_buf, body_buf, false});
+                } else {
+                    // No guard → always matches (like wildcard)
+                    if (has_destr_scope) symbols_->pop_scope();
+                    arms.push_back({BufferAllocator::BUFFER_UNUSED, body_buf, true});
+                }
             } else {
                 // Build condition
                 std::uint16_t cond_buf = BufferAllocator::BUFFER_UNUSED;
