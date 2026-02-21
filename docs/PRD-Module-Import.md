@@ -193,7 +193,7 @@ Core work. Generalizes the stdlib-prepend pattern to N source files.
 
 | File | Change |
 |------|--------|
-| `akkado/include/akkado/token.hpp` | Add `Import` token type |
+| `akkado/include/akkado/token.hpp` | Add `Import` token type (`As` already exists for pipe bindings, reused for `import ... as`) |
 | `akkado/src/lexer.cpp` | Add `"import"` to keyword map |
 | `akkado/include/akkado/ast.hpp` | Add `ImportDecl` node type + `ImportDeclData` |
 | `akkado/src/parser.cpp` | Parse import statements (before other statements) |
@@ -221,7 +221,10 @@ public:
                     std::size_t byte_length, std::size_t line_count);
 
     /// Adjust a diagnostic's location from combined-source coordinates
-    /// back to the originating file's local coordinates
+    /// back to the originating file's local coordinates.
+    /// Adjusts the diagnostic's primary location, all Related locations,
+    /// and the Fix location if present — matching the current
+    /// adjust_diagnostics() behavior.
     void adjust(Diagnostic& diag) const;
 
     /// Adjust all diagnostics in a vector
@@ -267,13 +270,16 @@ ImportResult resolve_imports(
 ```
 
 The scanner:
-1. Scans the source for lines matching `import "..."` or `import "..." as ident`
+1. Scans the source for lines matching `import "..."` or `import "..." as ident` using lightweight line-based matching that skips `//` comment lines and only matches `import` as the first token on a non-comment line
 2. For each import, calls `resolver.resolve()` to get the canonical path and source
-3. Recursively scans imported modules for their own imports
-4. Builds a dependency graph and runs topological sort (DFS post-order)
-5. Detects cycles and reports errors with the full cycle path
+3. Replaces import lines in each module's source with blank lines (preserving byte offsets and line counts for SourceMap accuracy) before the source is concatenated
+4. Recursively scans imported modules for their own imports
+5. Builds a dependency graph and runs topological sort (DFS post-order)
+6. Detects cycles and reports errors with the full cycle path
 
-The scanner uses simple string matching (not the full lexer) — it only needs to find `import` at the start of a line followed by a string literal. This avoids bootstrapping issues with the lexer needing to know about imports.
+The scanner uses lightweight line-based matching (not the full lexer) — it only needs to find `import` as the first token on a non-comment line followed by a string literal. This avoids bootstrapping issues with the lexer needing to know about imports.
+
+**Scanner vs. Parser roles**: The scanner (`import_scanner.hpp`) runs before lexing and handles all file resolution, cycle detection, topological sorting, and import line stripping. The `Import` token and `ImportDecl` AST node in the parser exist for **validation and future extensibility** (e.g., `import { a, b } from "path"`). In Phase A, the parser recognizes import syntax to produce clear errors like "import after code" (E501), but the scanner has already resolved and stripped the import lines. The parser emits `ImportDecl` nodes that codegen treats as no-ops.
 
 #### Compile Flow Change
 
@@ -361,7 +367,7 @@ struct ModuleInfo {
 
 For namespaced imports (`import "filters" as f`):
 1. During concatenation, the module's source is still included (definitions must be compiled)
-2. After analysis collects definitions, mark all symbols originating from this module as `hidden = true` and set `origin_module`
+2. During analysis, after the definition-collection pass, mark all symbols originating from this module as `hidden = true` and set `origin_module`
 3. Register a `Module` symbol named `f` pointing to the module
 4. Hidden symbols are skipped during normal lookup
 
@@ -377,7 +383,7 @@ For qualified access (`f.lp()`):
 | `akkado/include/akkado/symbol_table.hpp` | `SymbolKind::Module`, `hidden`, `origin_module` fields |
 | `akkado/src/symbol_table.cpp` | Skip hidden symbols in `lookup()` unless module-qualified |
 | `akkado/src/analyzer.cpp` | Module-qualified resolution in `collect_definitions()`, `rewrite_pipes()`, `desugar_method_call()` |
-| `akkado/src/akkado.cpp` | After analysis, mark symbols from namespaced modules as hidden |
+| `akkado/src/analyzer.cpp` | During analysis: after `collect_definitions()` but before reference resolution, use SourceMap to identify symbols from namespaced modules and mark them hidden |
 
 #### Interaction with Dot-Call
 
@@ -427,12 +433,14 @@ Stdlib `.ak` files are placed in `web/static/stdlib/`. At web app initialization
 
 The CodeGenerator tracks a `path_stack_` (`codegen.hpp:448`) to generate stable semantic IDs via FNV-1a hashing of the joined path (e.g., `main/osc1/delay` → `fnv1a("main/osc1/delay")`). These IDs are used by the `StatePool` to preserve DSP state across hot-swaps.
 
-When processing definitions from imported modules, the module's filename must be pushed onto `path_stack_` so that state IDs include the module context. This ensures that:
+When processing definitions from imported modules, the module's origin must be pushed onto `path_stack_` so that state IDs include the module context. This ensures that:
 
 1. A `delay()` in `filters.ak` gets a different state ID than a `delay()` in `synths.ak`
-2. Reordering imports doesn't change state IDs (the module filename is part of the path, not the concatenation position)
+2. Reordering imports doesn't change state IDs (the module origin is part of the path, not the concatenation position)
 
-**Implementation**: Pass the `SourceMap` to the `CodeGenerator`. Before visiting a top-level statement, check which region it falls in. If the region's filename differs from the current path context, push/pop the module filename on `path_stack_`.
+**Implementation**: Pass the `SourceMap` to the `CodeGenerator`. Before visiting a top-level statement, check which region it falls in. If the region's filename differs from the current path context, push/pop the module origin on `path_stack_`.
+
+**Stdlib path stability**: Stdlib modules (those resolved from the stdlib search path) use a stable `<stdlib>` prefix on `path_stack_`, not their actual filesystem path. User modules push their canonical filename. This preserves backward compatibility: current stdlib definitions produce the same semantic IDs as before migration, since the existing stdlib contributes nothing to the path stack and `<stdlib>` matches the filename already used in diagnostics.
 
 ---
 
