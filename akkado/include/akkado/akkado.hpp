@@ -10,8 +10,9 @@
 
 namespace akkado {
 
-// Forward declaration
+// Forward declarations
 class SampleRegistry;
+class FileResolver;
 
 /// Akkado version information
 struct Version {
@@ -42,13 +43,19 @@ struct CompileResult {
 /// @param source The source code to compile
 /// @param filename Optional filename for error reporting
 /// @param sample_registry Optional sample registry for resolving sample names to IDs
+/// @param resolver Optional file resolver for import statements
 /// @return Compilation result with bytecode and diagnostics
 CompileResult compile(std::string_view source, std::string_view filename = "<input>",
-                     SampleRegistry* sample_registry = nullptr);
+                     SampleRegistry* sample_registry = nullptr,
+                     const FileResolver* resolver = nullptr);
 
-/// Compile from file
+/// Compile from file (creates a FilesystemResolver for the file's directory)
 /// @param path Path to the source file
+/// @param sample_registry Optional sample registry for resolving sample names to IDs
+/// @param resolver Optional file resolver (if null, creates a FilesystemResolver)
 /// @return Compilation result
-CompileResult compile_file(const std::string& path);
+CompileResult compile_file(const std::string& path,
+                          SampleRegistry* sample_registry = nullptr,
+                          const FileResolver* resolver = nullptr);
 
 } // namespace akkado

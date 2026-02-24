@@ -57,6 +57,9 @@ add_library(akkado STATIC
     src/chord_parser.cpp
     src/pattern_debug.cpp
     src/tuning.cpp
+    src/source_map.cpp
+    src/file_resolver.cpp
+    src/import_scanner.cpp
 )
 
 target_include_directories(akkado

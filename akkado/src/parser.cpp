@@ -167,13 +167,58 @@ NodeIndex Parser::make_node(NodeType type, const Token& token) {
 
 // Program parsing
 
+NodeIndex Parser::parse_import_decl() {
+    Token import_tok = previous();  // Import token already consumed by match()
+    NodeIndex node = make_node(NodeType::ImportDecl, import_tok);
+
+    // Expect string literal (path)
+    if (!check(TokenType::String)) {
+        error("Expected module path string after 'import'");
+        return node;
+    }
+    Token path_tok = advance();
+    std::string path = path_tok.as_string();
+
+    // Optional: as <ident>
+    std::string alias;
+    if (match(TokenType::As)) {
+        if (!check(TokenType::Identifier)) {
+            error("Expected identifier after 'as'");
+        } else {
+            Token alias_tok = advance();
+            alias = std::string(alias_tok.lexeme);
+        }
+    }
+
+    arena_[node].data = Node::ImportDeclData{std::move(path), std::move(alias)};
+    return node;
+}
+
 NodeIndex Parser::parse_program() {
     NodeIndex program = make_node(NodeType::Program);
+    bool seen_code = false;
 
     while (!is_at_end()) {
-        NodeIndex stmt = parse_statement();
-        if (stmt != NULL_NODE) {
-            arena_.add_child(program, stmt);
+        if (match(TokenType::Import)) {
+            if (seen_code) {
+                diagnostics_.push_back(Diagnostic{
+                    .severity = Severity::Error,
+                    .code = "E501",
+                    .message = "Import statements must appear before other code",
+                    .filename = filename_,
+                    .location = previous().location
+                });
+            }
+            NodeIndex imp = parse_import_decl();
+            if (imp != NULL_NODE) {
+                arena_.add_child(program, imp);
+            }
+        } else {
+            seen_code = true;
+            NodeIndex stmt = parse_statement();
+            if (stmt != NULL_NODE) {
+                arena_.add_child(program, stmt);
+            }
         }
         if (panic_mode_) {
             synchronize();

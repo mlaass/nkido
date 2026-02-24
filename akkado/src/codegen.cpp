@@ -1,6 +1,8 @@
 #include "akkado/codegen.hpp"
 #include "akkado/codegen/codegen.hpp"  // Master include for all codegen helpers
 #include "akkado/builtins.hpp"
+#include "akkado/source_map.hpp"
+#include "akkado/stdlib.hpp"
 #include "akkado/chord_parser.hpp"
 #include "akkado/const_eval.hpp"
 #include "akkado/pattern_eval.hpp"
@@ -28,10 +30,12 @@ std::uint16_t BufferAllocator::allocate() {
 
 CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
                                        std::string_view filename,
-                                       SampleRegistry* sample_registry) {
+                                       SampleRegistry* sample_registry,
+                                       const SourceMap* source_map) {
     ast_ = &ast;
     symbols_ = &symbols;
     sample_registry_ = sample_registry;
+    source_map_ = source_map;
     buffers_ = BufferAllocator{};
     instructions_.clear();
     source_locations_.clear();
@@ -101,11 +105,32 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
     switch (n.type) {
         case NodeType::Program: {
-            // Visit all statements
+            // Visit all statements, pushing module context for imported definitions
             NodeIndex child = n.first_child;
             TypedValue last = TypedValue::void_val();
             while (child != NULL_NODE) {
+                const Node& child_node = ast_->arena[child];
+
+                // For imported module definitions, push their module path onto
+                // path_stack_ so state_ids are scoped by module origin.
+                // Skip <stdlib> region to preserve backward-compatible IDs.
+                bool pushed_module = false;
+                if (source_map_) {
+                    auto* region = source_map_->find_region(child_node.location.offset);
+                    if (region &&
+                        region->filename != filename_ &&
+                        region->filename != STDLIB_FILENAME) {
+                        push_path(region->filename);
+                        pushed_module = true;
+                    }
+                }
+
                 last = visit(child);
+
+                if (pushed_module) {
+                    pop_path();
+                }
+
                 child = ast_->arena[child].next_sibling;
             }
             return last;
@@ -1211,6 +1236,10 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
         case NodeType::PipeBinding:
             return handle_pipe_binding(node, n);
+
+        case NodeType::ImportDecl:
+            // No-op: imports are resolved by the scanner before compilation
+            return TypedValue::void_val();
 
         case NodeType::Directive:
             return handle_directive(node, n);

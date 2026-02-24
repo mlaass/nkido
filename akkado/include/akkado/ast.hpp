@@ -68,6 +68,9 @@ enum class NodeType : std::uint8_t {
     FieldAccess,    // expr.field - field access on record
     PipeBinding,    // expr as name - named binding in pipe chain
 
+    // Imports
+    ImportDecl,     // import "path" [as alias]
+
     // Directives
     Directive,      // $name(args) - compiler directive
 
@@ -113,6 +116,7 @@ constexpr const char* node_type_name(NodeType type) {
         case NodeType::RecordLit:   return "RecordLit";
         case NodeType::FieldAccess: return "FieldAccess";
         case NodeType::PipeBinding: return "PipeBinding";
+        case NodeType::ImportDecl:  return "ImportDecl";
         case NodeType::Directive:   return "Directive";
         case NodeType::Program:     return "Program";
     }
@@ -270,6 +274,12 @@ struct Node {
         std::optional<std::string> field_name;  // Field name if %.field, nullopt for bare %
     };
 
+    // Data for import declarations (import "path" [as alias])
+    struct ImportDeclData {
+        std::string path;    // Import path string
+        std::string alias;   // Empty for direct injection, non-empty for "as X"
+    };
+
     // Data for directives ($name(args))
     struct DirectiveData {
         std::string name;  // Directive name (e.g., "polyphony")
@@ -298,6 +308,7 @@ struct Node {
         FieldAccessData,
         PipeBindingData,
         HoleData,
+        ImportDeclData,
         DirectiveData
     > data;
 

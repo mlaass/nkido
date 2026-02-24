@@ -4,57 +4,31 @@
 #include "akkado/analyzer.hpp"
 #include "akkado/codegen.hpp"
 #include "akkado/stdlib.hpp"
+#include "akkado/source_map.hpp"
+#include "akkado/import_scanner.hpp"
+#include "akkado/file_resolver.hpp"
 #include <cedar/vm/instruction.hpp>
 #include <fstream>
 #include <sstream>
 #include <cstring>
+#ifndef __EMSCRIPTEN__
+#include <filesystem>
+#endif
 
 namespace akkado {
 
-/// Adjust diagnostic locations to account for stdlib prepended to user source.
-/// Diagnostics in user code get line numbers adjusted back to user's view.
-/// Diagnostics in stdlib get their filename changed to STDLIB_FILENAME.
-static void adjust_diagnostics(std::vector<Diagnostic>& diagnostics,
-                                std::size_t stdlib_byte_offset,
-                                std::size_t stdlib_line_count,
-                                std::string_view user_filename) {
-    for (auto& diag : diagnostics) {
-        if (diag.location.offset < stdlib_byte_offset) {
-            // Error is in stdlib - mark it as such
-            diag.filename = std::string(STDLIB_FILENAME);
-        } else {
-            // Error is in user code - adjust line/offset back to user's view
-            // stdlib_line_count is the number of lines in stdlib, and we add a newline
-            // after stdlib, so user code starts on line (stdlib_line_count + 1).
-            // To convert combined line L to user line: user_line = L - stdlib_line_count
-            diag.location.line -= static_cast<std::uint32_t>(stdlib_line_count);
-            diag.location.offset -= static_cast<std::uint32_t>(stdlib_byte_offset);
-            diag.filename = std::string(user_filename);
-        }
-
-        // Also adjust related diagnostics
-        for (auto& rel : diag.related) {
-            if (rel.location.offset < stdlib_byte_offset) {
-                rel.filename = std::string(STDLIB_FILENAME);
-            } else {
-                rel.location.line -= static_cast<std::uint32_t>(stdlib_line_count);
-                rel.location.offset -= static_cast<std::uint32_t>(stdlib_byte_offset);
-                rel.filename = std::string(user_filename);
-            }
-        }
-
-        // Adjust fix location if present
-        if (diag.fix) {
-            if (diag.fix->location.offset >= stdlib_byte_offset) {
-                diag.fix->location.line -= static_cast<std::uint32_t>(stdlib_line_count);
-                diag.fix->location.offset -= static_cast<std::uint32_t>(stdlib_byte_offset);
-            }
-        }
+/// Count newlines in a string (for source map line offsets)
+static std::size_t count_lines(std::string_view s) {
+    std::size_t count = 1;
+    for (char c : s) {
+        if (c == '\n') ++count;
     }
+    return count;
 }
 
 CompileResult compile(std::string_view source, std::string_view filename,
-                     SampleRegistry* sample_registry) {
+                     SampleRegistry* sample_registry,
+                     const FileResolver* resolver) {
     CompileResult result;
 
     if (source.empty()) {
@@ -69,18 +43,83 @@ CompileResult compile(std::string_view source, std::string_view filename,
         return result;
     }
 
-    // Prepend stdlib to user source
+    // Step 1: Resolve imports (if resolver provided)
+    std::vector<ResolvedModule> resolved_modules;
+    std::string user_source;
+
+    if (resolver) {
+        auto import_result = resolve_imports(source, filename, *resolver);
+        if (!import_result.success) {
+            result.diagnostics = std::move(import_result.diagnostics);
+            result.success = false;
+            return result;
+        }
+        // Forward any warnings from import resolution
+        result.diagnostics.insert(result.diagnostics.end(),
+            import_result.diagnostics.begin(), import_result.diagnostics.end());
+        resolved_modules = std::move(import_result.modules);
+        user_source = std::move(import_result.root_source);
+    } else {
+        // No resolver: check if source contains imports (E505)
+        auto user_imports = scan_imports(source);
+        if (!user_imports.empty()) {
+            for (const auto& dir : user_imports) {
+                result.diagnostics.push_back(Diagnostic{
+                    .severity = Severity::Error,
+                    .code = "E505",
+                    .message = "Import requires a file resolver (not available in this context)",
+                    .filename = std::string(filename),
+                    .location = {
+                        .line = static_cast<std::uint32_t>(dir.line_number),
+                        .column = 1,
+                        .offset = static_cast<std::uint32_t>(dir.line_start),
+                        .length = static_cast<std::uint32_t>(dir.line_length)
+                    }
+                });
+            }
+            result.success = false;
+            return result;
+        }
+        user_source = std::string(source);
+    }
+
+    // Step 2: Build combined source
+    // Order: stdlib + resolved modules (topo order) + user source
     std::string combined_source;
-    combined_source.reserve(STDLIB_SOURCE.size() + 1 + source.size());
+    SourceMap source_map;
+
+    std::size_t total_size = STDLIB_SOURCE.size() + 1 + user_source.size();
+    for (const auto& mod : resolved_modules) {
+        total_size += mod.source.size() + 1;
+    }
+    combined_source.reserve(total_size);
+
+    // Region 0: stdlib
     combined_source.append(STDLIB_SOURCE);
     combined_source.push_back('\n');
-    combined_source.append(source);
+    const std::size_t stdlib_byte_length = STDLIB_SOURCE.size() + 1;
+    source_map.add_region(std::string(STDLIB_FILENAME), 0, stdlib_byte_length, 0);
 
-    const std::size_t stdlib_byte_offset = STDLIB_SOURCE.size() + 1;  // +1 for the newline
+    std::size_t offset = stdlib_byte_length;
+    std::size_t cumulative_lines = STDLIB_LINE_COUNT;
+
+    // Regions 1..N-1: resolved modules (topo order, dependencies first)
+    for (const auto& mod : resolved_modules) {
+        combined_source.append(mod.source);
+        combined_source.push_back('\n');
+        std::size_t mod_byte_length = mod.source.size() + 1;
+        source_map.add_region(mod.canonical_path, offset, mod_byte_length, cumulative_lines);
+        cumulative_lines += count_lines(mod.source);
+        offset += mod_byte_length;
+    }
+
+    // Region N: user source (with import lines blanked by scanner)
+    combined_source.append(user_source);
+    source_map.add_region(std::string(filename), offset, user_source.size(), cumulative_lines);
 
     // Phase 1: Lexing
     auto [tokens, lex_diags] = lex(combined_source, filename);
-    adjust_diagnostics(lex_diags, stdlib_byte_offset, STDLIB_LINE_COUNT, filename);
+    source_map.adjust_all(lex_diags);
     result.diagnostics.insert(result.diagnostics.end(),
                               lex_diags.begin(), lex_diags.end());
 
@@ -91,7 +130,7 @@ CompileResult compile(std::string_view source, std::string_view filename,
 
     // Phase 2: Parsing
     auto [ast, parse_diags] = parse(std::move(tokens), combined_source, filename);
-    adjust_diagnostics(parse_diags, stdlib_byte_offset, STDLIB_LINE_COUNT, filename);
+    source_map.adjust_all(parse_diags);
     result.diagnostics.insert(result.diagnostics.end(),
                               parse_diags.begin(), parse_diags.end());
 
@@ -103,7 +142,7 @@ CompileResult compile(std::string_view source, std::string_view filename,
     // Phase 3: Semantic Analysis
     SemanticAnalyzer analyzer;
     auto analysis = analyzer.analyze(ast, filename);
-    adjust_diagnostics(analysis.diagnostics, stdlib_byte_offset, STDLIB_LINE_COUNT, filename);
+    source_map.adjust_all(analysis.diagnostics);
     result.diagnostics.insert(result.diagnostics.end(),
                               analysis.diagnostics.begin(),
                               analysis.diagnostics.end());
@@ -115,8 +154,8 @@ CompileResult compile(std::string_view source, std::string_view filename,
 
     // Phase 4: Code Generation
     CodeGenerator codegen;
-    auto gen = codegen.generate(analysis.transformed_ast, analysis.symbols, filename, sample_registry);
-    adjust_diagnostics(gen.diagnostics, stdlib_byte_offset, STDLIB_LINE_COUNT, filename);
+    auto gen = codegen.generate(analysis.transformed_ast, analysis.symbols, filename, sample_registry, &source_map);
+    source_map.adjust_all(gen.diagnostics);
     result.diagnostics.insert(result.diagnostics.end(),
                               gen.diagnostics.begin(),
                               gen.diagnostics.end());
@@ -131,22 +170,13 @@ CompileResult compile(std::string_view source, std::string_view filename,
     std::memcpy(result.bytecode.data(), gen.instructions.data(),
                 result.bytecode.size());
 
-    // Copy source locations for bytecode-to-source mapping, adjusting offsets for stdlib
+    // Copy source locations, adjusting offsets via source map
     result.source_locations = std::move(gen.source_locations);
-    for (auto& loc : result.source_locations) {
-        if (loc.offset >= stdlib_byte_offset) {
-            loc.offset -= static_cast<std::uint32_t>(stdlib_byte_offset);
-            loc.line -= static_cast<std::uint32_t>(STDLIB_LINE_COUNT);
-        }
-    }
+    source_map.adjust_source_locations(result.source_locations);
 
-    // Copy state initializations for patterns, adjusting offsets for stdlib
+    // Copy state initializations, adjusting pattern locations
     result.state_inits = std::move(gen.state_inits);
-    for (auto& init : result.state_inits) {
-        if (init.pattern_location.offset >= stdlib_byte_offset) {
-            init.pattern_location.offset -= static_cast<std::uint32_t>(stdlib_byte_offset);
-        }
-    }
+    source_map.adjust_state_inits(result.state_inits);
 
     // Copy required sample names for runtime loading
     result.required_samples = std::move(gen.required_samples);
@@ -156,19 +186,17 @@ CompileResult compile(std::string_view source, std::string_view filename,
     // Copy parameter declarations for UI generation
     result.param_decls = std::move(gen.param_decls);
 
-    // Copy visualization declarations for UI generation, adjusting offsets for stdlib
+    // Copy visualization declarations, adjusting offsets
     result.viz_decls = std::move(gen.viz_decls);
-    for (auto& viz : result.viz_decls) {
-        if (viz.source_offset >= stdlib_byte_offset) {
-            viz.source_offset -= static_cast<std::uint32_t>(stdlib_byte_offset);
-        }
-    }
+    source_map.adjust_viz_decls(result.viz_decls);
 
     result.success = true;
     return result;
 }
 
-CompileResult compile_file(const std::string& path) {
+CompileResult compile_file(const std::string& path,
+                          SampleRegistry* sample_registry,
+                          const FileResolver* resolver) {
     std::ifstream file(path);
     if (!file) {
         CompileResult result;
@@ -185,7 +213,20 @@ CompileResult compile_file(const std::string& path) {
 
     std::stringstream buffer;
     buffer << file.rdbuf();
-    return compile(buffer.str(), path);
+
+#ifndef __EMSCRIPTEN__
+    // If no resolver provided, create a default FilesystemResolver
+    // using the file's parent directory
+    if (!resolver) {
+        std::filesystem::path p(path);
+        auto dir = p.parent_path().string();
+        if (dir.empty()) dir = ".";
+        FilesystemResolver default_resolver({dir});
+        return compile(buffer.str(), path, sample_registry, &default_resolver);
+    }
+#endif
+
+    return compile(buffer.str(), path, sample_registry, resolver);
 }
 
 } // namespace akkado

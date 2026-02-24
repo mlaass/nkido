@@ -29,6 +29,7 @@ enum class TokenType : std::uint8_t {
     Fn,             // fn
     As,             // as (pipe binding)
     Const,          // const
+    Import,         // import
 
     // Pattern types (used with mini-notation)
     Pat,            // pat(...)
@@ -103,6 +104,7 @@ constexpr std::string_view token_type_name(TokenType type) {
         case TokenType::Fn:           return "Fn";
         case TokenType::As:           return "As";
         case TokenType::Const:        return "Const";
+        case TokenType::Import:       return "Import";
         case TokenType::Pat:          return "Pat";
         case TokenType::Plus:         return "Plus";
         case TokenType::Minus:        return "Minus";

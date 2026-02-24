@@ -16,6 +16,7 @@ const std::unordered_map<std::string_view, TokenType> keywords = {
     {"fn",       TokenType::Fn},
     {"as",       TokenType::As},
     {"const",    TokenType::Const},
+    {"import",   TokenType::Import},
     {"pat",      TokenType::Pat},
 };
 

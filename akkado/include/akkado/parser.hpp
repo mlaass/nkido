@@ -124,6 +124,9 @@ private:
     NodeIndex parse_const_decl(const Token& name_token);
     NodeIndex parse_directive();
 
+    // Import parsing
+    NodeIndex parse_import_decl();
+
     // Program parsing
     NodeIndex parse_program();
 

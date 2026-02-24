@@ -210,9 +210,11 @@ public:
     /// @param symbols Symbol table from semantic analysis
     /// @param filename Filename for error reporting
     /// @param sample_registry Optional sample registry for resolving sample names to IDs
+    /// @param source_map Optional source map for module-aware semantic ID paths
     CodeGenResult generate(const Ast& ast, SymbolTable& symbols,
                           std::string_view filename = "<input>",
-                          SampleRegistry* sample_registry = nullptr);
+                          SampleRegistry* sample_registry = nullptr,
+                          const class SourceMap* source_map = nullptr);
 
 private:
     /// Visit AST node and emit instructions
@@ -435,6 +437,7 @@ private:
     const Ast* ast_ = nullptr;
     SymbolTable* symbols_ = nullptr;
     SampleRegistry* sample_registry_ = nullptr;
+    const class SourceMap* source_map_ = nullptr;
     BufferAllocator buffers_;
     std::vector<cedar::Instruction> instructions_;
     std::vector<SourceLocation> source_locations_;  // Parallel to instructions_
