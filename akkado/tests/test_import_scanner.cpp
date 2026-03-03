@@ -172,6 +172,42 @@ TEST_CASE("resolve_imports module not found", "[import_scanner]") {
     CHECK(has_diagnostic_code(result.diagnostics, "E502"));
 }
 
+TEST_CASE("resolve_imports populates namespaced_imports", "[import_scanner][namespace]") {
+    akkado::VirtualResolver resolver;
+    resolver.register_module("filters", "fn lp(sig, freq) -> sig");
+    resolver.register_module("utils", "fn helper() -> 42");
+
+    SECTION("as alias populates namespaced_imports") {
+        auto result = akkado::resolve_imports(
+            "import \"filters\" as f\nsaw(440)",
+            "main.ak", resolver);
+        REQUIRE(result.success);
+        REQUIRE(result.namespaced_imports.size() == 1);
+        CHECK(result.namespaced_imports[0].canonical_path == "filters");
+        CHECK(result.namespaced_imports[0].alias == "f");
+    }
+
+    SECTION("direct import has empty namespaced_imports") {
+        auto result = akkado::resolve_imports(
+            "import \"utils\"\nhelper()",
+            "main.ak", resolver);
+        REQUIRE(result.success);
+        CHECK(result.namespaced_imports.empty());
+    }
+
+    SECTION("mixed direct and namespaced") {
+        auto result = akkado::resolve_imports(
+            "import \"utils\"\nimport \"filters\" as f\nhelper()",
+            "main.ak", resolver);
+        REQUIRE(result.success);
+        REQUIRE(result.namespaced_imports.size() == 1);
+        CHECK(result.namespaced_imports[0].canonical_path == "filters");
+        CHECK(result.namespaced_imports[0].alias == "f");
+        // Both modules should be in the modules list
+        CHECK(result.modules.size() == 2);
+    }
+}
+
 TEST_CASE("resolve_imports blanking preserves byte offsets", "[import_scanner]") {
     akkado::VirtualResolver resolver;
     resolver.register_module("utils", "fn helper() -> 42");
@@ -184,4 +220,43 @@ TEST_CASE("resolve_imports blanking preserves byte offsets", "[import_scanner]")
     CHECK(result.root_source.size() == source.size());
     // The newline should be preserved
     CHECK(result.root_source[source.find('\n')] == '\n');
+}
+
+// ============================================================================
+// Group 11: Scanner namespace edge cases
+// ============================================================================
+
+TEST_CASE("scan_imports namespace edge cases", "[import_scanner][namespace]") {
+    SECTION("alias with underscore") {
+        auto directives = akkado::scan_imports(R"(import "mod" as my_mod)");
+        REQUIRE(directives.size() == 1);
+        CHECK(directives[0].path == "mod");
+        CHECK(directives[0].alias == "my_mod");
+    }
+
+    SECTION("alias with digits") {
+        auto directives = akkado::scan_imports(R"(import "mod" as m2)");
+        REQUIRE(directives.size() == 1);
+        CHECK(directives[0].path == "mod");
+        CHECK(directives[0].alias == "m2");
+    }
+
+    SECTION("two namespaced imports") {
+        auto directives = akkado::scan_imports(
+            "import \"a\" as x\n"
+            "import \"b\" as y\n"
+        );
+        REQUIRE(directives.size() == 2);
+        CHECK(directives[0].path == "a");
+        CHECK(directives[0].alias == "x");
+        CHECK(directives[1].path == "b");
+        CHECK(directives[1].alias == "y");
+    }
+
+    SECTION("namespace with relative path") {
+        auto directives = akkado::scan_imports(R"(import "./utils" as u)");
+        REQUIRE(directives.size() == 1);
+        CHECK(directives[0].path == "./utils");
+        CHECK(directives[0].alias == "u");
+    }
 }

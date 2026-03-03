@@ -260,6 +260,14 @@ ImportResult resolve_imports(
 
         root_deps.push_back(*resolved);
 
+        // Track namespace imports (root-level only)
+        if (!dir.alias.empty()) {
+            result.namespaced_imports.push_back(NamespacedImport{
+                .canonical_path = *resolved,
+                .alias = dir.alias
+            });
+        }
+
         if (!visited.contains(*resolved)) {
             visited.insert(*resolved);
             auto module_source = resolver.read(*resolved);

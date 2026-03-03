@@ -45,6 +45,7 @@ CompileResult compile(std::string_view source, std::string_view filename,
 
     // Step 1: Resolve imports (if resolver provided)
     std::vector<ResolvedModule> resolved_modules;
+    std::vector<NamespacedImport> namespaced_imports;
     std::string user_source;
 
     if (resolver) {
@@ -58,6 +59,7 @@ CompileResult compile(std::string_view source, std::string_view filename,
         result.diagnostics.insert(result.diagnostics.end(),
             import_result.diagnostics.begin(), import_result.diagnostics.end());
         resolved_modules = std::move(import_result.modules);
+        namespaced_imports = std::move(import_result.namespaced_imports);
         user_source = std::move(import_result.root_source);
     } else {
         // No resolver: check if source contains imports (E505)
@@ -140,8 +142,13 @@ CompileResult compile(std::string_view source, std::string_view filename,
     }
 
     // Phase 3: Semantic Analysis
+    std::vector<ModuleNamespace> namespaces;
+    for (const auto& ns : namespaced_imports) {
+        namespaces.push_back(ModuleNamespace{ns.canonical_path, ns.alias});
+    }
+
     SemanticAnalyzer analyzer;
-    auto analysis = analyzer.analyze(ast, filename);
+    auto analysis = analyzer.analyze(ast, filename, &source_map, namespaces);
     source_map.adjust_all(analysis.diagnostics);
     result.diagnostics.insert(result.diagnostics.end(),
                               analysis.diagnostics.begin(),

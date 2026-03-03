@@ -56,6 +56,7 @@ enum class SymbolKind : std::uint8_t {
     Array,          // Array value
     FunctionValue,  // Function as value (lambda or fn reference)
     Record,         // Record value (structured data with named fields)
+    Module,         // Namespace import binding (import "x" as m)
 };
 
 /// Information about a pattern variable
@@ -156,6 +157,12 @@ struct Symbol {
 
     // Full typed value from codegen (for pipe bindings, patterns, records)
     std::optional<TypedValue> typed_value;
+
+    // Canonical path of originating module (empty if local)
+    std::string origin_module;
+
+    // Only valid if kind == Module: canonical path of the module
+    std::string module_path;
 };
 
 /// Scoped symbol table with lexical scoping
@@ -215,9 +222,23 @@ public:
     /// Update function body/def node indices after AST transformation
     void update_function_nodes(const std::unordered_map<NodeIndex, NodeIndex>& node_map);
 
+    /// Define a module namespace binding (import "x" as alias)
+    bool define_module(std::string_view alias, std::string_view canonical_path);
+
+    /// Look up a symbol in a specific module's hidden symbols
+    [[nodiscard]] std::optional<Symbol> lookup_in_module(
+        std::string_view module_path, std::string_view name) const;
+
+    /// Move a symbol from scopes_ to hidden_symbols_ for the given module
+    void hide_symbol(std::string_view name, std::string_view module_path);
+
 private:
     /// Each scope is a hash map from name_hash to Symbol
     std::vector<std::unordered_map<std::uint32_t, Symbol>> scopes_;
+
+    /// Hidden symbols per module (for namespace imports).
+    /// Key: module canonical path → inner map: name_hash → Symbol
+    std::unordered_map<std::string, std::unordered_map<std::uint32_t, Symbol>> hidden_symbols_;
 
     /// Pre-populate with builtins
     void register_builtins();

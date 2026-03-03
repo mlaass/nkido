@@ -136,64 +136,82 @@ bool SymbolTable::is_defined_in_current_scope(std::string_view name) const {
     return scopes_.back().find(hash) != scopes_.back().end();
 }
 
+static void update_symbol_nodes(Symbol& sym, const std::unordered_map<NodeIndex, NodeIndex>& node_map) {
+    if (sym.kind == SymbolKind::UserFunction) {
+        auto body_it = node_map.find(sym.user_function.body_node);
+        if (body_it != node_map.end()) sym.user_function.body_node = body_it->second;
+        auto def_it = node_map.find(sym.user_function.def_node);
+        if (def_it != node_map.end()) sym.user_function.def_node = def_it->second;
+        for (auto& param : sym.user_function.params) {
+            if (param.default_node != NULL_NODE) {
+                auto param_it = node_map.find(param.default_node);
+                if (param_it != node_map.end()) param.default_node = param_it->second;
+            }
+        }
+    } else if (sym.kind == SymbolKind::FunctionValue) {
+        auto closure_it = node_map.find(sym.function_ref.closure_node);
+        if (closure_it != node_map.end()) sym.function_ref.closure_node = closure_it->second;
+        for (auto& param : sym.function_ref.params) {
+            if (param.default_node != NULL_NODE) {
+                auto param_it = node_map.find(param.default_node);
+                if (param_it != node_map.end()) param.default_node = param_it->second;
+            }
+        }
+    } else if (sym.kind == SymbolKind::Pattern) {
+        auto pat_it = node_map.find(sym.pattern.pattern_node);
+        if (pat_it != node_map.end()) sym.pattern.pattern_node = pat_it->second;
+    } else if (sym.kind == SymbolKind::Array) {
+        auto arr_it = node_map.find(sym.array.source_node);
+        if (arr_it != node_map.end()) sym.array.source_node = arr_it->second;
+    } else if (sym.kind == SymbolKind::Record && sym.record_type) {
+        auto rec_it = node_map.find(sym.record_type->source_node);
+        if (rec_it != node_map.end()) sym.record_type->source_node = rec_it->second;
+    }
+}
+
 void SymbolTable::update_function_nodes(const std::unordered_map<NodeIndex, NodeIndex>& node_map) {
     // Iterate through all scopes and update UserFunction, FunctionValue, and Pattern entries
     for (auto& scope : scopes_) {
         for (auto& [hash, sym] : scope) {
-            if (sym.kind == SymbolKind::UserFunction) {
-                // Update body_node
-                auto body_it = node_map.find(sym.user_function.body_node);
-                if (body_it != node_map.end()) {
-                    sym.user_function.body_node = body_it->second;
-                }
-                // Update def_node
-                auto def_it = node_map.find(sym.user_function.def_node);
-                if (def_it != node_map.end()) {
-                    sym.user_function.def_node = def_it->second;
-                }
-                // Update default_node in params
-                for (auto& param : sym.user_function.params) {
-                    if (param.default_node != NULL_NODE) {
-                        auto param_it = node_map.find(param.default_node);
-                        if (param_it != node_map.end()) {
-                            param.default_node = param_it->second;
-                        }
-                    }
-                }
-            } else if (sym.kind == SymbolKind::FunctionValue) {
-                // Update closure_node for lambda variables
-                auto closure_it = node_map.find(sym.function_ref.closure_node);
-                if (closure_it != node_map.end()) {
-                    sym.function_ref.closure_node = closure_it->second;
-                }
-                // Update default_node in params
-                for (auto& param : sym.function_ref.params) {
-                    if (param.default_node != NULL_NODE) {
-                        auto param_it = node_map.find(param.default_node);
-                        if (param_it != node_map.end()) {
-                            param.default_node = param_it->second;
-                        }
-                    }
-                }
-            } else if (sym.kind == SymbolKind::Pattern) {
-                // Update pattern_node
-                auto pat_it = node_map.find(sym.pattern.pattern_node);
-                if (pat_it != node_map.end()) {
-                    sym.pattern.pattern_node = pat_it->second;
-                }
-            } else if (sym.kind == SymbolKind::Array) {
-                // Update array source_node
-                auto arr_it = node_map.find(sym.array.source_node);
-                if (arr_it != node_map.end()) {
-                    sym.array.source_node = arr_it->second;
-                }
-            } else if (sym.kind == SymbolKind::Record && sym.record_type) {
-                // Update record source_node
-                auto rec_it = node_map.find(sym.record_type->source_node);
-                if (rec_it != node_map.end()) {
-                    sym.record_type->source_node = rec_it->second;
-                }
-            }
+            update_symbol_nodes(sym, node_map);
+        }
+    }
+    // Also update hidden symbols (namespace imports)
+    for (auto& [mod_path, mod_symbols] : hidden_symbols_) {
+        for (auto& [hash, sym] : mod_symbols) {
+            update_symbol_nodes(sym, node_map);
+        }
+    }
+}
+
+bool SymbolTable::define_module(std::string_view alias, std::string_view canonical_path) {
+    Symbol sym{};
+    sym.kind = SymbolKind::Module;
+    sym.name_hash = fnv1a_hash(alias);
+    sym.name = std::string(alias);
+    sym.buffer_index = 0xFFFF;
+    sym.module_path = std::string(canonical_path);
+    return define(sym);
+}
+
+std::optional<Symbol> SymbolTable::lookup_in_module(
+    std::string_view module_path, std::string_view name) const {
+    auto mod_it = hidden_symbols_.find(std::string(module_path));
+    if (mod_it == hidden_symbols_.end()) return std::nullopt;
+    auto sym_it = mod_it->second.find(fnv1a_hash(name));
+    if (sym_it == mod_it->second.end()) return std::nullopt;
+    return sym_it->second;
+}
+
+void SymbolTable::hide_symbol(std::string_view name, std::string_view module_path) {
+    auto hash = fnv1a_hash(name);
+    // Search scopes for the symbol and move it to hidden storage
+    for (auto& scope : scopes_) {
+        auto it = scope.find(hash);
+        if (it != scope.end()) {
+            hidden_symbols_[std::string(module_path)][hash] = it->second;
+            scope.erase(it);
+            return;
         }
     }
 }

@@ -1,15 +1,21 @@
 #include "akkado/analyzer.hpp"
 #include "akkado/builtins.hpp"
+#include "akkado/source_map.hpp"
+#include <unordered_set>
 
 namespace akkado {
 
-AnalysisResult SemanticAnalyzer::analyze(const Ast& ast, std::string_view filename) {
+AnalysisResult SemanticAnalyzer::analyze(const Ast& ast, std::string_view filename,
+                                          const SourceMap* source_map,
+                                          std::span<const ModuleNamespace> namespaces) {
     input_ast_ = &ast;
     output_arena_ = AstArena{};
     symbols_ = SymbolTable{};
     diagnostics_.clear();
     node_map_.clear();
     filename_ = std::string(filename);
+    source_map_ = source_map;
+    namespaces_.assign(namespaces.begin(), namespaces.end());
 
     if (!ast.valid()) {
         error("E001", "Invalid AST: no root node", {});
@@ -18,6 +24,9 @@ AnalysisResult SemanticAnalyzer::analyze(const Ast& ast, std::string_view filena
 
     // Pass 1: Collect variable definitions
     collect_definitions(ast.root);
+
+    // Pass 1.5: Hide definitions from namespaced modules
+    hide_namespaced_definitions();
 
     // Pass 2: Rewrite pipes (builds new AST)
     NodeIndex new_root = rewrite_pipes(ast.root);
@@ -38,6 +47,74 @@ AnalysisResult SemanticAnalyzer::analyze(const Ast& ast, std::string_view filena
     result.success = success;
 
     return result;
+}
+
+std::string SemanticAnalyzer::extract_definition_name(const Node& n) {
+    if (n.type == NodeType::Assignment || n.type == NodeType::ConstDecl) {
+        if (std::holds_alternative<Node::IdentifierData>(n.data)) {
+            return n.as_identifier();
+        }
+    }
+    if (n.type == NodeType::FunctionDef) {
+        if (std::holds_alternative<Node::FunctionDefData>(n.data)) {
+            return n.as_function_def().name;
+        }
+    }
+    return {};
+}
+
+void SemanticAnalyzer::hide_namespaced_definitions() {
+    if (namespaces_.empty() || !source_map_) return;
+
+    // Build map: canonical_path → alias
+    std::unordered_map<std::string, std::string> path_to_alias;
+    // Build set of directly-imported canonical paths (those NOT in namespaces)
+    // We need to compare against all module source regions that are NOT namespaced
+    std::unordered_set<std::string> namespaced_paths;
+    for (const auto& ns : namespaces_) {
+        path_to_alias[ns.canonical_path] = ns.alias;
+        namespaced_paths.insert(ns.canonical_path);
+    }
+
+    // Walk top-level AST children
+    const Node& root = input_ast_->arena[input_ast_->root];
+    NodeIndex child_idx = root.first_child;
+    while (child_idx != NULL_NODE) {
+        const Node& child = input_ast_->arena[child_idx];
+        std::string def_name = extract_definition_name(child);
+
+        if (!def_name.empty()) {
+            // Determine which module this node comes from
+            const auto* region = source_map_->find_region(child.location.offset);
+            if (region) {
+                auto alias_it = path_to_alias.find(region->filename);
+                if (alias_it != path_to_alias.end()) {
+                    const std::string& alias = alias_it->second;
+
+                    // Look up the existing symbol to copy it under qualified name
+                    auto sym = symbols_.lookup(def_name);
+                    if (sym) {
+                        // Register qualified name (e.g., "f.lp")
+                        Symbol qsym = *sym;
+                        std::string qname = alias + "." + def_name;
+                        qsym.name_hash = fnv1a_hash(qname);
+                        qsym.name = qname;
+                        qsym.origin_module = region->filename;
+                        symbols_.define(qsym);
+
+                        // Hide the original (unqualified) symbol
+                        symbols_.hide_symbol(def_name, region->filename);
+                    }
+                }
+            }
+        }
+        child_idx = child.next_sibling;
+    }
+
+    // Register Module symbols for each alias
+    for (const auto& ns : namespaces_) {
+        symbols_.define_module(ns.alias, ns.canonical_path);
+    }
 }
 
 void SemanticAnalyzer::collect_definitions(NodeIndex node) {
@@ -927,20 +1004,63 @@ NodeIndex SemanticAnalyzer::create_closure_from_pipe(
 NodeIndex SemanticAnalyzer::desugar_method_call(NodeIndex method_call_idx) {
     // Desugar: receiver.method(a, b) -> method(receiver, a, b)
     const Node& src = (*input_ast_).arena[method_call_idx];
+    const std::string& method_name = src.as_identifier();
 
-    // Create a Call node with the same method name
+    // Get the receiver (first child of MethodCall)
+    NodeIndex src_receiver = src.first_child;
+    if (src_receiver == NULL_NODE) {
+        NodeIndex call_idx = output_arena_.alloc(NodeType::Call, src.location);
+        output_arena_[call_idx].data = src.data;
+        node_map_[method_call_idx] = call_idx;
+        error("E008", "Method call missing receiver", src.location);
+        return call_idx;
+    }
+
+    // Check if receiver is a Module identifier (namespace-qualified call)
+    const Node& receiver_node = (*input_ast_).arena[src_receiver];
+    if (receiver_node.type == NodeType::Identifier) {
+        std::string receiver_name;
+        if (std::holds_alternative<Node::IdentifierData>(receiver_node.data)) {
+            receiver_name = receiver_node.as_identifier();
+        }
+        auto sym = symbols_.lookup(receiver_name);
+        if (sym && sym->kind == SymbolKind::Module) {
+            // Module-qualified call: f.lp(sig, 800) → Call "f.lp"(sig, 800)
+            auto mod_sym = symbols_.lookup_in_module(sym->module_path, method_name);
+            if (!mod_sym) {
+                error("E504", "Module '" + receiver_name + "' has no definition '" + method_name + "'", src.location);
+            }
+
+            std::string qname = receiver_name + "." + method_name;
+            NodeIndex call_idx = output_arena_.alloc(NodeType::Call, src.location);
+            output_arena_[call_idx].data = Node::IdentifierData{qname};
+            node_map_[method_call_idx] = call_idx;
+
+            // Clone arguments (skip receiver — it's the module, not a signal)
+            NodeIndex src_arg = (*input_ast_).arena[src_receiver].next_sibling;
+            NodeIndex prev_dst_arg = NULL_NODE;
+            while (src_arg != NULL_NODE) {
+                NodeIndex dst_arg = clone_subtree(src_arg);
+                if (dst_arg != NULL_NODE) {
+                    if (prev_dst_arg == NULL_NODE) {
+                        output_arena_[call_idx].first_child = dst_arg;
+                    } else {
+                        output_arena_[prev_dst_arg].next_sibling = dst_arg;
+                    }
+                    prev_dst_arg = dst_arg;
+                }
+                src_arg = (*input_ast_).arena[src_arg].next_sibling;
+            }
+            return call_idx;
+        }
+    }
+
+    // Standard method call desugaring: receiver.method(a, b) -> method(receiver, a, b)
     NodeIndex call_idx = output_arena_.alloc(NodeType::Call, src.location);
     output_arena_[call_idx].data = src.data;  // Copy the method name (IdentifierData)
 
     // Track mapping
     node_map_[method_call_idx] = call_idx;
-
-    // Get the receiver (first child of MethodCall)
-    NodeIndex src_receiver = src.first_child;
-    if (src_receiver == NULL_NODE) {
-        error("E008", "Method call missing receiver", src.location);
-        return call_idx;
-    }
 
     // Clone the receiver and wrap it in an Argument node
     NodeIndex cloned_receiver = clone_subtree(src_receiver);
@@ -1274,7 +1394,14 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                 }
                 if (!expr_name.empty()) {
                     auto sym = symbols_.lookup(expr_name);
-                    if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
+                    if (sym && sym->kind == SymbolKind::Module) {
+                        // Module-qualified field access (e.g., f.pi)
+                        auto mod_sym = symbols_.lookup_in_module(sym->module_path, field_name);
+                        if (!mod_sym) {
+                            error("E504", "Module '" + expr_name + "' has no definition '" + field_name + "'", n.location);
+                        }
+                        return;  // Don't recurse into module identifier
+                    } else if (sym && sym->kind == SymbolKind::Record && sym->record_type) {
                         // Check if field exists
                         const auto* field = sym->record_type->find_field(field_name);
                         if (!field) {
@@ -1289,7 +1416,8 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                         }
                     } else if (sym && sym->kind != SymbolKind::Record
                              && sym->kind != SymbolKind::Pattern
-                             && sym->kind != SymbolKind::Parameter) {
+                             && sym->kind != SymbolKind::Parameter
+                             && sym->kind != SymbolKind::Module) {
                         error("E061", "Cannot access field '" + field_name + "' on non-record value", n.location);
                     }
                 }

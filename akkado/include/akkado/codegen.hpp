@@ -644,6 +644,9 @@ private:
     /// Handle field access nodes - resolve to correct field buffer
     TypedValue handle_field_access(NodeIndex node, const Node& n);
 
+    /// Handle access to a qualified symbol from a namespace import (e.g., f.lp)
+    TypedValue handle_qualified_symbol_access(NodeIndex node, const Symbol& qsym, SourceLocation loc);
+
     /// Handle pipe binding nodes - create buffer alias for named binding
     TypedValue handle_pipe_binding(NodeIndex node, const Node& n);
 

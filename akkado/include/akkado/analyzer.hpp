@@ -4,11 +4,21 @@
 #include "diagnostics.hpp"
 #include "symbol_table.hpp"
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace akkado {
+
+// Forward declarations
+class SourceMap;
+
+/// Namespace import info passed from compile() to analyzer
+struct ModuleNamespace {
+    std::string canonical_path;   // Module's canonical path
+    std::string alias;            // The alias name
+};
 
 /// Result of semantic analysis
 struct AnalysisResult {
@@ -29,8 +39,12 @@ public:
     /// Analyze and transform AST
     /// @param ast The parsed AST
     /// @param filename Filename for error reporting
+    /// @param source_map Optional source map for module origin tracking
+    /// @param namespaces Namespace imports (import "x" as alias)
     /// @return Analysis result with transformed AST and diagnostics
-    AnalysisResult analyze(const Ast& ast, std::string_view filename = "<input>");
+    AnalysisResult analyze(const Ast& ast, std::string_view filename = "<input>",
+                           const SourceMap* source_map = nullptr,
+                           std::span<const ModuleNamespace> namespaces = {});
 
 private:
     // Pass 1: Collect all variable definitions
@@ -104,12 +118,20 @@ private:
     void error(const std::string& code, const std::string& message, SourceLocation loc);
     void warning(const std::string& message, SourceLocation loc);
 
+    // Hide definitions from namespaced modules (between pass 1 and pass 2)
+    void hide_namespaced_definitions();
+
+    // Extract the definition name from an Assignment/FunctionDef/ConstDecl node
+    static std::string extract_definition_name(const Node& n);
+
     // Context
     const Ast* input_ast_ = nullptr;
     AstArena output_arena_;
     SymbolTable symbols_;
     std::vector<Diagnostic> diagnostics_;
     std::string filename_;
+    const SourceMap* source_map_ = nullptr;
+    std::vector<ModuleNamespace> namespaces_;
 
     // For pipe rewriting: track mapping from old indices to new indices
     std::unordered_map<NodeIndex, NodeIndex> node_map_;

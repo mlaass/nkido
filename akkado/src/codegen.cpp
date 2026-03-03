@@ -1565,11 +1565,29 @@ TypedValue CodeGenerator::handle_field_access(NodeIndex node, const Node& n) {
         return TypedValue::error_val();
     }
 
+    // Check for Module-qualified access BEFORE visiting (visiting a Module would fail)
+    const Node& expr = ast_->arena[expr_node];
+    if (expr.type == NodeType::Identifier) {
+        std::string var_name;
+        if (std::holds_alternative<Node::IdentifierData>(expr.data)) {
+            var_name = expr.as_identifier();
+        }
+        auto sym = symbols_->lookup(var_name);
+        if (sym && sym->kind == SymbolKind::Module) {
+            std::string qname = var_name + "." + field_name;
+            auto qsym = symbols_->lookup(qname);
+            if (!qsym) {
+                error("E504", "Module '" + var_name + "' has no definition '" + field_name + "'", n.location);
+                return TypedValue::error_val();
+            }
+            return handle_qualified_symbol_access(node, *qsym, n.location);
+        }
+    }
+
     // Visit expression to get its TypedValue
     TypedValue expr_tv = visit(expr_node);
 
     // Also check the symbol table for richer type info
-    const Node& expr = ast_->arena[expr_node];
     if (expr.type == NodeType::Identifier) {
         std::string var_name;
         if (std::holds_alternative<Node::IdentifierData>(expr.data)) {
@@ -1662,6 +1680,62 @@ TypedValue CodeGenerator::handle_field_access(NodeIndex node, const Node& n) {
     }
 
     error("E135", "Field access on expression type not supported", n.location);
+    return TypedValue::error_val();
+}
+
+TypedValue CodeGenerator::handle_qualified_symbol_access(NodeIndex node, const Symbol& qsym, SourceLocation loc) {
+    // Dispatch based on symbol kind — mirrors the Identifier case in visit()
+    switch (qsym.kind) {
+        case SymbolKind::Variable:
+        case SymbolKind::Parameter: {
+            std::uint16_t buf = qsym.buffer_index;
+            TypedValue tv = TypedValue::signal(buf);
+            if (!qsym.multi_buffers.empty()) {
+                std::vector<TypedValue> elements;
+                for (auto b : qsym.multi_buffers) {
+                    elements.push_back(TypedValue::signal(b));
+                }
+                tv = TypedValue::make_array(std::move(elements), buf);
+            }
+            if (qsym.typed_value) {
+                tv = *qsym.typed_value;
+            }
+            return cache_and_return(node, tv);
+        }
+        case SymbolKind::Pattern:
+            return handle_pattern_reference(qsym.name, qsym.pattern.pattern_node, loc);
+        case SymbolKind::Array: {
+            if (qsym.array.source_node == NULL_NODE) {
+                if (!qsym.array.buffer_indices.empty()) {
+                    std::vector<TypedValue> elements;
+                    for (auto b : qsym.array.buffer_indices) {
+                        elements.push_back(TypedValue::signal(b));
+                    }
+                    auto tv = TypedValue::make_array(std::move(elements), qsym.array.buffer_indices[0]);
+                    return cache_and_return(node, tv);
+                }
+                return cache_and_return(node, TypedValue::signal(buffers_.allocate()));
+            }
+            TypedValue source_tv = visit(qsym.array.source_node);
+            return cache_and_return(node, source_tv);
+        }
+        case SymbolKind::Record:
+            if (qsym.record_type) {
+                auto type_it = node_types_.find(qsym.record_type->source_node);
+                if (type_it != node_types_.end() && type_it->second.type == ValueType::Record) {
+                    return cache_and_return(node, type_it->second);
+                }
+                TypedValue source_tv = visit(qsym.record_type->source_node);
+                return cache_and_return(node, source_tv);
+            }
+            break;
+        case SymbolKind::UserFunction:
+        case SymbolKind::FunctionValue:
+            return TypedValue::function_val();
+        default:
+            break;
+    }
+    error("E504", "Cannot access module member '" + qsym.name + "'", loc);
     return TypedValue::error_val();
 }
 

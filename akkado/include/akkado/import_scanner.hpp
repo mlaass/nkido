@@ -23,6 +23,12 @@ struct ResolvedModule {
     std::string source;           // File contents with import lines blanked
 };
 
+/// A module imported with `as alias` (namespace import)
+struct NamespacedImport {
+    std::string canonical_path;   // Canonical path of the module
+    std::string alias;            // The alias name (e.g., "f" in `import "filters" as f`)
+};
+
 /// Result of import resolution
 struct ImportResult {
     /// Dependency modules in topological order (dependencies first).
@@ -31,6 +37,9 @@ struct ImportResult {
 
     /// Root source with import lines blanked (preserved byte offsets)
     std::string root_source;
+
+    /// Namespace imports from root directives (those with `as alias`)
+    std::vector<NamespacedImport> namespaced_imports;
 
     std::vector<Diagnostic> diagnostics;
     bool success = true;
