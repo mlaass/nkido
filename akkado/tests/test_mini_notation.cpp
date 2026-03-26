@@ -1631,3 +1631,85 @@ TEST_CASE("Curve mode mini_token_type_name", "[curve_lexer]") {
     CHECK(mini_token_type_name(MiniTokenType::CurveRamp) == "CurveRamp");
     CHECK(mini_token_type_name(MiniTokenType::CurveSmooth) == "CurveSmooth");
 }
+
+// ============================================================================
+// Curve Parser Tests [curve_parser]
+// ============================================================================
+
+TEST_CASE("Parse basic curve levels", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_ ' -", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(root != NULL_NODE);
+    CHECK(arena[root].type == NodeType::MiniPattern);
+    REQUIRE(arena.child_count(root) == 3);
+
+    NodeIndex c0 = arena[root].first_child;
+    CHECK(arena[c0].type == NodeType::MiniAtom);
+    CHECK(arena[c0].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c0].as_mini_atom().curve_value == 0.0f);
+    CHECK(arena[c0].as_mini_atom().curve_smooth == false);
+
+    NodeIndex c1 = arena[c0].next_sibling;
+    CHECK(arena[c1].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c1].as_mini_atom().curve_value == 1.0f);
+
+    NodeIndex c2 = arena[c1].next_sibling;
+    CHECK(arena[c2].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c2].as_mini_atom().curve_value == 0.5f);
+}
+
+TEST_CASE("Parse curve ramps", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_/'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 3);
+
+    NodeIndex c0 = arena[root].first_child;
+    CHECK(arena[c0].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    NodeIndex c1 = arena[c0].next_sibling;
+    CHECK(arena[c1].as_mini_atom().kind == Node::MiniAtomKind::CurveRamp);
+    NodeIndex c2 = arena[c1].next_sibling;
+    CHECK(arena[c2].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c2].as_mini_atom().curve_value == 1.0f);
+}
+
+TEST_CASE("Parse smooth modifier ~", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_~'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 2);
+
+    NodeIndex c0 = arena[root].first_child;
+    CHECK(arena[c0].as_mini_atom().curve_smooth == false);
+    NodeIndex c1 = arena[c0].next_sibling;
+    CHECK(arena[c1].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c1].as_mini_atom().curve_value == 1.0f);
+    CHECK(arena[c1].as_mini_atom().curve_smooth == true);
+}
+
+TEST_CASE("Parse curve with grouping", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("[_'] __", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 3);
+    NodeIndex group = arena[root].first_child;
+    CHECK(arena[group].type == NodeType::MiniGroup);
+    REQUIRE(arena.child_count(group) == 2);
+}
+
+TEST_CASE("Parse curve with alternation", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("<[_'] ['_]>", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 1);
+    NodeIndex seq = arena[root].first_child;
+    CHECK(arena[seq].type == NodeType::MiniSequence);
+    REQUIRE(arena.child_count(seq) == 2);
+}
+
+TEST_CASE("Curve ~ before non-level is error", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("~/", arena, {}, false, true);
+    CHECK(!diags.empty());
+}

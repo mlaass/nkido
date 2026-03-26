@@ -164,6 +164,9 @@ bool MiniParser::is_atom_start() const {
            type == MiniTokenType::SampleToken ||
            type == MiniTokenType::Rest ||
            type == MiniTokenType::Elongate ||
+           type == MiniTokenType::CurveLevel ||
+           type == MiniTokenType::CurveRamp ||
+           type == MiniTokenType::CurveSmooth ||
            type == MiniTokenType::LBracket ||
            type == MiniTokenType::LAngle ||
            type == MiniTokenType::LBrace;
@@ -190,6 +193,68 @@ NodeIndex MiniParser::parse_atom() {
 
     if (match(MiniTokenType::Elongate)) {
         return parse_elongate();
+    }
+
+    // Curve atoms
+    if (match(MiniTokenType::CurveSmooth)) {
+        // ~ must be followed by a CurveLevel token
+        if (!match(MiniTokenType::CurveLevel)) {
+            error("Expected level character (_, ., -, ^, ') after ~");
+            return NULL_NODE;
+        }
+        const auto& level_data = previous().as_curve_level();
+        NodeIndex node = make_node(NodeType::MiniAtom, previous());
+        arena_[node].data = Node::MiniAtomData{
+            .kind = Node::MiniAtomKind::CurveLevel,
+            .midi_note = 0,
+            .velocity = 1.0f,
+            .sample_name = "",
+            .sample_variant = 0,
+            .chord_root = "",
+            .chord_quality = "",
+            .chord_root_midi = 0,
+            .chord_intervals = {},
+            .curve_value = level_data.value,
+            .curve_smooth = true
+        };
+        return node;
+    }
+
+    if (match(MiniTokenType::CurveLevel)) {
+        const auto& level_data = previous().as_curve_level();
+        NodeIndex node = make_node(NodeType::MiniAtom, previous());
+        arena_[node].data = Node::MiniAtomData{
+            .kind = Node::MiniAtomKind::CurveLevel,
+            .midi_note = 0,
+            .velocity = 1.0f,
+            .sample_name = "",
+            .sample_variant = 0,
+            .chord_root = "",
+            .chord_quality = "",
+            .chord_root_midi = 0,
+            .chord_intervals = {},
+            .curve_value = level_data.value,
+            .curve_smooth = false
+        };
+        return node;
+    }
+
+    if (match(MiniTokenType::CurveRamp)) {
+        NodeIndex node = make_node(NodeType::MiniAtom, previous());
+        arena_[node].data = Node::MiniAtomData{
+            .kind = Node::MiniAtomKind::CurveRamp,
+            .midi_note = 0,
+            .velocity = 1.0f,
+            .sample_name = "",
+            .sample_variant = 0,
+            .chord_root = "",
+            .chord_quality = "",
+            .chord_root_midi = 0,
+            .chord_intervals = {},
+            .curve_value = 0.0f,
+            .curve_smooth = false
+        };
+        return node;
     }
 
     if (check(MiniTokenType::LBracket)) {
@@ -519,8 +584,8 @@ NodeIndex MiniParser::parse_modifiers(NodeIndex atom) {
 // Convenience function
 std::pair<NodeIndex, std::vector<Diagnostic>>
 parse_mini(std::string_view pattern, AstArena& arena, SourceLocation base_location,
-           bool sample_only) {
-    auto [tokens, lex_diags] = lex_mini(pattern, base_location, sample_only);
+           bool sample_only, bool curve_mode) {
+    auto [tokens, lex_diags] = lex_mini(pattern, base_location, sample_only, curve_mode);
 
     MiniParser parser(std::move(tokens), arena, base_location);
     NodeIndex root = parser.parse();
