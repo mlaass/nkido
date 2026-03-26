@@ -1551,3 +1551,83 @@ TEST_CASE("tune() compiles end-to-end", "[tuning]") {
         CHECK_FALSE(result.success);
     }
 }
+
+// ============================================================================
+// Curve Lexer Tests [curve_lexer]
+// ============================================================================
+
+TEST_CASE("Curve mode lexes level characters", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("_ . - ^ '", {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(tokens.size() == 6); // 5 levels + Eof
+    CHECK(tokens[0].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[0].value).value == 0.0f);
+    CHECK(tokens[1].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[1].value).value == 0.25f);
+    CHECK(tokens[2].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[2].value).value == 0.5f);
+    CHECK(tokens[3].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[3].value).value == 0.75f);
+    CHECK(tokens[4].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[4].value).value == 1.0f);
+}
+
+TEST_CASE("Curve mode lexes ramp characters", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("/ \\", {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(tokens.size() == 3);
+    CHECK(tokens[0].type == MiniTokenType::CurveRamp);
+    CHECK(tokens[1].type == MiniTokenType::CurveRamp);
+}
+
+TEST_CASE("Curve mode lexes smooth modifier", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("~", {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(tokens.size() == 2);
+    CHECK(tokens[0].type == MiniTokenType::CurveSmooth);
+}
+
+TEST_CASE("Curve mode _ is CurveLevel not Elongate", "[curve_lexer]") {
+    auto [std_tokens, std_diags] = lex_mini("_", {}, false, false);
+    CHECK(std_tokens[0].type == MiniTokenType::Elongate);
+    auto [curve_tokens, curve_diags] = lex_mini("_", {}, false, true);
+    CHECK(curve_tokens[0].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(curve_tokens[0].value).value == 0.0f);
+}
+
+TEST_CASE("Curve mode ~ is CurveSmooth not Rest", "[curve_lexer]") {
+    auto [std_tokens, std_diags] = lex_mini("~", {}, false, false);
+    CHECK(std_tokens[0].type == MiniTokenType::Rest);
+    auto [curve_tokens, curve_diags] = lex_mini("~", {}, false, true);
+    CHECK(curve_tokens[0].type == MiniTokenType::CurveSmooth);
+}
+
+TEST_CASE("Curve mode / disambiguation", "[curve_lexer]") {
+    auto [tokens1, diags1] = lex_mini("_/2", {}, false, true);
+    REQUIRE(diags1.empty());
+    CHECK(tokens1[0].type == MiniTokenType::CurveLevel);
+    CHECK(tokens1[1].type == MiniTokenType::Slash);
+    CHECK(tokens1[2].type == MiniTokenType::Number);
+
+    auto [tokens2, diags2] = lex_mini("_/'", {}, false, true);
+    REQUIRE(diags2.empty());
+    CHECK(tokens2[0].type == MiniTokenType::CurveLevel);
+    CHECK(tokens2[1].type == MiniTokenType::CurveRamp);
+    CHECK(tokens2[2].type == MiniTokenType::CurveLevel);
+}
+
+TEST_CASE("Curve mode grouping and modifiers still work", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("[_'] *4", {}, false, true);
+    REQUIRE(diags.empty());
+    CHECK(tokens[0].type == MiniTokenType::LBracket);
+    CHECK(tokens[1].type == MiniTokenType::CurveLevel);
+    CHECK(tokens[2].type == MiniTokenType::CurveLevel);
+    CHECK(tokens[3].type == MiniTokenType::RBracket);
+    CHECK(tokens[4].type == MiniTokenType::Star);
+}
+
+TEST_CASE("Curve mode mini_token_type_name", "[curve_lexer]") {
+    CHECK(mini_token_type_name(MiniTokenType::CurveLevel) == "CurveLevel");
+    CHECK(mini_token_type_name(MiniTokenType::CurveRamp) == "CurveRamp");
+    CHECK(mini_token_type_name(MiniTokenType::CurveSmooth) == "CurveSmooth");
+}

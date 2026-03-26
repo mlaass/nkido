@@ -21,6 +21,9 @@ enum class MiniTokenType : std::uint8_t {
     ChordToken,     // Am, C7, Fmaj7, G (chord symbol without octave)
     Rest,           // ~ (silent step)
     Elongate,       // _ (extend previous note - Tidal-compatible)
+    CurveLevel,     // _, ., -, ^, ' (value level atom in curve mode)
+    CurveRamp,      // /, \ (ramp atom in curve mode)
+    CurveSmooth,    // ~ (smooth modifier prefix in curve mode)
     Number,         // 0.5, 3, 4.0 (for modifiers and euclidean)
 
     // Groupings
@@ -59,6 +62,9 @@ constexpr std::string_view mini_token_type_name(MiniTokenType type) {
         case MiniTokenType::ChordToken:  return "ChordToken";
         case MiniTokenType::Rest:        return "Rest";
         case MiniTokenType::Elongate:    return "Elongate";
+        case MiniTokenType::CurveLevel:  return "CurveLevel";
+        case MiniTokenType::CurveRamp:   return "CurveRamp";
+        case MiniTokenType::CurveSmooth: return "CurveSmooth";
         case MiniTokenType::Number:      return "Number";
         case MiniTokenType::LBracket:    return "LBracket";
         case MiniTokenType::RBracket:    return "RBracket";
@@ -106,6 +112,11 @@ struct MiniChordData {
     float velocity = 1.0f;                 // 0.0-1.0, from :vel suffix (e.g., Am:0.5)
 };
 
+/// Curve level data for curve-mode notation (value level atom)
+struct MiniCurveLevelData {
+    float value;  // 0.0, 0.25, 0.5, 0.75, or 1.0
+};
+
 /// Token value for mini-notation
 using MiniTokenValue = std::variant<
     std::monostate,     // For punctuation/operators
@@ -113,6 +124,7 @@ using MiniTokenValue = std::variant<
     MiniPitchData,      // For pitch tokens
     MiniSampleData,     // For sample tokens
     MiniChordData,      // For chord tokens
+    MiniCurveLevelData, // For curve level tokens
     std::string         // For error messages
 >;
 
@@ -147,6 +159,11 @@ struct MiniToken {
     /// Get chord data (assumes type == ChordToken)
     [[nodiscard]] const MiniChordData& as_chord() const {
         return std::get<MiniChordData>(value);
+    }
+
+    /// Get curve level data (assumes type == CurveLevel)
+    [[nodiscard]] const MiniCurveLevelData& as_curve_level() const {
+        return std::get<MiniCurveLevelData>(value);
     }
 
     /// Get error message (assumes type == Error)

@@ -33,7 +33,7 @@ public:
     /// @param sample_only When true, all alphanumeric sequences are treated as sample tokens
     ///                    (used for chord patterns where "C7" is a chord, not pitch C at octave 7)
     explicit MiniLexer(std::string_view pattern, SourceLocation base_location = {},
-                       bool sample_only = false);
+                       bool sample_only = false, bool curve_mode = false);
 
     /// Lex all tokens from the pattern
     /// @return Vector of tokens, ending with Eof token
@@ -88,6 +88,7 @@ private:
     SourceLocation base_location_;
     std::vector<Diagnostic> diagnostics_;
     bool sample_only_ = false;   // When true, skip pitch detection
+    bool curve_mode_ = false;    // When true, lex curve notation characters
 
     // Current position
     std::uint32_t start_ = 0;    // Start of current token
@@ -102,6 +103,6 @@ private:
 /// @return Pair of tokens and diagnostics
 std::pair<std::vector<MiniToken>, std::vector<Diagnostic>>
 lex_mini(std::string_view pattern, SourceLocation base_location = {},
-         bool sample_only = false);
+         bool sample_only = false, bool curve_mode = false);
 
 } // namespace akkado
