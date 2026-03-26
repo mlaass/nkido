@@ -4127,3 +4127,39 @@ TEST_CASE("Timeline curve produces state init", "[timeline_codegen]") {
     }
     CHECK(found);
 }
+
+// ============================================================================
+// Timeline End-to-End Integration Tests [timeline_e2e]
+// ============================================================================
+
+TEST_CASE("Timeline curve with math compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("t\"__/''\" * 1800 + 200 |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    auto insts = get_instructions(result);
+    CHECK(find_instruction(insts, cedar::Opcode::TIMELINE) != nullptr);
+}
+
+TEST_CASE("Timeline constant output compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("t\"''''\" |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    auto insts = get_instructions(result);
+    CHECK(find_instruction(insts, cedar::Opcode::TIMELINE) != nullptr);
+}
+
+TEST_CASE("Timeline with pipe chain compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("osc(\"sin\", 440) * t\"''''____\" |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+}
+
+TEST_CASE("Timeline function call form compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("timeline(\"__/''\") |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    auto insts = get_instructions(result);
+    CHECK(find_instruction(insts, cedar::Opcode::TIMELINE) != nullptr);
+    // Verify state init exists
+    bool found = false;
+    for (const auto& init : result.state_inits) {
+        if (init.type == akkado::StateInitData::Type::Timeline) found = true;
+    }
+    CHECK(found);
+}

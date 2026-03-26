@@ -631,8 +631,8 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"hits", "steps", "rot", "", "", ""},
                  {0.0f, NAN, NAN},
                  "Euclidean rhythm generator"}},
-    {"timeline", {cedar::Opcode::TIMELINE, 0, 0, true,
-                 {"", "", "", "", "", ""},
+    {"timeline", {cedar::Opcode::TIMELINE, 0, 1, true,
+                 {"pattern", "", "", "", "", ""},
                  {NAN, NAN, NAN},
                  "Breakpoint automation timeline"}},
 

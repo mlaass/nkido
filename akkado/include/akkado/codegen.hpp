@@ -307,6 +307,9 @@ private:
     /// Handle timeline curve literal nodes - t"__/'", etc.
     TypedValue handle_timeline_literal(NodeIndex node, const Node& n);
 
+    /// Handle timeline("...") function call form
+    TypedValue handle_timeline_call(NodeIndex node, const Node& n);
+
     /// Emit per-voice SEQPAT_STEP/GATE/TYPE instructions and register polyphonic fields
     /// Shared helper used by handle_mini_literal and handle_pattern_reference
     /// @param node The node to register polyphonic fields / multi-buffers on

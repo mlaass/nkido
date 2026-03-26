@@ -1657,6 +1657,109 @@ TypedValue CodeGenerator::handle_timeline_literal(NodeIndex node, const Node& n)
     return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
+// ============================================================================
+// Timeline function call form: timeline("__/''")
+// ============================================================================
+
+TypedValue CodeGenerator::handle_timeline_call(NodeIndex node, const Node& n) {
+    // Extract the first string argument
+    NodeIndex arg = n.first_child;
+    if (arg == NULL_NODE) {
+        error("E114", "timeline() requires a string argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    const Node& arg_node = ast_->arena[arg];
+    NodeIndex arg_value = arg;
+    if (arg_node.type == NodeType::Argument) {
+        arg_value = arg_node.first_child;
+    }
+    if (arg_value == NULL_NODE) {
+        error("E114", "timeline() requires a string argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    const Node& value_node = ast_->arena[arg_value];
+    if (value_node.type != NodeType::StringLit) {
+        error("E114", "timeline() argument must be a string literal", n.location);
+        return TypedValue::void_val();
+    }
+
+    std::string curve_str = value_node.as_string();
+
+    // Parse the string as curve notation
+    auto [pattern_root, diags] = parse_mini(curve_str,
+        const_cast<AstArena&>(ast_->arena), value_node.location, false, true);
+
+    for (const auto& d : diags) {
+        if (d.severity == Severity::Error) {
+            error("E114", d.message, n.location);
+        } else {
+            warn("W200", d.message, n.location);
+        }
+    }
+
+    if (pattern_root == NULL_NODE) {
+        error("E114", "timeline() failed to parse curve notation", n.location);
+        return TypedValue::void_val();
+    }
+
+    // Evaluate the curve pattern to events
+    PatternEvaluator evaluator(ast_->arena);
+    PatternEventStream stream = evaluator.evaluate(pattern_root, 0);
+
+    // Convert events to breakpoints
+    auto breakpoints = events_to_breakpoints(stream.events);
+    if (breakpoints.empty()) {
+        std::uint16_t out = emit_zero(buffers_, instructions_);
+        if (out == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", n.location);
+        }
+        return cache_and_return(node, TypedValue::signal(out));
+    }
+
+    if (breakpoints.size() > cedar::TimelineState::MAX_BREAKPOINTS) {
+        warn("W200", "Timeline curve exceeds 64 breakpoints, truncating", n.location);
+        breakpoints.resize(cedar::TimelineState::MAX_BREAKPOINTS);
+    }
+
+    // Allocate state and output buffer
+    std::uint32_t tl_count = call_counters_["timeline"]++;
+    push_path("timeline#" + std::to_string(tl_count));
+    std::uint32_t state_id = compute_state_id();
+    std::uint16_t out_buf = buffers_.allocate();
+
+    if (out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        pop_path();
+        return TypedValue::void_val();
+    }
+
+    // Emit TIMELINE instruction
+    cedar::Instruction inst{};
+    inst.opcode = cedar::Opcode::TIMELINE;
+    inst.out_buffer = out_buf;
+    inst.inputs[0] = 0xFFFF;
+    inst.inputs[1] = 0xFFFF;
+    inst.inputs[2] = 0xFFFF;
+    inst.inputs[3] = 0xFFFF;
+    inst.inputs[4] = 0xFFFF;
+    inst.state_id = state_id;
+    emit(inst);
+
+    // Create StateInitData for timeline breakpoints
+    StateInitData timeline_init;
+    timeline_init.state_id = state_id;
+    timeline_init.type = StateInitData::Type::Timeline;
+    timeline_init.timeline_breakpoints = std::move(breakpoints);
+    timeline_init.timeline_loop = true;
+    timeline_init.timeline_loop_length = 4.0f * stream.cycle_span;
+    state_inits_.push_back(std::move(timeline_init));
+
+    pop_path();
+    return cache_and_return(node, TypedValue::signal(out_buf));
+}
+
 // Helper to emit instruction (wrapper for member function access)
 static void emit_instruction_helper(std::vector<cedar::Instruction>& instructions,
                                     const cedar::Instruction& inst) {
