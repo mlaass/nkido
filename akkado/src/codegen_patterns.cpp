@@ -702,6 +702,12 @@ private:
 
 // Handle MiniLiteral (pattern) nodes
 TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
+    // Check for timeline curve notation
+    const auto* str_data = std::get_if<Node::StringData>(&n.data);
+    if (str_data && str_data->value == "timeline") {
+        return handle_timeline_literal(node, n);
+    }
+
     NodeIndex pattern_node = n.first_child;
     NodeIndex closure_node = NULL_NODE;
 
@@ -1581,6 +1587,74 @@ static TypedValue emit_pattern_with_state(
     auto tv = TypedValue::make_pattern(payload, value_buf);
     node_types[node] = tv;
     return tv;
+}
+
+// ============================================================================
+// Timeline curve literal codegen
+// ============================================================================
+
+TypedValue CodeGenerator::handle_timeline_literal(NodeIndex node, const Node& n) {
+    NodeIndex pattern_node = n.first_child;
+    if (pattern_node == NULL_NODE) {
+        error("E114", "Timeline curve has no parsed content", n.location);
+        return TypedValue::void_val();
+    }
+
+    // Evaluate the curve pattern to events
+    PatternEvaluator evaluator(ast_->arena);
+    PatternEventStream stream = evaluator.evaluate(pattern_node, 0);
+
+    // Convert events to breakpoints
+    auto breakpoints = events_to_breakpoints(stream.events);
+    if (breakpoints.empty()) {
+        // Empty curve - emit zero
+        std::uint16_t out = emit_zero(buffers_, instructions_);
+        if (out == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", n.location);
+        }
+        return cache_and_return(node, TypedValue::signal(out));
+    }
+
+    if (breakpoints.size() > cedar::TimelineState::MAX_BREAKPOINTS) {
+        warn("W200", "Timeline curve exceeds 64 breakpoints, truncating", n.location);
+        breakpoints.resize(cedar::TimelineState::MAX_BREAKPOINTS);
+    }
+
+    // Allocate state and output buffer
+    std::uint32_t tl_count = call_counters_["timeline"]++;
+    push_path("timeline#" + std::to_string(tl_count));
+    std::uint32_t state_id = compute_state_id();
+    std::uint16_t out_buf = buffers_.allocate();
+
+    if (out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        pop_path();
+        return TypedValue::void_val();
+    }
+
+    // Emit TIMELINE instruction
+    cedar::Instruction inst{};
+    inst.opcode = cedar::Opcode::TIMELINE;
+    inst.out_buffer = out_buf;
+    inst.inputs[0] = 0xFFFF;
+    inst.inputs[1] = 0xFFFF;
+    inst.inputs[2] = 0xFFFF;
+    inst.inputs[3] = 0xFFFF;
+    inst.inputs[4] = 0xFFFF;
+    inst.state_id = state_id;
+    emit(inst);
+
+    // Create StateInitData for timeline breakpoints
+    StateInitData timeline_init;
+    timeline_init.state_id = state_id;
+    timeline_init.type = StateInitData::Type::Timeline;
+    timeline_init.timeline_breakpoints = std::move(breakpoints);
+    timeline_init.timeline_loop = true;
+    timeline_init.timeline_loop_length = 4.0f * stream.cycle_span;  // 1 cycle = 4 beats
+    state_inits_.push_back(std::move(timeline_init));
+
+    pop_path();
+    return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
 // Helper to emit instruction (wrapper for member function access)

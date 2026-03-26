@@ -2,6 +2,7 @@
 
 #include "ast.hpp"
 #include "pattern_event.hpp"
+#include <cedar/opcodes/dsp_state.hpp>
 #include <cstdint>
 #include <random>
 
@@ -138,5 +139,9 @@ count_pattern_cycles(NodeIndex pattern_root, const AstArena& arena);
 /// @return Combined event stream spanning all cycles
 [[nodiscard]] PatternEventStream
 evaluate_pattern_multi_cycle(NodeIndex pattern_root, const AstArena& arena);
+
+/// Convert curve pattern events to TIMELINE breakpoints
+std::vector<cedar::TimelineState::Breakpoint>
+events_to_breakpoints(const std::vector<PatternEvent>& events);
 
 } // namespace akkado

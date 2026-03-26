@@ -7,6 +7,7 @@
 #include "typed_value.hpp"
 #include <cedar/vm/instruction.hpp>
 #include <cedar/opcodes/sequence.hpp>
+#include <cedar/opcodes/dsp_state.hpp>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -125,6 +126,11 @@ struct StateInitData {
 
     // AST JSON (serialized during compilation for debug UI)
     std::string ast_json;
+
+    // For Timeline: breakpoint data
+    std::vector<cedar::TimelineState::Breakpoint> timeline_breakpoints;
+    bool timeline_loop = false;
+    float timeline_loop_length = 0.0f;
 
     // For PolyAlloc: configuration for poly/mono/legato voice allocation
     std::uint32_t poly_seq_state_id = 0;   // Linked SequenceState for events
@@ -297,6 +303,9 @@ private:
 
     /// Handle MiniLiteral (pattern) nodes - pat("c4 e4 g4"), etc.
     TypedValue handle_mini_literal(NodeIndex node, const Node& n);
+
+    /// Handle timeline curve literal nodes - t"__/'", etc.
+    TypedValue handle_timeline_literal(NodeIndex node, const Node& n);
 
     /// Emit per-voice SEQPAT_STEP/GATE/TYPE instructions and register polyphonic fields
     /// Shared helper used by handle_mini_literal and handle_pattern_reference
