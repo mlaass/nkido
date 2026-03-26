@@ -108,6 +108,7 @@ private:
 /// @return Pair of root node index and diagnostics
 std::pair<NodeIndex, std::vector<Diagnostic>>
 parse_mini(std::string_view pattern, AstArena& arena,
-           SourceLocation base_location = {}, bool sample_only = false);
+           SourceLocation base_location = {}, bool sample_only = false,
+           bool curve_mode = false);
 
 } // namespace akkado

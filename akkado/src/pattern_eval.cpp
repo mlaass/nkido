@@ -1,5 +1,6 @@
 #include "akkado/pattern_eval.hpp"
 #include "akkado/chord_parser.hpp"
+#include <cedar/opcodes/dsp_state.hpp>
 #include <algorithm>
 
 namespace akkado {
@@ -231,6 +232,14 @@ void PatternEvaluator::eval_atom(NodeIndex node, const PatternEvalContext& ctx,
             // Elongate is handled by post-processing in evaluate()
             // Emit an internal marker event that will be merged later
             event.type = PatternEventType::Elongate;
+            break;
+        case Node::MiniAtomKind::CurveLevel:
+            event.type = PatternEventType::CurveLevel;
+            event.curve_value = atom_data.curve_value;
+            event.curve_smooth = atom_data.curve_smooth;
+            break;
+        case Node::MiniAtomKind::CurveRamp:
+            event.type = PatternEventType::CurveRamp;
             break;
     }
 
@@ -657,6 +666,104 @@ PatternEventStream evaluate_pattern_multi_cycle(NodeIndex pattern_root,
     combined.sort_by_time();
 
     return combined;
+}
+
+// ============================================================================
+// events_to_breakpoints - Convert curve events to TIMELINE breakpoints
+// ============================================================================
+
+std::vector<cedar::TimelineState::Breakpoint>
+events_to_breakpoints(const std::vector<PatternEvent>& events) {
+    std::vector<cedar::TimelineState::Breakpoint> breakpoints;
+
+    // First pass: collect curve events only (skip non-curve events)
+    struct CurveEvent {
+        float time;
+        PatternEventType type;
+        float curve_value;
+        bool curve_smooth;
+    };
+    std::vector<CurveEvent> curve_events;
+    for (const auto& e : events) {
+        if (e.type == PatternEventType::CurveLevel || e.type == PatternEventType::CurveRamp) {
+            curve_events.push_back({e.time, e.type, e.curve_value, e.curve_smooth});
+        }
+    }
+
+    if (curve_events.empty()) return breakpoints;
+
+    // Process curve events into breakpoints
+    for (std::size_t i = 0; i < curve_events.size(); ++i) {
+        const auto& ce = curve_events[i];
+
+        if (ce.type == PatternEventType::CurveLevel) {
+            cedar::TimelineState::Breakpoint bp;
+            bp.time = ce.time;
+            bp.value = ce.curve_value;
+            // Smooth (~) prefix means linear interpolation, otherwise hold
+            bp.curve = ce.curve_smooth ? 0 : 2;  // 0=linear, 2=hold
+            breakpoints.push_back(bp);
+        }
+        else if (ce.type == PatternEventType::CurveRamp) {
+            // Find preceding level value
+            float prev_value = 0.0f;
+            for (std::size_t j = i; j > 0; --j) {
+                if (curve_events[j - 1].type == PatternEventType::CurveLevel) {
+                    prev_value = curve_events[j - 1].curve_value;
+                    break;
+                }
+            }
+
+            // Find following level value
+            float next_value = 0.0f;
+            for (std::size_t j = i + 1; j < curve_events.size(); ++j) {
+                if (curve_events[j].type == PatternEventType::CurveLevel) {
+                    next_value = curve_events[j].curve_value;
+                    break;
+                }
+            }
+
+            // Count consecutive ramps (including this one)
+            std::size_t ramp_start = i;
+            while (ramp_start > 0 && curve_events[ramp_start - 1].type == PatternEventType::CurveRamp) {
+                --ramp_start;
+            }
+            std::size_t ramp_end = i;
+            while (ramp_end + 1 < curve_events.size() && curve_events[ramp_end + 1].type == PatternEventType::CurveRamp) {
+                ++ramp_end;
+            }
+            std::size_t total_ramps = ramp_end - ramp_start + 1;
+            std::size_t ramp_index = i - ramp_start;  // 0-based index within ramp run
+
+            // Proportional interpolation
+            float t = static_cast<float>(ramp_index + 1) / static_cast<float>(total_ramps + 1);
+            float interp_value = prev_value + t * (next_value - prev_value);
+
+            cedar::TimelineState::Breakpoint bp;
+            bp.time = ce.time;
+            bp.value = interp_value;
+            bp.curve = 0;  // linear
+            breakpoints.push_back(bp);
+        }
+    }
+
+    // Optimization: merge consecutive same-value hold breakpoints (keep only the first)
+    if (breakpoints.size() > 1) {
+        std::vector<cedar::TimelineState::Breakpoint> merged;
+        merged.push_back(breakpoints[0]);
+        for (std::size_t i = 1; i < breakpoints.size(); ++i) {
+            const auto& prev = merged.back();
+            const auto& curr = breakpoints[i];
+            // Skip if both are hold with same value
+            if (prev.curve == 2 && curr.curve == 2 && prev.value == curr.value) {
+                continue;
+            }
+            merged.push_back(curr);
+        }
+        breakpoints = std::move(merged);
+    }
+
+    return breakpoints;
 }
 
 } // namespace akkado

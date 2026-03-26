@@ -7,10 +7,11 @@
 
 namespace akkado {
 
-MiniLexer::MiniLexer(std::string_view pattern, SourceLocation base_location, bool sample_only)
+MiniLexer::MiniLexer(std::string_view pattern, SourceLocation base_location, bool sample_only, bool curve_mode)
     : pattern_(pattern)
     , base_location_(base_location)
     , sample_only_(sample_only)
+    , curve_mode_(curve_mode)
 {}
 
 std::vector<MiniToken> MiniLexer::lex_all() {
@@ -209,6 +210,47 @@ MiniToken MiniLexer::lex_token() {
     }
 
     char c = peek();
+
+    // Curve-mode handling: reinterpret certain characters as curve tokens
+    if (curve_mode_) {
+        switch (c) {
+            case '_':
+                advance();
+                return make_token(MiniTokenType::CurveLevel, MiniCurveLevelData{0.00f});
+            case '.':
+                // '.' followed by a digit is a number (for modifiers like @0.5)
+                if (!is_digit(peek_next())) {
+                    advance();
+                    return make_token(MiniTokenType::CurveLevel, MiniCurveLevelData{0.25f});
+                }
+                break;  // fall through to number lexing
+            case '-':
+                advance();
+                return make_token(MiniTokenType::CurveLevel, MiniCurveLevelData{0.50f});
+            case '^':
+                advance();
+                return make_token(MiniTokenType::CurveLevel, MiniCurveLevelData{0.75f});
+            case '\'':
+                advance();
+                return make_token(MiniTokenType::CurveLevel, MiniCurveLevelData{1.00f});
+            case '~':
+                advance();
+                return make_token(MiniTokenType::CurveSmooth);
+            case '\\':
+                advance();
+                return make_token(MiniTokenType::CurveRamp);
+            case '/':
+                // '/' followed by a digit is Slash (slow modifier); otherwise CurveRamp
+                if (is_digit(peek_next())) {
+                    advance();
+                    return make_token(MiniTokenType::Slash);
+                }
+                advance();
+                return make_token(MiniTokenType::CurveRamp);
+            default:
+                break;  // fall through to standard lexing
+        }
+    }
 
     // Handle _ as elongate (extends previous note - Tidal-compatible)
     if (c == '_') {
@@ -637,8 +679,8 @@ MiniToken MiniLexer::lex_sample_only() {
 
 // Convenience function
 std::pair<std::vector<MiniToken>, std::vector<Diagnostic>>
-lex_mini(std::string_view pattern, SourceLocation base_location, bool sample_only) {
-    MiniLexer lexer(pattern, base_location, sample_only);
+lex_mini(std::string_view pattern, SourceLocation base_location, bool sample_only, bool curve_mode) {
+    MiniLexer lexer(pattern, base_location, sample_only, curve_mode);
     auto tokens = lexer.lex_all();
     return {std::move(tokens), lexer.diagnostics()};
 }

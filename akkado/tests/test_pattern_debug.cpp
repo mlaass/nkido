@@ -150,6 +150,32 @@ TEST_CASE("Pattern debug: serialize_mini_ast_json", "[pattern_debug]") {
         auto json = serialize_mini_ast_json(root, arena);
         CHECK(json.find("\"sampleName\":\"kick\"") != std::string::npos);
     }
+
+    SECTION("curve level atom") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("_'", arena, {}, false, true);
+        REQUIRE(root != NULL_NODE);
+        auto json = serialize_mini_ast_json(root, arena);
+        CHECK(json.find("\"kind\":\"CurveLevel\"") != std::string::npos);
+        CHECK(json.find("\"value\":") != std::string::npos);
+    }
+
+    SECTION("curve ramp atom") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("_/'", arena, {}, false, true);
+        REQUIRE(root != NULL_NODE);
+        auto json = serialize_mini_ast_json(root, arena);
+        CHECK(json.find("\"kind\":\"CurveRamp\"") != std::string::npos);
+    }
+
+    SECTION("curve level with value") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("'", arena, {}, false, true);
+        REQUIRE(root != NULL_NODE);
+        auto json = serialize_mini_ast_json(root, arena);
+        CHECK(json.find("\"kind\":\"CurveLevel\"") != std::string::npos);
+        CHECK(json.find("\"value\":1") != std::string::npos);
+    }
 }
 
 // =============================================================================

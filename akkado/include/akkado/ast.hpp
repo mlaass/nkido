@@ -177,6 +177,8 @@ struct Node {
         Rest,       // Rest/silence (~)
         Elongate,   // _ - extend previous note's duration (Tidal-compatible)
         Chord,      // Chord symbol (Am, C7, Fmaj7, etc.)
+        CurveLevel, // Curve value level (_, ., -, ^, ')
+        CurveRamp,  // Curve ramp (/, \)
     };
 
     // Mini-notation modifier types
@@ -202,6 +204,8 @@ struct Node {
         std::string chord_quality;          // Quality: "", "m", "7", "maj7", etc.
         std::uint8_t chord_root_midi;       // MIDI of root (octave 4)
         std::vector<std::int8_t> chord_intervals;  // Semitone intervals
+        float curve_value = 0.0f;    // For CurveLevel: 0.0, 0.25, 0.5, 0.75, 1.0
+        bool curve_smooth = false;   // For CurveLevel: true if preceded by ~ modifier
     };
 
     // Data for mini-notation euclidean patterns

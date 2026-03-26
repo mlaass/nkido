@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include "akkado/lexer.hpp"
 #include "akkado/mini_lexer.hpp"
 #include "akkado/mini_parser.hpp"
 #include "akkado/pattern_eval.hpp"
@@ -1550,4 +1551,242 @@ TEST_CASE("tune() compiles end-to-end", "[tuning]") {
         auto result = akkado::compile(R"(tune("24edo", 42))");
         CHECK_FALSE(result.success);
     }
+}
+
+// ============================================================================
+// Curve Lexer Tests [curve_lexer]
+// ============================================================================
+
+TEST_CASE("Curve mode lexes level characters", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("_ . - ^ '", {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(tokens.size() == 6); // 5 levels + Eof
+    CHECK(tokens[0].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[0].value).value == 0.0f);
+    CHECK(tokens[1].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[1].value).value == 0.25f);
+    CHECK(tokens[2].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[2].value).value == 0.5f);
+    CHECK(tokens[3].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[3].value).value == 0.75f);
+    CHECK(tokens[4].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(tokens[4].value).value == 1.0f);
+}
+
+TEST_CASE("Curve mode lexes ramp characters", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("/ \\", {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(tokens.size() == 3);
+    CHECK(tokens[0].type == MiniTokenType::CurveRamp);
+    CHECK(tokens[1].type == MiniTokenType::CurveRamp);
+}
+
+TEST_CASE("Curve mode lexes smooth modifier", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("~", {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(tokens.size() == 2);
+    CHECK(tokens[0].type == MiniTokenType::CurveSmooth);
+}
+
+TEST_CASE("Curve mode _ is CurveLevel not Elongate", "[curve_lexer]") {
+    auto [std_tokens, std_diags] = lex_mini("_", {}, false, false);
+    CHECK(std_tokens[0].type == MiniTokenType::Elongate);
+    auto [curve_tokens, curve_diags] = lex_mini("_", {}, false, true);
+    CHECK(curve_tokens[0].type == MiniTokenType::CurveLevel);
+    CHECK(std::get<MiniCurveLevelData>(curve_tokens[0].value).value == 0.0f);
+}
+
+TEST_CASE("Curve mode ~ is CurveSmooth not Rest", "[curve_lexer]") {
+    auto [std_tokens, std_diags] = lex_mini("~", {}, false, false);
+    CHECK(std_tokens[0].type == MiniTokenType::Rest);
+    auto [curve_tokens, curve_diags] = lex_mini("~", {}, false, true);
+    CHECK(curve_tokens[0].type == MiniTokenType::CurveSmooth);
+}
+
+TEST_CASE("Curve mode / disambiguation", "[curve_lexer]") {
+    auto [tokens1, diags1] = lex_mini("_/2", {}, false, true);
+    REQUIRE(diags1.empty());
+    CHECK(tokens1[0].type == MiniTokenType::CurveLevel);
+    CHECK(tokens1[1].type == MiniTokenType::Slash);
+    CHECK(tokens1[2].type == MiniTokenType::Number);
+
+    auto [tokens2, diags2] = lex_mini("_/'", {}, false, true);
+    REQUIRE(diags2.empty());
+    CHECK(tokens2[0].type == MiniTokenType::CurveLevel);
+    CHECK(tokens2[1].type == MiniTokenType::CurveRamp);
+    CHECK(tokens2[2].type == MiniTokenType::CurveLevel);
+}
+
+TEST_CASE("Curve mode grouping and modifiers still work", "[curve_lexer]") {
+    auto [tokens, diags] = lex_mini("[_'] *4", {}, false, true);
+    REQUIRE(diags.empty());
+    CHECK(tokens[0].type == MiniTokenType::LBracket);
+    CHECK(tokens[1].type == MiniTokenType::CurveLevel);
+    CHECK(tokens[2].type == MiniTokenType::CurveLevel);
+    CHECK(tokens[3].type == MiniTokenType::RBracket);
+    CHECK(tokens[4].type == MiniTokenType::Star);
+}
+
+TEST_CASE("Curve mode mini_token_type_name", "[curve_lexer]") {
+    CHECK(mini_token_type_name(MiniTokenType::CurveLevel) == "CurveLevel");
+    CHECK(mini_token_type_name(MiniTokenType::CurveRamp) == "CurveRamp");
+    CHECK(mini_token_type_name(MiniTokenType::CurveSmooth) == "CurveSmooth");
+}
+
+// ============================================================================
+// Curve Parser Tests [curve_parser]
+// ============================================================================
+
+TEST_CASE("Parse basic curve levels", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_ ' -", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(root != NULL_NODE);
+    CHECK(arena[root].type == NodeType::MiniPattern);
+    REQUIRE(arena.child_count(root) == 3);
+
+    NodeIndex c0 = arena[root].first_child;
+    CHECK(arena[c0].type == NodeType::MiniAtom);
+    CHECK(arena[c0].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c0].as_mini_atom().curve_value == 0.0f);
+    CHECK(arena[c0].as_mini_atom().curve_smooth == false);
+
+    NodeIndex c1 = arena[c0].next_sibling;
+    CHECK(arena[c1].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c1].as_mini_atom().curve_value == 1.0f);
+
+    NodeIndex c2 = arena[c1].next_sibling;
+    CHECK(arena[c2].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c2].as_mini_atom().curve_value == 0.5f);
+}
+
+TEST_CASE("Parse curve ramps", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_/'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 3);
+
+    NodeIndex c0 = arena[root].first_child;
+    CHECK(arena[c0].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    NodeIndex c1 = arena[c0].next_sibling;
+    CHECK(arena[c1].as_mini_atom().kind == Node::MiniAtomKind::CurveRamp);
+    NodeIndex c2 = arena[c1].next_sibling;
+    CHECK(arena[c2].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c2].as_mini_atom().curve_value == 1.0f);
+}
+
+TEST_CASE("Parse smooth modifier ~", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_~'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 2);
+
+    NodeIndex c0 = arena[root].first_child;
+    CHECK(arena[c0].as_mini_atom().curve_smooth == false);
+    NodeIndex c1 = arena[c0].next_sibling;
+    CHECK(arena[c1].as_mini_atom().kind == Node::MiniAtomKind::CurveLevel);
+    CHECK(arena[c1].as_mini_atom().curve_value == 1.0f);
+    CHECK(arena[c1].as_mini_atom().curve_smooth == true);
+}
+
+TEST_CASE("Parse curve with grouping", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("[_'] __", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 3);
+    NodeIndex group = arena[root].first_child;
+    CHECK(arena[group].type == NodeType::MiniGroup);
+    REQUIRE(arena.child_count(group) == 2);
+}
+
+TEST_CASE("Parse curve with alternation", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("<[_'] ['_]>", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    REQUIRE(arena.child_count(root) == 1);
+    NodeIndex seq = arena[root].first_child;
+    CHECK(arena[seq].type == NodeType::MiniSequence);
+    REQUIRE(arena.child_count(seq) == 2);
+}
+
+TEST_CASE("Curve ~ before non-level is error", "[curve_parser]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("~/", arena, {}, false, true);
+    CHECK(!diags.empty());
+}
+
+// ============================================================================
+// Curve Evaluation Tests [curve_eval]
+// ============================================================================
+
+TEST_CASE("Evaluate constant curve", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("____", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 4);
+    for (const auto& event : stream.events) {
+        CHECK(event.type == PatternEventType::CurveLevel);
+        CHECK(event.curve_value == 0.0f);
+        CHECK(event.curve_smooth == false);
+    }
+    CHECK_THAT(stream.events[0].time, WithinRel(0.0f, 0.01f));
+    CHECK_THAT(stream.events[0].duration, WithinRel(0.25f, 0.01f));
+    CHECK_THAT(stream.events[1].time, WithinRel(0.25f, 0.01f));
+    CHECK_THAT(stream.events[2].time, WithinRel(0.5f, 0.01f));
+    CHECK_THAT(stream.events[3].time, WithinRel(0.75f, 0.01f));
+}
+
+TEST_CASE("Evaluate step curve", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("__''", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 4);
+    CHECK(stream.events[0].curve_value == 0.0f);
+    CHECK(stream.events[1].curve_value == 0.0f);
+    CHECK(stream.events[2].curve_value == 1.0f);
+    CHECK(stream.events[3].curve_value == 1.0f);
+}
+
+TEST_CASE("Evaluate curve with ramp", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_/'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 3);
+    CHECK(stream.events[0].type == PatternEventType::CurveLevel);
+    CHECK(stream.events[0].curve_value == 0.0f);
+    CHECK(stream.events[1].type == PatternEventType::CurveRamp);
+    CHECK(stream.events[2].type == PatternEventType::CurveLevel);
+    CHECK(stream.events[2].curve_value == 1.0f);
+}
+
+TEST_CASE("Evaluate curve with smooth modifier", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_~'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 2);
+    CHECK(stream.events[0].curve_smooth == false);
+    CHECK(stream.events[1].curve_smooth == true);
+    CHECK(stream.events[1].curve_value == 1.0f);
+}
+
+TEST_CASE("Evaluate curve with weight modifier", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_@3 '", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 2);
+    CHECK_THAT(stream.events[0].duration, WithinRel(0.75f, 0.01f));
+    CHECK_THAT(stream.events[1].duration, WithinRel(0.25f, 0.01f));
+}
+
+TEST_CASE("t prefix produces Timeline token", "[timeline_prefix]") {
+    auto [tokens, lex_diags] = akkado::lex("t\"__''\"");
+    REQUIRE(lex_diags.empty());
+    REQUIRE(tokens.size() >= 3);
+    CHECK(tokens[0].type == TokenType::Timeline);
+    CHECK(tokens[1].type == TokenType::String);
 }

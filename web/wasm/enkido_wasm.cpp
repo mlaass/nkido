@@ -710,7 +710,18 @@ WASM_EXPORT uint32_t cedar_apply_state_inits() {
             );
             count++;
         }
-        // Timeline state init would go here if needed
+        else if (init.type == akkado::StateInitData::Type::Timeline) {
+            auto& state = g_vm->states().get_or_create<cedar::TimelineState>(init.state_id);
+            state.num_points = std::min(
+                static_cast<std::uint32_t>(init.timeline_breakpoints.size()),
+                static_cast<std::uint32_t>(cedar::TimelineState::MAX_BREAKPOINTS));
+            for (std::uint32_t i = 0; i < state.num_points; ++i) {
+                state.points[i] = init.timeline_breakpoints[i];
+            }
+            state.loop = init.timeline_loop;
+            state.loop_length = init.timeline_loop_length;
+            count++;
+        }
     }
     return count;
 }

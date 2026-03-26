@@ -22,6 +22,8 @@ enum class PatternEventType : std::uint8_t {
     Rest,       // Silence (no output)
     Chord,      // Chord (multiple MIDI notes)
     Elongate,   // Internal marker: extends previous event's duration (filtered during post-processing)
+    CurveLevel, // Curve value level (holds a value for its duration)
+    CurveRamp,  // Curve ramp (interpolates between neighbors)
 };
 
 /// A single event in an expanded pattern timeline
@@ -51,6 +53,10 @@ struct PatternEvent {
     // Chord data (for Chord type)
     std::optional<ChordEventData> chord_data;
 
+    // Curve data (for CurveLevel/CurveRamp types)
+    float curve_value = 0.0f;      // For CurveLevel: 0.0, 0.25, 0.5, 0.75, 1.0
+    bool curve_smooth = false;     // For CurveLevel: true if ~ prefix (linear interp)
+
     /// Check if this event should trigger (based on chance)
     /// @param random_value Random value in [0, 1)
     [[nodiscard]] bool should_trigger(float random_value) const {
@@ -75,6 +81,16 @@ struct PatternEvent {
     /// Check if this is a chord event
     [[nodiscard]] bool is_chord() const {
         return type == PatternEventType::Chord;
+    }
+
+    /// Check if this is a curve level event
+    [[nodiscard]] bool is_curve_level() const {
+        return type == PatternEventType::CurveLevel;
+    }
+
+    /// Check if this is a curve ramp event
+    [[nodiscard]] bool is_curve_ramp() const {
+        return type == PatternEventType::CurveRamp;
     }
 };
 

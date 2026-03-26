@@ -1,6 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include "akkado/akkado.hpp"
+#include "akkado/pattern_eval.hpp"
+#include "akkado/mini_parser.hpp"
 #include <cedar/vm/instruction.hpp>
 #include <cedar/vm/state_pool.hpp>  // For fnv1a_hash_runtime
 #include <cstring>
@@ -4024,4 +4026,140 @@ TEST_CASE("Codegen: Expression default interactions", "[codegen][fn]") {
         )");
         CHECK(result.success);
     }
+}
+
+// ============================================================================
+// Timeline Curve Breakpoint Tests [timeline_codegen]
+// ============================================================================
+
+static akkado::PatternEventStream eval_curve(const std::string& curve_str) {
+    akkado::AstArena arena;
+    auto [root, diags] = akkado::parse_mini(curve_str, arena, {}, false, true);
+    return akkado::evaluate_pattern(root, arena, 0);
+}
+
+TEST_CASE("Constant curve produces single breakpoint", "[timeline_codegen]") {
+    auto stream = eval_curve("___");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    REQUIRE(breakpoints.size() == 1);
+    CHECK(breakpoints[0].time == Catch::Approx(0.0f));
+    CHECK(breakpoints[0].value == Catch::Approx(0.0f));
+    CHECK(breakpoints[0].curve == 2); // hold
+}
+
+TEST_CASE("Step curve produces two breakpoints", "[timeline_codegen]") {
+    auto stream = eval_curve("__''");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    REQUIRE(breakpoints.size() == 2);
+    CHECK(breakpoints[0].value == Catch::Approx(0.0f));
+    CHECK(breakpoints[0].curve == 2);
+    CHECK(breakpoints[1].time == Catch::Approx(0.5f).margin(0.01f));
+    CHECK(breakpoints[1].value == Catch::Approx(1.0f));
+    CHECK(breakpoints[1].curve == 2);
+}
+
+TEST_CASE("Ramp produces linear breakpoints", "[timeline_codegen]") {
+    auto stream = eval_curve("_/'");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    REQUIRE(breakpoints.size() >= 2);
+    // Should have linear interpolation somewhere
+    bool has_linear = false;
+    for (const auto& bp : breakpoints) {
+        if (bp.curve == 0) has_linear = true;
+    }
+    CHECK(has_linear);
+}
+
+TEST_CASE("Smooth modifier produces linear breakpoint", "[timeline_codegen]") {
+    auto stream = eval_curve("_~'");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    REQUIRE(breakpoints.size() >= 2);
+    // The smooth level should be linear
+    CHECK(breakpoints[1].curve == 0);
+    CHECK(breakpoints[1].value == Catch::Approx(1.0f));
+}
+
+TEST_CASE("Multiple ramps produce proportional interpolation", "[timeline_codegen]") {
+    auto stream = eval_curve("_//'");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    // Should have intermediate value around 0.5
+    bool has_mid = false;
+    for (const auto& bp : breakpoints) {
+        if (bp.value > 0.3f && bp.value < 0.7f && bp.curve == 0) {
+            has_mid = true;
+        }
+    }
+    CHECK(has_mid);
+}
+
+TEST_CASE("All-same levels merge to single breakpoint", "[timeline_codegen]") {
+    auto stream = eval_curve("'''''");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    CHECK(breakpoints.size() == 1);
+    CHECK(breakpoints[0].value == Catch::Approx(1.0f));
+}
+
+TEST_CASE("Timeline curve compiles to TIMELINE opcode", "[timeline_codegen]") {
+    auto result = akkado::compile("t\"____\" |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    auto insts = get_instructions(result);
+    bool found = false;
+    for (const auto& inst : insts) {
+        if (inst.opcode == cedar::Opcode::TIMELINE) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("Timeline curve produces state init", "[timeline_codegen]") {
+    auto result = akkado::compile("t\"__''\" |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    bool found = false;
+    for (const auto& init : result.state_inits) {
+        if (init.type == akkado::StateInitData::Type::Timeline) {
+            found = true;
+            CHECK(!init.timeline_breakpoints.empty());
+            CHECK(init.timeline_loop == true);
+            CHECK(init.timeline_loop_length > 0.0f);
+        }
+    }
+    CHECK(found);
+}
+
+// ============================================================================
+// Timeline End-to-End Integration Tests [timeline_e2e]
+// ============================================================================
+
+TEST_CASE("Timeline curve with math compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("t\"__/''\" * 1800 + 200 |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    auto insts = get_instructions(result);
+    CHECK(find_instruction(insts, cedar::Opcode::TIMELINE) != nullptr);
+}
+
+TEST_CASE("Timeline constant output compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("t\"''''\" |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    auto insts = get_instructions(result);
+    CHECK(find_instruction(insts, cedar::Opcode::TIMELINE) != nullptr);
+}
+
+TEST_CASE("Timeline with pipe chain compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("osc(\"sin\", 440) * t\"''''____\" |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+}
+
+TEST_CASE("Timeline function call form compiles", "[timeline_e2e]") {
+    auto result = akkado::compile("timeline(\"__/''\") |> out(%, %)");
+    CHECK(result.diagnostics.empty());
+    auto insts = get_instructions(result);
+    CHECK(find_instruction(insts, cedar::Opcode::TIMELINE) != nullptr);
+    // Verify state init exists
+    bool found = false;
+    for (const auto& init : result.state_inits) {
+        if (init.type == akkado::StateInitData::Type::Timeline) found = true;
+    }
+    CHECK(found);
 }

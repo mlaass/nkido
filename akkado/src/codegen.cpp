@@ -692,6 +692,8 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"range",   &CodeGenerator::handle_range_call},
                 {"repeat",  &CodeGenerator::handle_repeat_call},
                 {"spread",  &CodeGenerator::handle_spread_call},
+                // Timeline curve call form
+                {"timeline",  &CodeGenerator::handle_timeline_call},
                 // Pattern transformation builtins
                 {"slow",      &CodeGenerator::handle_slow_call},
                 {"fast",      &CodeGenerator::handle_fast_call},

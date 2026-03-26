@@ -426,6 +426,14 @@ Token Lexer::lex_identifier() {
         }
     }
 
+    // Check for timeline string prefix: t"..." or t`...`
+    if (source_[start_] == 't' && current_ == start_ + 1) {
+        char next = peek();
+        if (next == '"' || next == '`') {
+            return make_token(TokenType::Timeline);
+        }
+    }
+
     while (is_alphanumeric(peek())) {
         advance();
     }
