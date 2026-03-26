@@ -33,6 +33,7 @@ enum class TokenType : std::uint8_t {
 
     // Pattern types (used with mini-notation)
     Pat,            // pat(...)
+    Timeline,       // t"..." (timeline curve notation)
 
     // Operators
     Plus,           // +
@@ -106,6 +107,7 @@ constexpr std::string_view token_type_name(TokenType type) {
         case TokenType::Const:        return "Const";
         case TokenType::Import:       return "Import";
         case TokenType::Pat:          return "Pat";
+        case TokenType::Timeline:     return "Timeline";
         case TokenType::Plus:         return "Plus";
         case TokenType::Minus:        return "Minus";
         case TokenType::Star:         return "Star";

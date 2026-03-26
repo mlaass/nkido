@@ -1118,3 +1118,34 @@ TEST_CASE("Token accessors edge cases", "[lexer]") {
         CHECK(tokens[0].as_string() == "tab\there");
     }
 }
+
+TEST_CASE("Lexer timeline string prefix", "[lexer][timeline]") {
+    SECTION("t followed by double quote is Timeline token") {
+        auto [tokens, diags] = lex("t\"__/''\"");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens.size() >= 3);
+        CHECK(tokens[0].type == TokenType::Timeline);
+        CHECK(tokens[1].type == TokenType::String);
+        CHECK(tokens[1].as_string() == "__/''");
+    }
+
+    SECTION("t followed by backtick is Timeline token") {
+        auto [tokens, diags] = lex("t`__/''`");
+        REQUIRE(diags.empty());
+        CHECK(tokens[0].type == TokenType::Timeline);
+        CHECK(tokens[1].type == TokenType::String);
+    }
+
+    SECTION("standalone t is Identifier") {
+        auto [tokens, diags] = lex("t = 5");
+        REQUIRE(diags.empty());
+        CHECK(tokens[0].type == TokenType::Identifier);
+    }
+
+    SECTION("total is Identifier not Timeline") {
+        auto [tokens, diags] = lex("total = 10");
+        REQUIRE(diags.empty());
+        CHECK(tokens[0].type == TokenType::Identifier);
+        CHECK(tokens[0].as_string() == "total");
+    }
+}

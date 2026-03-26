@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include "akkado/lexer.hpp"
 #include "akkado/mini_lexer.hpp"
 #include "akkado/mini_parser.hpp"
 #include "akkado/pattern_eval.hpp"
@@ -1780,4 +1781,12 @@ TEST_CASE("Evaluate curve with weight modifier", "[curve_eval]") {
     REQUIRE(stream.events.size() == 2);
     CHECK_THAT(stream.events[0].duration, WithinRel(0.75f, 0.01f));
     CHECK_THAT(stream.events[1].duration, WithinRel(0.25f, 0.01f));
+}
+
+TEST_CASE("t prefix produces Timeline token", "[timeline_prefix]") {
+    auto [tokens, lex_diags] = akkado::lex("t\"__''\"");
+    REQUIRE(lex_diags.empty());
+    REQUIRE(tokens.size() >= 3);
+    CHECK(tokens[0].type == TokenType::Timeline);
+    CHECK(tokens[1].type == TokenType::String);
 }

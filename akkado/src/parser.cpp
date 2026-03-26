@@ -87,6 +87,7 @@ void Parser::synchronize() {
         switch (current().type) {
             case TokenType::Post:
             case TokenType::Pat:
+            case TokenType::Timeline:
             case TokenType::Const:
                 return;
             default:
@@ -453,6 +454,7 @@ NodeIndex Parser::parse_prefix() {
         case TokenType::LBrace:
             return parse_record_literal();
         case TokenType::Pat:
+        case TokenType::Timeline:
             return parse_mini_literal();
         case TokenType::Match:
             return parse_match_expr();
@@ -1116,15 +1118,19 @@ NodeIndex Parser::parse_argument() {
 NodeIndex Parser::parse_mini_literal() {
     Token kw_tok = advance();
 
-    if (kw_tok.type != TokenType::Pat) {
-        error("Expected 'pat' keyword");
+    bool is_timeline = (kw_tok.type == TokenType::Timeline);
+
+    if (kw_tok.type != TokenType::Pat && kw_tok.type != TokenType::Timeline) {
+        error("Expected 'pat' or 't' keyword");
         return NULL_NODE;
     }
 
     NodeIndex node = make_node(NodeType::MiniLiteral, kw_tok);
 
-    bool has_parens = check(TokenType::LParen);
-    if (has_parens) {
+    // Timeline prefix t"..." doesn't support parens form
+    bool has_parens = false;
+    if (!is_timeline && check(TokenType::LParen)) {
+        has_parens = true;
         advance(); // consume '('
     }
 
@@ -1144,8 +1150,9 @@ NodeIndex Parser::parse_mini_literal() {
     content_loc.column += 1;
     content_loc.length = pattern_str.length();  // Content length without quotes
 
-    // Parse the mini-notation string into AST nodes
-    auto [pattern_ast, mini_diags] = parse_mini(pattern_str, arena_, content_loc);
+    // Timeline (t"...") uses curve_mode=true
+    auto [pattern_ast, mini_diags] = parse_mini(pattern_str, arena_, content_loc,
+                                                 false, is_timeline);
 
     // Add mini-notation diagnostics to our diagnostics
     for (auto& diag : mini_diags) {
@@ -1156,6 +1163,11 @@ NodeIndex Parser::parse_mini_literal() {
     // Add the parsed pattern as a child
     if (pattern_ast != NULL_NODE) {
         arena_.add_child(node, pattern_ast);
+    }
+
+    // Mark timeline nodes so codegen can distinguish from pat
+    if (is_timeline) {
+        arena_[node].data = Node::StringData{.value = "timeline"};
     }
 
     if (has_parens) {
