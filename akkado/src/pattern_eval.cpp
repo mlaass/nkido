@@ -232,6 +232,14 @@ void PatternEvaluator::eval_atom(NodeIndex node, const PatternEvalContext& ctx,
             // Emit an internal marker event that will be merged later
             event.type = PatternEventType::Elongate;
             break;
+        case Node::MiniAtomKind::CurveLevel:
+            event.type = PatternEventType::CurveLevel;
+            event.curve_value = atom_data.curve_value;
+            event.curve_smooth = atom_data.curve_smooth;
+            break;
+        case Node::MiniAtomKind::CurveRamp:
+            event.type = PatternEventType::CurveRamp;
+            break;
     }
 
     stream.add(std::move(event));

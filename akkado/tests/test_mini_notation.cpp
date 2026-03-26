@@ -1713,3 +1713,71 @@ TEST_CASE("Curve ~ before non-level is error", "[curve_parser]") {
     auto [root, diags] = parse_mini("~/", arena, {}, false, true);
     CHECK(!diags.empty());
 }
+
+// ============================================================================
+// Curve Evaluation Tests [curve_eval]
+// ============================================================================
+
+TEST_CASE("Evaluate constant curve", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("____", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 4);
+    for (const auto& event : stream.events) {
+        CHECK(event.type == PatternEventType::CurveLevel);
+        CHECK(event.curve_value == 0.0f);
+        CHECK(event.curve_smooth == false);
+    }
+    CHECK_THAT(stream.events[0].time, WithinRel(0.0f, 0.01f));
+    CHECK_THAT(stream.events[0].duration, WithinRel(0.25f, 0.01f));
+    CHECK_THAT(stream.events[1].time, WithinRel(0.25f, 0.01f));
+    CHECK_THAT(stream.events[2].time, WithinRel(0.5f, 0.01f));
+    CHECK_THAT(stream.events[3].time, WithinRel(0.75f, 0.01f));
+}
+
+TEST_CASE("Evaluate step curve", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("__''", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 4);
+    CHECK(stream.events[0].curve_value == 0.0f);
+    CHECK(stream.events[1].curve_value == 0.0f);
+    CHECK(stream.events[2].curve_value == 1.0f);
+    CHECK(stream.events[3].curve_value == 1.0f);
+}
+
+TEST_CASE("Evaluate curve with ramp", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_/'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 3);
+    CHECK(stream.events[0].type == PatternEventType::CurveLevel);
+    CHECK(stream.events[0].curve_value == 0.0f);
+    CHECK(stream.events[1].type == PatternEventType::CurveRamp);
+    CHECK(stream.events[2].type == PatternEventType::CurveLevel);
+    CHECK(stream.events[2].curve_value == 1.0f);
+}
+
+TEST_CASE("Evaluate curve with smooth modifier", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_~'", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 2);
+    CHECK(stream.events[0].curve_smooth == false);
+    CHECK(stream.events[1].curve_smooth == true);
+    CHECK(stream.events[1].curve_value == 1.0f);
+}
+
+TEST_CASE("Evaluate curve with weight modifier", "[curve_eval]") {
+    AstArena arena;
+    auto [root, diags] = parse_mini("_@3 '", arena, {}, false, true);
+    REQUIRE(diags.empty());
+    PatternEventStream stream = evaluate_pattern(root, arena, 0);
+    REQUIRE(stream.events.size() == 2);
+    CHECK_THAT(stream.events[0].duration, WithinRel(0.75f, 0.01f));
+    CHECK_THAT(stream.events[1].duration, WithinRel(0.25f, 0.01f));
+}
