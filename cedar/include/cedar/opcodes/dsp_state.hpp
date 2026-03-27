@@ -976,7 +976,25 @@ struct PolyAllocState {
             return 0;
         }
 
-        // Poly mode: find first inactive slot
+        // Poly mode: reuse active voice with same frequency
+        // Preserves oscillator phase (same voice slot = same XOR isolation)
+        // but retriggers gate so envelopes re-attack for clear chord articulation
+        for (std::uint16_t i = 0; i < max_voices; ++i) {
+            if (voices[i].active && std::abs(voices[i].freq - freq) < 0.5f) {
+                auto& v = voices[i];
+                v.vel = vel;
+                v.event_index = event_idx;
+                v.cycle = cyc;
+                v.releasing = false;
+                v.gate = 1.0f;
+                v.age = 0;
+                v.pending_gate_on = gate_on_sample;  // Retrigger for envelope
+                v.pending_gate_off = BLOCK_SIZE;
+                return static_cast<int>(i);
+            }
+        }
+
+        // Find first inactive slot
         for (std::uint16_t i = 0; i < max_voices; ++i) {
             if (!voices[i].active) {
                 auto& v = voices[i];
@@ -1060,8 +1078,9 @@ struct PolyAllocState {
         }
     }
 
-    // Release timeout: 1 block after gate-off (gate multiplication zeros output)
-    static constexpr std::uint32_t RELEASE_TIMEOUT = 1;
+    // Release timeout: blocks after gate-off before voice is deactivated
+    // (gate multiplication zeros output during this window)
+    static constexpr std::uint32_t RELEASE_TIMEOUT = 4;
 
     void tick() {
         if (!voices) return;

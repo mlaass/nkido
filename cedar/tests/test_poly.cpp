@@ -560,3 +560,151 @@ TEST_CASE("POLY voice allocation: velocity is passed to voices", "[poly][alloc]"
     }
     CHECK(found);
 }
+
+// Helper: set up a 3-chord sequence that tiles the full cycle
+// Used for cycle-boundary and voice-reuse tests
+static void setup_three_chord_sequence(VM& vm) {
+    static constexpr float CYCLE_LENGTH = 4.0f;
+
+    // Three contiguous chord events, each 1/3 of cycle
+    // Event 0: [A4, C5, E5]  Event 1: [A4, C5, B5]  Event 2: [A4, E5, D5]
+    // Note: a4=440 is shared across all 3 events
+    static Event events[3];
+
+    events[0].type = EventType::DATA;
+    events[0].time = 0.0f;
+    events[0].duration = 1.0f / 3.0f;
+    events[0].chance = 1.0f;
+    events[0].velocity = 1.0f;
+    events[0].num_values = 3;
+    events[0].values[0] = 440.00f;   // A4
+    events[0].values[1] = 523.25f;   // C5
+    events[0].values[2] = 659.25f;   // E5
+
+    events[1].type = EventType::DATA;
+    events[1].time = 1.0f / 3.0f;
+    events[1].duration = 1.0f / 3.0f;
+    events[1].chance = 1.0f;
+    events[1].velocity = 1.0f;
+    events[1].num_values = 3;
+    events[1].values[0] = 440.00f;   // A4 (shared)
+    events[1].values[1] = 523.25f;   // C5 (shared)
+    events[1].values[2] = 987.77f;   // B5
+
+    events[2].type = EventType::DATA;
+    events[2].time = 2.0f / 3.0f;
+    events[2].duration = 1.0f / 3.0f;  // ends at 1.0 = cycle boundary
+    events[2].chance = 1.0f;
+    events[2].velocity = 1.0f;
+    events[2].num_values = 3;
+    events[2].values[0] = 440.00f;   // A4 (shared)
+    events[2].values[1] = 659.25f;   // E5
+    events[2].values[2] = 587.33f;   // D5
+
+    Sequence seq;
+    seq.events = events;
+    seq.num_events = 3;
+    seq.capacity = 3;
+    seq.duration = CYCLE_LENGTH;
+    seq.mode = SequenceMode::NORMAL;
+
+    vm.init_sequence_program_state(SEQ_STATE_ID, &seq, 1, CYCLE_LENGTH, false, 3);
+}
+
+TEST_CASE("POLY cycle-boundary: no voice leak at aligned BPM", "[poly][boundary]") {
+    // At 120 BPM, cycle_length_in_samples (96000) is exactly divisible by
+    // BLOCK_SIZE (128), causing block_end_pos == cycle_length at the boundary.
+    // The last event (evt_end == cycle_length) must be properly released.
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    auto program = build_seq_poly_program();
+    vm.load_program_immediate(std::span<const Instruction>(program));
+
+    setup_three_chord_sequence(vm);
+    vm.init_poly_state(POLY_STATE_ID, SEQ_STATE_ID, 12, 0, 0);
+
+    // At 120 BPM, 1 cycle = 750 blocks. Run 3 full cycles.
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    for (int b = 0; b < 750 * 3; ++b) {
+        vm.process_block(left.data(), right.data());
+    }
+
+    // After 3 full cycles, voice count should NOT have grown beyond
+    // the normal working set (3 active + some releasing)
+    auto& poly = vm.states().get_or_create<PolyAllocState>(POLY_STATE_ID);
+    int active_count = 0;
+    for (std::uint8_t i = 0; i < poly.max_voices; ++i) {
+        if (poly.voices[i].active) active_count++;
+    }
+    // At a cycle boundary, we expect 3 active voices (current chord)
+    // plus up to 3 releasing from the previous chord = max 6
+    // Without the fix, leaked voices would accumulate to 12 (max_voices)
+    CHECK(active_count <= 6);
+}
+
+TEST_CASE("POLY voice reuse: same frequency reuses voice slot", "[poly][reuse]") {
+    // When a note (A4=440Hz) appears in consecutive events, the poly system
+    // should reuse the same voice slot instead of allocating a new one.
+    // This preserves oscillator phase continuity.
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    auto program = build_seq_poly_program();
+    vm.load_program_immediate(std::span<const Instruction>(program));
+
+    setup_three_chord_sequence(vm);
+    vm.init_poly_state(POLY_STATE_ID, SEQ_STATE_ID, 12, 0, 0);
+
+    // Process enough blocks to get past the first event and into the second
+    // Event 0 covers 0 to 1/3 cycle. At 120 BPM, 1/3 cycle = 250 blocks.
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    for (int b = 0; b < 260; ++b) {
+        vm.process_block(left.data(), right.data());
+    }
+
+    // A4 (440 Hz) should be on a voice that's still active (reused from Event 0)
+    auto& poly = vm.states().get_or_create<PolyAllocState>(POLY_STATE_ID);
+    int a4_count = 0;
+    for (std::uint8_t i = 0; i < poly.max_voices; ++i) {
+        if (poly.voices[i].active && !poly.voices[i].releasing &&
+            std::abs(poly.voices[i].freq - 440.0f) < 0.5f) {
+            a4_count++;
+        }
+    }
+    // With voice reuse, A4 should appear on exactly 1 voice
+    // Without reuse, it could be on 2 (one releasing from Event 0, one from Event 1)
+    CHECK(a4_count == 1);
+}
+
+TEST_CASE("POLY long-running stability: no voice accumulation over 10 cycles", "[poly][stability]") {
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    auto program = build_seq_poly_program();
+    vm.load_program_immediate(std::span<const Instruction>(program));
+
+    setup_three_chord_sequence(vm);
+    vm.init_poly_state(POLY_STATE_ID, SEQ_STATE_ID, 12, 0, 0);
+
+    // Run 10 full cycles (7500 blocks at 120 BPM)
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    int max_active_seen = 0;
+    for (int b = 0; b < 750 * 10; ++b) {
+        vm.process_block(left.data(), right.data());
+        if (b % 750 == 749) {
+            // Check at end of each cycle
+            auto& poly = vm.states().get_or_create<PolyAllocState>(POLY_STATE_ID);
+            int active = 0;
+            for (std::uint8_t i = 0; i < poly.max_voices; ++i) {
+                if (poly.voices[i].active) active++;
+            }
+            max_active_seen = std::max(max_active_seen, active);
+        }
+    }
+    // Voice count should stay bounded (never exceed 6: 3 active + 3 releasing)
+    CHECK(max_active_seen <= 6);
+}

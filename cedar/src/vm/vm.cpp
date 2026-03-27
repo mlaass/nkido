@@ -272,14 +272,23 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
         : nullptr;
 
     if (seq_state && seq_state->output.num_events > 0) {
-        const float spb = ctx_.samples_per_beat();
-        const float beat_start = static_cast<float>(ctx_.global_sample_counter) / spb;
+        // Use double precision for beat timing to avoid float32 precision loss
+        // after ~6 minutes (global_sample_counter > 2^24)
+        const double spb_d = (60.0 / static_cast<double>(ctx_.bpm))
+                           * static_cast<double>(ctx_.sample_rate);
+        const double beat_start_d =
+            static_cast<double>(ctx_.global_sample_counter) / spb_d;
         const float cycle_length = seq_state->cycle_length;
-        const float cycle_pos = std::fmod(beat_start, cycle_length);
+        const double cycle_pos_d =
+            std::fmod(beat_start_d, static_cast<double>(cycle_length));
         const std::uint32_t current_cycle =
-            static_cast<std::uint32_t>(std::floor(beat_start / cycle_length));
-        const float block_beats = static_cast<float>(BLOCK_SIZE) / spb;
-        const float block_end_pos = cycle_pos + block_beats;
+            static_cast<std::uint32_t>(std::floor(beat_start_d / cycle_length));
+        const double block_beats_d = static_cast<double>(BLOCK_SIZE) / spb_d;
+        const double block_end_pos_d = cycle_pos_d + block_beats_d;
+        // Narrow to float for comparisons against float-precision event times
+        const float spb = static_cast<float>(spb_d);
+        const float cycle_pos = static_cast<float>(cycle_pos_d);
+        const float block_end_pos = static_cast<float>(block_end_pos_d);
 
         // Reset pending gate transitions for all voices
         if (poly_state.voices) {
@@ -333,7 +342,14 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
             float off_beat_offset = 0.0f;
             std::uint32_t off_cycle = current_cycle;
 
-            if (evt_end >= cycle_pos && evt_end < block_end_pos) {
+            // At the cycle boundary, extend the upper bound slightly to catch
+            // evt_end == cycle_length when block_end_pos == cycle_length exactly
+            // (happens at BPMs where cycle_length_in_samples % BLOCK_SIZE == 0)
+            const float off_upper = (std::abs(block_end_pos - cycle_length) < 1e-4f)
+                ? block_end_pos + 1e-4f
+                : block_end_pos;
+
+            if (evt_end >= cycle_pos && evt_end < off_upper) {
                 gate_off_this_block = true;
                 off_beat_offset = evt_end - cycle_pos;
             } else if (evt_end > cycle_length) {
