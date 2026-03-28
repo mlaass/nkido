@@ -1455,6 +1455,66 @@ WASM_EXPORT uint32_t cedar_get_probe_write_pos(uint32_t state_id) {
 }
 
 // ============================================================================
+// FFT Probe Data API (for waterfall/spectrum visualizations)
+// ============================================================================
+
+// Static buffer for FFT magnitude copy
+static float g_fft_magnitude_buffer[1025];  // MAX_BINS
+
+/**
+ * Get number of frequency bins for this FFT probe
+ * @param state_id The state_id of the FFT probe
+ * @return Number of bins (nfft/2+1), or 0 if not found
+ */
+WASM_EXPORT uint32_t cedar_get_fft_bin_count(uint32_t state_id) {
+    if (!g_vm) return 0;
+
+    auto& states = g_vm->states();
+    if (!states.exists(state_id)) return 0;
+
+    auto* fft_probe = states.get_if<cedar::FFTProbeState>(state_id);
+    if (!fft_probe) return 0;
+
+    return static_cast<uint32_t>(fft_probe->fft_size / 2 + 1);
+}
+
+/**
+ * Get magnitude spectrum in dB
+ * @param state_id The state_id of the FFT probe
+ * @return Pointer to static buffer with magnitudes, or nullptr if not found
+ */
+WASM_EXPORT const float* cedar_get_fft_magnitudes(uint32_t state_id) {
+    if (!g_vm) return nullptr;
+
+    auto& states = g_vm->states();
+    if (!states.exists(state_id)) return nullptr;
+
+    auto* fft_probe = states.get_if<cedar::FFTProbeState>(state_id);
+    if (!fft_probe || !fft_probe->initialized) return nullptr;
+
+    std::size_t bin_count = fft_probe->fft_size / 2 + 1;
+    std::memcpy(g_fft_magnitude_buffer, fft_probe->magnitudes_db, bin_count * sizeof(float));
+    return g_fft_magnitude_buffer;
+}
+
+/**
+ * Get frame counter to detect new FFT frames without redundant data copies
+ * @param state_id The state_id of the FFT probe
+ * @return Frame counter value, or 0 if not found
+ */
+WASM_EXPORT uint32_t cedar_get_fft_frame_counter(uint32_t state_id) {
+    if (!g_vm) return 0;
+
+    auto& states = g_vm->states();
+    if (!states.exists(state_id)) return 0;
+
+    auto* fft_probe = states.get_if<cedar::FFTProbeState>(state_id);
+    if (!fft_probe) return 0;
+
+    return fft_probe->frame_counter;
+}
+
+// ============================================================================
 // Debug/Disassembly API
 // ============================================================================
 

@@ -544,6 +544,14 @@ public:
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
+            else if constexpr (std::is_same_v<T, FFTProbeState>) {
+                json << R"({"type":"FFTProbeState")";
+                json << R"(,"fft_size":)" << state.fft_size;
+                json << R"(,"write_pos":)" << state.write_pos;
+                json << R"(,"frame_counter":)" << state.frame_counter;
+                json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
+                json << "}";
+            }
             else {
                 json << R"({"type":"Unknown"})";
             }

@@ -126,6 +126,8 @@ function inferStatefulOpcodes(opcodes: Map<string, number>, fromBuiltins: Set<st
     "EUCLID",    // Pattern state
     "TRIGGER",   // Trigger tracking
     "TIMELINE",  // Breakpoint automation
+    "PROBE",     // Visualization ring buffer
+    "FFT_PROBE", // FFT visualization state
   ];
 
   for (const [name, _] of opcodes) {

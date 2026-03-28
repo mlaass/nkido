@@ -967,6 +967,10 @@ void VM::execute(const Instruction& inst) {
             op_probe(ctx_, inst);
             break;
 
+        case Opcode::FFT_PROBE:
+            op_fft_probe(ctx_, inst);
+            break;
+
         // === Invalid ===
         [[unlikely]] case Opcode::INVALID:
         [[unlikely]] default:

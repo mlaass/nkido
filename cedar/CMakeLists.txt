@@ -35,6 +35,7 @@ add_library(cedar STATIC
     src/opcodes/minblep_state.cpp
     src/io/audio_decoder.cpp
     src/audio/soundfont.cpp
+    src/dsp/fft.cpp
 )
 
 # Add file_loader only for native builds (not WASM)

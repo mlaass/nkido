@@ -61,7 +61,8 @@ enum class VisualizationType : std::uint8_t {
     PianoRoll = 0,   // Musical pattern display with notes/events
     Oscilloscope = 1, // Time-domain waveform (short window, real-time)
     Waveform = 2,     // Time-domain waveform (longer window)
-    Spectrum = 3      // Frequency-domain FFT display
+    Spectrum = 3,     // Frequency-domain FFT display
+    Waterfall = 4     // Scrolling spectrogram
 };
 
 /// Declaration of a visualization widget extracted at compile time
@@ -431,6 +432,9 @@ private:
 
     /// Handle spectrum(signal, name?) - attach spectrum visualization
     TypedValue handle_spectrum_call(NodeIndex node, const Node& n);
+
+    /// Handle waterfall(signal, name?, options?) - attach waterfall spectrogram visualization
+    TypedValue handle_waterfall_call(NodeIndex node, const Node& n);
 
     /// Handle compose(f, g, ...) - function composition
     TypedValue handle_compose_call(NodeIndex node, const Node& n);

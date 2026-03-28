@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — Multi-revision viz system overhaul. Revision 1: Spectral Waterfall + FFT/IFFT opcodes.
+> **Status: REVISION 1 IMPLEMENTED** — Multi-revision viz system overhaul. Revision 1: Spectral Waterfall + FFT/IFFT opcodes.
 
 # PRD: Visualization System Revision
 
@@ -39,7 +39,7 @@ Overhaul the visualization system across three revisions: (1) add a spectral wat
 ### Target Syntax
 
 ```akkado
-// Basic waterfall with defaults (angle: 90, speed: 40, fft: 1024, gradient: "magma")
+// Basic waterfall with defaults (angle: 180, speed: 40, fft: 1024, gradient: "magma")
 osc("saw", 220) |> waterfall(%, "harmonics") |> out(%, %)
 
 // Fully configured waterfall
@@ -76,7 +76,7 @@ signal |> spectrum(%, "fft", {fft: 1024}) |> out(%, %)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `angle` | number | 90 | Scroll direction in degrees. Cardinal only: 0=right, 90=up, 180=left, 270=down |
+| `angle` | number | 180 | Scroll direction in degrees. Cardinal only: 0=right, 90=up, 180=left, 270=down |
 | `speed` | number | 40 | Scroll speed in pixels per second |
 | `fft` | number | 1024 | FFT size (power of 2: 256, 512, 1024, 2048) |
 | `gradient` | string | "magma" | Color gradient preset name |
@@ -103,8 +103,8 @@ Direction is specified as an angle in degrees, mapped internally to a scroll vec
 
 ```
 angle=0   -> dx=+1, dy=0  -> time flows right, frequency on Y axis
-angle=90  -> dx=0,  dy=-1 -> time flows up, frequency on X axis (default)
-angle=180 -> dx=-1, dy=0  -> time flows left, frequency on Y axis
+angle=90  -> dx=0,  dy=-1 -> time flows up, frequency on X axis
+angle=180 -> dx=-1, dy=0  -> time flows left, frequency on Y axis (default)
 angle=270 -> dx=0,  dy=+1 -> time flows down, frequency on X axis
 ```
 

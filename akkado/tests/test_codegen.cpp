@@ -4163,3 +4163,90 @@ TEST_CASE("Timeline function call form compiles", "[timeline_e2e]") {
     }
     CHECK(found);
 }
+
+// =============================================================================
+// Waterfall / FFT Visualization Tests
+// =============================================================================
+
+TEST_CASE("Codegen: waterfall() emits FFT_PROBE", "[codegen][viz]") {
+    SECTION("basic waterfall with default fft size") {
+        auto result = akkado::compile(R"(
+            osc("saw", 220) |> waterfall(%, "test") |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* fft = find_instruction(insts, cedar::Opcode::FFT_PROBE);
+        REQUIRE(fft != nullptr);
+        CHECK(fft->rate == 10);  // default 1024
+    }
+
+    SECTION("waterfall with fft: 512") {
+        auto result = akkado::compile(R"(
+            osc("saw", 220) |> waterfall(%, "test", {fft: 512}) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* fft = find_instruction(insts, cedar::Opcode::FFT_PROBE);
+        REQUIRE(fft != nullptr);
+        CHECK(fft->rate == 9);  // 512 = 2^9
+    }
+
+    SECTION("waterfall with fft: 2048") {
+        auto result = akkado::compile(R"(
+            osc("saw", 220) |> waterfall(%, "test", {fft: 2048}) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* fft = find_instruction(insts, cedar::Opcode::FFT_PROBE);
+        REQUIRE(fft != nullptr);
+        CHECK(fft->rate == 11);  // 2048 = 2^11
+    }
+
+    SECTION("waterfall with string gradient option") {
+        auto result = akkado::compile(R"(
+            osc("saw", 220) |> waterfall(%, "test", {gradient: "viridis"}) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        bool found = false;
+        for (const auto& decl : result.viz_decls) {
+            if (decl.type == akkado::VisualizationType::Waterfall) {
+                CHECK(decl.options_json.find("\"gradient\":\"viridis\"") != std::string::npos);
+                found = true;
+            }
+        }
+        CHECK(found);
+    }
+
+    SECTION("waterfall creates Waterfall viz decl") {
+        auto result = akkado::compile(R"(
+            osc("saw", 220) |> waterfall(%, "my-spectrogram") |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        bool found = false;
+        for (const auto& decl : result.viz_decls) {
+            if (decl.type == akkado::VisualizationType::Waterfall) {
+                CHECK(decl.name == "my-spectrogram");
+                CHECK(decl.state_id != 0);
+                found = true;
+            }
+        }
+        CHECK(found);
+    }
+}
+
+TEST_CASE("Codegen: spectrum() now emits FFT_PROBE", "[codegen][viz]") {
+    auto result = akkado::compile(R"(
+        osc("saw", 220) |> spectrum(%, "fft") |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+
+    // Should use FFT_PROBE, not PROBE
+    auto* fft = find_instruction(insts, cedar::Opcode::FFT_PROBE);
+    REQUIRE(fft != nullptr);
+    CHECK(fft->rate == 10);  // default 1024
+
+    // Should NOT have a PROBE instruction
+    auto* probe = find_instruction(insts, cedar::Opcode::PROBE);
+    CHECK(probe == nullptr);
+}

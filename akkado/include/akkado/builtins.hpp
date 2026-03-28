@@ -842,6 +842,10 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                   {"signal", "name", "options", "", "", ""},
                   {NAN, NAN, NAN, NAN, NAN},
                   "Attach spectrum analyzer visualization. Signal passes through unchanged."}},
+    {"waterfall", {cedar::Opcode::COPY, 1, 2, true,
+                   {"signal", "name", "options", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Attach scrolling spectrogram visualization. Signal passes through unchanged."}},
 };
 
 /// Alias mappings for convenience syntax

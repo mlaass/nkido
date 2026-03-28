@@ -12,3 +12,4 @@ import './pianoroll';
 import './oscilloscope';
 import './waveform';
 import './spectrum';
+import './waterfall';

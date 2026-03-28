@@ -205,6 +205,10 @@ class CedarProcessor extends AudioWorkletProcessor {
 			case 'getProbeData':
 				this.getProbeData(msg.stateId);
 				break;
+
+			case 'getFFTProbeData':
+				this.getFFTProbeData(msg.stateId);
+				break;
 		}
 	}
 
@@ -1220,6 +1224,83 @@ class CedarProcessor extends AudioWorkletProcessor {
 				type: 'probeData',
 				stateId,
 				samples: null,
+				error: String(err)
+			});
+		}
+	}
+
+	/**
+	 * Get FFT probe data for waterfall/spectrum visualization
+	 * @param {number} stateId - The FFT probe's state_id
+	 */
+	getFFTProbeData(stateId) {
+		if (!this.module) {
+			this.port.postMessage({
+				type: 'fftProbeData',
+				stateId,
+				magnitudes: null,
+				binCount: 0,
+				frameCounter: 0
+			});
+			return;
+		}
+
+		try {
+			if (!this.module._cedar_get_fft_frame_counter ||
+				!this.module._cedar_get_fft_magnitudes ||
+				!this.module._cedar_get_fft_bin_count) {
+				this.port.postMessage({
+					type: 'fftProbeData',
+					stateId,
+					magnitudes: null,
+					binCount: 0,
+					frameCounter: 0
+				});
+				return;
+			}
+
+			const frameCounter = this.module._cedar_get_fft_frame_counter(stateId);
+			const binCount = this.module._cedar_get_fft_bin_count(stateId);
+
+			if (binCount === 0) {
+				this.port.postMessage({
+					type: 'fftProbeData',
+					stateId,
+					magnitudes: null,
+					binCount: 0,
+					frameCounter
+				});
+				return;
+			}
+
+			const ptr = this.module._cedar_get_fft_magnitudes(stateId);
+			if (!ptr) {
+				this.port.postMessage({
+					type: 'fftProbeData',
+					stateId,
+					magnitudes: null,
+					binCount,
+					frameCounter
+				});
+				return;
+			}
+
+			const magnitudes = this.extractFloatArray(ptr, binCount);
+
+			this.port.postMessage({
+				type: 'fftProbeData',
+				stateId,
+				magnitudes,
+				binCount,
+				frameCounter
+			});
+		} catch (err) {
+			this.port.postMessage({
+				type: 'fftProbeData',
+				stateId,
+				magnitudes: null,
+				binCount: 0,
+				frameCounter: 0,
 				error: String(err)
 			});
 		}

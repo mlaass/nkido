@@ -41,7 +41,14 @@ export enum VizType {
 	PianoRoll = 0,
 	Oscilloscope = 1,
 	Waveform = 2,
-	Spectrum = 3
+	Spectrum = 3,
+	Waterfall = 4
+}
+
+export interface FFTProbeData {
+	magnitudes: Float32Array;
+	binCount: number;
+	frameCounter: number;
 }
 
 export interface VizDecl {
@@ -294,6 +301,7 @@ function createAudioEngine() {
 	let stateInspectionResolve: ((data: StateInspection | null) => void) | null = null;
 	// Map from stateId to resolve callback - supports multiple concurrent probe requests
 	const probeDataResolvers = new Map<number, (samples: Float32Array | null) => void>();
+	const fftProbeDataResolvers = new Map<number, (data: FFTProbeData | null) => void>();
 	let patternDebugResolve: ((data: PatternDebugInfo | null) => void) | null = null;
 
 	// Track sample loading state: 'pending' | 'loading' | 'loaded' | 'error'
@@ -551,6 +559,22 @@ function createAudioEngine() {
 				if (resolver) {
 					resolver(samples ? new Float32Array(samples) : null);
 					probeDataResolvers.delete(stateId);
+				}
+				break;
+			}
+			case 'fftProbeData': {
+				const stateId = msg.stateId as number;
+				const magnitudes = msg.magnitudes as number[] | null;
+				const binCount = msg.binCount as number;
+				const frameCounter = msg.frameCounter as number;
+				const resolver = fftProbeDataResolvers.get(stateId);
+				if (resolver) {
+					resolver(magnitudes ? {
+						magnitudes: new Float32Array(magnitudes),
+						binCount,
+						frameCounter
+					} : null);
+					fftProbeDataResolvers.delete(stateId);
 				}
 				break;
 			}
@@ -1656,6 +1680,28 @@ function createAudioEngine() {
 		});
 	}
 
+	/**
+	 * Get FFT probe data (magnitude spectrum) for a visualization
+	 * @param stateId The FFT probe's state_id from viz decl
+	 * @returns FFTProbeData with magnitudes in dB, or null if not available
+	 */
+	async function getFFTProbeData(stateId: number): Promise<FFTProbeData | null> {
+		if (!workletNode) {
+			return null;
+		}
+
+		return new Promise((resolve) => {
+			fftProbeDataResolvers.set(stateId, resolve);
+			setTimeout(() => {
+				if (fftProbeDataResolvers.get(stateId) === resolve) {
+					fftProbeDataResolvers.delete(stateId);
+					resolve(null);
+				}
+			}, 100);
+			workletNode!.port.postMessage({ type: 'getFFTProbeData', stateId });
+		});
+	}
+
 	return {
 		get isPlaying() { return state.isPlaying; },
 		get bpm() { return state.bpm; },
@@ -1728,7 +1774,8 @@ function createAudioEngine() {
 		// Pattern debug API
 		getPatternDebug,
 		// Visualization probe data
-		getProbeData
+		getProbeData,
+		getFFTProbeData
 	};
 }
 

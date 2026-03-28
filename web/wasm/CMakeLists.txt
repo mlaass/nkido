@@ -109,6 +109,10 @@ if(EMSCRIPTEN)
         _cedar_get_probe_sample_count
         _cedar_get_probe_data
         _cedar_get_probe_write_pos
+        # FFT Probe data API
+        _cedar_get_fft_bin_count
+        _cedar_get_fft_magnitudes
+        _cedar_get_fft_frame_counter
         # SoundFont API
         _cedar_load_soundfont
         _cedar_soundfont_preset_count

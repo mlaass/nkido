@@ -33,6 +33,7 @@ add_executable(cedar_tests
     test_poly.cpp
     test_file_loader.cpp
     test_audio_decoder.cpp
+    test_fft.cpp
 )
 
 # Add concurrency tests if enabled

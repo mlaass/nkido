@@ -749,6 +749,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"oscilloscope", &CodeGenerator::handle_oscilloscope_call},
                 {"waveform", &CodeGenerator::handle_waveform_call},
                 {"spectrum", &CodeGenerator::handle_spectrum_call},
+                {"waterfall", &CodeGenerator::handle_waterfall_call},
                 // Function composition
                 {"compose", &CodeGenerator::handle_compose_call},
                 // SoundFont playback

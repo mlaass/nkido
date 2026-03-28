@@ -45,7 +45,8 @@ class VisualizationContainerWidget extends WidgetType {
 		return this.vizList.every((v, i) =>
 			v.stateId === other.vizList[i].stateId &&
 			v.type === other.vizList[i].type &&
-			v.sourceOffset === other.vizList[i].sourceOffset
+			v.sourceOffset === other.vizList[i].sourceOffset &&
+			JSON.stringify(v.options) === JSON.stringify(other.vizList[i].options)
 		);
 	}
 
@@ -236,7 +237,7 @@ class VizWidgetsPlugin {
 	}
 
 	private computeHash(vizDecls: VizDecl[]): string {
-		return vizDecls.map(v => `${v.stateId}:${v.type}:${v.sourceOffset}`).join(',');
+		return vizDecls.map(v => `${v.stateId}:${v.type}:${v.sourceOffset}:${JSON.stringify(v.options)}`).join(',');
 	}
 
 	private startPolling(): void {

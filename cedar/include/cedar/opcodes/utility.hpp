@@ -250,6 +250,38 @@ inline void op_probe(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// FFT_PROBE: Accumulate samples and compute FFT for spectral visualization
+// The signal passes through unchanged (out = in)
+// rate field encodes fft_size as log2: 8=256, 9=512, 10=1024, 11=2048
+[[gnu::always_inline]]
+inline void op_fft_probe(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    const float* in = ctx.buffers->get(inst.inputs[0]);
+
+    auto& state = ctx.states->get_or_create<FFTProbeState>(inst.state_id);
+
+    // Arena-allocate buffers on first access (arena zeroes memory)
+    if (!state.input_buffer) {
+        state.input_buffer = ctx.arena->allocate(FFTProbeState::MAX_FFT_SIZE);
+        state.magnitudes_db = ctx.arena->allocate(FFTProbeState::MAX_BINS);
+        state.real_bins = ctx.arena->allocate(FFTProbeState::MAX_BINS);
+        state.imag_bins = ctx.arena->allocate(FFTProbeState::MAX_BINS);
+        // Set fft_size from rate field
+        std::size_t log2_size = inst.rate;
+        if (log2_size >= 8 && log2_size <= 11) {
+            state.fft_size = std::size_t(1) << log2_size;
+        }
+    }
+
+    // Write input samples — triggers FFT when buffer is full
+    state.write_block(in, BLOCK_SIZE);
+
+    // Pass signal through unchanged
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        out[i] = in[i];
+    }
+}
+
 // Helper: Create instruction with float constant stored in state_id
 inline Instruction make_const_instruction(Opcode op, std::uint16_t out, float value) {
     Instruction inst{};

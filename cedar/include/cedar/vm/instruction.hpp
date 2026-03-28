@@ -184,6 +184,9 @@ enum class Opcode : std::uint8_t {
 
     // Visualization/Debug (180-189)
     PROBE = 180,             // Capture signal to ring buffer for visualization: out=passthrough, in0=signal
+    FFT_PROBE = 181,         // Forward FFT: accumulate samples, compute FFT, store magnitudes
+                             // out=passthrough, in0=signal, rate=fft_size_log2 (8=256..11=2048)
+    IFFT = 182,              // Inverse FFT (reserved for Revision 2+)
 
     INVALID = 255
 };

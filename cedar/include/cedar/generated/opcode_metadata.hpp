@@ -138,6 +138,8 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::MS_DECODE: return "MS_DECODE";
         case Opcode::DELAY_PINGPONG: return "DELAY_PINGPONG";
         case Opcode::PROBE: return "PROBE";
+        case Opcode::FFT_PROBE: return "FFT_PROBE";
+        case Opcode::IFFT: return "IFFT";
         case Opcode::INVALID: return "INVALID";
         default: return "UNKNOWN";
     }
@@ -210,6 +212,8 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::SEQPAT_GATE:
         case Opcode::SEQPAT_TRANSPORT:
         case Opcode::DELAY_PINGPONG:
+        case Opcode::PROBE:
+        case Opcode::FFT_PROBE:
             return true;
         default:
             return false;

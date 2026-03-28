@@ -1186,6 +1186,31 @@ struct ProbeState {
     }
 };
 
+// FFT probe state for spectral visualization (waterfall, spectrum)
+// Accumulates samples and computes FFT when a full frame is collected.
+// Buffers are arena-allocated to keep variant size small.
+struct FFTProbeState {
+    static constexpr std::size_t MAX_FFT_SIZE = 2048;
+    static constexpr std::size_t MAX_BINS = MAX_FFT_SIZE / 2 + 1;  // 1025
+
+    // Arena-allocated buffers (not inline to keep DSPState variant small)
+    float* input_buffer = nullptr;    // [MAX_FFT_SIZE]
+    float* magnitudes_db = nullptr;   // [MAX_BINS]
+    float* real_bins = nullptr;       // [MAX_BINS]
+    float* imag_bins = nullptr;       // [MAX_BINS]
+
+    std::size_t write_pos = 0;
+    std::size_t fft_size = 1024;
+
+    // Frame counter - increments each completed FFT, used by viz to detect new data
+    std::uint32_t frame_counter = 0;
+    bool initialized = false;
+
+    // Write a block of samples. Triggers FFT when accumulation buffer is full.
+    // Implementation in cedar/src/dsp/fft.cpp
+    void write_block(const float* samples, std::size_t count);
+};
+
 // Variant holding all possible DSP state types
 // std::monostate represents stateless operations
 using DSPState = std::variant<
@@ -1241,6 +1266,7 @@ using DSPState = std::variant<
     PolyAllocState,
     // Visualization states
     ProbeState,
+    FFTProbeState,
     // Extended parameters (for opcodes with 7+ params)
     ExtendedParams<3>,   // 8-param opcodes (5 inputs + 3 extended)
     ExtendedParams<5>,   // 10-param opcodes (5 inputs + 5 extended)

@@ -2,7 +2,7 @@
  * Spectrum Visualization Renderer
  *
  * Displays a frequency-domain (FFT) view of a signal.
- * Uses a simple DFT for 64 frequency bins (more bins would need optimized FFT).
+ * Uses WASM FFT via the FFT_PROBE opcode for high-resolution analysis.
  */
 
 import type { VisualizationRenderer } from './registry';
@@ -14,14 +14,10 @@ interface SpectrumState {
 	canvas: HTMLCanvasElement;
 	ctx: CanvasRenderingContext2D;
 	lastUpdateTime: number;
-	// Smoothed magnitude values for smoother visualization
 	smoothedMagnitudes: Float32Array;
 }
 
 const stateMap = new WeakMap<HTMLElement, SpectrumState>();
-
-// Number of frequency bins to display
-const NUM_BINS = 64;
 
 // Default dimensions for visualization widgets
 const DEFAULT_WIDTH = 200;
@@ -80,7 +76,7 @@ const spectrumRenderer: VisualizationRenderer = {
 			canvas,
 			ctx: ctx!,
 			lastUpdateTime: 0,
-			smoothedMagnitudes: new Float32Array(NUM_BINS)
+			smoothedMagnitudes: new Float32Array(0)
 		});
 
 		return container;
@@ -97,21 +93,27 @@ const spectrumRenderer: VisualizationRenderer = {
 
 		if (!isPlaying || !viz.stateId) {
 			// Decay smoothed values when stopped
-			for (let i = 0; i < NUM_BINS; i++) {
+			for (let i = 0; i < state.smoothedMagnitudes.length; i++) {
 				state.smoothedMagnitudes[i] *= 0.9;
 			}
 			drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
 			return;
 		}
 
-		audioEngine.getProbeData(viz.stateId).then(samples => {
-			if (samples) {
-				// Compute spectrum
-				const magnitudes = computeSpectrum(samples, NUM_BINS);
+		audioEngine.getFFTProbeData(viz.stateId).then(data => {
+			if (data) {
+				const { magnitudes, binCount } = data;
+
+				// Resize smoothed array if bin count changed
+				if (state.smoothedMagnitudes.length !== binCount) {
+					state.smoothedMagnitudes = new Float32Array(binCount);
+				}
 
 				// Smooth the magnitudes (exponential moving average)
-				for (let i = 0; i < NUM_BINS; i++) {
-					state.smoothedMagnitudes[i] = state.smoothedMagnitudes[i] * 0.7 + magnitudes[i] * 0.3;
+				// Magnitudes arrive as dB values; normalize to 0..1
+				for (let i = 0; i < binCount; i++) {
+					const normalized = Math.max(0, (magnitudes[i] + 90) / 90);
+					state.smoothedMagnitudes[i] = state.smoothedMagnitudes[i] * 0.7 + normalized * 0.3;
 				}
 
 				drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
@@ -123,45 +125,6 @@ const spectrumRenderer: VisualizationRenderer = {
 		stateMap.delete(element);
 	}
 };
-
-/**
- * Compute spectrum magnitudes using a simple DFT
- * For real-time use with small bin counts, DFT is fast enough
- */
-function computeSpectrum(samples: Float32Array, numBins: number): Float32Array {
-	const magnitudes = new Float32Array(numBins);
-	const N = samples.length;
-
-	// Apply Hanning window
-	const windowed = new Float32Array(N);
-	for (let i = 0; i < N; i++) {
-		const window = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (N - 1)));
-		windowed[i] = samples[i] * window;
-	}
-
-	// Compute DFT for each bin
-	// We only need the first half of frequencies (up to Nyquist)
-	for (let k = 0; k < numBins; k++) {
-		// Map bin to frequency index (logarithmic spacing for better low-freq resolution)
-		const freq = Math.pow(k / numBins, 1.5) * (N / 2);
-		const freqIdx = Math.floor(freq);
-
-		let real = 0;
-		let imag = 0;
-
-		// DFT at this frequency
-		const omega = (2 * Math.PI * freqIdx) / N;
-		for (let n = 0; n < N; n++) {
-			real += windowed[n] * Math.cos(omega * n);
-			imag -= windowed[n] * Math.sin(omega * n);
-		}
-
-		// Magnitude (normalized)
-		magnitudes[k] = Math.sqrt(real * real + imag * imag) / N;
-	}
-
-	return magnitudes;
-}
 
 /**
  * Draw spectrum bars
@@ -193,7 +156,11 @@ function drawSpectrum(
 		return;
 	}
 
-	const barWidth = width / magnitudes.length;
+	// Downsample bins to fit display width
+	// With 513+ bins from FFT, we group bins into visual bars
+	const maxBars = Math.min(magnitudes.length, Math.floor(width / 3)); // ~3px per bar minimum
+	const binsPerBar = magnitudes.length / maxBars;
+	const barWidth = width / maxBars;
 	const maxHeight = height * 0.95;
 
 	// Create theme-aware gradient for bars
@@ -202,18 +169,22 @@ function drawSpectrum(
 	gradient.addColorStop(0.7, warningColor);  // Warning in upper range
 	gradient.addColorStop(1, errorColor);      // Error at top
 
-	for (let i = 0; i < magnitudes.length; i++) {
-		// Convert to dB scale (with floor at -60dB)
-		const magnitude = magnitudes[i];
-		const db = magnitude > 0 ? 20 * Math.log10(magnitude) : -60;
-		const normalizedDb = Math.max(0, (db + 60) / 60);  // 0 to 1
-		const barHeight = normalizedDb * maxHeight;
+	for (let i = 0; i < maxBars; i++) {
+		// Average bins for this bar
+		const startBin = Math.floor(i * binsPerBar);
+		const endBin = Math.min(Math.floor((i + 1) * binsPerBar), magnitudes.length);
+		let sum = 0;
+		for (let b = startBin; b < endBin; b++) {
+			sum += magnitudes[b];
+		}
+		const avg = sum / (endBin - startBin);
+		const barHeight = avg * maxHeight;
 
 		const x = i * barWidth;
 
 		// Draw bar
 		ctx.fillStyle = gradient;
-		ctx.fillRect(x + 1, height - barHeight, barWidth - 2, barHeight);
+		ctx.fillRect(x + 0.5, height - barHeight, barWidth - 1, barHeight);
 	}
 
 	// Draw frequency markers

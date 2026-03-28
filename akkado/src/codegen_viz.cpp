@@ -83,6 +83,17 @@ static std::string extract_options_json(const AstArena& arena, NodeIndex arg_nod
                     json += "\":";
                     json += num_buf;
                 }
+                // Extract string value (e.g., {gradient: "magma"})
+                else if (val.type == NodeType::StringLit) {
+                    if (!first) json += ",";
+                    first = false;
+
+                    json += "\"";
+                    json += field_data.name;
+                    json += "\":\"";
+                    json += val.as_string();
+                    json += "\"";
+                }
             }
         }
 
@@ -97,6 +108,22 @@ static std::string extract_options_json(const AstArena& arena, NodeIndex arg_nod
     }
 
     return json;
+}
+
+// Helper: Extract FFT size from options JSON and return log2 value
+// Returns default_log2 if "fft" key is not found
+static std::uint8_t extract_fft_log2(const std::string& options_json, std::uint8_t default_log2 = 10) {
+    if (options_json.empty()) return default_log2;
+
+    auto pos = options_json.find("\"fft\":");
+    if (pos == std::string::npos) return default_log2;
+
+    int fft_val = std::atoi(options_json.c_str() + pos + 6);
+    if (fft_val == 256)  return 8;
+    if (fft_val == 512)  return 9;
+    if (fft_val == 1024) return 10;
+    if (fft_val == 2048) return 11;
+    return default_log2;
 }
 
 // ============================================================================
@@ -350,7 +377,9 @@ TypedValue CodeGenerator::handle_spectrum_call(NodeIndex node, const Node& n) {
 
     viz_decls_.push_back(std::move(decl));
 
-    // 7. Emit PROBE opcode to capture signal data
+    // 7. Emit FFT_PROBE opcode (migrated from PROBE for WASM FFT)
+    std::uint8_t fft_log2 = extract_fft_log2(options_json);
+
     std::uint16_t out_buf = buffers_.allocate();
     if (out_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", n.location);
@@ -358,7 +387,81 @@ TypedValue CodeGenerator::handle_spectrum_call(NodeIndex node, const Node& n) {
     }
 
     cedar::Instruction probe_inst{};
-    probe_inst.opcode = cedar::Opcode::PROBE;
+    probe_inst.opcode = cedar::Opcode::FFT_PROBE;
+    probe_inst.rate = fft_log2;
+    probe_inst.out_buffer = out_buf;
+    probe_inst.inputs[0] = signal_buf;
+    probe_inst.inputs[1] = 0xFFFF;
+    probe_inst.inputs[2] = 0xFFFF;
+    probe_inst.inputs[3] = 0xFFFF;
+    probe_inst.inputs[4] = 0xFFFF;
+    probe_inst.state_id = state_id;
+    emit(probe_inst);
+
+    return cache_and_return(node, TypedValue::signal(out_buf));
+}
+
+// ============================================================================
+// waterfall(signal, name?, options?) - Spectral waterfall visualization
+// ============================================================================
+
+TypedValue CodeGenerator::handle_waterfall_call(NodeIndex node, const Node& n) {
+    // 1. Get signal argument (required)
+    NodeIndex signal_arg = n.first_child;
+    if (signal_arg == NULL_NODE) {
+        error("E174", "waterfall() requires a signal argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    NodeIndex signal_node = unwrap_argument(ast_->arena, signal_arg);
+
+    // 2. Visit signal to get its buffer
+    std::uint16_t signal_buf = visit(signal_node).buffer;
+    if (signal_buf == BufferAllocator::BUFFER_UNUSED) {
+        return TypedValue::void_val();
+    }
+
+    // 3. Extract optional name argument
+    NodeIndex name_arg = next_arg(ast_->arena, signal_arg);
+    std::string name = extract_name_arg(ast_->arena, name_arg, "Waterfall");
+
+    // 4. Extract optional options argument
+    NodeIndex options_arg = next_arg(ast_->arena, name_arg);
+    std::string options_json = extract_options_json(ast_->arena, options_arg);
+
+    // 5. Generate state_id for FFT probe
+    push_path("waterfall");
+    push_path(name);
+    push_path(std::to_string(n.location.offset));
+    std::uint32_t state_id = compute_state_id();
+    pop_path();
+    pop_path();
+    pop_path();
+
+    // 6. Create visualization declaration
+    VisualizationDecl decl;
+    decl.name = name;
+    decl.type = VisualizationType::Waterfall;
+    decl.state_id = state_id;
+    decl.options_json = options_json;
+    decl.source_offset = n.location.offset;
+    decl.source_length = n.location.length;
+    decl.pattern_state_init_index = -1;
+
+    viz_decls_.push_back(std::move(decl));
+
+    // 7. Emit FFT_PROBE opcode
+    std::uint8_t fft_log2 = extract_fft_log2(options_json);
+
+    std::uint16_t out_buf = buffers_.allocate();
+    if (out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::void_val();
+    }
+
+    cedar::Instruction probe_inst{};
+    probe_inst.opcode = cedar::Opcode::FFT_PROBE;
+    probe_inst.rate = fft_log2;
     probe_inst.out_buffer = out_buf;
     probe_inst.inputs[0] = signal_buf;
     probe_inst.inputs[1] = 0xFFFF;
