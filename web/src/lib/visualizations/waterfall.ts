@@ -35,9 +35,14 @@ interface WaterfallState {
 	minDb: number;
 	maxDb: number;
 	dpr: number;
+	cacheKey: string;
 }
 
 const stateMap = new WeakMap<HTMLElement, WaterfallState>();
+
+// Persist offscreen canvas across recompilations, keyed by viz name.
+// drawImage handles resampling when dimensions change (FFT size, angle, etc.)
+const offscreenCache = new Map<string, HTMLCanvasElement>();
 
 const DEFAULT_WIDTH = 300;
 const DEFAULT_HEIGHT = 150;
@@ -109,14 +114,17 @@ const waterfallRenderer: VisualizationRenderer = {
 		offCanvas.width = offWidth;
 		offCanvas.height = offHeight;
 		const offCtx = offCanvas.getContext('2d')!;
-		const offImageData = offCtx.createImageData(offWidth, offHeight);
 
-		// Fill with opaque black
-		const offPixels = offImageData.data;
-		for (let i = 3; i < offPixels.length; i += 4) {
-			offPixels[i] = 255;
+		// Restore from cache (drawImage resamples if dimensions changed)
+		const cacheKey = viz.name;
+		const cached = offscreenCache.get(cacheKey);
+		if (cached) {
+			offCtx.drawImage(cached, 0, 0, offWidth, offHeight);
+		} else {
+			offCtx.fillStyle = '#000';
+			offCtx.fillRect(0, 0, offWidth, offHeight);
 		}
-		offCtx.putImageData(offImageData, 0, 0);
+		const offImageData = offCtx.getImageData(0, 0, offWidth, offHeight);
 
 		const gradientLUT = GRADIENT_PRESETS[gradientName] ?? GRADIENT_PRESETS[DEFAULT_GRADIENT];
 		const rotation = -angle * Math.PI / 180;
@@ -139,7 +147,8 @@ const waterfallRenderer: VisualizationRenderer = {
 			speed,
 			minDb,
 			maxDb,
-			dpr
+			dpr,
+			cacheKey
 		});
 
 		return container;
@@ -225,7 +234,11 @@ const waterfallRenderer: VisualizationRenderer = {
 	},
 
 	destroy(element: HTMLElement): void {
-		stateMap.delete(element);
+		const state = stateMap.get(element);
+		if (state) {
+			offscreenCache.set(state.cacheKey, state.offCanvas);
+			stateMap.delete(element);
+		}
 	}
 };
 
