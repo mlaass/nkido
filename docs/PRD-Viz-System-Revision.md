@@ -1,6 +1,6 @@
 > **Status: NOT STARTED** — Multi-revision viz system overhaul. Revision 1: Spectral Waterfall + FFT/IFFT opcodes.
 
-# Visualization System Revision PRD
+# PRD: Visualization System Revision
 
 ## Executive Summary
 
@@ -23,6 +23,14 @@ Overhaul the visualization system across three revisions: (1) add a spectral wat
 3. Replace the JavaScript DFT in `spectrum.ts` with the new WASM FFT
 4. Support configurable direction, speed, FFT resolution, color gradient, and sizing
 5. Design the FFT opcodes for future user-accessible spectral processing (Revision 2+)
+
+### Non-Goals
+
+1. **User-accessible `fft()`/`ifft()` DSP primitives** — spectral processing as language-level functions is deferred to Revision 2+. Revision 1 only adds the internal `FFT_PROBE` opcode for visualization.
+2. **Spectral processing chains** (freeze, cross-synthesis, vocoding) — requires the IFFT opcode and a spectral buffer model, both Revision 2+ scope.
+3. **Runtime FFT size switching** — changing the `fft` parameter requires recompile. No dynamic FFT size changes during playback.
+4. **Custom user-defined gradient presets** — only the 5 built-in presets (magma, viridis, inferno, thermal, grayscale) are supported. User-defined gradients may be added in a future revision.
+5. **Overlap-add windowing** — Revision 1 uses non-overlapping FFT frames (hop = fft_size). Overlapping windows for smoother time resolution may be added later.
 
 ---
 
@@ -148,7 +156,7 @@ void compute_magnitude_db(const float* real, const float* imag,
 }  // namespace cedar
 ```
 
-The wrapper caches `kiss_fftr_cfg` instances in a static array indexed by log2(nfft) for zero-allocation reuse.
+The wrapper caches `kiss_fftr_cfg` instances and pre-computed Hanning window coefficient arrays in static arrays indexed by log2(nfft) for zero-allocation reuse.
 
 ### 2. FFT/IFFT Opcodes
 
@@ -210,6 +218,8 @@ struct FFTProbeState {
 ```
 
 Add `FFTProbeState` to the `DSPState` variant (after `ProbeState` in the Visualization states section).
+
+> **Design note**: `FFTProbeState` always allocates for `MAX_FFT_SIZE = 2048` regardless of the requested FFT size. This is intentional — fixed-size allocation avoids templating on FFT size or runtime branching in the audio path, keeping the opcode implementation simple. The ~20KB per instance is acceptable given the bounded number of simultaneous viz probes.
 
 **Timing**: At fft_size=1024 and BLOCK_SIZE=128, FFT triggers every 8 blocks = 21.3ms. At 30fps viz update rate (33ms), this means roughly 1-2 new FFT frames per render, which is ideal.
 
@@ -292,7 +302,7 @@ Extend `extract_options_json()` to handle `StringLit` values in addition to `Num
 1. Extract signal argument (required)
 2. Extract optional name (default: "Waterfall")
 3. Extract optional options record, serialize to JSON
-4. Generate state_id via push_path("waterfall")/push_path(name)/push_path(offset)
+4. Generate state_id via push_path("waterfall")/push_path(name) (matching existing viz handler pattern)
 5. Create `VisualizationDecl` with type `Waterfall`
 6. Extract `fft` option at compile time to encode in `inst.rate` as log2 (default: 10 = 1024)
 7. Emit `FFT_PROBE` opcode (instead of `PROBE`) with `rate = fft_size_log2`
@@ -301,14 +311,16 @@ Extend `extract_options_json()` to handle `StringLit` values in addition to `Num
 **Builtin registration** (`akkado/src/codegen.cpp`):
 Add `{"waterfall", &CodeGenerator::handle_waterfall_call}` to handler dispatch.
 
+> **Follow-up**: All viz handlers (pianoroll, oscilloscope, waveform, spectrum, waterfall) should add a `push_path(source_offset)` step to their state_id generation for disambiguation when multiple viz calls share the same name. This is a separate change that applies to all viz types uniformly.
+
 ### 8. Migrate Spectrum to WASM FFT
 
 As part of Revision 1, migrate the existing `spectrum()` viz to use the same FFT_PROBE pathway:
 
 1. Change `handle_spectrum_call` in `codegen_viz.cpp` to emit `FFT_PROBE` instead of `PROBE`
 2. Change `spectrum.ts` to call `audioEngine.getFFTProbeData(stateId)` instead of `getProbeData(stateId)`
-3. Remove the JavaScript `computeSpectrum()` DFT function
-4. Render bars directly from the magnitude dB array
+3. Remove the JavaScript `computeSpectrum()` DFT function and its log-frequency bin spacing (`Math.pow(k/numBins, 1.5)`)
+4. Render bars directly from the linear FFT magnitude dB array — the visual appearance will change from log-compressed to linear frequency spacing, which is more accurate for spectral analysis
 
 This validates the full FFT pipeline and eliminates the JS DFT.
 
@@ -535,10 +547,10 @@ Verify:
 
 ## Open Questions
 
-1. **Overlap-add for FFT**: Should FFT frames overlap (e.g., 50% hop) for smoother waterfall, or use non-overlapping windows? Overlapping doubles FFT compute but gives smoother time resolution.
+1. **Overlap-add for FFT**: Revision 1 uses non-overlapping windows (hop = fft_size). At 1024/48kHz this gives ~21ms per frame, adequate for 30fps visual display with 1-2 new frames per render. Overlapping (50% hop) could be added as a future enhancement if smoother time resolution is needed, at the cost of doubling FFT compute.
 2. **Logarithmic frequency axis**: Should the waterfall support log-frequency mapping (compress low bins, expand high bins)? Useful for musical content but adds complexity to the pixel mapping.
 3. **kissfft licensing**: kissfft is BSD-licensed — confirm this is acceptable for the project.
-4. **Max simultaneous waterfalls**: FFTProbeState is ~25KB per instance (2048 * 3 arrays + input buffer). With MAX_DSP_ID=4096, this is bounded but could be large. Consider a MAX_FFT_PROBES limit?
+4. **Max simultaneous waterfalls**: FFTProbeState is ~20KB per instance (1025 × 3 output arrays + 2048-sample input buffer). With MAX_DSP_ID=4096, this is bounded but could be large. Consider a MAX_FFT_PROBES limit?
 5. **IFFT opcode buffer model**: When IFFT is implemented in Revision 2+, how does frequency-domain data flow through the DAG? FFT outputs nfft/2+1 complex bins, which don't fit in a single 128-sample buffer. Needs a buffer model design for spectral processing.
 
 ---
