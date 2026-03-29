@@ -94,6 +94,16 @@ static std::string extract_options_json(const AstArena& arena, NodeIndex arg_nod
                     json += val.as_string();
                     json += "\"";
                 }
+                // Extract boolean value (e.g., {logScale: true})
+                else if (val.type == NodeType::BoolLit) {
+                    if (!first) json += ",";
+                    first = false;
+
+                    json += "\"";
+                    json += field_data.name;
+                    json += "\":";
+                    json += val.as_bool() ? "true" : "false";
+                }
             }
         }
 

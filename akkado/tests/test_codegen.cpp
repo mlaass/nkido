@@ -4234,6 +4234,55 @@ TEST_CASE("Codegen: waterfall() emits FFT_PROBE", "[codegen][viz]") {
     }
 }
 
+TEST_CASE("Codegen: viz options serialize BoolLit values", "[codegen][viz]") {
+    SECTION("boolean true") {
+        auto result = akkado::compile(R"(
+            osc("saw", 220) |> spectrum(%, "s", {logScale: true}) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        bool found = false;
+        for (const auto& decl : result.viz_decls) {
+            if (decl.type == akkado::VisualizationType::Spectrum) {
+                CHECK(decl.options_json.find("\"logScale\":true") != std::string::npos);
+                found = true;
+            }
+        }
+        CHECK(found);
+    }
+
+    SECTION("boolean false") {
+        auto result = akkado::compile(R"(
+            pat("c4 e4") |> pianoroll(%, "pr", {showGrid: false})
+        )");
+        REQUIRE(result.success);
+        bool found = false;
+        for (const auto& decl : result.viz_decls) {
+            if (decl.type == akkado::VisualizationType::PianoRoll) {
+                CHECK(decl.options_json.find("\"showGrid\":false") != std::string::npos);
+                found = true;
+            }
+        }
+        CHECK(found);
+    }
+
+    SECTION("mixed types: number, boolean, string") {
+        auto result = akkado::compile(R"(
+            osc("saw", 220) |> waterfall(%, "w", {minDb: -60, logScale: true, gradient: "warm"}) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        bool found = false;
+        for (const auto& decl : result.viz_decls) {
+            if (decl.type == akkado::VisualizationType::Waterfall) {
+                CHECK(decl.options_json.find("\"minDb\":-60") != std::string::npos);
+                CHECK(decl.options_json.find("\"logScale\":true") != std::string::npos);
+                CHECK(decl.options_json.find("\"gradient\":\"warm\"") != std::string::npos);
+                found = true;
+            }
+        }
+        CHECK(found);
+    }
+}
+
 TEST_CASE("Codegen: spectrum() now emits FFT_PROBE", "[codegen][viz]") {
     auto result = akkado::compile(R"(
         osc("saw", 220) |> spectrum(%, "fft") |> out(%, %)

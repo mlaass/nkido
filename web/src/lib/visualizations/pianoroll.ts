@@ -71,6 +71,13 @@ function freqToY(freq: number, height: number): number {
 	return height - 4 - normalized * (height - 8);
 }
 
+// Scale interval sets (semitones from root C)
+const SCALE_INTERVALS: Record<string, Set<number>> = {
+	chromatic: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+	pentatonic: new Set([0, 2, 4, 7, 9]),
+	octave: new Set([0])
+};
+
 /**
  * Render the piano roll on a canvas
  */
@@ -79,7 +86,8 @@ function render(
 	events: PatternEvent[],
 	cycleLength: number,
 	beatPos: number,
-	isPlaying: boolean
+	isPlaying: boolean,
+	opts: { beats?: number; showGrid: boolean; scale: string }
 ): void {
 	const ctx = canvas.getContext('2d');
 	if (!ctx) return;
@@ -88,7 +96,7 @@ function render(
 	const h = canvas.height;
 
 	// Calculate visible window (1+ cycle centered on playhead when playing)
-	const windowBeats = Math.max(4, cycleLength);
+	const windowBeats = opts.beats ?? Math.max(4, cycleLength);
 	const windowStart = isPlaying ? Math.max(0, beatPos - windowBeats * 0.25) : 0;
 	const windowEnd = windowStart + windowBeats;
 
@@ -100,25 +108,33 @@ function render(
 	const dimColor = computedStyle.getPropertyValue('--text-tertiary').trim() || '#666';
 	const playheadColor = computedStyle.getPropertyValue('--accent-secondary').trim() || '#fb923c';
 
+	const scaleSet = SCALE_INTERVALS[opts.scale] ?? SCALE_INTERVALS.chromatic;
+
 	// Clear with background
 	ctx.fillStyle = bgColor;
 	ctx.fillRect(0, 0, w, h);
 
 	// Draw beat grid
-	ctx.strokeStyle = borderColor;
-	ctx.lineWidth = 1;
-	for (let beat = Math.ceil(windowStart); beat < windowEnd; beat++) {
-		const x = ((beat - windowStart) / (windowEnd - windowStart)) * w;
-		ctx.beginPath();
-		ctx.moveTo(x, 0);
-		ctx.lineTo(x, h);
-		ctx.stroke();
+	if (opts.showGrid) {
+		ctx.strokeStyle = borderColor;
+		ctx.lineWidth = 1;
+		for (let beat = Math.ceil(windowStart); beat < windowEnd; beat++) {
+			const x = ((beat - windowStart) / (windowEnd - windowStart)) * w;
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, h);
+			ctx.stroke();
+		}
 	}
 
 	// Draw events
 	for (const evt of events) {
 		const cycleTime = evt.time % cycleLength;
 		const maxCycle = Math.ceil(windowEnd / cycleLength) + 1;
+
+		// Check if event's note is in the selected scale
+		const midi = Math.round(12 * Math.log2(evt.value / 440) + 69);
+		const inScale = scaleSet.has(((midi % 12) + 12) % 12);
 
 		for (let cycle = -1; cycle <= maxCycle; cycle++) {
 			const evtTime = cycleTime + cycle * cycleLength;
@@ -127,7 +143,11 @@ function render(
 				const evtW = Math.max((evt.duration / (windowEnd - windowStart)) * w, 3);
 				const y = freqToY(evt.value, h);
 
-				ctx.fillStyle = evtTime < beatPos ? dimColor : accentColor;
+				if (evtTime < beatPos || !inScale) {
+					ctx.fillStyle = dimColor;
+				} else {
+					ctx.fillStyle = accentColor;
+				}
 				ctx.fillRect(x, y, evtW, 4);
 			}
 		}
@@ -162,10 +182,12 @@ const LABEL_HEIGHT = 18;
  */
 const pianoRollRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
-		// Extract dimensions from options
+		// Extract dimensions and parameters from options
 		const opts = viz.options || {};
-		const width = (opts.width as number) ?? DEFAULT_WIDTH;
-		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const isRelativeWidth = typeof opts.width === 'string';
+		const isRelativeHeight = typeof opts.height === 'string';
+		const width = isRelativeWidth ? DEFAULT_WIDTH : ((opts.width as number) ?? DEFAULT_WIDTH);
+		const height = isRelativeHeight ? DEFAULT_HEIGHT : ((opts.height as number) ?? DEFAULT_HEIGHT);
 		const canvasHeight = height - LABEL_HEIGHT;
 
 		const container = document.createElement('div');
@@ -176,8 +198,8 @@ const pianoRollRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: ${width}px;
-			height: ${height}px;
+			width: ${isRelativeWidth ? '100%' : width + 'px'};
+			height: ${isRelativeHeight ? '100%' : height + 'px'};
 			vertical-align: top;
 		`;
 
@@ -200,8 +222,33 @@ const pianoRollRenderer: VisualizationRenderer = {
 		canvas.style.cssText = `display: block; width: ${width}px; height: ${canvasHeight}px;`;
 		container.appendChild(canvas);
 
-		// Store viz data on element for updates
-		(container as unknown as { _vizDecl: VizDecl })._vizDecl = viz;
+		// Attach ResizeObserver for relative sizing
+		let resizeObserver: ResizeObserver | null = null;
+		if (isRelativeWidth || isRelativeHeight) {
+			resizeObserver = new ResizeObserver(entries => {
+				for (const entry of entries) {
+					const rect = entry.contentRect;
+					const newWidth = isRelativeWidth ? rect.width : width;
+					const newHeight = isRelativeHeight ? rect.height : height;
+					const newCanvasHeight = newHeight - LABEL_HEIGHT;
+					if (newCanvasHeight <= 0) return;
+					canvas.width = Math.round(newWidth * 2);
+					canvas.height = Math.round(newCanvasHeight * 2);
+					canvas.style.width = `${newWidth}px`;
+					canvas.style.height = `${newCanvasHeight}px`;
+				}
+			});
+			resizeObserver.observe(container);
+		}
+
+		// Store viz data and parsed options on element for updates
+		(container as unknown as { _vizDecl: VizDecl; _vizOpts: { beats?: number; showGrid: boolean; scale: string }; _resizeObserver: ResizeObserver | null })._vizDecl = viz;
+		(container as unknown as { _vizOpts: { beats?: number; showGrid: boolean; scale: string } })._vizOpts = {
+			beats: opts.beats != null ? (opts.beats as number) : undefined,
+			showGrid: (opts.showGrid as boolean) ?? true,
+			scale: (opts.scale as string) ?? 'chromatic'
+		};
+		(container as unknown as { _resizeObserver: ResizeObserver | null })._resizeObserver = resizeObserver;
 
 		return container;
 	},
@@ -210,12 +257,15 @@ const pianoRollRenderer: VisualizationRenderer = {
 		const canvas = element.querySelector('canvas');
 		if (!canvas) return;
 
+		const vizOpts = (element as unknown as { _vizOpts: { beats?: number; showGrid: boolean; scale: string } })._vizOpts
+			?? { showGrid: true, scale: 'chromatic' };
+
 		const { events, cycleLength } = getPatternEvents(viz);
-		render(canvas, events, cycleLength, beatPos, isPlaying);
+		render(canvas, events, cycleLength, beatPos, isPlaying, vizOpts);
 	},
 
-	destroy(_element: HTMLElement): void {
-		// Nothing to clean up for piano roll
+	destroy(element: HTMLElement): void {
+		(element as unknown as { _resizeObserver: ResizeObserver | null })?._resizeObserver?.disconnect();
 	}
 };
 

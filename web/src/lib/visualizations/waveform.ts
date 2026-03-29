@@ -14,6 +14,9 @@ interface WaveformState {
 	canvas: HTMLCanvasElement;
 	ctx: CanvasRenderingContext2D;
 	lastUpdateTime: number;
+	scale: number;
+	filled: boolean;
+	resizeObserver: ResizeObserver | null;
 }
 
 const stateMap = new WeakMap<HTMLElement, WaveformState>();
@@ -28,11 +31,15 @@ const LABEL_HEIGHT = 18;
  */
 const waveformRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
-		// Extract dimensions from options
+		// Extract dimensions and parameters from options
 		const opts = viz.options || {};
-		const width = (opts.width as number) ?? DEFAULT_WIDTH;
-		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const isRelativeWidth = typeof opts.width === 'string';
+		const isRelativeHeight = typeof opts.height === 'string';
+		const width = isRelativeWidth ? DEFAULT_WIDTH : ((opts.width as number) ?? DEFAULT_WIDTH);
+		const height = isRelativeHeight ? DEFAULT_HEIGHT : ((opts.height as number) ?? DEFAULT_HEIGHT);
 		const canvasHeight = height - LABEL_HEIGHT;
+		const scale = (opts.scale as number) ?? 1.0;
+		const filled = (opts.filled as boolean) ?? true;
 
 		const container = document.createElement('div');
 		container.className = 'viz-waveform';
@@ -42,8 +49,8 @@ const waveformRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: ${width}px;
-			height: ${height}px;
+			width: ${isRelativeWidth ? '100%' : width + 'px'};
+			height: ${isRelativeHeight ? '100%' : height + 'px'};
 			vertical-align: top;
 		`;
 
@@ -68,13 +75,35 @@ const waveformRenderer: VisualizationRenderer = {
 
 		const ctx = canvas.getContext('2d');
 		if (ctx) {
-			drawWaveform(canvas, ctx, canvas.width, canvas.height, null);
+			drawWaveform(canvas, ctx, canvas.width, canvas.height, null, scale, filled);
+		}
+
+		// Attach ResizeObserver for relative sizing
+		let resizeObserver: ResizeObserver | null = null;
+		if (isRelativeWidth || isRelativeHeight) {
+			resizeObserver = new ResizeObserver(entries => {
+				for (const entry of entries) {
+					const rect = entry.contentRect;
+					const newWidth = isRelativeWidth ? rect.width : width;
+					const newHeight = isRelativeHeight ? rect.height : height;
+					const newCanvasHeight = newHeight - LABEL_HEIGHT;
+					if (newCanvasHeight <= 0) return;
+					canvas.width = Math.round(newWidth * 2);
+					canvas.height = Math.round(newCanvasHeight * 2);
+					canvas.style.width = `${newWidth}px`;
+					canvas.style.height = `${newCanvasHeight}px`;
+				}
+			});
+			resizeObserver.observe(container);
 		}
 
 		stateMap.set(container, {
 			canvas,
 			ctx: ctx!,
-			lastUpdateTime: 0
+			lastUpdateTime: 0,
+			scale,
+			filled,
+			resizeObserver
 		});
 
 		return container;
@@ -90,18 +119,20 @@ const waveformRenderer: VisualizationRenderer = {
 		state.lastUpdateTime = now;
 
 		if (!isPlaying || !viz.stateId) {
-			drawWaveform(state.canvas, state.ctx, state.canvas.width, state.canvas.height, null);
+			drawWaveform(state.canvas, state.ctx, state.canvas.width, state.canvas.height, null, state.scale, state.filled);
 			return;
 		}
 
 		audioEngine.getProbeData(viz.stateId).then(samples => {
 			if (samples) {
-				drawWaveform(state.canvas, state.ctx, state.canvas.width, state.canvas.height, samples);
+				drawWaveform(state.canvas, state.ctx, state.canvas.width, state.canvas.height, samples, state.scale, state.filled);
 			}
 		});
 	},
 
 	destroy(element: HTMLElement): void {
+		const state = stateMap.get(element);
+		state?.resizeObserver?.disconnect();
 		stateMap.delete(element);
 	}
 };
@@ -117,14 +148,16 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 /**
- * Draw waveform with min/max envelope style
+ * Draw waveform with min/max envelope style or line style
  */
 function drawWaveform(
 	canvas: HTMLCanvasElement,
 	ctx: CanvasRenderingContext2D,
 	width: number,
 	height: number,
-	samples: Float32Array | null
+	samples: Float32Array | null,
+	scale: number,
+	filled: boolean
 ): void {
 	// Read theme colors from CSS
 	const style = getComputedStyle(canvas);
@@ -154,10 +187,44 @@ function drawWaveform(
 	}
 
 	const centerY = height / 2;
-	const amplitude = (height / 2) * 0.9;
+	const amplitude = (height / 2) * 0.9 * scale;
 
-	// Calculate min/max for each column (envelope rendering)
+	// Calculate min/max for each column
 	const samplesPerPixel = samples.length / width;
+
+	if (!filled) {
+		// Line mode: draw center-line waveform (average of min/max per column)
+		ctx.strokeStyle = vizColor;
+		ctx.lineWidth = 1.5;
+		ctx.lineCap = 'round';
+		ctx.lineJoin = 'round';
+		ctx.beginPath();
+
+		for (let x = 0; x < width; x++) {
+			const startIdx = Math.floor(x * samplesPerPixel);
+			const endIdx = Math.min(Math.floor((x + 1) * samplesPerPixel), samples.length);
+
+			let min = Infinity;
+			let max = -Infinity;
+			for (let i = startIdx; i < endIdx; i++) {
+				if (samples[i] < min) min = samples[i];
+				if (samples[i] > max) max = samples[i];
+			}
+			const avg = (min + max) / 2;
+			const y = Math.max(0, Math.min(height, centerY - avg * amplitude));
+
+			if (x === 0) {
+				ctx.moveTo(x, y);
+			} else {
+				ctx.lineTo(x, y);
+			}
+		}
+
+		ctx.stroke();
+		return;
+	}
+
+	// Filled envelope mode (default)
 
 	// Fill envelope (filled area between min/max)
 	ctx.fillStyle = hexToRgba(vizColor, 0.3);
@@ -172,8 +239,7 @@ function drawWaveform(
 		for (let i = startIdx; i < endIdx; i++) {
 			if (samples[i] > max) max = samples[i];
 		}
-		max = Math.max(-1, Math.min(1, max));
-		const y = centerY - max * amplitude;
+		const y = Math.max(0, Math.min(height, centerY - max * amplitude));
 
 		if (x === 0) {
 			ctx.moveTo(x, y);
@@ -191,8 +257,7 @@ function drawWaveform(
 		for (let i = startIdx; i < endIdx; i++) {
 			if (samples[i] < min) min = samples[i];
 		}
-		min = Math.max(-1, Math.min(1, min));
-		const y = centerY - min * amplitude;
+		const y = Math.max(0, Math.min(height, centerY - min * amplitude));
 		ctx.lineTo(x, y);
 	}
 
@@ -213,8 +278,7 @@ function drawWaveform(
 		for (let i = startIdx; i < endIdx; i++) {
 			if (samples[i] > max) max = samples[i];
 		}
-		max = Math.max(-1, Math.min(1, max));
-		const y = centerY - max * amplitude;
+		const y = Math.max(0, Math.min(height, centerY - max * amplitude));
 
 		if (x === 0) {
 			ctx.moveTo(x, y);
@@ -234,8 +298,7 @@ function drawWaveform(
 		for (let i = startIdx; i < endIdx; i++) {
 			if (samples[i] < min) min = samples[i];
 		}
-		min = Math.max(-1, Math.min(1, min));
-		const y = centerY - min * amplitude;
+		const y = Math.max(0, Math.min(height, centerY - min * amplitude));
 
 		if (x === 0) {
 			ctx.moveTo(x, y);

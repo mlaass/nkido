@@ -1,4 +1,4 @@
-> **Status: REVISION 1 IMPLEMENTED** — Multi-revision viz system overhaul. Revision 1: Spectral Waterfall + FFT/IFFT opcodes.
+> **Status: REVISION 2 IMPLEMENTED** — Multi-revision viz system overhaul. Revision 1: Spectral Waterfall + FFT/IFFT opcodes. Revision 2: Extended viz parameters for all types.
 
 # PRD: Visualization System Revision
 

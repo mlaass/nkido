@@ -51,8 +51,10 @@ const LABEL_HEIGHT = 18;
 const waterfallRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
 		const opts = viz.options || {};
-		const width = (opts.width as number) ?? DEFAULT_WIDTH;
-		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const isRelativeWidth = typeof opts.width === 'string';
+		const isRelativeHeight = typeof opts.height === 'string';
+		const width = isRelativeWidth ? DEFAULT_WIDTH : ((opts.width as number) ?? DEFAULT_WIDTH);
+		const height = isRelativeHeight ? DEFAULT_HEIGHT : ((opts.height as number) ?? DEFAULT_HEIGHT);
 		const canvasHeight = height - LABEL_HEIGHT;
 
 		const angle = (opts.angle as number) ?? 180;
@@ -70,8 +72,8 @@ const waterfallRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: ${width}px;
-			height: ${height}px;
+			width: ${isRelativeWidth ? '100%' : width + 'px'};
+			height: ${isRelativeHeight ? '100%' : height + 'px'};
 			vertical-align: top;
 		`;
 

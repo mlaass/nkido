@@ -15,6 +15,9 @@ interface OscilloscopeState {
 	ctx: CanvasRenderingContext2D;
 	animationId: number | null;
 	lastUpdateTime: number;
+	triggerLevel: number;
+	triggerEdge: 'rising' | 'falling';
+	resizeObserver: ResizeObserver | null;
 }
 
 const stateMap = new WeakMap<HTMLElement, OscilloscopeState>();
@@ -29,11 +32,15 @@ const LABEL_HEIGHT = 18;
  */
 const oscilloscopeRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
-		// Extract dimensions from options
+		// Extract dimensions and parameters from options
 		const opts = viz.options || {};
-		const width = (opts.width as number) ?? DEFAULT_WIDTH;
-		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const isRelativeWidth = typeof opts.width === 'string';
+		const isRelativeHeight = typeof opts.height === 'string';
+		const width = isRelativeWidth ? DEFAULT_WIDTH : ((opts.width as number) ?? DEFAULT_WIDTH);
+		const height = isRelativeHeight ? DEFAULT_HEIGHT : ((opts.height as number) ?? DEFAULT_HEIGHT);
 		const canvasHeight = height - LABEL_HEIGHT;
+		const triggerLevel = (opts.triggerLevel as number) ?? 0;
+		const triggerEdge = ((opts.triggerEdge as string) ?? 'rising') as 'rising' | 'falling';
 
 		const container = document.createElement('div');
 		container.className = 'viz-oscilloscope';
@@ -43,8 +50,8 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: ${width}px;
-			height: ${height}px;
+			width: ${isRelativeWidth ? '100%' : width + 'px'};
+			height: ${isRelativeHeight ? '100%' : height + 'px'};
 			vertical-align: top;
 		`;
 
@@ -70,7 +77,26 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 		const ctx = canvas.getContext('2d');
 		if (ctx) {
 			// Initial empty state
-			drawOscilloscope(canvas, ctx, canvas.width, canvas.height, null);
+			drawOscilloscope(canvas, ctx, canvas.width, canvas.height, null, triggerLevel, triggerEdge);
+		}
+
+		// Attach ResizeObserver for relative sizing
+		let resizeObserver: ResizeObserver | null = null;
+		if (isRelativeWidth || isRelativeHeight) {
+			resizeObserver = new ResizeObserver(entries => {
+				for (const entry of entries) {
+					const rect = entry.contentRect;
+					const newWidth = isRelativeWidth ? rect.width : width;
+					const newHeight = isRelativeHeight ? rect.height : height;
+					const newCanvasHeight = newHeight - LABEL_HEIGHT;
+					if (newCanvasHeight <= 0) return;
+					canvas.width = Math.round(newWidth * 2);
+					canvas.height = Math.round(newCanvasHeight * 2);
+					canvas.style.width = `${newWidth}px`;
+					canvas.style.height = `${newCanvasHeight}px`;
+				}
+			});
+			resizeObserver.observe(container);
 		}
 
 		// Store state
@@ -78,7 +104,10 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 			canvas,
 			ctx: ctx!,
 			animationId: null,
-			lastUpdateTime: 0
+			lastUpdateTime: 0,
+			triggerLevel,
+			triggerEdge,
+			resizeObserver
 		});
 
 		return container;
@@ -94,14 +123,14 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 		state.lastUpdateTime = now;
 
 		if (!isPlaying || !viz.stateId) {
-			drawOscilloscope(state.canvas, state.ctx, state.canvas.width, state.canvas.height, null);
+			drawOscilloscope(state.canvas, state.ctx, state.canvas.width, state.canvas.height, null, state.triggerLevel, state.triggerEdge);
 			return;
 		}
 
 		// Fetch probe data asynchronously
 		audioEngine.getProbeData(viz.stateId).then(samples => {
 			if (samples) {
-				drawOscilloscope(state.canvas, state.ctx, state.canvas.width, state.canvas.height, samples);
+				drawOscilloscope(state.canvas, state.ctx, state.canvas.width, state.canvas.height, samples, state.triggerLevel, state.triggerEdge);
 			}
 		});
 	},
@@ -111,9 +140,26 @@ const oscilloscopeRenderer: VisualizationRenderer = {
 		if (state?.animationId) {
 			cancelAnimationFrame(state.animationId);
 		}
+		state?.resizeObserver?.disconnect();
 		stateMap.delete(element);
 	}
 };
+
+/**
+ * Find the first sample index where the signal crosses the trigger level.
+ * Returns 0 if no crossing is found.
+ */
+function findTriggerPoint(
+	samples: Float32Array,
+	level: number,
+	edge: 'rising' | 'falling'
+): number {
+	for (let i = 1; i < samples.length - 1; i++) {
+		if (edge === 'rising' && samples[i - 1] < level && samples[i] >= level) return i;
+		if (edge === 'falling' && samples[i - 1] > level && samples[i] <= level) return i;
+	}
+	return 0;
+}
 
 /**
  * Draw oscilloscope waveform
@@ -123,7 +169,9 @@ function drawOscilloscope(
 	ctx: CanvasRenderingContext2D,
 	width: number,
 	height: number,
-	samples: Float32Array | null
+	samples: Float32Array | null,
+	triggerLevel: number,
+	triggerEdge: 'rising' | 'falling'
 ): void {
 	// Read theme colors from CSS
 	const style = getComputedStyle(canvas);
@@ -135,6 +183,9 @@ function drawOscilloscope(
 	// Clear background
 	ctx.fillStyle = bgColor;
 	ctx.fillRect(0, 0, width, height);
+
+	const centerY = height / 2;
+	const amplitude = (height / 2) * 0.9;  // Leave some margin
 
 	// Draw center line
 	ctx.strokeStyle = gridColor;
@@ -153,6 +204,10 @@ function drawOscilloscope(
 		return;
 	}
 
+	// Apply trigger: find crossing point and start rendering from there
+	const triggerOffset = findTriggerPoint(samples, triggerLevel, triggerEdge);
+	const visibleSamples = samples.subarray(triggerOffset);
+
 	// Draw waveform with anti-aliasing
 	ctx.strokeStyle = vizColor;
 	ctx.lineWidth = 1.5;
@@ -160,14 +215,11 @@ function drawOscilloscope(
 	ctx.lineJoin = 'round';
 	ctx.beginPath();
 
-	const centerY = height / 2;
-	const amplitude = (height / 2) * 0.9;  // Leave some margin
-
 	// Map samples to canvas width
-	const step = samples.length / width;
+	const step = visibleSamples.length / width;
 	for (let x = 0; x < width; x++) {
 		const sampleIndex = Math.floor(x * step);
-		const sample = samples[sampleIndex];
+		const sample = visibleSamples[sampleIndex];
 		// Clamp sample to -1..1 range
 		const clampedSample = Math.max(-1, Math.min(1, sample));
 		const y = centerY - clampedSample * amplitude;
@@ -197,6 +249,16 @@ function drawOscilloscope(
 	ctx.moveTo(0, centerY + amplitude * 0.5);
 	ctx.lineTo(width, centerY + amplitude * 0.5);
 	ctx.stroke();
+
+	// Draw trigger level line when non-zero
+	if (triggerLevel !== 0) {
+		const triggerY = centerY - Math.max(-1, Math.min(1, triggerLevel)) * amplitude;
+		ctx.strokeStyle = mutedColor;
+		ctx.beginPath();
+		ctx.moveTo(0, triggerY);
+		ctx.lineTo(width, triggerY);
+		ctx.stroke();
+	}
 
 	ctx.setLineDash([]);
 }

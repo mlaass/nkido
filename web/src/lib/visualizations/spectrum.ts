@@ -15,6 +15,11 @@ interface SpectrumState {
 	ctx: CanvasRenderingContext2D;
 	lastUpdateTime: number;
 	smoothedMagnitudes: Float32Array;
+	logScale: boolean;
+	minDb: number;
+	maxDb: number;
+	fftSize: number;
+	resizeObserver: ResizeObserver | null;
 }
 
 const stateMap = new WeakMap<HTMLElement, SpectrumState>();
@@ -29,11 +34,17 @@ const LABEL_HEIGHT = 18;
  */
 const spectrumRenderer: VisualizationRenderer = {
 	create(viz: VizDecl): HTMLElement {
-		// Extract dimensions from options
+		// Extract dimensions and parameters from options
 		const opts = viz.options || {};
-		const width = (opts.width as number) ?? DEFAULT_WIDTH;
-		const height = (opts.height as number) ?? DEFAULT_HEIGHT;
+		const isRelativeWidth = typeof opts.width === 'string';
+		const isRelativeHeight = typeof opts.height === 'string';
+		const width = isRelativeWidth ? DEFAULT_WIDTH : ((opts.width as number) ?? DEFAULT_WIDTH);
+		const height = isRelativeHeight ? DEFAULT_HEIGHT : ((opts.height as number) ?? DEFAULT_HEIGHT);
 		const canvasHeight = height - LABEL_HEIGHT;
+		const logScale = (opts.logScale as boolean) ?? false;
+		const minDb = (opts.minDb as number) ?? -90;
+		const maxDb = (opts.maxDb as number) ?? 0;
+		const fftSize = (opts.fft as number) ?? 1024;
 
 		const container = document.createElement('div');
 		container.className = 'viz-spectrum';
@@ -43,8 +54,8 @@ const spectrumRenderer: VisualizationRenderer = {
 			overflow: hidden;
 			background: var(--bg-secondary, #1a1a1a);
 			border: 1px solid var(--border-primary, #333);
-			width: ${width}px;
-			height: ${height}px;
+			width: ${isRelativeWidth ? '100%' : width + 'px'};
+			height: ${isRelativeHeight ? '100%' : height + 'px'};
 			vertical-align: top;
 		`;
 
@@ -69,14 +80,38 @@ const spectrumRenderer: VisualizationRenderer = {
 
 		const ctx = canvas.getContext('2d');
 		if (ctx) {
-			drawSpectrum(canvas, ctx, canvas.width, canvas.height, null);
+			drawSpectrum(canvas, ctx, canvas.width, canvas.height, null, logScale, fftSize);
+		}
+
+		// Attach ResizeObserver for relative sizing
+		let resizeObserver: ResizeObserver | null = null;
+		if (isRelativeWidth || isRelativeHeight) {
+			resizeObserver = new ResizeObserver(entries => {
+				for (const entry of entries) {
+					const rect = entry.contentRect;
+					const newWidth = isRelativeWidth ? rect.width : width;
+					const newHeight = isRelativeHeight ? rect.height : height;
+					const newCanvasHeight = newHeight - LABEL_HEIGHT;
+					if (newCanvasHeight <= 0) return;
+					canvas.width = Math.round(newWidth * 2);
+					canvas.height = Math.round(newCanvasHeight * 2);
+					canvas.style.width = `${newWidth}px`;
+					canvas.style.height = `${newCanvasHeight}px`;
+				}
+			});
+			resizeObserver.observe(container);
 		}
 
 		stateMap.set(container, {
 			canvas,
 			ctx: ctx!,
 			lastUpdateTime: 0,
-			smoothedMagnitudes: new Float32Array(0)
+			smoothedMagnitudes: new Float32Array(0),
+			logScale,
+			minDb,
+			maxDb,
+			fftSize,
+			resizeObserver
 		});
 
 		return container;
@@ -96,9 +131,12 @@ const spectrumRenderer: VisualizationRenderer = {
 			for (let i = 0; i < state.smoothedMagnitudes.length; i++) {
 				state.smoothedMagnitudes[i] *= 0.9;
 			}
-			drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
+			drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes, state.logScale, state.fftSize);
 			return;
 		}
+
+		const { minDb, maxDb } = state;
+		const dbRange = maxDb - minDb;
 
 		audioEngine.getFFTProbeData(viz.stateId).then(data => {
 			if (data) {
@@ -110,18 +148,20 @@ const spectrumRenderer: VisualizationRenderer = {
 				}
 
 				// Smooth the magnitudes (exponential moving average)
-				// Magnitudes arrive as dB values; normalize to 0..1
+				// Magnitudes arrive as dB values; normalize to 0..1 using configurable dB range
 				for (let i = 0; i < binCount; i++) {
-					const normalized = Math.max(0, (magnitudes[i] + 90) / 90);
+					const normalized = Math.max(0, Math.min(1, (magnitudes[i] - minDb) / dbRange));
 					state.smoothedMagnitudes[i] = state.smoothedMagnitudes[i] * 0.7 + normalized * 0.3;
 				}
 
-				drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes);
+				drawSpectrum(state.canvas, state.ctx, state.canvas.width, state.canvas.height, state.smoothedMagnitudes, state.logScale, state.fftSize);
 			}
 		});
 	},
 
 	destroy(element: HTMLElement): void {
+		const state = stateMap.get(element);
+		state?.resizeObserver?.disconnect();
 		stateMap.delete(element);
 	}
 };
@@ -134,7 +174,9 @@ function drawSpectrum(
 	ctx: CanvasRenderingContext2D,
 	width: number,
 	height: number,
-	magnitudes: Float32Array | null
+	magnitudes: Float32Array | null,
+	logScale: boolean,
+	fftSize: number
 ): void {
 	// Read theme colors from CSS
 	const style = getComputedStyle(canvas);
@@ -159,7 +201,6 @@ function drawSpectrum(
 	// Downsample bins to fit display width
 	// With 513+ bins from FFT, we group bins into visual bars
 	const maxBars = Math.min(magnitudes.length, Math.floor(width / 3)); // ~3px per bar minimum
-	const binsPerBar = magnitudes.length / maxBars;
 	const barWidth = width / maxBars;
 	const maxHeight = height * 0.95;
 
@@ -169,10 +210,33 @@ function drawSpectrum(
 	gradient.addColorStop(0.7, warningColor);  // Warning in upper range
 	gradient.addColorStop(1, errorColor);      // Error at top
 
+	const sampleRate = 48000;
+	const nyquist = sampleRate / 2;
+	const hzPerBin = sampleRate / fftSize;
+
 	for (let i = 0; i < maxBars; i++) {
+		let startBin: number;
+		let endBin: number;
+
+		if (logScale) {
+			// Logarithmic frequency mapping: each bar covers a geometric frequency range
+			const minFreq = 20;
+			const logMin = Math.log(minFreq);
+			const logMax = Math.log(nyquist);
+			const freqLo = Math.exp(logMin + (logMax - logMin) * (i / maxBars));
+			const freqHi = Math.exp(logMin + (logMax - logMin) * ((i + 1) / maxBars));
+			startBin = Math.max(1, Math.floor(freqLo / hzPerBin));
+			endBin = Math.min(Math.ceil(freqHi / hzPerBin), magnitudes.length);
+			// Ensure at least 1 bin per bar
+			if (endBin <= startBin) endBin = startBin + 1;
+		} else {
+			// Linear bin spacing (original behavior)
+			const binsPerBar = magnitudes.length / maxBars;
+			startBin = Math.floor(i * binsPerBar);
+			endBin = Math.min(Math.floor((i + 1) * binsPerBar), magnitudes.length);
+		}
+
 		// Average bins for this bar
-		const startBin = Math.floor(i * binsPerBar);
-		const endBin = Math.min(Math.floor((i + 1) * binsPerBar), magnitudes.length);
 		let sum = 0;
 		for (let b = startBin; b < endBin; b++) {
 			sum += magnitudes[b];
@@ -192,11 +256,24 @@ function drawSpectrum(
 	ctx.font = '9px monospace';
 	ctx.textAlign = 'center';
 
-	// Low frequency marker
-	ctx.fillText('0', 10, height - 2);
-
-	// Nyquist marker (assuming 48kHz = 24kHz Nyquist)
-	ctx.fillText('24k', width - 15, height - 2);
+	if (logScale) {
+		// Log scale: markers at decade boundaries
+		const markers = [100, 1000, 10000];
+		const labels = ['100', '1k', '10k'];
+		const minFreq = 20;
+		const logMin = Math.log(minFreq);
+		const logMax = Math.log(nyquist);
+		for (let m = 0; m < markers.length; m++) {
+			if (markers[m] < minFreq || markers[m] > nyquist) continue;
+			const x = ((Math.log(markers[m]) - logMin) / (logMax - logMin)) * width;
+			ctx.fillText(labels[m], x, height - 2);
+		}
+	} else {
+		// Linear scale: endpoints
+		ctx.fillText('0', 10, height - 2);
+		const nyquistLabel = nyquist >= 1000 ? `${Math.round(nyquist / 1000)}k` : `${nyquist}`;
+		ctx.fillText(nyquistLabel, width - 15, height - 2);
+	}
 }
 
 // Register the spectrum renderer
