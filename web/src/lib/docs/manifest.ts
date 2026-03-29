@@ -24,6 +24,7 @@ export const slugToPath: Record<string, string> = {
 	"oscillators": "reference/builtins/oscillators.md",
 	"dynamics": "reference/builtins/dynamics.md",
 	"reverbs": "reference/builtins/reverbs.md",
+	"visualizations": "reference/builtins/visualizations.md",
 	"DOCUMENTATION_GUIDE": "DOCUMENTATION_GUIDE.md"
 };
 
@@ -94,6 +95,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "utility",
 			"title": "Utility"
+		},
+		{
+			"slug": "visualizations",
+			"title": "Visualizations"
 		}
 	],
 	"language": [
@@ -1218,9 +1223,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Oscillators"
 	},
 	"waveform": {
-		"slug": "oscillators",
+		"slug": "visualizations",
 		"category": "builtins",
-		"title": "Oscillators"
+		"title": "waveform",
+		"anchor": "waveform"
 	},
 	"tone": {
 		"slug": "oscillators",
@@ -1292,6 +1298,105 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Reverbs"
 	},
+	"oscilloscope": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "oscilloscope",
+		"anchor": "oscilloscope"
+	},
+	"spectrum": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "spectrum",
+		"anchor": "spectrum"
+	},
+	"waterfall": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "waterfall",
+		"anchor": "waterfall"
+	},
+	"pianoroll": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "pianoroll",
+		"anchor": "pianoroll"
+	},
+	"visualization": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"viz": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"piano": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"roll": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"display": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"monitor": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"probe": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"fft": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"spectrogram": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"logscale": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"mindb": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"maxdb": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"filled": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"showgrid": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
+	"gradient": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "Visualizations"
+	},
 	"contributing": {
 		"slug": "DOCUMENTATION_GUIDE",
 		"category": "concepts",
@@ -1337,5 +1442,6 @@ export const previews: Record<string, string> = {
 	"oscillators": "Oscillators are the fundamental sound sources in synthesis. The  function is the unified interface for all oscillator types.",
 	"dynamics": "Dynamics processors control the volume envelope of signals, reducing dynamic range or removing unwanted quiet sections.",
 	"reverbs": "Reverbs simulate acoustic spaces by creating many delayed, filtered reflections. Different algorithms offer different sonic characteristics.",
+	"visualizations": "Inline visualizations that render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain — the audio...",
 	"DOCUMENTATION_GUIDE": "This guide outlines standards and practices for writing NKIDO documentation."
 };
