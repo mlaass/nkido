@@ -117,6 +117,8 @@ After:
 Unknown function 'ou'; did you mean 'out'?
 ```
 
+Note: the colon is intentionally dropped from "Unknown function" and "Undefined identifier" messages for cleaner formatting with the suggestion suffix.
+
 ### 4.3 Enhanced Error Panel
 
 ```
@@ -223,66 +225,123 @@ editor-linter.ts      editor-linter.ts
 
 ### 5.2 Error Code Taxonomy
 
+#### Lexer Codes
+
+Currently all lexer errors use `L001`. This PRD introduces distinct codes:
+
+| Code | Component | Meaning | Status |
+|------|-----------|---------|--------|
+| `L001` | Lexer | Unexpected character | Existing (currently used for all lexer errors) |
+| `L002` | Lexer | Unterminated string | **New** |
+| `L003` | Lexer | Invalid escape sequence | **New** |
+| `L004` | Lexer | Invalid number literal | **New** |
+| `L005` | Lexer | Expected digit after exponent | **New** |
+| `L006` | Lexer | Incomplete operator (lone `\|`, lone `&`) | **New** |
+
+#### Mini-notation Codes
+
+| Code | Component | Meaning | Status |
+|------|-----------|---------|--------|
+| `M001` | Mini-notation lexer | Pattern string error | Existing |
+| `MP01` | Mini-notation parser | Pattern syntax error | Existing |
+
+#### Parser Codes
+
+Currently all parser errors use `P001`. This PRD introduces distinct codes:
+
+| Code | Component | Meaning | Status |
+|------|-----------|---------|--------|
+| `P001` | Parser | Expected expression | Existing (currently used for all parser errors) |
+| `P002` | Parser | Expected closing delimiter (`)`, `]`, `}`) | **New** |
+| `P003` | Parser | Expected keyword or operator (`=`, `->`, `:`) | **New** |
+| `P004` | Parser | Expected identifier | **New** |
+| `P005` | Parser | Unknown infix operator | **New** |
+
+#### Compile / Semantic / Codegen Codes (Existing)
+
 | Code | Component | Meaning |
 |------|-----------|---------|
-| `L001` | Lexer | Unexpected character |
-| `L002` | Lexer | Unterminated string |
-| `L003` | Lexer | Invalid escape sequence |
-| `L004` | Lexer | Invalid number literal |
-| `L005` | Lexer | Expected digit after exponent |
-| `L006` | Lexer | Incomplete operator (lone `\|`, lone `&`) |
-| `M001` | Mini-notation lexer | Pattern string error |
-| `MP01` | Mini-notation parser | Pattern syntax error |
-| `P001` | Parser | Expected expression |
-| `P002` | Parser | Expected closing delimiter (`)`, `]`, `}`) |
-| `P003` | Parser | Expected keyword or operator (`=`, `->`, `:`) |
-| `P004` | Parser | Expected identifier |
-| `P005` | Parser | Unknown infix operator |
+| `E000` | Compile | Could not open file |
 | `E001` | Compile | Empty source file |
+| `E002` | Semantic | Invalid pipe expression |
+| `E003` | Semantic | Hole '%' used outside pipe |
 | `E004` | Semantic | Unknown function |
 | `E005` | Semantic | Undefined identifier |
+| `E006` | Semantic | Wrong argument count (too few) |
+| `E007` | Semantic | Wrong argument count (too many) |
+| `E008` | Semantic | Method call missing receiver |
+| `E009` | Semantic | Positional argument after named argument |
 | `E100` | Codegen | Invalid AST |
 | `E101` | Codegen | Buffer pool exhausted |
 | `E102` | Codegen | Undefined identifier (codegen) |
+| `E103` | Codegen | Cannot use builtin as value |
+| `E104` | Codegen | Invalid assignment / const declaration |
+| `E105` | Codegen | Missing required argument / default evaluation |
 | `E107` | Codegen | Unknown function (codegen) |
+| `E108` | Codegen | Invalid binary operation |
+| `E109` | Codegen | Unknown binary operator |
+| `E110` | Codegen | Hole in unexpected context |
+| `E111` | Codegen | Invalid index expression / pipe rewrite |
+| `E112` | Codegen | Closure has no body |
+| `E113` | Codegen | Method calls not supported |
+| `E115` | Codegen | Post statements not supported |
+| `E120`-`E122` | Codegen | len() / match errors |
+| `E130`-`E136` | Codegen | map/lambda/field access errors |
+| `E140`-`E155` | Codegen | Array ops, compose, destructure, directives |
+| `E160`-`E180` | Codegen | Stereo ops, array ops, viz ops (*) |
+| `E199` | Codegen | Unsupported node type |
+| `E200` | Const eval | Division/modulo by zero |
+| `E202` | Const eval | Cannot evaluate at compile time |
+| `E203` | Const eval | Non-const identifier / failed const eval |
+| `E301`-`E304` | Codegen | tap_delay() errors |
+| `E400`-`E405` | Codegen | Polyphony errors |
 | `E410` | Codegen | Chord not wrapped in poly() |
 | `E500`-`E505` | Import | Import resolution errors |
+| `W000` | Semantic | General warning |
+
+(*) **Note**: Codes E150-E180 have collisions — they are reused with different meanings across `codegen_arrays.cpp`, `codegen_stereo.cpp`, and `codegen_viz.cpp`. This is a pre-existing issue not introduced by this PRD; a future cleanup should assign unique codes.
 
 ### 5.3 Levenshtein "Did You Mean?" Algorithm
 
+**Header** (`akkado/include/akkado/string_distance.hpp`):
 ```cpp
-// In analyzer.cpp (or a shared utility)
+#pragma once
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace akkado {
+
+/// Compute Levenshtein edit distance between two strings
+int levenshtein(std::string_view a, std::string_view b);
+
+/// Find the closest match to `name` from a list of candidates.
+/// Returns the best match within threshold, or empty string if none.
+/// Threshold: <=6 chars → max distance 2, >6 chars → max distance 3.
 std::string suggest_similar(std::string_view name,
-                           const SymbolTable& symbols) {
-    std::string best;
-    int best_dist = INT_MAX;
-    int threshold = name.size() <= 6 ? 2 : 3;
+                           const std::vector<std::string_view>& candidates);
 
-    // Check user-defined symbols
-    for (const auto& [sym_name, _] : symbols) {
-        int d = levenshtein(name, sym_name);
-        if (d < best_dist && d <= threshold) {
-            best_dist = d;
-            best = sym_name;
-        }
-    }
+} // namespace akkado
+```
 
-    // Check builtin function names
-    for (const auto& [builtin_name, _] : BUILTIN_FUNCTIONS) {
-        int d = levenshtein(name, builtin_name);
-        if (d < best_dist && d <= threshold) {
-            best_dist = d;
-            best = std::string(builtin_name);
-        }
-    }
+Both analyzer and codegen callers collect their candidate names (user symbols + builtin names) into a `vector<string_view>` before calling `suggest_similar()`.
 
-    return best;  // Empty if no suggestion
-}
+**Usage at call sites:**
+```cpp
+// Collect candidates from user symbols + builtins
+std::vector<std::string_view> candidates;
+for (const auto& [sym_name, _] : symbols) candidates.push_back(sym_name);
+for (const auto& [builtin_name, _] : BUILTIN_FUNCTIONS) candidates.push_back(builtin_name);
+
+auto suggestion = suggest_similar(name, candidates);
+std::string msg = "Unknown function '" + func_name + "'";
+if (!suggestion.empty()) msg += "; did you mean '" + suggestion + "'?";
+error("E004", msg, n.location);
 ```
 
 Applied at:
-- `analyzer.cpp:1370` — `"Undefined identifier: 'xyz'"` → `"Undefined identifier 'xyz'; did you mean 'abc'?"`
-- `analyzer.cpp:1108` — `"Unknown function: 'xyz'"` → `"Unknown function 'xyz'; did you mean 'abc'?"`
+- `analyzer.cpp:1370` — `"Undefined identifier 'xyz'"` → `"Undefined identifier 'xyz'; did you mean 'abc'?"`
+- `analyzer.cpp:1108` — `"Unknown function 'xyz'"` → `"Unknown function 'xyz'; did you mean 'abc'?"`
 - `codegen.cpp:426` — same for codegen-level undefined identifier
 - `codegen.cpp:823` — same for codegen-level unknown function
 
@@ -307,22 +366,14 @@ Proposed:
 auto [tokens, lex_diags] = lex(combined_source, filename);
 source_map.adjust_all(lex_diags);
 result.diagnostics.insert(..., lex_diags.begin(), lex_diags.end());
-bool had_lex_errors = has_errors(lex_diags);
 
 // Phase 2: Parsing — continues even with lex errors
-// Parser's advance() skips TokenType::Error tokens (already reported by lexer)
 auto [ast, parse_diags] = parse(std::move(tokens), combined_source, filename);
 source_map.adjust_all(parse_diags);
 result.diagnostics.insert(..., parse_diags.begin(), parse_diags.end());
-bool had_parse_errors = has_errors(parse_diags);
 
-// Phase 3: Semantic analysis — continues if AST is valid
-if (ast.valid() && !had_lex_errors && !had_parse_errors) {
-    // Full semantic analysis
-    auto analysis = analyzer.analyze(ast, ...);
-    result.diagnostics.insert(..., analysis.diagnostics.begin(), ...);
-} else if (ast.valid()) {
-    // Partial semantic analysis — best effort
+// Phase 3: Semantic analysis — runs if AST is structurally valid
+if (ast.valid()) {
     auto analysis = analyzer.analyze(ast, ...);
     result.diagnostics.insert(..., analysis.diagnostics.begin(), ...);
 }
@@ -335,23 +386,29 @@ if (!has_errors(result.diagnostics)) {
 } else {
     result.success = false;
 }
+
+// Deduplicate diagnostics by (line, column) before returning
+deduplicate_diagnostics(result.diagnostics);
 ```
 
 **Safety constraint**: Codegen is never reached if any prior stage had errors. Invalid bytecode must never enter the VM.
 
-The parser's `advance()` method needs a small change to skip Error tokens:
+The parser's `synchronize()` method needs a small change to skip Error tokens at statement boundaries:
 ```cpp
-const Token& Parser::advance() {
-    if (!is_at_end()) {
-        current_idx_++;
+void Parser::synchronize() {
+    panic_mode_ = false;
+    while (!is_at_end()) {
         // Skip error tokens (already reported by lexer)
-        while (!is_at_end() && current().type == TokenType::Error) {
+        if (current().type == TokenType::Error) {
             current_idx_++;
+            continue;
         }
+        // ... existing sync point logic
     }
-    return previous();
 }
 ```
+
+Note: Error tokens are skipped only during synchronization (at statement boundaries), not during `advance()`. This avoids silently consuming tokens mid-expression, which could produce confusing secondary parse errors.
 
 ---
 
@@ -387,10 +444,10 @@ const Token& Parser::advance() {
 |------|--------|
 | `akkado/include/akkado/lexer.hpp` | Update `add_error` signature to accept error code string |
 | `akkado/src/lexer.cpp` | (1) Include actual character in "Unexpected character" messages; (2) Assign distinct codes L001-L006 per error category; (3) Update all `make_error_token` / `add_error` call sites |
-| `akkado/src/parser.cpp` | (1) `error_at()` appends `, found '<token>'` (or `at end of file`); (2) Add contextual hints for common mistakes (lone `=` → "did you mean `==`?"); (3) Assign distinct codes P001-P005; (4) `advance()` skips `TokenType::Error` tokens |
-| `akkado/src/analyzer.cpp` | Add `suggest_similar()` helper; update E004 and E005 messages to include suggestions |
+| `akkado/src/parser.cpp` | (1) `error_at()` appends `, found '<token>'` (or `at end of file`); (2) Add contextual hints for common mistakes (lone `=` → "did you mean `==`?"); (3) Assign distinct codes P001-P005; (4) `synchronize()` skips `TokenType::Error` tokens |
+| `akkado/src/analyzer.cpp` | Update E004 and E005 messages to include `suggest_similar()` suggestions |
 | `akkado/src/codegen.cpp` | Update E102 and E107 messages to include "did you mean?" suggestions |
-| `akkado/src/akkado.cpp` | Remove early returns between stages; collect errors from lex + parse + semantic; gate codegen on zero total errors |
+| `akkado/src/akkado.cpp` | Remove early returns between stages; collect errors from lex + parse + semantic; gate codegen on zero total errors; deduplicate diagnostics by (line, column) |
 | New: `akkado/src/string_distance.cpp` | Levenshtein distance implementation (shared between analyzer and codegen) |
 | New: `akkado/include/akkado/string_distance.hpp` | Header for `levenshtein()` and `suggest_similar()` |
 
@@ -466,9 +523,10 @@ const Token& Parser::advance() {
 
 **Changes**:
 1. Remove early returns after lex and parse error checks in `compile()`
-2. Add Error token skipping to parser's `advance()` method
+2. Add Error token skipping to parser's `synchronize()` method (at statement boundaries only, not in `advance()`)
 3. Run semantic analysis on valid ASTs even when earlier stages had errors
 4. Gate codegen on zero total errors (safety: never emit bytecode from broken AST)
+5. Add `deduplicate_diagnostics()` to remove duplicate errors at the same (line, column) before returning `CompileResult`
 
 **Verify**: Source with a lex error on line 2 and an undefined identifier on line 5 shows both errors simultaneously.
 
@@ -510,7 +568,7 @@ Some diagnostics may have `length = 0` (e.g., errors at EOF, errors generated by
 When the lexer encounters an error at the end of the source, `current_ - start_` may be 0. The parser's Error-token skipping must not loop infinitely — it must also check `is_at_end()`.
 
 ### 9.3 Cascading errors across stages
-Multi-stage collection means the parser may generate errors for positions where the lexer already reported an error (the parser sees a gap where the Error token was skipped). To avoid duplicate errors at the same location, deduplicate diagnostics by (line, column) before displaying.
+Multi-stage collection means the parser may generate errors for positions where the lexer already reported an error. To avoid duplicate errors at the same location, deduplicate diagnostics by (line, column) in `compile()` in `akkado.cpp`, after collecting diagnostics from all stages and before returning `CompileResult`.
 
 ### 9.4 "Did you mean?" with no close match
 If no symbol is within Levenshtein threshold, don't suggest anything. Message stays as `"Undefined identifier 'xyzzy'"` without a suggestion tail.
