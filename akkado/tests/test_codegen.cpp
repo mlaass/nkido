@@ -1370,6 +1370,41 @@ TEST_CASE("Codegen: Embedded alternate sequence timing", "[codegen][pattern][seq
             CHECK(ev.type == cedar::EventType::SUB_SEQ);
         }
     }
+
+    SECTION("speed-modified alternate with groups - groups wrapped in sub-sequences") {
+        // <hh hh [hh hh hh]>*2 should have an ALTERNATE sequence with 3 events:
+        // 2 DATA (plain hh atoms) + 1 SUB_SEQ (for the [hh hh hh] group)
+        // NOT 5 DATA events (flattened group)
+        auto result = akkado::compile("pat(\"<hh hh [hh hh hh]>*2\")");
+        REQUIRE(result.success);
+
+        const akkado::StateInitData* seq_init = nullptr;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+                seq_init = &init;
+                break;
+            }
+        }
+        REQUIRE(seq_init != nullptr);
+
+        // Find the ALTERNATE sequence
+        std::size_t alt_idx = static_cast<std::size_t>(-1);
+        for (std::size_t i = 0; i < seq_init->sequences.size(); ++i) {
+            if (seq_init->sequences[i].mode == cedar::SequenceMode::ALTERNATE) {
+                alt_idx = i;
+                break;
+            }
+        }
+        REQUIRE(alt_idx != static_cast<std::size_t>(-1));
+
+        // The ALTERNATE sequence should have exactly 3 events:
+        // hh (DATA), hh (DATA), [hh hh hh] (SUB_SEQ)
+        const auto& alt_events = seq_init->sequence_events[alt_idx];
+        CHECK(alt_events.size() == 3);
+
+        // The third event (for the group) should be a SUB_SEQ
+        CHECK(alt_events[2].type == cedar::EventType::SUB_SEQ);
+    }
 }
 
 // =============================================================================

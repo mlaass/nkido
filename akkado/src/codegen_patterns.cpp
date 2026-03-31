@@ -561,7 +561,10 @@ private:
 
                     NodeIndex alt_child = child_node.first_child;
                     while (alt_child != NULL_NODE) {
-                        compile_into_sequence(alt_child, new_seq_idx, 0.0f, 1.0f);
+                        int repeat = get_node_repeat(alt_child);
+                        for (int i = 0; i < repeat; ++i) {
+                            compile_alternate_child(alt_child, new_seq_idx);
+                        }
                         alt_child = arena_[alt_child].next_sibling;
                     }
 
