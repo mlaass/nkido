@@ -2742,6 +2742,11 @@ TEST_CASE("Codegen: Pipe expressions", "[codegen]") {
         auto result = akkado::compile("pat(\"c4\") |> osc(\"sin\", %.freq) |> out(%, %)");
         CHECK(result.success);
     }
+
+    SECTION("sample pattern to output") {
+        auto result = akkado::compile("pat(\"bd ~ bd ~\") |> out(%)");
+        CHECK(result.success);
+    }
 }
 
 TEST_CASE("Codegen: Binary operations", "[codegen]") {

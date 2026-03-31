@@ -1894,7 +1894,7 @@ TEST_CASE("TypedValue type checking", "[akkado][types]") {
         // Signal accepts Signal and Number
         CHECK(type_compatible(ValueType::Signal, ParamValueType::Signal));
         CHECK(type_compatible(ValueType::Number, ParamValueType::Signal));
-        CHECK_FALSE(type_compatible(ValueType::Pattern, ParamValueType::Signal));
+        CHECK(type_compatible(ValueType::Pattern, ParamValueType::Signal));
         CHECK_FALSE(type_compatible(ValueType::String, ParamValueType::Signal));
         CHECK_FALSE(type_compatible(ValueType::Function, ParamValueType::Signal));
 
@@ -2118,9 +2118,8 @@ TEST_CASE("TypedValue integration", "[akkado][types][integration]") {
         CHECK(has_diagnostic_code(result.diagnostics, "E160"));
     }
 
-    SECTION("out rejects Pattern argument") {
+    SECTION("out accepts Pattern argument") {
         auto result = akkado::compile(R"(out(pat("c4")))");
-        REQUIRE_FALSE(result.success);
-        CHECK(has_diagnostic_code(result.diagnostics, "E160"));
+        REQUIRE(result.success);
     }
 }

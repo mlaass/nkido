@@ -59,7 +59,7 @@ constexpr const char* param_value_type_name(ParamValueType type) {
 inline bool type_compatible(ValueType actual, ParamValueType expected) {
     switch (expected) {
         case ParamValueType::Any:      return true;
-        case ParamValueType::Signal:   return actual == ValueType::Signal || actual == ValueType::Number;
+        case ParamValueType::Signal:   return actual == ValueType::Signal || actual == ValueType::Number || actual == ValueType::Pattern;
         case ParamValueType::Pattern:  return actual == ValueType::Pattern;
         case ParamValueType::String:   return actual == ValueType::String;
         case ParamValueType::Function: return actual == ValueType::Function;
