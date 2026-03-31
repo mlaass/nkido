@@ -2,8 +2,12 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cedar/vm/crossfade_state.hpp>
+#include <cedar/vm/vm.hpp>
+#include <cedar/vm/instruction.hpp>
+#include <cedar/opcodes/utility.hpp>
 #include <cedar/dsp/constants.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace cedar;
@@ -528,6 +532,120 @@ TEST_CASE("CrossfadeBuffers stress test", "[crossfade][stress]") {
                 buffers.mix_equal_power(out_left, out_right, pos);
             } else {
                 buffers.mix_linear(out_left, out_right, pos);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Integration Tests: Crossfade with VM [crossfade][integration]
+// ============================================================================
+
+TEST_CASE("Crossfade output level stays bounded during hot-swap", "[crossfade][integration]") {
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+
+    // Program: DC 1.0 → OUTPUT (both channels)
+    std::array<Instruction, 2> program_a = {
+        make_const_instruction(Opcode::PUSH_CONST, 0, 1.0f),
+        Instruction::make_unary(Opcode::OUTPUT, 0, 0)
+    };
+
+    // Load initial program (immediate, no crossfade)
+    vm.load_program_immediate(program_a);
+
+    // Process a few blocks to establish steady state
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    for (int i = 0; i < 5; ++i) {
+        vm.process_block(left.data(), right.data());
+    }
+
+    // Verify steady state: output is DC 1.0
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        REQUIRE_THAT(left[i], WithinAbs(1.0f, 1e-4f));
+    }
+
+    // Load identical program via swap (triggers crossfade)
+    std::array<Instruction, 2> program_b = {
+        make_const_instruction(Opcode::PUSH_CONST, 0, 1.0f),
+        Instruction::make_unary(Opcode::OUTPUT, 0, 0)
+    };
+    auto result = vm.load_program(program_b);
+    REQUIRE(result == VM::LoadResult::Success);
+
+    // Process through crossfade + several blocks after
+    // Equal-power crossfade with identical correlated signals peaks at sqrt(2) ≈ 1.414
+    constexpr float max_allowed = 1.5f;  // sqrt(2) + margin
+    float peak_level = 0.0f;
+    float max_delta = 0.0f;
+
+    float prev_sample = left[BLOCK_SIZE - 1];  // last sample from steady state
+
+    for (int block = 0; block < 10; ++block) {
+        vm.process_block(left.data(), right.data());
+
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            float level = std::abs(left[i]);
+            peak_level = std::max(peak_level, level);
+
+            float delta = std::abs(left[i] - prev_sample);
+            max_delta = std::max(max_delta, delta);
+            prev_sample = left[i];
+
+            // Hard assertion: no sample should exceed max_allowed
+            // Before the fix, this would reach ~4.0 due to buffer accumulation
+            REQUIRE(level <= max_allowed);
+        }
+    }
+
+    // After crossfade completes, output should return to DC 1.0
+    vm.process_block(left.data(), right.data());
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        CHECK_THAT(left[i], WithinAbs(1.0f, 1e-4f));
+    }
+
+    // Maximum sample-to-sample delta should be reasonable
+    // With a 3-block crossfade over DC signals, deltas are small
+    CHECK(max_delta < 0.5f);
+}
+
+TEST_CASE("Multiple successive crossfades stay bounded", "[crossfade][integration]") {
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+
+    std::array<Instruction, 2> program = {
+        make_const_instruction(Opcode::PUSH_CONST, 0, 1.0f),
+        Instruction::make_unary(Opcode::OUTPUT, 0, 0)
+    };
+
+    vm.load_program_immediate(program);
+
+    std::array<float, BLOCK_SIZE> left{}, right{};
+
+    // Do 5 successive hot-swaps, processing enough blocks between each
+    // for the crossfade to complete
+    for (int swap = 0; swap < 5; ++swap) {
+        // Process a few blocks
+        for (int i = 0; i < 5; ++i) {
+            vm.process_block(left.data(), right.data());
+        }
+
+        // Trigger another swap
+        std::array<Instruction, 2> next_program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, 1.0f),
+            Instruction::make_unary(Opcode::OUTPUT, 0, 0)
+        };
+        auto result = vm.load_program(next_program);
+        REQUIRE(result == VM::LoadResult::Success);
+
+        // Process through crossfade
+        for (int block = 0; block < 10; ++block) {
+            vm.process_block(left.data(), right.data());
+
+            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+                float level = std::abs(left[i]);
+                // No accumulation from previous crossfades should leak through
+                REQUIRE(level <= 1.5f);
             }
         }
     }

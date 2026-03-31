@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — Fix crossfade buffer accumulation and state double-processing bugs
+> **Status: DONE** — Phase 1 shipped. Phase 2 & 3 deferred pending further testing.
 
 # PRD: Crossfade Audio Artifact Fixes
 

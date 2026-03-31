@@ -161,6 +161,11 @@ void VM::handle_swap() {
 }
 
 void VM::perform_crossfade(float* out_left, float* out_right) {
+    // Zero crossfade buffers before executing programs into them.
+    // OUTPUT opcode uses += accumulation; without this, audio from
+    // previous blocks compounds across the crossfade duration.
+    crossfade_buffers_.clear();
+
     // Get both program slots
     const ProgramSlot* old_slot = swap_controller_.previous_slot();
     const ProgramSlot* new_slot = swap_controller_.current_slot();
