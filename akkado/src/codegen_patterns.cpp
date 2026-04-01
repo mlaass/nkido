@@ -1565,6 +1565,36 @@ static TypedValue emit_pattern_with_state(
         voice_buffers.push_back(voice_value_buf);
     }
 
+    // Emit SEQPAT_GATE (voice 0)
+    std::uint16_t gate_buf = buffers.allocate();
+    std::uint16_t type_buf = buffers.allocate();
+    if (gate_buf == BufferAllocator::BUFFER_UNUSED ||
+        type_buf == BufferAllocator::BUFFER_UNUSED) {
+        return TypedValue::void_val();
+    }
+
+    cedar::Instruction gate_inst{};
+    gate_inst.opcode = cedar::Opcode::SEQPAT_GATE;
+    gate_inst.out_buffer = gate_buf;
+    gate_inst.inputs[0] = 0;  // voice 0
+    gate_inst.inputs[1] = 0xFFFF;
+    gate_inst.inputs[2] = 0xFFFF;
+    gate_inst.inputs[3] = 0xFFFF;
+    gate_inst.inputs[4] = 0xFFFF;
+    gate_inst.state_id = state_id;
+    emit_fn(instructions, gate_inst);
+
+    cedar::Instruction type_inst{};
+    type_inst.opcode = cedar::Opcode::SEQPAT_TYPE;
+    type_inst.out_buffer = type_buf;
+    type_inst.inputs[0] = 0;  // voice 0
+    type_inst.inputs[1] = 0xFFFF;
+    type_inst.inputs[2] = 0xFFFF;
+    type_inst.inputs[3] = 0xFFFF;
+    type_inst.inputs[4] = 0xFFFF;
+    type_inst.state_id = state_id;
+    emit_fn(instructions, type_inst);
+
     // Store sequence program initialization data
     StateInitData seq_init;
     seq_init.state_id = state_id;
@@ -1578,16 +1608,54 @@ static TypedValue emit_pattern_with_state(
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits.push_back(std::move(seq_init));
 
+    std::uint16_t result_buf = value_buf;
+
+    // Wire up SAMPLE_PLAY for sample patterns (same as handle_mini_literal)
+    if (is_sample_pattern) {
+        std::uint16_t pitch_buf = buffers.allocate();
+        std::uint16_t output_buf = buffers.allocate();
+
+        if (pitch_buf == BufferAllocator::BUFFER_UNUSED ||
+            output_buf == BufferAllocator::BUFFER_UNUSED) {
+            return TypedValue::void_val();
+        }
+
+        // Set pitch to 1.0 for sample playback
+        cedar::Instruction pitch_inst{};
+        pitch_inst.opcode = cedar::Opcode::PUSH_CONST;
+        pitch_inst.out_buffer = pitch_buf;
+        pitch_inst.inputs[0] = 0xFFFF;
+        pitch_inst.inputs[1] = 0xFFFF;
+        pitch_inst.inputs[2] = 0xFFFF;
+        pitch_inst.inputs[3] = 0xFFFF;
+        encode_const_value(pitch_inst, 1.0f);
+        emit_fn(instructions, pitch_inst);
+
+        // Wire up sample player
+        cedar::Instruction sample_inst{};
+        sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
+        sample_inst.out_buffer = output_buf;
+        sample_inst.inputs[0] = trigger_buf;   // trigger
+        sample_inst.inputs[1] = pitch_buf;     // pitch
+        sample_inst.inputs[2] = value_buf;     // sample_id
+        sample_inst.inputs[3] = 0xFFFF;
+        sample_inst.state_id = state_id + 1;
+        emit_fn(instructions, sample_inst);
+
+        result_buf = output_buf;
+    }
+
     // Build PatternPayload
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
     payload->fields[PatternPayload::VEL] = velocity_buf;
     payload->fields[PatternPayload::TRIG] = trigger_buf;
-    // GATE and TYPE stay 0xFFFF (not emitted by this helper)
+    payload->fields[PatternPayload::GATE] = gate_buf;
+    payload->fields[PatternPayload::TYPE] = type_buf;
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
 
-    auto tv = TypedValue::make_pattern(payload, value_buf);
+    auto tv = TypedValue::make_pattern(payload, result_buf);
     node_types[node] = tv;
     return tv;
 }
