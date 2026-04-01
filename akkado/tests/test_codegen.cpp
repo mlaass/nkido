@@ -3,6 +3,7 @@
 #include "akkado/akkado.hpp"
 #include "akkado/pattern_eval.hpp"
 #include "akkado/mini_parser.hpp"
+#include "akkado/sample_registry.hpp"
 #include <cedar/vm/instruction.hpp>
 #include <cedar/vm/state_pool.hpp>  // For fnv1a_hash_runtime
 #include <cstring>
@@ -2017,9 +2018,10 @@ TEST_CASE("Pattern transform chaining compiles", "[codegen][patterns]") {
 }
 
 TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][patterns]") {
-    SECTION("slow(pat(...), 2) doubles event times and cycle length") {
+    SECTION("slow(pat(...), 2) doubles cycle length, event times unchanged") {
         // pat("c4 e4") has 2 elements -> base cycle_length = 2
-        // slow(2) -> cycle_length = 4, event times doubled
+        // slow(2) -> cycle_length = 4, event times stay normalized
+        // Runtime formula (e.time * cycle_length) handles the scaling
         auto result = akkado::compile(R"(slow(pat("c4 e4"), 2))");
         REQUIRE(result.success);
         REQUIRE_FALSE(result.state_inits.empty());
@@ -2029,13 +2031,13 @@ TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][pattern
         REQUIRE_FALSE(si.sequence_events.empty());
         REQUIRE(si.sequence_events[0].size() >= 2);
         CHECK(si.sequence_events[0][0].time == Catch::Approx(0.0f));
-        CHECK(si.sequence_events[0][1].time == Catch::Approx(1.0f));
+        CHECK(si.sequence_events[0][1].time == Catch::Approx(0.5f));
     }
 
     SECTION("slow(fast(pat(...), 2), 2) is identity") {
-        // pat("c4 e4") base: cycle_length=2, times at 0, 0.5 (each dur=0.5)
-        // fast(2): cycle_length=1, times at 0, 0.25 (each dur=0.25)
-        // slow(2): cycle_length=2, times at 0, 0.5 (each dur=0.5) -> identity
+        // pat("c4 e4") base: cycle_length=2, times at 0, 0.5
+        // fast(2): cycle_length=1, times unchanged
+        // slow(2): cycle_length=2, times unchanged -> identity
         auto result = akkado::compile(R"(slow(fast(pat("c4 e4"), 2), 2))");
         REQUIRE(result.success);
         REQUIRE_FALSE(result.state_inits.empty());
@@ -2781,6 +2783,100 @@ TEST_CASE("Codegen: Pipe expressions", "[codegen]") {
     SECTION("sample pattern to output") {
         auto result = akkado::compile("pat(\"bd ~ bd ~\") |> out(%)");
         CHECK(result.success);
+    }
+}
+
+TEST_CASE("Codegen: Sample pattern event inspection", "[codegen][samples][debug]") {
+    SECTION("sample pattern compiles with SAMPLE_PLAY and correct events") {
+        auto result = akkado::compile(R"(pat("hh hh hh [hh hh] hh hh hh [hh oh]") |> out(%))");
+        REQUIRE(result.success);
+
+        auto insts = get_instructions(result);
+
+        // Must have SEQPAT_QUERY, SEQPAT_STEP, and SAMPLE_PLAY instructions
+        CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_QUERY) >= 1);
+        CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_STEP) >= 1);
+        CHECK(count_instructions(insts, cedar::Opcode::SAMPLE_PLAY) >= 1);
+
+        // Check state_inits
+        REQUIRE(!result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        CHECK(si.type == akkado::StateInitData::Type::SequenceProgram);
+        CHECK(si.cycle_length == 8.0f);  // 8 top-level elements
+        CHECK(si.is_sample_pattern == true);
+
+        // Root sequence should have 10 events (8 top-level, groups expand inline)
+        REQUIRE(!si.sequence_events.empty());
+        const auto& events = si.sequence_events[0];
+        REQUIRE(events.size() == 10);
+
+        // Verify event times (normalized to [0,1) range, divided by 8)
+        CHECK(events[0].time == Catch::Approx(0.0f));        // hh
+        CHECK(events[1].time == Catch::Approx(1.0f / 8.0f)); // hh
+        CHECK(events[2].time == Catch::Approx(2.0f / 8.0f)); // hh
+        CHECK(events[3].time == Catch::Approx(3.0f / 8.0f)); // [hh (first child)
+        CHECK(events[4].time == Catch::Approx(3.5f / 8.0f)); // hh] (second child)
+        CHECK(events[5].time == Catch::Approx(4.0f / 8.0f)); // hh
+        CHECK(events[6].time == Catch::Approx(5.0f / 8.0f)); // hh
+        CHECK(events[7].time == Catch::Approx(6.0f / 8.0f)); // hh
+        CHECK(events[8].time == Catch::Approx(7.0f / 8.0f)); // [hh (first child)
+        CHECK(events[9].time == Catch::Approx(7.5f / 8.0f)); // oh] (second child)
+
+        // ALL events should be DATA type with num_values=1
+        for (size_t i = 0; i < events.size(); i++) {
+            INFO("Event " << i << " at time " << events[i].time);
+            CHECK(events[i].type == cedar::EventType::DATA);
+            CHECK(events[i].num_values == 1);
+        }
+
+        // Without a sample registry, all sample IDs should be 0 (deferred resolution)
+        for (size_t i = 0; i < events.size(); i++) {
+            CHECK(events[i].values[0] == 0.0f);
+        }
+
+        // Check sample mappings exist for all 10 events
+        CHECK(si.sequence_sample_mappings.size() == 10);
+        for (const auto& mapping : si.sequence_sample_mappings) {
+            CHECK(mapping.seq_idx == 0);
+            // All mappings should have a sample name
+            CHECK(!mapping.sample_name.empty());
+        }
+
+        // Verify SAMPLE_PLAY instruction wiring
+        const auto* sample_play = find_instruction(insts, cedar::Opcode::SAMPLE_PLAY);
+        REQUIRE(sample_play != nullptr);
+
+        // SAMPLE_PLAY should read from trigger buffer (inputs[0]) and value buffer (inputs[2])
+        const auto* seqpat_step = find_instruction(insts, cedar::Opcode::SEQPAT_STEP);
+        REQUIRE(seqpat_step != nullptr);
+
+        // The trigger buffer written by SEQPAT_STEP should be read by SAMPLE_PLAY
+        CHECK(sample_play->inputs[0] == seqpat_step->inputs[1]);  // trigger
+        // The value buffer written by SEQPAT_STEP should be read by SAMPLE_PLAY
+        CHECK(sample_play->inputs[2] == seqpat_step->out_buffer);  // sample_id
+    }
+
+    SECTION("sample pattern with sample registry resolves IDs") {
+        akkado::SampleRegistry registry;
+        registry.register_sample("hh", 42);
+        registry.register_sample("oh", 99);
+
+        auto result = akkado::compile(
+            R"(pat("hh hh hh [hh hh] hh hh hh [hh oh]") |> out(%))",
+            "<input>", &registry);
+        REQUIRE(result.success);
+        REQUIRE(!result.state_inits.empty());
+
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 10);
+
+        // With registry, sample IDs should be resolved
+        for (size_t i = 0; i < 9; i++) {  // first 9 are "hh"
+            INFO("Event " << i << " sample_id");
+            CHECK(events[i].values[0] == 42.0f);
+        }
+        // Last event is "oh"
+        CHECK(events[9].values[0] == 99.0f);
     }
 }
 

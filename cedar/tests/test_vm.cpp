@@ -1488,3 +1488,262 @@ TEST_CASE("VM ENV_FOLLOWER opcode", "[vm][envelopes]") {
         CHECK(fast_rise > slow_rise);
     }
 }
+
+// =============================================================================
+// SEQPAT + SAMPLE_PLAY Integration Test
+// =============================================================================
+// Tests the exact bug scenario: sample pattern from beat 0, all events should trigger
+
+TEST_CASE("SEQPAT sample pattern: all events trigger from beat 0", "[vm][sequence][samples]") {
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    // Load a dummy 1-second sample as "hh" (sample_id=1)
+    constexpr std::uint32_t NUM_FRAMES = 48000;
+    std::vector<float> sample_data(NUM_FRAMES, 0.5f);  // constant 0.5
+    std::uint32_t hh_id = vm.load_sample("hh", sample_data.data(), NUM_FRAMES, 1, 48000.0f);
+    REQUIRE(hh_id > 0);
+
+    // Build pattern: 4 events at beats 0, 1, 2, 3 (cycle_length = 4)
+    // Simulating "hh hh hh hh" — simplification of the bug pattern
+    constexpr float CYCLE_LENGTH = 4.0f;
+    constexpr std::uint32_t STATE_ID = 0x12345;
+
+    // Events with normalized times (divided by cycle_length to match SequenceCompiler output)
+    std::vector<Event> events(4);
+    for (int i = 0; i < 4; i++) {
+        events[i] = Event{};
+        events[i].type = EventType::DATA;
+        events[i].time = static_cast<float>(i) / CYCLE_LENGTH;  // normalized
+        events[i].duration = 1.0f / CYCLE_LENGTH;
+        events[i].num_values = 1;
+        events[i].values[0] = static_cast<float>(hh_id);  // resolved sample ID
+        events[i].velocity = 1.0f;
+        events[i].chance = 1.0f;
+    }
+
+    Sequence seq{};
+    seq.events = events.data();
+    seq.num_events = 4;
+    seq.capacity = 4;
+    seq.duration = 1.0f;  // Normalized (SequenceCompiler sets this)
+    seq.mode = SequenceMode::NORMAL;
+
+    // Initialize the sequence state in the VM
+    vm.init_sequence_program_state(STATE_ID, &seq, 1, CYCLE_LENGTH, true, 4);
+
+    // Build program: SEQPAT_QUERY + SEQPAT_STEP + PUSH_CONST + SAMPLE_PLAY + OUTPUT
+    // Buffer allocation:
+    //   0 = value (sample_id)
+    //   1 = velocity
+    //   2 = trigger
+    //   3 = pitch (constant 1.0)
+    //   4 = sample_play output
+    std::vector<Instruction> program;
+
+    // SEQPAT_QUERY
+    Instruction query{};
+    query.opcode = Opcode::SEQPAT_QUERY;
+    query.out_buffer = BUFFER_UNUSED;
+    for (auto& inp : query.inputs) inp = BUFFER_UNUSED;
+    query.state_id = STATE_ID;
+    program.push_back(query);
+
+    // SEQPAT_STEP
+    Instruction step{};
+    step.opcode = Opcode::SEQPAT_STEP;
+    step.out_buffer = 0;      // value output (sample_id)
+    step.inputs[0] = 1;       // velocity output
+    step.inputs[1] = 2;       // trigger output
+    step.inputs[2] = 0;       // voice 0 (literal, not buffer ref)
+    step.inputs[3] = BUFFER_UNUSED;  // no external clock
+    step.inputs[4] = BUFFER_UNUSED;
+    step.state_id = STATE_ID;
+    program.push_back(step);
+
+    // PUSH_CONST 1.0 for pitch
+    program.push_back(make_const_instruction(Opcode::PUSH_CONST, 3, 1.0f));
+
+    // SAMPLE_PLAY
+    Instruction sample{};
+    sample.opcode = Opcode::SAMPLE_PLAY;
+    sample.out_buffer = 4;
+    sample.inputs[0] = 2;     // trigger
+    sample.inputs[1] = 3;     // pitch
+    sample.inputs[2] = 0;     // sample_id (from SEQPAT_STEP value output)
+    sample.inputs[3] = BUFFER_UNUSED;
+    sample.inputs[4] = BUFFER_UNUSED;
+    sample.state_id = STATE_ID + 1;
+    program.push_back(sample);
+
+    // OUTPUT
+    Instruction output{};
+    output.opcode = Opcode::OUTPUT;
+    output.out_buffer = BUFFER_UNUSED;
+    output.inputs[0] = 4;     // L channel
+    output.inputs[1] = 4;     // R channel (same as L for mono)
+    output.inputs[2] = BUFFER_UNUSED;
+    output.inputs[3] = BUFFER_UNUSED;
+    output.inputs[4] = BUFFER_UNUSED;
+    output.state_id = 0;
+    program.push_back(output);
+
+    // Load program
+    auto load_result = vm.load_program(std::span<const Instruction>(program));
+    REQUIRE(load_result == VM::LoadResult::Success);
+
+    // Process blocks and count triggers + audio output
+    float spb = (60.0f / 120.0f) * 48000.0f;  // 24000 samples per beat
+    int blocks_per_cycle = static_cast<int>(std::ceil(CYCLE_LENGTH * spb / BLOCK_SIZE));
+
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    int total_triggers = 0;
+    int blocks_with_audio = 0;
+    bool first_block_has_trigger = false;
+
+    for (int b = 0; b < blocks_per_cycle; b++) {
+        vm.process_block(left.data(), right.data());
+
+        // Check trigger buffer
+        const float* trigger_buf = vm.buffers().get(2);
+        const float* value_buf = vm.buffers().get(0);
+
+        for (int i = 0; i < static_cast<int>(BLOCK_SIZE); i++) {
+            if (trigger_buf[i] > 0.0f) {
+                total_triggers++;
+                if (b == 0) first_block_has_trigger = true;
+
+                // When trigger fires, sample_id must be non-zero
+                INFO("Block " << b << " sample " << i << ": trigger=" << trigger_buf[i]
+                     << " sample_id=" << value_buf[i]);
+                CHECK(value_buf[i] > 0.0f);
+            }
+        }
+
+        // Check if audio output is non-zero
+        bool has_audio = false;
+        for (int i = 0; i < static_cast<int>(BLOCK_SIZE); i++) {
+            if (left[i] != 0.0f) {
+                has_audio = true;
+                break;
+            }
+        }
+        if (has_audio) blocks_with_audio++;
+    }
+
+    // Key assertions:
+    // 1. First block should have a trigger (event at beat 0)
+    CHECK(first_block_has_trigger);
+
+    // 2. Total triggers should be 4 (one for each event)
+    CHECK(total_triggers == 4);
+
+    // 3. Should have audio output
+    CHECK(blocks_with_audio > 0);
+}
+
+TEST_CASE("SEQPAT deferred sample resolution: resolve after compile, before state init", "[vm][sequence][samples]") {
+    // This simulates the WASM path: compile with sample_id=0, then resolve, then init state
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    // Load samples into VM sample bank
+    constexpr std::uint32_t NUM_FRAMES = 48000;
+    std::vector<float> sample_data(NUM_FRAMES, 0.5f);
+    std::uint32_t hh_id = vm.load_sample("hh", sample_data.data(), NUM_FRAMES, 1, 48000.0f);
+    REQUIRE(hh_id > 0);
+
+    constexpr float CYCLE_LENGTH = 4.0f;
+    constexpr std::uint32_t STATE_ID = 0xABCDE;
+
+    // Step 1: Create events with sample_id = 0 (unresolved, like compiler output)
+    std::vector<Event> events(4);
+    for (int i = 0; i < 4; i++) {
+        events[i] = Event{};
+        events[i].type = EventType::DATA;
+        events[i].time = static_cast<float>(i) / CYCLE_LENGTH;
+        events[i].duration = 1.0f / CYCLE_LENGTH;
+        events[i].num_values = 1;
+        events[i].values[0] = 0.0f;  // UNRESOLVED - like compiler output
+        events[i].velocity = 1.0f;
+        events[i].chance = 1.0f;
+    }
+
+    // Step 2: Simulate akkado_resolve_sample_ids() — update events in the source vector
+    for (auto& e : events) {
+        e.values[0] = static_cast<float>(hh_id);  // Resolve to actual ID
+    }
+
+    // Step 3: Now init state (like cedar_apply_state_inits) — copies from the resolved events
+    Sequence seq{};
+    seq.events = events.data();
+    seq.num_events = 4;
+    seq.capacity = 4;
+    seq.duration = 1.0f;
+    seq.mode = SequenceMode::NORMAL;
+
+    vm.init_sequence_program_state(STATE_ID, &seq, 1, CYCLE_LENGTH, true, 4);
+
+    // Step 4: Build and load program
+    std::vector<Instruction> program;
+
+    Instruction query{};
+    query.opcode = Opcode::SEQPAT_QUERY;
+    query.out_buffer = BUFFER_UNUSED;
+    for (auto& inp : query.inputs) inp = BUFFER_UNUSED;
+    query.state_id = STATE_ID;
+    program.push_back(query);
+
+    Instruction step{};
+    step.opcode = Opcode::SEQPAT_STEP;
+    step.out_buffer = 0;
+    step.inputs[0] = 1;
+    step.inputs[1] = 2;
+    step.inputs[2] = 0;
+    step.inputs[3] = BUFFER_UNUSED;
+    step.inputs[4] = BUFFER_UNUSED;
+    step.state_id = STATE_ID;
+    program.push_back(step);
+
+    program.push_back(make_const_instruction(Opcode::PUSH_CONST, 3, 1.0f));
+
+    Instruction sample{};
+    sample.opcode = Opcode::SAMPLE_PLAY;
+    sample.out_buffer = 4;
+    sample.inputs[0] = 2;
+    sample.inputs[1] = 3;
+    sample.inputs[2] = 0;
+    sample.inputs[3] = BUFFER_UNUSED;
+    sample.inputs[4] = BUFFER_UNUSED;
+    sample.state_id = STATE_ID + 1;
+    program.push_back(sample);
+
+    auto load_result = vm.load_program(std::span<const Instruction>(program));
+    REQUIRE(load_result == VM::LoadResult::Success);
+
+    // Step 5: Process and verify
+    float spb = (60.0f / 120.0f) * 48000.0f;
+    int blocks_per_cycle = static_cast<int>(std::ceil(CYCLE_LENGTH * spb / BLOCK_SIZE));
+
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    int total_triggers = 0;
+
+    for (int b = 0; b < blocks_per_cycle; b++) {
+        vm.process_block(left.data(), right.data());
+
+        const float* trigger_buf = vm.buffers().get(2);
+        const float* value_buf = vm.buffers().get(0);
+
+        for (int i = 0; i < static_cast<int>(BLOCK_SIZE); i++) {
+            if (trigger_buf[i] > 0.0f) {
+                total_triggers++;
+                INFO("Block " << b << " sample " << i << ": sample_id=" << value_buf[i]);
+                CHECK(value_buf[i] == static_cast<float>(hh_id));
+            }
+        }
+    }
+
+    CHECK(total_triggers == 4);
+}
