@@ -2866,7 +2866,7 @@ TypedValue CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n) {
     sf_inst.inputs[1] = freq_buf;     // Frequency in Hz
     sf_inst.inputs[2] = vel_buf;      // Velocity (0-1)
     sf_inst.inputs[3] = preset_buf;   // Preset index (constant)
-    sf_inst.inputs[4] = 0xFFFF;
+    sf_inst.inputs[4] = pat_fields[PatternPayload::TRIG];  // Trigger pulse from SEQPAT_STEP
     sf_inst.state_id = state_id;
     sf_inst.rate = sf_slot;           // SF2 file index (resolved to sf_id at runtime)
     emit(sf_inst);

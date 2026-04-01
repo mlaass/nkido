@@ -534,6 +534,7 @@ struct SoundFontVoiceState {
     SFVoice* voices = nullptr;    // Arena-allocated array
     std::uint16_t num_voices = 0; // Active voice count tracking
     float prev_gate = 0.0f;       // For gate edge detection
+    std::uint8_t prev_note = 255; // For note-change fallback (255 = none)
 
     // Ensure voices are allocated from arena
     void ensure_voices(AudioArena* arena) {

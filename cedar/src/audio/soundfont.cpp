@@ -45,6 +45,14 @@ int SoundFontRegistry::load_from_memory(const void* data, int size,
                                          const std::string& name,
                                          SampleBank& sample_bank) {
     if (!data || size <= 0) return -1;
+
+    // Dedup: if already loaded by this name, return existing ID
+    for (std::size_t i = 0; i < banks_.size(); ++i) {
+        if (banks_[i].name == name) {
+            return static_cast<int>(i);
+        }
+    }
+
     if (banks_.size() >= MAX_SOUNDFONTS) return -1;
 
     // Parse SF2 with TinySoundFont

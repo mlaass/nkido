@@ -18,6 +18,7 @@ namespace cedar {
 // in1: frequency in Hz (converted to MIDI note internally)
 // in2: velocity (0-1)
 // in3: preset index (constant, which preset to use)
+// in4: trigger pulse (optional, from SEQPAT_STEP — 0xFFFF if not wired)
 // rate: soundfont ID (0-255)
 //
 // Multi-zone, polyphonic SoundFont sampler.
@@ -34,6 +35,8 @@ inline void op_soundfont_voice(ExecutionContext& ctx, const Instruction& inst,
     const float* freq_buf = ctx.buffers->get(inst.inputs[1]);
     const float* vel_buf = ctx.buffers->get(inst.inputs[2]);
     const float* preset_buf = ctx.buffers->get(inst.inputs[3]);
+    const float* trig_buf = (inst.inputs[4] != 0xFFFF)
+        ? ctx.buffers->get(inst.inputs[4]) : nullptr;
 
     auto& state = ctx.states->get_or_create<SoundFontVoiceState>(inst.state_id);
     state.ensure_voices(ctx.arena);
@@ -78,10 +81,19 @@ inline void op_soundfont_voice(ExecutionContext& ctx, const Instruction& inst,
         // Gate edge detection
         bool gate_on = (current_gate > 0.0f && state.prev_gate <= 0.0f);
         bool gate_off = (current_gate <= 0.0f && state.prev_gate > 0.0f);
+
+        // Trigger pulse from pattern sequencer (fires at every event boundary)
+        bool trigger_on = (trig_buf != nullptr && trig_buf[i] > 0.0f);
+
+        // Fallback: note-change detection for non-pattern inputs (no trigger wired)
+        bool note_change = (trig_buf == nullptr && current_gate > 0.0f
+                            && note != state.prev_note && state.prev_note != 255);
+
         state.prev_gate = current_gate;
+        state.prev_note = (current_gate > 0.0f) ? note : static_cast<std::uint8_t>(255);
 
         // Note on: find zones and allocate voices
-        if (gate_on && vel > 0) {
+        if ((gate_on || trigger_on || note_change) && vel > 0) {
             // Quick fade-out on same-note re-trigger
             for (std::uint16_t v = 0; v < SoundFontVoiceState::MAX_VOICES; ++v) {
                 if (state.voices[v].active && state.voices[v].note == note) {
