@@ -1,5 +1,9 @@
 > **Status: NOT STARTED** — Fix SoundFont retrigger and web loading bugs
 
+**Author:** Claude
+**Date:** 2026-04-01
+**Related:** [SoundFont and Sample Bank PRD](prd-soundfonts-sample-banks.md)
+
 # SoundFont Playback Fixes PRD
 
 ## Executive Summary
@@ -33,7 +37,7 @@ bool gate_on = (current_gate > 0.0f && state.prev_gate <= 0.0f);
 bool gate_off = (current_gate <= 0.0f && state.prev_gate > 0.0f);
 ```
 
-Only fires `gate_on` when gate transitions from ≤0 to >0. But `SEQPAT_GATE` (`sequencing.hpp:625-651`) outputs sustained 1.0 for any sample inside an event's `[time, time+duration)` window. For sequential notes like `pat("c4 e4 g4")`:
+Only fires `gate_on` when gate transitions from ≤0 to >0. But `SEQPAT_GATE` (`sequencing.hpp:589-655`) outputs sustained 1.0 for any sample inside an event's `[time, time+duration)` window. For sequential notes like `pat("c4 e4 g4")`:
 
 ```
 beat:  0.0─────1.0─────2.0─────3.0─────4.0
@@ -56,13 +60,13 @@ struct SoundFontVoiceState {
 };
 ```
 
-**Note:** `SEQPAT_STEP` produces a per-event trigger signal (`sequencing.hpp:466-488`) that fires a single-sample 1.0 pulse at each event boundary — including same-note repeats. This trigger is already stored in `PatternPayload::TRIG` (`typed_value.hpp:46`) and populated by `emit_per_voice_seqpat()` (`codegen_patterns.cpp:947`). However, `handle_soundfont_call()` only wires gate/freq/vel to `inputs[0-2]` and leaves `inputs[4]` unused (0xFFFF). The fix is to wire the trigger buffer to `inputs[4]` and use it as the primary note-on signal.
+**Note:** `SEQPAT_STEP` produces a per-event trigger signal (`sequencing.hpp:467-488`) that fires a single-sample 1.0 pulse at each event boundary — including same-note repeats. This trigger is already stored in `PatternPayload::TRIG` (`typed_value.hpp:46`) and populated by `emit_per_voice_seqpat()` (`codegen_patterns.cpp:947`). However, `handle_soundfont_call()` only wires gate/freq/vel/preset to `inputs[0-3]` and leaves `inputs[4]` unused (0xFFFF). The fix is to wire the trigger buffer to `inputs[4]` and use it as the primary note-on signal.
 
 ### 1.3 Bug 2: Web Silence from SF Slot Mismatch
 
 **Affected:** Web path only
 
-The compiler assigns SF slot indices based on order of appearance in source code (`codegen_patterns.cpp:2755-2768`):
+The compiler assigns SF slot indices based on order of appearance in source code (`codegen_patterns.cpp:2846-2858`):
 ```cpp
 sf_slot = static_cast<std::uint8_t>(required_soundfonts_.size());
 // ...
@@ -114,7 +118,7 @@ Two-pronged approach: (A) wire the existing trigger signal from patterns to the 
 
 The trigger buffer already exists in `PatternPayload::TRIG` (populated at `codegen_patterns.cpp:947`). Wire it to `inputs[4]` in `handle_soundfont_call()`:
 
-**Codegen change** (`codegen_patterns.cpp`, in `handle_soundfont_call`, ~line 2797-2801):
+**Codegen change** (`codegen_patterns.cpp`, in `handle_soundfont_call`, ~line 2887-2891):
 ```cpp
 sf_inst.inputs[0] = gate_buf;     // Gate signal (sustained, for release detection)
 sf_inst.inputs[1] = freq_buf;     // Frequency in Hz
@@ -129,6 +133,8 @@ std::uint16_t trig_buf = pat_fields[PatternPayload::TRIG];
 // trig_buf may be 0xFFFF if pattern doesn't produce triggers — that's fine,
 // the opcode falls back to note-change detection
 ```
+
+**Polyphonic patterns:** For monophonic patterns, `trig_buf` comes from `PatternPayload::fields[TRIG]`. For polyphonic patterns (chords via `poly()`), each voice has its own trigger buffer in `PatternPayload::voice_fields[voice_index][TRIG]`. The existing `handle_soundfont_call()` already iterates per-voice fields when emitting polyphonic patterns — the trigger wiring follows the same per-voice pattern. Mono trigger wiring is sufficient for the common case; polyphonic trigger wiring should follow the same structure as the existing gate/freq/vel per-voice emission.
 
 #### 3.1.2 Opcode Note-On Logic (two triggers, one fallback)
 
@@ -243,6 +249,8 @@ This ensures:
 
 The JS-side name check at `audio.svelte.ts:962` (`if (state.loadedSoundfonts.some(s => s.name === sf.filename)) continue`) already prevents most double-loads. The C++ dedup is a safety net for race conditions where both the background preload and compile path issue `cedar_load_soundfont` before the JS state updates.
 
+**Name consistency across call sites:** The dedup relies on both paths passing the same `name` string to `cedar_load_soundfont`. The compile path uses `sf.filename` from the compiler's `requiredSoundfonts` list (line 969). The preload path uses `sf.name` from the default soundfonts config (line 1267). Both must resolve to the same short name (e.g., `"gm"`) for dedup to work. Currently this holds because `resolveDefaultSoundFontUrl()` maps short names to URLs while preserving the short name as the identifier.
+
 ### 3.3 Python Experiment Test
 
 Create `experiments/test_op_soundfont.py` that validates retrigger behavior with synthetic gate/freq/vel buffers fed directly to `SOUNDFONT_VOICE`.
@@ -327,13 +335,22 @@ Create `experiments/test_op_soundfont.py` that validates retrigger behavior with
 **Files:**
 - `cedar/src/audio/soundfont.cpp` — add name check at top of `load_from_memory()`
 
-**Verify:** Build. The dedup is a safety net — no behavioral test needed beyond confirming it compiles and existing tests pass.
+**Verify:** Build and add a C++ unit test that loads the same SF data twice with the same name and asserts the returned IDs are equal. Also test that loading with a different name returns a different ID. This prevents regression if the registry is refactored later.
 
 ### Phase 3: Python Experiment Test
 
+**Depends on:** Phase 1 (trigger + note-change retrigger must be implemented first).
+
 **Goal:** Validate retrigger behavior with synthetic signals.
 
+**Prerequisite:** The `cedar_core` Python bindings (`cedar/bindings/bindings.cpp`) do **not** currently expose SoundFont loading (`SoundFontRegistry::load_from_memory()`) or the `SoundFontRegistry` class. Before this phase can proceed, either:
+1. **Add SF bindings to `cedar_core`:** Expose `load_from_memory()` and ensure `SOUNDFONT_VOICE` can access the registry from the Python test host. This is the preferred approach as it enables ongoing SF opcode testing.
+2. **Alternative:** Skip Python validation and rely on C++ unit tests (Phase 1 verify) + web end-to-end (Phase 4). This avoids binding work but loses the synthetic-signal isolation benefit.
+
+A test SF2 file is also needed. Options: use the GM SoundFont from the web app's default set, or include a minimal test SF2 in the experiments directory.
+
 **Files:**
+- `cedar/bindings/bindings.cpp` — add SoundFont registry bindings (if option 1)
 - `experiments/test_op_soundfont.py` — new file
 
 **Verify:** `cd experiments && uv run python test_op_soundfont.py` — all tests pass, WAV files saved for listening.
