@@ -2081,6 +2081,62 @@ TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][pattern
         const auto& si = result.state_inits[0];
         CHECK(si.cycle_length == Catch::Approx(2.0f / 6.0f));
     }
+
+    SECTION("fast(pat(...), 2) halves cycle length, event times unchanged") {
+        // pat("c4 e4") has 2 elements -> base cycle_length = 2
+        // fast(2) -> cycle_length = 1, event times stay normalized
+        auto result = akkado::compile(R"(fast(pat("c4 e4"), 2))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(1.0f));
+        REQUIRE(si.sequence_events.size() >= 1);
+        REQUIRE(si.sequence_events[0].size() >= 2);
+        CHECK(si.sequence_events[0][0].time == Catch::Approx(0.0f));
+        CHECK(si.sequence_events[0][1].time == Catch::Approx(0.5f));
+    }
+
+    SECTION("rev(pat(...)) reverses event positions within [0,1)") {
+        // pat("c4 e4") -> events at 0.0 (dur 0.5) and 0.5 (dur 0.5)
+        // rev -> e4 at 0.0, c4 at 0.5
+        auto result = akkado::compile(R"(rev(pat("c4 e4")))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(2.0f));
+        REQUIRE(si.sequence_events.size() >= 1);
+        REQUIRE(si.sequence_events[0].size() >= 2);
+        // After rev: original event at 0.5 moves to 0.0, original at 0.0 moves to 0.5
+        // Events may be unsorted; check that both positions exist
+        bool has_0 = false, has_05 = false;
+        for (const auto& e : si.sequence_events[0]) {
+            if (std::abs(e.time - 0.0f) < 0.01f) has_0 = true;
+            if (std::abs(e.time - 0.5f) < 0.01f) has_05 = true;
+        }
+        CHECK(has_0);
+        CHECK(has_05);
+    }
+
+    SECTION("rev(slow(pat(...), 2)) reverses within normalized range") {
+        // pat("c4 e4") base: cycle_length=2, events at 0.0, 0.5
+        // slow(2): cycle_length=4, events still at 0.0, 0.5
+        // rev: events reversed to 0.0, 0.5 (swapped values), cycle_length=4
+        auto result = akkado::compile(R"(rev(slow(pat("c4 e4"), 2)))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(4.0f));
+        REQUIRE(si.sequence_events.size() >= 1);
+        REQUIRE(si.sequence_events[0].size() >= 2);
+        // All events should be in [0, 1) range
+        for (const auto& e : si.sequence_events[0]) {
+            CHECK(e.time >= 0.0f);
+            CHECK(e.time < 1.0f);
+        }
+    }
 }
 
 // =============================================================================

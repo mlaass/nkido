@@ -1396,27 +1396,17 @@ static bool compile_pattern_for_transform(
             if (func_name == "slow") {
                 auto factor = get_number_arg(ast, pat_node, 1);
                 if (!factor.has_value() || *factor <= 0) return false;
-                for (auto& seq_events : out_events) {
-                    for (auto& event : seq_events) {
-                        event.time *= *factor;
-                        event.duration *= *factor;
-                    }
-                }
+                // Only scale cycle_length — event times are normalized [0,1)
                 out_cycle_length *= *factor;
             } else if (func_name == "fast") {
                 auto factor = get_number_arg(ast, pat_node, 1);
                 if (!factor.has_value() || *factor <= 0) return false;
-                for (auto& seq_events : out_events) {
-                    for (auto& event : seq_events) {
-                        event.time /= *factor;
-                        event.duration /= *factor;
-                    }
-                }
+                // Only scale cycle_length — event times are normalized [0,1)
                 out_cycle_length /= *factor;
             } else if (func_name == "rev") {
                 for (auto& seq_events : out_events) {
                     for (auto& event : seq_events) {
-                        float new_time = out_cycle_length - event.time - event.duration;
+                        float new_time = 1.0f - event.time - event.duration;
                         if (new_time < 0.0f) new_time = 0.0f;
                         event.time = new_time;
                     }
@@ -1878,15 +1868,9 @@ TypedValue CodeGenerator::handle_slow_call(NodeIndex node, const Node& n) {
     push_path("slow#" + std::to_string(slow_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Apply slow transformation on top of any inner transforms
-    float slow_factor = *factor;
-    for (auto& seq_events : sequence_events) {
-        for (auto& event : seq_events) {
-            event.time *= slow_factor;
-            event.duration *= slow_factor;
-        }
-    }
-    cycle_length *= slow_factor;
+    // Only scale cycle_length — event times are normalized [0,1) and the
+    // runtime formula (e.time * cycle_length) handles the stretching.
+    cycle_length *= *factor;
 
     const Node& pattern = ast_->arena[pattern_node];
     auto result_tv = emit_pattern_with_state(
@@ -1945,15 +1929,9 @@ TypedValue CodeGenerator::handle_fast_call(NodeIndex node, const Node& n) {
     push_path("fast#" + std::to_string(fast_count));
     std::uint32_t state_id = compute_state_id();
 
-    // Apply fast transformation on top of any inner transforms
-    float fast_factor = *factor;
-    for (auto& seq_events : sequence_events) {
-        for (auto& event : seq_events) {
-            event.time /= fast_factor;
-            event.duration /= fast_factor;
-        }
-    }
-    cycle_length /= fast_factor;
+    // Only scale cycle_length — event times are normalized [0,1) and the
+    // runtime formula (e.time * cycle_length) handles the compression.
+    cycle_length /= *factor;
 
     const Node& pattern = ast_->arena[pattern_node];
     auto result_tv = emit_pattern_with_state(
@@ -2009,7 +1987,7 @@ TypedValue CodeGenerator::handle_rev_call(NodeIndex node, const Node& n) {
     // Apply reverse transformation on top of any inner transforms
     for (auto& seq_events : sequence_events) {
         for (auto& event : seq_events) {
-            float new_time = cycle_length - event.time - event.duration;
+            float new_time = 1.0f - event.time - event.duration;
             if (new_time < 0.0f) new_time = 0.0f;
             event.time = new_time;
         }
