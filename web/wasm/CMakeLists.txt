@@ -133,9 +133,9 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,stringToUTF8,lengthBytesUTF8,wasmMemory"
 
         # Memory settings
-        -sINITIAL_MEMORY=67108864   # 64MB initial
+        -sINITIAL_MEMORY=268435456   # 256MB initial (SoundFont parsing needs ~190MB peak)
         -sALLOW_MEMORY_GROWTH=1
-        -sMAXIMUM_MEMORY=536870912  # 512MB max
+        -sMAXIMUM_MEMORY=1073741824  # 1GB max (SF3 SoundFonts expand ~6x during decode)
 
         # Stack size - default 64KB is too small for deep AST recursion in codegen
         -sSTACK_SIZE=1048576    # 1MB
@@ -184,4 +184,14 @@ if(EMSCRIPTEN)
             "${CMAKE_CURRENT_SOURCE_DIR}/../static/wasm/"
         COMMENT "Copying WASM files to static/wasm/"
     )
+
+    # Copy source map in debug builds for browser debugging
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_custom_command(TARGET enkido_wasm POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+                "$<TARGET_FILE_DIR:enkido_wasm>/enkido.wasm.map"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../static/wasm/"
+            COMMENT "Copying WASM source map to static/wasm/"
+        )
+    endif()
 endif()

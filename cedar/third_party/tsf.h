@@ -898,7 +898,7 @@ static int tsf_decode_ogg(const tsf_u8 *pSmpl, const tsf_u8 *pSmplEnd, float** p
 			do { resMax += (resMax ? (resMax < 1048576 ? resMax : 1048576) : resInitial); } while (resNum > resMax);
 			oldres = res;
 			res = (float*)TSF_REALLOC(res, resMax * sizeof(float));
-			if (!res) { TSF_FREE(oldres); stb_vorbis_close(v); return 0; }
+			if (!res) { TSF_FREE(oldres); *pRes = TSF_NULL; stb_vorbis_close(v); return 0; }
 		}
 		TSF_MEMCPY(res + resNum - n_samples, outputs[0], n_samples * sizeof(float));
 	}
@@ -918,6 +918,11 @@ static int tsf_decode_sf3_samples(const void* rawBuffer, float** pFloatBuffer, u
 		struct tsf_hydra_shdr *shdr = &hydra->shdrs[i];
 		if (shdr->sampleType & 0x30) // compression flags (sometimes Vorbis flag)
 		{
+			if (shdr->start >= smplLength || shdr->end > smplLength)
+			{
+				shdr->start = shdr->end = shdr->startLoop = shdr->endLoop = 0;
+				continue;
+			}
 			const tsf_u8 *pSmpl = smplBuffer + shdr->start, *pSmplEnd = smplBuffer + shdr->end;
 			if (pSmpl + 4 > pSmplEnd || !TSF_FourCCEquals(pSmpl, "OggS"))
 			{

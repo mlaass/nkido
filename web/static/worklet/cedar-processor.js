@@ -891,8 +891,13 @@ class CedarProcessor extends AudioWorkletProcessor {
 		const dataArray = new Uint8Array(audioData);
 		const dataPtr = this.module._enkido_malloc(dataArray.length);
 		if (dataPtr === 0) {
+			const heapMB = this.module.wasmMemory
+				? (this.module.wasmMemory.buffer.byteLength / 1048576).toFixed(0)
+				: '?';
+			const needMB = (dataArray.length / 1048576).toFixed(1);
+			console.error(`[CedarProcessor] Failed to allocate ${needMB} MB for SF2 data (heap: ${heapMB} MB)`);
 			this.module._enkido_free(namePtr);
-			this.port.postMessage({ type: 'soundFontLoaded', name, success: false, error: 'Failed to allocate SF2 data' });
+			this.port.postMessage({ type: 'soundFontLoaded', name, success: false, error: `Out of memory: could not allocate ${needMB} MB for SoundFont data` });
 			return;
 		}
 

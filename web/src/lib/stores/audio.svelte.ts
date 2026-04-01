@@ -1361,7 +1361,7 @@ function createAudioEngine() {
 			type: 'loadSoundFont',
 			name,
 			data
-		});
+		}, [data]);
 
 		return await loadPromise;
 	}

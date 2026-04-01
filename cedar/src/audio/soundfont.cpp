@@ -44,7 +44,11 @@ namespace cedar {
 int SoundFontRegistry::load_from_memory(const void* data, int size,
                                          const std::string& name,
                                          SampleBank& sample_bank) {
-    if (!data || size <= 0) return -1;
+    if (!data || size <= 0) {
+        std::printf("[SoundFont] Invalid data: %s (data=%p, size=%d)\n",
+                    name.c_str(), data, size);
+        return -1;
+    }
 
     // Dedup: if already loaded by this name, return existing ID
     for (std::size_t i = 0; i < banks_.size(); ++i) {
@@ -55,10 +59,33 @@ int SoundFontRegistry::load_from_memory(const void* data, int size,
 
     if (banks_.size() >= MAX_SOUNDFONTS) return -1;
 
+    // Pre-flight: verify RIFF/sfbk header before passing to TSF
+    const auto* header = static_cast<const uint8_t*>(data);
+    if (size < 12) {
+        std::printf("[SoundFont] File too small for SF2 header: %s (%d bytes)\n",
+                    name.c_str(), size);
+        return -1;
+    }
+    if (header[0] != 'R' || header[1] != 'I' || header[2] != 'F' || header[3] != 'F') {
+        std::printf("[SoundFont] Not a RIFF file: %s (magic: %02x %02x %02x %02x)\n",
+                    name.c_str(), header[0], header[1], header[2], header[3]);
+        return -1;
+    }
+    if (header[8] != 's' || header[9] != 'f' || header[10] != 'b' || header[11] != 'k') {
+        std::printf("[SoundFont] RIFF file is not SF2/SF3: %s (type: %c%c%c%c)\n",
+                    name.c_str(), header[8], header[9], header[10], header[11]);
+        return -1;
+    }
+
+    std::printf("[SoundFont] Parsing '%s' (%d bytes, %.1f MB)...\n",
+                name.c_str(), size, size / (1024.0 * 1024.0));
+
     // Parse SF2 with TinySoundFont
     tsf* sf = tsf_load_memory(data, size);
     if (!sf) {
-        std::printf("[SoundFont] Failed to parse SF2: %s\n", name.c_str());
+        std::printf("[SoundFont] tsf_load_memory failed for '%s' — likely out of memory "
+                    "(input: %.1f MB, estimated peak: ~%.0f MB)\n",
+                    name.c_str(), size / (1024.0 * 1024.0), (size * 5.0) / (1024.0 * 1024.0));
         return -1;
     }
 
