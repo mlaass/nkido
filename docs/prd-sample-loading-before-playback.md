@@ -1,4 +1,4 @@
-> **Status: NOT STARTED**
+> **Status: IMPLEMENTED**
 
 # Sample Loading Before Playback
 

@@ -19,7 +19,6 @@
 #include <akkado/pattern_debug.hpp>
 #include <cstdint>
 #include <cstring>
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <sstream>
@@ -104,34 +103,20 @@ WASM_EXPORT void cedar_set_crossfade_blocks(uint32_t blocks) {
  * @return 0 on success, non-zero on error
  */
 WASM_EXPORT int cedar_load_program(const uint8_t* bytecode, uint32_t byte_count) {
-    std::printf("[Cedar C++] cedar_load_program called: bytecode=%p, byte_count=%u\n",
-                static_cast<const void*>(bytecode), byte_count);
-
     if (!g_vm || !bytecode) {
-        std::printf("[Cedar C++] load_program FAILED: g_vm=%p, bytecode=%p\n",
-                    static_cast<void*>(g_vm.get()), static_cast<const void*>(bytecode));
         return -1;
     }
 
     // Each instruction is 16 bytes
     constexpr size_t INST_SIZE = sizeof(cedar::Instruction);
     if (byte_count % INST_SIZE != 0) {
-        std::printf("[Cedar C++] load_program FAILED: byte_count %u not multiple of %zu\n",
-                    byte_count, INST_SIZE);
         return -2;
     }
 
     size_t inst_count = byte_count / INST_SIZE;
     auto instructions = reinterpret_cast<const cedar::Instruction*>(bytecode);
 
-    std::printf("[Cedar C++] Loading %zu instructions\n", inst_count);
-
     auto result = g_vm->load_program(std::span{instructions, inst_count});
-
-    std::printf("[Cedar C++] load_program result=%d, has_pending_swap=%d, swap_count=%u\n",
-                static_cast<int>(result),
-                g_vm->has_pending_swap() ? 1 : 0,
-                g_vm->swap_count());
 
     return static_cast<int>(result);
 }
@@ -379,29 +364,14 @@ WASM_EXPORT uint32_t cedar_get_sample_count() {
  * @return 1 on success, 0 on error
  */
 WASM_EXPORT int akkado_compile(const char* source, uint32_t source_len) {
-    std::printf("[akkado_compile] ENTRY: source=%p, len=%u\n",
-                static_cast<const void*>(source), source_len);
-
     if (!source) {
-        std::printf("[akkado_compile] null source, returning 0\n");
         return 0;
     }
 
-    std::printf("[akkado_compile] Creating string_view...\n");
     std::string_view src{source, source_len};
-    std::printf("[akkado_compile] string_view created, calling akkado::compile...\n");
-
-    // Compile to a fresh local result first
     akkado::CompileResult new_result = akkado::compile(src, "<web>", nullptr);
-    std::printf("[akkado_compile] akkado::compile returned, success=%d\n", new_result.success ? 1 : 0);
-
-    // Now swap - if the old result is corrupted, the crash happens here
-    std::printf("[akkado_compile] About to swap with old result...\n");
     std::swap(g_compile_result, new_result);
-    std::printf("[akkado_compile] Swap complete, about to destroy old result...\n");
-    // new_result (now containing old data) is destroyed here
 
-    std::printf("[akkado_compile] Returning success=%d\n", g_compile_result.success ? 1 : 0);
     return g_compile_result.success ? 1 : 0;
 }
 

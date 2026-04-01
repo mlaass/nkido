@@ -248,6 +248,7 @@ interface AudioState {
 	error: string | null;
 	samplesLoaded: boolean;
 	samplesLoading: boolean;
+	isLoadingSamples: boolean;
 	loadedSoundfonts: SoundFontInfo[];
 	params: ParamDecl[];
 	paramValues: Map<string, number>;
@@ -270,6 +271,7 @@ function createAudioEngine() {
 		error: null,
 		samplesLoaded: false,
 		samplesLoading: false,
+		isLoadingSamples: false,
 		loadedSoundfonts: [],
 		params: [],
 		paramValues: new Map(),
@@ -386,9 +388,7 @@ function createAudioEngine() {
 				console.log('[AudioEngine] Worklet WASM initialized');
 				// Set initial BPM after worklet is ready
 				workletNode?.port.postMessage({ type: 'setBpm', bpm: state.bpm });
-				// Load default samples and soundfonts
-				loadDefaultSamples();
-				loadDefaultSoundFonts();
+				// Default samples load lazily when compile() needs them
 				break;
 			case 'compiled': {
 				// Compilation result from worklet
@@ -917,70 +917,75 @@ function createAudioEngine() {
 			return compileResult;
 		}
 
-		// Step 2: Load any required samples that aren't loaded yet
-		// Prefer extended samples if available (has bank/variant info)
-		const extendedSamples = compileResult.requiredSamplesExtended || [];
-		const legacySamples = compileResult.requiredSamples || [];
-		const missingSamples: string[] = [];
+		// Step 2: Load any required samples and soundfonts (await ALL before proceeding)
+		state.isLoadingSamples = true;
+		try {
+			// Prefer extended samples if available (has bank/variant info)
+			const extendedSamples = compileResult.requiredSamplesExtended || [];
+			const legacySamples = compileResult.requiredSamples || [];
+			const missingSamples: string[] = [];
 
-		if (extendedSamples.length > 0) {
-			// Use extended sample info with bank support
-			for (const sample of extendedSamples) {
-				const loaded = await ensureBankSampleLoaded(sample);
-				if (!loaded) {
-					const displayName = sample.bank ? `${sample.bank}/${sample.name}:${sample.variant}` : sample.name;
-					missingSamples.push(displayName);
+			if (extendedSamples.length > 0) {
+				// Use extended sample info with bank support
+				for (const sample of extendedSamples) {
+					const loaded = await ensureBankSampleLoaded(sample);
+					if (!loaded) {
+						const displayName = sample.bank ? `${sample.bank}/${sample.name}:${sample.variant}` : sample.name;
+						missingSamples.push(displayName);
+					}
+				}
+			} else {
+				// Fall back to legacy simple sample names
+				for (const name of legacySamples) {
+					const loaded = await ensureSampleLoaded(name);
+					if (!loaded) {
+						missingSamples.push(name);
+					}
 				}
 			}
-		} else {
-			// Fall back to legacy simple sample names
-			for (const name of legacySamples) {
-				const loaded = await ensureSampleLoaded(name);
-				if (!loaded) {
-					missingSamples.push(name);
-				}
-			}
-		}
 
-		// If any samples couldn't be loaded, report as error
-		if (missingSamples.length > 0) {
-			return {
-				success: false,
-				diagnostics: missingSamples.map((name) => ({
-					severity: 2,
-					message: `Sample '${name}' not found or failed to load`,
-					line: 1,
-					column: 1
-				}))
-			};
-		}
-
-		// Step 2b: Load any required SoundFonts
-		const requiredSoundfonts = compileResult.requiredSoundfonts || [];
-		for (const sf of requiredSoundfonts) {
-			// Skip if already loaded (by name)
-			if (state.loadedSoundfonts.some((s) => s.name === sf.filename)) continue;
-
-			// Resolve short names (e.g., "gm") to default soundfont URLs
-			const defaultUrl = resolveDefaultSoundFontUrl(sf.filename);
-			const url = defaultUrl ?? sf.filename;
-
-			try {
-				await loadSoundFontFromUrl(sf.filename, url);
-			} catch (e) {
-				console.warn(`[AudioEngine] Failed to load SoundFont '${sf.filename}':`, e);
+			// If any samples couldn't be loaded, report as error
+			if (missingSamples.length > 0) {
 				return {
 					success: false,
-					diagnostics: [
-						{
-							severity: 2,
-							message: `SoundFont '${sf.filename}' failed to load`,
-							line: 1,
-							column: 1
-						}
-					]
+					diagnostics: missingSamples.map((name) => ({
+						severity: 2,
+						message: `Sample '${name}' not found or failed to load`,
+						line: 1,
+						column: 1
+					}))
 				};
 			}
+
+			// Step 2b: Load any required SoundFonts
+			const requiredSoundfonts = compileResult.requiredSoundfonts || [];
+			for (const sf of requiredSoundfonts) {
+				// Skip if already loaded (by name)
+				if (state.loadedSoundfonts.some((s) => s.name === sf.filename)) continue;
+
+				// Resolve short names (e.g., "gm") to default soundfont URLs
+				const defaultUrl = resolveDefaultSoundFontUrl(sf.filename);
+				const url = defaultUrl ?? sf.filename;
+
+				try {
+					await loadSoundFontFromUrl(sf.filename, url);
+				} catch (e) {
+					console.warn(`[AudioEngine] Failed to load SoundFont '${sf.filename}':`, e);
+					return {
+						success: false,
+						diagnostics: [
+							{
+								severity: 2,
+								message: `SoundFont '${sf.filename}' failed to load`,
+								line: 1,
+								column: 1
+							}
+						]
+					};
+				}
+			}
+		} finally {
+			state.isLoadingSamples = false;
 		}
 
 		// Step 3: Load the compiled program with retry on SlotBusy
@@ -1715,6 +1720,7 @@ function createAudioEngine() {
 		get error() { return state.error; },
 		get samplesLoaded() { return state.samplesLoaded; },
 		get samplesLoading() { return state.samplesLoading; },
+		get isLoadingSamples() { return state.isLoadingSamples; },
 		get loadedSoundfonts() { return state.loadedSoundfonts; },
 		// Parameter exposure
 		get params() { return state.params; },

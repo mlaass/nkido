@@ -57,6 +57,15 @@
 				<rect x="4" y="4" width="16" height="16" />
 			</svg>
 		</button>
+
+		{#if audioEngine.isLoadingSamples}
+			<div class="loading-indicator" title="Loading samples...">
+				<svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none">
+					<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.25" />
+					<path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" />
+				</svg>
+			</div>
+		{/if}
 	</div>
 
 	<div class="bpm-control">
@@ -133,6 +142,24 @@
 	.stop-button:hover {
 		background-color: var(--bg-hover);
 		color: var(--text-primary);
+	}
+
+	.loading-indicator {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		height: 32px;
+		color: var(--text-secondary);
+	}
+
+	.spinner {
+		animation: spin 0.8s linear infinite;
+	}
+
+	@keyframes spin {
+		from { transform: rotate(0deg); }
+		to { transform: rotate(360deg); }
 	}
 
 	.bpm-control, .volume-control {
