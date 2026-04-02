@@ -819,6 +819,325 @@ TEST_CASE("Pattern evaluation", "[pattern_eval]") {
 }
 
 // ============================================================================
+// Nested Bracket Tests - verify arbitrary nesting of [] and <>
+// ============================================================================
+
+TEST_CASE("Nested bracket subdivision", "[pattern_eval][nested]") {
+
+    // ------------------------------------------------------------------
+    // [] within [] — 2 levels
+    // ------------------------------------------------------------------
+    SECTION("[] within [] — 2 levels: a [b [c d]]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("a [b [c d]]", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 4);
+
+        // a: 0.0, dur 0.5
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));
+        CHECK_THAT(events.events[0].duration, WithinRel(0.5f, 0.001f));
+        // b: 0.5, dur 0.25
+        CHECK_THAT(events.events[1].time, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events.events[1].duration, WithinRel(0.25f, 0.001f));
+        // c: 0.75, dur 0.125
+        CHECK_THAT(events.events[2].time, WithinRel(0.75f, 0.001f));
+        CHECK_THAT(events.events[2].duration, WithinRel(0.125f, 0.001f));
+        // d: 0.875, dur 0.125
+        CHECK_THAT(events.events[3].time, WithinRel(0.875f, 0.001f));
+        CHECK_THAT(events.events[3].duration, WithinRel(0.125f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // [] within [] — 3 levels
+    // ------------------------------------------------------------------
+    SECTION("[] within [] — 3 levels: a [b [c [d e]]]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("a [b [c [d e]]]", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 5);
+
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));       // a
+        CHECK_THAT(events.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events.events[1].time, WithinRel(0.5f, 0.001f));       // b
+        CHECK_THAT(events.events[1].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[2].time, WithinRel(0.75f, 0.001f));      // c
+        CHECK_THAT(events.events[2].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events.events[3].time, WithinRel(0.875f, 0.001f));     // d
+        CHECK_THAT(events.events[3].duration, WithinRel(0.0625f, 0.001f));
+        CHECK_THAT(events.events[4].time, WithinRel(0.9375f, 0.001f));    // e
+        CHECK_THAT(events.events[4].duration, WithinRel(0.0625f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // [] within [] — 4 levels
+    // ------------------------------------------------------------------
+    SECTION("[] within [] — 4 levels: a [b [c [d [e f]]]]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("a [b [c [d [e f]]]]", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 6);
+
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));        // a
+        CHECK_THAT(events.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events.events[1].time, WithinRel(0.5f, 0.001f));        // b
+        CHECK_THAT(events.events[1].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[2].time, WithinRel(0.75f, 0.001f));       // c
+        CHECK_THAT(events.events[2].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events.events[3].time, WithinRel(0.875f, 0.001f));      // d
+        CHECK_THAT(events.events[3].duration, WithinRel(0.0625f, 0.001f));
+        CHECK_THAT(events.events[4].time, WithinRel(0.9375f, 0.001f));     // e
+        CHECK_THAT(events.events[4].duration, WithinRel(0.03125f, 0.001f));
+        CHECK_THAT(events.events[5].time, WithinRel(0.96875f, 0.001f));    // f
+        CHECK_THAT(events.events[5].duration, WithinRel(0.03125f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // Symmetric nesting: [a b] [c d]
+    // ------------------------------------------------------------------
+    SECTION("symmetric nesting: [a b] [c d]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("[a b] [c d]", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 4);
+
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));    // a
+        CHECK_THAT(events.events[0].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[1].time, WithinRel(0.25f, 0.001f));   // b
+        CHECK_THAT(events.events[1].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[2].time, WithinRel(0.5f, 0.001f));    // c
+        CHECK_THAT(events.events[2].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[3].time, WithinRel(0.75f, 0.001f));   // d
+        CHECK_THAT(events.events[3].duration, WithinRel(0.25f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // Deep symmetric: [a [b c]] [d [e f]]
+    // ------------------------------------------------------------------
+    SECTION("deep symmetric: [a [b c]] [d [e f]]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("[a [b c]] [d [e f]]", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 6);
+
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));     // a
+        CHECK_THAT(events.events[0].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[1].time, WithinRel(0.25f, 0.001f));    // b
+        CHECK_THAT(events.events[1].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events.events[2].time, WithinRel(0.375f, 0.001f));   // c
+        CHECK_THAT(events.events[2].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events.events[3].time, WithinRel(0.5f, 0.001f));     // d
+        CHECK_THAT(events.events[3].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[4].time, WithinRel(0.75f, 0.001f));    // e
+        CHECK_THAT(events.events[4].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events.events[5].time, WithinRel(0.875f, 0.001f));   // f
+        CHECK_THAT(events.events[5].duration, WithinRel(0.125f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // <> within [] — alternate inside group
+    // ------------------------------------------------------------------
+    SECTION("<> within []: a [b <c d>]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("a [b <c d>]", arena);
+        REQUIRE(diags.empty());
+
+        // Cycle 0: alternate picks c
+        PatternEventStream events0 = evaluate_pattern(root, arena, 0);
+        REQUIRE(events0.size() == 3);
+
+        CHECK_THAT(events0.events[0].time, WithinRel(0.0f, 0.001f));    // a
+        CHECK_THAT(events0.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events0.events[1].time, WithinRel(0.5f, 0.001f));    // b
+        CHECK_THAT(events0.events[1].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events0.events[2].time, WithinRel(0.75f, 0.001f));   // c
+        CHECK_THAT(events0.events[2].duration, WithinRel(0.25f, 0.001f));
+
+        // Cycle 1: alternate picks d
+        PatternEventStream events1 = evaluate_pattern(root, arena, 1);
+        REQUIRE(events1.size() == 3);
+
+        CHECK_THAT(events1.events[2].time, WithinRel(0.75f, 0.001f));   // d
+        CHECK_THAT(events1.events[2].duration, WithinRel(0.25f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // [] within <> — group inside alternate
+    // ------------------------------------------------------------------
+    SECTION("[] within <>: <a [b c]>") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("<a [b c]>", arena);
+        REQUIRE(diags.empty());
+
+        // Cycle 0: alternate picks a
+        PatternEventStream events0 = evaluate_pattern(root, arena, 0);
+        REQUIRE(events0.size() == 1);
+        CHECK_THAT(events0.events[0].time, WithinRel(0.0f, 0.001f));
+        CHECK_THAT(events0.events[0].duration, WithinRel(1.0f, 0.001f));
+
+        // Cycle 1: alternate picks [b c]
+        PatternEventStream events1 = evaluate_pattern(root, arena, 1);
+        REQUIRE(events1.size() == 2);
+        CHECK_THAT(events1.events[0].time, WithinRel(0.0f, 0.001f));    // b
+        CHECK_THAT(events1.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events1.events[1].time, WithinRel(0.5f, 0.001f));    // c
+        CHECK_THAT(events1.events[1].duration, WithinRel(0.5f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // <> within <> — nested alternates
+    // ------------------------------------------------------------------
+    SECTION("<> within <>: <a <b c>>") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("<a <b c>>", arena);
+        REQUIRE(diags.empty());
+
+        // Cycle 0: outer picks a
+        PatternEventStream events0 = evaluate_pattern(root, arena, 0);
+        REQUIRE(events0.size() == 1);
+        CHECK_THAT(events0.events[0].time, WithinRel(0.0f, 0.001f));
+
+        // Cycle 1: outer picks <b c>, inner cycle determines b or c
+        PatternEventStream events1 = evaluate_pattern(root, arena, 1);
+        REQUIRE(events1.size() == 1);
+        CHECK_THAT(events1.events[0].time, WithinRel(0.0f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // Deep mixed nesting (4 levels): a [b <c [d e]>]
+    // ------------------------------------------------------------------
+    SECTION("deep mixed nesting: a [b <c [d e]>]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("a [b <c [d e]>]", arena);
+        REQUIRE(diags.empty());
+
+        // Cycle 0: alternate picks c (single atom)
+        PatternEventStream events0 = evaluate_pattern(root, arena, 0);
+        REQUIRE(events0.size() == 3);
+        CHECK_THAT(events0.events[0].time, WithinRel(0.0f, 0.001f));    // a
+        CHECK_THAT(events0.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events0.events[1].time, WithinRel(0.5f, 0.001f));    // b
+        CHECK_THAT(events0.events[1].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events0.events[2].time, WithinRel(0.75f, 0.001f));   // c
+        CHECK_THAT(events0.events[2].duration, WithinRel(0.25f, 0.001f));
+
+        // Cycle 1: alternate picks [d e] (group → 2 events subdivided)
+        PatternEventStream events1 = evaluate_pattern(root, arena, 1);
+        REQUIRE(events1.size() == 4);
+        CHECK_THAT(events1.events[0].time, WithinRel(0.0f, 0.001f));    // a
+        CHECK_THAT(events1.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events1.events[1].time, WithinRel(0.5f, 0.001f));    // b
+        CHECK_THAT(events1.events[1].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events1.events[2].time, WithinRel(0.75f, 0.001f));   // d
+        CHECK_THAT(events1.events[2].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events1.events[3].time, WithinRel(0.875f, 0.001f));  // e
+        CHECK_THAT(events1.events[3].duration, WithinRel(0.125f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // 4 levels all []: [[a b] [[c d] [e f]]]
+    // ------------------------------------------------------------------
+    SECTION("4 levels all []: [[a b] [[c d] [e f]]]") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("[[a b] [[c d] [e f]]]", arena);
+        REQUIRE(diags.empty());
+
+        PatternEventStream events = evaluate_pattern(root, arena, 0);
+        REQUIRE(events.size() == 6);
+
+        // Outer group is the only top-level element → takes full [0,1)
+        // Inside: [a b] and [[c d] [e f]] each get 0.5
+        // [a b]: a@0.0 dur=0.25, b@0.25 dur=0.25
+        CHECK_THAT(events.events[0].time, WithinRel(0.0f, 0.001f));
+        CHECK_THAT(events.events[0].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[1].time, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events.events[1].duration, WithinRel(0.25f, 0.001f));
+        // [[c d] [e f]]: [c d] at 0.5 dur 0.25, [e f] at 0.75 dur 0.25
+        //   c@0.5 dur=0.125, d@0.625 dur=0.125
+        CHECK_THAT(events.events[2].time, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events.events[2].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events.events[3].time, WithinRel(0.625f, 0.001f));
+        CHECK_THAT(events.events[3].duration, WithinRel(0.125f, 0.001f));
+        //   e@0.75 dur=0.125, f@0.875 dur=0.125
+        CHECK_THAT(events.events[4].time, WithinRel(0.75f, 0.001f));
+        CHECK_THAT(events.events[4].duration, WithinRel(0.125f, 0.001f));
+        CHECK_THAT(events.events[5].time, WithinRel(0.875f, 0.001f));
+        CHECK_THAT(events.events[5].duration, WithinRel(0.125f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // <> within [] within <> — 3-level mixed
+    // ------------------------------------------------------------------
+    SECTION("<> within [] within <>: <[a <b c>] d>") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("<[a <b c>] d>", arena);
+        REQUIRE(diags.empty());
+
+        // Cycle 0: outer picks [a <b c>]
+        // [a <b c>] subdivides: a@0.0 dur=0.5, <b c>@0.5 dur=0.5
+        // <b c> cycle 0 → b
+        PatternEventStream events0 = evaluate_pattern(root, arena, 0);
+        REQUIRE(events0.size() == 2);
+        CHECK_THAT(events0.events[0].time, WithinRel(0.0f, 0.001f));    // a
+        CHECK_THAT(events0.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events0.events[1].time, WithinRel(0.5f, 0.001f));    // b
+        CHECK_THAT(events0.events[1].duration, WithinRel(0.5f, 0.001f));
+
+        // Cycle 1: outer picks d
+        PatternEventStream events1 = evaluate_pattern(root, arena, 1);
+        REQUIRE(events1.size() == 1);
+        CHECK_THAT(events1.events[0].time, WithinRel(0.0f, 0.001f));    // d
+        CHECK_THAT(events1.events[0].duration, WithinRel(1.0f, 0.001f));
+    }
+
+    // ------------------------------------------------------------------
+    // [] within <> within [] within <> — 4-level alternating
+    // ------------------------------------------------------------------
+    SECTION("4-level: <a [b <c [d e]>]>") {
+        AstArena arena;
+        auto [root, diags] = parse_mini("<a [b <c [d e]>]>", arena);
+        REQUIRE(diags.empty());
+
+        // Cycle 0: outer picks a (0%2=0)
+        PatternEventStream events0 = evaluate_pattern(root, arena, 0);
+        REQUIRE(events0.size() == 1);
+        CHECK_THAT(events0.events[0].time, WithinRel(0.0f, 0.001f));
+        CHECK_THAT(events0.events[0].duration, WithinRel(1.0f, 0.001f));
+
+        // Cycle 1: outer picks [b <c [d e]>] (1%2=1)
+        // [b <c [d e]>] subdivides: b@0.0 dur=0.5, <c [d e]>@0.5 dur=0.5
+        // Inner <c [d e]> uses global cycle 1: 1%2=1 → picks [d e]
+        // [d e] subdivides 0.5 into d@0.5 dur=0.25, e@0.75 dur=0.25
+        PatternEventStream events1 = evaluate_pattern(root, arena, 1);
+        REQUIRE(events1.size() == 3);
+        CHECK_THAT(events1.events[0].time, WithinRel(0.0f, 0.001f));    // b
+        CHECK_THAT(events1.events[0].duration, WithinRel(0.5f, 0.001f));
+        CHECK_THAT(events1.events[1].time, WithinRel(0.5f, 0.001f));    // d
+        CHECK_THAT(events1.events[1].duration, WithinRel(0.25f, 0.001f));
+        CHECK_THAT(events1.events[2].time, WithinRel(0.75f, 0.001f));   // e
+        CHECK_THAT(events1.events[2].duration, WithinRel(0.25f, 0.001f));
+
+        // Cycle 2: outer picks a again (2%2=0)
+        PatternEventStream events2 = evaluate_pattern(root, arena, 2);
+        REQUIRE(events2.size() == 1);
+
+        // Cycle 4: outer picks [b <c [d e]>] (3%2=1)
+        // Inner <c [d e]> uses global cycle 3: 3%2=1 → picks [d e] again
+        PatternEventStream events3 = evaluate_pattern(root, arena, 3);
+        REQUIRE(events3.size() == 3);
+    }
+}
+
+// ============================================================================
 // Multi-Cycle Pattern Tests
 // ============================================================================
 

@@ -789,3 +789,271 @@ TEST_CASE("Source location tracking", "[sequence]") {
     CHECK(state.output.events[0].source_offset == 5);
     CHECK(state.output.events[0].source_length == 3);
 }
+
+// ============================================================================
+// Nested Bracket Tests — runtime sequence evaluation
+// ============================================================================
+
+// Simulate "bd [sd [hh hh]]" — all flat DATA events in root sequence
+// This is how the SequenceCompiler produces nested [] groups
+TEST_CASE("Nested [] — flat events: bd [sd [hh hh]]", "[sequence][nested]") {
+    g_test_storage.reset();
+    SequenceState state;
+    g_test_storage.init_state(state);
+
+    Sequence& seq = g_test_storage.add_sequence(state);
+    seq.mode = SequenceMode::NORMAL;
+    seq.duration = 1.0f;  // Normalized
+
+    // bd: time=0.0, dur=0.5
+    Event e0;
+    e0.type = EventType::DATA;
+    e0.time = 0.0f;
+    e0.duration = 0.5f;
+    e0.num_values = 1;
+    e0.values[0] = 1.0f;
+    seq.add_event(e0);
+
+    // sd: time=0.5, dur=0.25
+    Event e1;
+    e1.type = EventType::DATA;
+    e1.time = 0.5f;
+    e1.duration = 0.25f;
+    e1.num_values = 1;
+    e1.values[0] = 2.0f;
+    seq.add_event(e1);
+
+    // hh: time=0.75, dur=0.125
+    Event e2;
+    e2.type = EventType::DATA;
+    e2.time = 0.75f;
+    e2.duration = 0.125f;
+    e2.num_values = 1;
+    e2.values[0] = 3.0f;
+    seq.add_event(e2);
+
+    // hh: time=0.875, dur=0.125
+    Event e3;
+    e3.type = EventType::DATA;
+    e3.time = 0.875f;
+    e3.duration = 0.125f;
+    e3.num_values = 1;
+    e3.values[0] = 4.0f;
+    seq.add_event(e3);
+
+    state.cycle_length = 2.0f;  // 2 top-level elements
+
+    query_pattern(state, 0, 2.0f);
+
+    REQUIRE(state.output.num_events == 4);
+
+    // bd: time=0.0*2.0=0.0, dur=0.5*2.0=1.0
+    CHECK_THAT(state.output.events[0].time, WithinAbs(0.0f, 0.001f));
+    CHECK_THAT(state.output.events[0].duration, WithinAbs(1.0f, 0.001f));
+    // sd: time=0.5*2.0=1.0, dur=0.25*2.0=0.5
+    CHECK_THAT(state.output.events[1].time, WithinAbs(1.0f, 0.001f));
+    CHECK_THAT(state.output.events[1].duration, WithinAbs(0.5f, 0.001f));
+    // hh: time=0.75*2.0=1.5, dur=0.125*2.0=0.25
+    CHECK_THAT(state.output.events[2].time, WithinAbs(1.5f, 0.001f));
+    CHECK_THAT(state.output.events[2].duration, WithinAbs(0.25f, 0.001f));
+    // hh: time=0.875*2.0=1.75, dur=0.125*2.0=0.25
+    CHECK_THAT(state.output.events[3].time, WithinAbs(1.75f, 0.001f));
+    CHECK_THAT(state.output.events[3].duration, WithinAbs(0.25f, 0.001f));
+}
+
+// Simulate "bd [sd [hh [cp cp]]]" — 4 levels, all flat
+TEST_CASE("Nested [] — 4 levels flat: bd [sd [hh [cp cp]]]", "[sequence][nested]") {
+    g_test_storage.reset();
+    SequenceState state;
+    g_test_storage.init_state(state);
+
+    Sequence& seq = g_test_storage.add_sequence(state);
+    seq.mode = SequenceMode::NORMAL;
+    seq.duration = 1.0f;
+
+    float times[]    = {0.0f,  0.5f,  0.75f, 0.875f, 0.9375f};
+    float durs[]     = {0.5f,  0.25f, 0.125f, 0.0625f, 0.0625f};
+    float vals[]     = {1.0f,  2.0f,  3.0f,  4.0f,   5.0f};
+
+    for (int i = 0; i < 5; ++i) {
+        Event e;
+        e.type = EventType::DATA;
+        e.time = times[i];
+        e.duration = durs[i];
+        e.num_values = 1;
+        e.values[0] = vals[i];
+        seq.add_event(e);
+    }
+
+    state.cycle_length = 2.0f;
+    query_pattern(state, 0, 2.0f);
+
+    REQUIRE(state.output.num_events == 5);
+    for (int i = 0; i < 5; ++i) {
+        INFO("Event " << i);
+        CHECK_THAT(state.output.events[i].time, WithinAbs(times[i] * 2.0f, 0.001f));
+        CHECK_THAT(state.output.events[i].duration, WithinAbs(durs[i] * 2.0f, 0.001f));
+        CHECK_THAT(state.output.events[i].values[0], WithinAbs(vals[i], 0.001f));
+    }
+}
+
+// Simulate "bd [<hh oh> sd]" — alternate nested inside group via SUB_SEQ
+TEST_CASE("Nested <> in [] — SUB_SEQ: bd [<hh oh> sd]", "[sequence][nested]") {
+    g_test_storage.reset();
+    SequenceState state;
+    g_test_storage.init_state(state);
+
+    // Seq 0: root (NORMAL)
+    // Seq 1: alternate <hh oh> (ALTERNATE)
+    Sequence& root_seq = g_test_storage.add_sequence(state);
+    Sequence& alt_seq = g_test_storage.add_sequence(state);
+
+    // Alternate: <hh oh>
+    alt_seq.mode = SequenceMode::ALTERNATE;
+    alt_seq.duration = 1.0f;
+
+    Event hh;
+    hh.type = EventType::DATA;
+    hh.time = 0.0f;
+    hh.duration = 1.0f;
+    hh.num_values = 1;
+    hh.values[0] = 10.0f;
+    alt_seq.add_event(hh);
+
+    Event oh;
+    oh.type = EventType::DATA;
+    oh.time = 0.0f;
+    oh.duration = 1.0f;
+    oh.num_values = 1;
+    oh.values[0] = 20.0f;
+    alt_seq.add_event(oh);
+
+    // Root: bd at [0, 0.5), SUB_SEQ to alt at [0.5, 0.75), sd at [0.75, 1.0)
+    root_seq.mode = SequenceMode::NORMAL;
+    root_seq.duration = 1.0f;
+
+    Event bd;
+    bd.type = EventType::DATA;
+    bd.time = 0.0f;
+    bd.duration = 0.5f;
+    bd.num_values = 1;
+    bd.values[0] = 100.0f;
+    root_seq.add_event(bd);
+
+    Event sub;
+    sub.type = EventType::SUB_SEQ;
+    sub.time = 0.5f;
+    sub.duration = 0.25f;
+    sub.seq_id = 1;
+    root_seq.add_event(sub);
+
+    Event sd;
+    sd.type = EventType::DATA;
+    sd.time = 0.75f;
+    sd.duration = 0.25f;
+    sd.num_values = 1;
+    sd.values[0] = 200.0f;
+    root_seq.add_event(sd);
+
+    state.cycle_length = 2.0f;
+
+    // Cycle 0: alt picks hh (step=0)
+    query_pattern(state, 0, 2.0f);
+    REQUIRE(state.output.num_events == 3);
+    CHECK_THAT(state.output.events[0].values[0], WithinAbs(100.0f, 0.01f));  // bd
+    CHECK_THAT(state.output.events[0].time, WithinAbs(0.0f, 0.001f));
+    CHECK_THAT(state.output.events[0].duration, WithinAbs(1.0f, 0.001f));
+    CHECK_THAT(state.output.events[1].values[0], WithinAbs(10.0f, 0.01f));   // hh
+    CHECK_THAT(state.output.events[1].time, WithinAbs(1.0f, 0.001f));
+    CHECK_THAT(state.output.events[1].duration, WithinAbs(0.5f, 0.001f));
+    CHECK_THAT(state.output.events[2].values[0], WithinAbs(200.0f, 0.01f));  // sd
+    CHECK_THAT(state.output.events[2].time, WithinAbs(1.5f, 0.001f));
+    CHECK_THAT(state.output.events[2].duration, WithinAbs(0.5f, 0.001f));
+
+    // Cycle 1: alt picks oh (step=1)
+    query_pattern(state, 1, 2.0f);
+    REQUIRE(state.output.num_events == 3);
+    CHECK_THAT(state.output.events[1].values[0], WithinAbs(20.0f, 0.01f));   // oh
+}
+
+// Simulate nested SUB_SEQ: <[bd sd] [hh hh hh]> — alternate containing groups
+TEST_CASE("Nested [] in <> — SUB_SEQ wrapping: <[bd sd] [hh hh hh]>", "[sequence][nested]") {
+    g_test_storage.reset();
+    SequenceState state;
+    g_test_storage.init_state(state);
+
+    // Seq 0: root (NORMAL) — single SUB_SEQ pointing to alternate
+    // Seq 1: alternate (ALTERNATE) — 2 choices, each SUB_SEQ to a group
+    // Seq 2: [bd sd] (NORMAL)
+    // Seq 3: [hh hh hh] (NORMAL)
+    Sequence& root = g_test_storage.add_sequence(state);
+    Sequence& alt = g_test_storage.add_sequence(state);
+    Sequence& grp1 = g_test_storage.add_sequence(state);
+    Sequence& grp2 = g_test_storage.add_sequence(state);
+
+    // Group 1: [bd sd] at normalized [0, 1)
+    grp1.mode = SequenceMode::NORMAL;
+    grp1.duration = 1.0f;
+    {
+        Event e;
+        e.type = EventType::DATA; e.time = 0.0f; e.duration = 0.5f;
+        e.num_values = 1; e.values[0] = 1.0f;
+        grp1.add_event(e);
+        e.time = 0.5f; e.values[0] = 2.0f;
+        grp1.add_event(e);
+    }
+
+    // Group 2: [hh hh hh] at normalized [0, 1)
+    grp2.mode = SequenceMode::NORMAL;
+    grp2.duration = 1.0f;
+    for (int i = 0; i < 3; ++i) {
+        Event e;
+        e.type = EventType::DATA;
+        e.time = static_cast<float>(i) / 3.0f;
+        e.duration = 1.0f / 3.0f;
+        e.num_values = 1;
+        e.values[0] = 10.0f + static_cast<float>(i);
+        grp2.add_event(e);
+    }
+
+    // Alternate: choice 0 → SUB_SEQ(grp1), choice 1 → SUB_SEQ(grp2)
+    alt.mode = SequenceMode::ALTERNATE;
+    alt.duration = 1.0f;
+    {
+        Event e;
+        e.type = EventType::SUB_SEQ; e.time = 0.0f; e.duration = 1.0f;
+        e.seq_id = 2;
+        alt.add_event(e);
+        e.seq_id = 3;
+        alt.add_event(e);
+    }
+
+    // Root: single SUB_SEQ taking full cycle
+    root.mode = SequenceMode::NORMAL;
+    root.duration = 1.0f;
+    {
+        Event e;
+        e.type = EventType::SUB_SEQ; e.time = 0.0f; e.duration = 1.0f;
+        e.seq_id = 1;
+        root.add_event(e);
+    }
+
+    state.cycle_length = 1.0f;  // 1 top-level element
+
+    // Cycle 0: alt picks [bd sd]
+    query_pattern(state, 0, 1.0f);
+    REQUIRE(state.output.num_events == 2);
+    CHECK_THAT(state.output.events[0].values[0], WithinAbs(1.0f, 0.01f));  // bd
+    CHECK_THAT(state.output.events[0].time, WithinAbs(0.0f, 0.001f));
+    CHECK_THAT(state.output.events[0].duration, WithinAbs(0.5f, 0.001f));
+    CHECK_THAT(state.output.events[1].values[0], WithinAbs(2.0f, 0.01f));  // sd
+    CHECK_THAT(state.output.events[1].time, WithinAbs(0.5f, 0.001f));
+
+    // Cycle 1: alt picks [hh hh hh]
+    query_pattern(state, 1, 1.0f);
+    REQUIRE(state.output.num_events == 3);
+    CHECK_THAT(state.output.events[0].time, WithinAbs(0.0f, 0.01f));
+    CHECK_THAT(state.output.events[0].duration, WithinAbs(1.0f / 3.0f, 0.01f));
+    CHECK_THAT(state.output.events[1].time, WithinAbs(1.0f / 3.0f, 0.01f));
+    CHECK_THAT(state.output.events[2].time, WithinAbs(2.0f / 3.0f, 0.01f));
+}

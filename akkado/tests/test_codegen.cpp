@@ -2936,6 +2936,122 @@ TEST_CASE("Codegen: Sample pattern event inspection", "[codegen][samples][debug]
     }
 }
 
+TEST_CASE("Codegen: Nested bracket subdivision", "[codegen][nested]") {
+    SECTION("[] within [] — 2 levels: bd [sd [hh hh]]") {
+        auto result = akkado::compile(R"(pat("bd [sd [hh hh]]") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(!result.state_inits.empty());
+
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 4);
+
+        // 2 top-level → cycle_length=2, events in [0,1) normalized range
+        // bd: 0.0, dur 0.5
+        CHECK(events[0].time == Catch::Approx(0.0f));
+        CHECK(events[0].duration == Catch::Approx(0.5f));
+        // sd: 0.5, dur 0.25
+        CHECK(events[1].time == Catch::Approx(0.5f));
+        CHECK(events[1].duration == Catch::Approx(0.25f));
+        // hh: 0.75, dur 0.125
+        CHECK(events[2].time == Catch::Approx(0.75f));
+        CHECK(events[2].duration == Catch::Approx(0.125f));
+        // hh: 0.875, dur 0.125
+        CHECK(events[3].time == Catch::Approx(0.875f));
+        CHECK(events[3].duration == Catch::Approx(0.125f));
+    }
+
+    SECTION("[] within [] — 3 levels: bd [sd [hh [cp cp]]]") {
+        auto result = akkado::compile(R"(pat("bd [sd [hh [cp cp]]]") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(!result.state_inits.empty());
+
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 5);
+
+        CHECK(events[0].time == Catch::Approx(0.0f));      // bd
+        CHECK(events[0].duration == Catch::Approx(0.5f));
+        CHECK(events[1].time == Catch::Approx(0.5f));      // sd
+        CHECK(events[1].duration == Catch::Approx(0.25f));
+        CHECK(events[2].time == Catch::Approx(0.75f));     // hh
+        CHECK(events[2].duration == Catch::Approx(0.125f));
+        CHECK(events[3].time == Catch::Approx(0.875f));    // cp
+        CHECK(events[3].duration == Catch::Approx(0.0625f));
+        CHECK(events[4].time == Catch::Approx(0.9375f));   // cp
+        CHECK(events[4].duration == Catch::Approx(0.0625f));
+    }
+
+    SECTION("[] within [] — 4 levels: bd [sd [hh [cp [oh oh]]]]") {
+        auto result = akkado::compile(R"(pat("bd [sd [hh [cp [oh oh]]]]") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(!result.state_inits.empty());
+
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 6);
+
+        CHECK(events[0].time == Catch::Approx(0.0f));       // bd
+        CHECK(events[0].duration == Catch::Approx(0.5f));
+        CHECK(events[1].time == Catch::Approx(0.5f));       // sd
+        CHECK(events[1].duration == Catch::Approx(0.25f));
+        CHECK(events[2].time == Catch::Approx(0.75f));      // hh
+        CHECK(events[2].duration == Catch::Approx(0.125f));
+        CHECK(events[3].time == Catch::Approx(0.875f));     // cp
+        CHECK(events[3].duration == Catch::Approx(0.0625f));
+        CHECK(events[4].time == Catch::Approx(0.9375f));    // oh
+        CHECK(events[4].duration == Catch::Approx(0.03125f));
+        CHECK(events[5].time == Catch::Approx(0.96875f));   // oh
+        CHECK(events[5].duration == Catch::Approx(0.03125f));
+    }
+
+    SECTION("symmetric nesting: [bd sd] [hh [cp oh]]") {
+        auto result = akkado::compile(R"(pat("[bd sd] [hh [cp oh]]") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(!result.state_inits.empty());
+
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 5);
+
+        // [bd sd] gets first half [0, 0.5)
+        CHECK(events[0].time == Catch::Approx(0.0f));       // bd
+        CHECK(events[0].duration == Catch::Approx(0.25f));
+        CHECK(events[1].time == Catch::Approx(0.25f));      // sd
+        CHECK(events[1].duration == Catch::Approx(0.25f));
+        // [hh [cp oh]] gets second half [0.5, 1.0)
+        CHECK(events[2].time == Catch::Approx(0.5f));       // hh
+        CHECK(events[2].duration == Catch::Approx(0.25f));
+        CHECK(events[3].time == Catch::Approx(0.75f));      // cp
+        CHECK(events[3].duration == Catch::Approx(0.125f));
+        CHECK(events[4].time == Catch::Approx(0.875f));     // oh
+        CHECK(events[4].duration == Catch::Approx(0.125f));
+    }
+
+    SECTION("4 levels all []: [[bd sd] [[hh hh] [cp oh]]]") {
+        auto result = akkado::compile(R"(pat("[[bd sd] [[hh hh] [cp oh]]]") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(!result.state_inits.empty());
+
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 6);
+
+        // Single top-level group → cycle_length=1
+        // [bd sd] gets [0, 0.5): bd@0, sd@0.25
+        CHECK(events[0].time == Catch::Approx(0.0f));
+        CHECK(events[0].duration == Catch::Approx(0.25f));
+        CHECK(events[1].time == Catch::Approx(0.25f));
+        CHECK(events[1].duration == Catch::Approx(0.25f));
+        // [[hh hh] [cp oh]] gets [0.5, 1.0)
+        //   [hh hh]@[0.5, 0.75): hh@0.5, hh@0.625
+        CHECK(events[2].time == Catch::Approx(0.5f));
+        CHECK(events[2].duration == Catch::Approx(0.125f));
+        CHECK(events[3].time == Catch::Approx(0.625f));
+        CHECK(events[3].duration == Catch::Approx(0.125f));
+        //   [cp oh]@[0.75, 1.0): cp@0.75, oh@0.875
+        CHECK(events[4].time == Catch::Approx(0.75f));
+        CHECK(events[4].duration == Catch::Approx(0.125f));
+        CHECK(events[5].time == Catch::Approx(0.875f));
+        CHECK(events[5].duration == Catch::Approx(0.125f));
+    }
+}
+
 TEST_CASE("Codegen: Binary operations", "[codegen]") {
     SECTION("arithmetic") {
         auto result = akkado::compile("1 + 2 * 3 - 4 / 2");
