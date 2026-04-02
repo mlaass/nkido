@@ -120,6 +120,50 @@ function createPatternHighlightStore() {
 		return activeSteps.get(stateId);
 	}
 
+	/**
+	 * Adjust stored pattern offsets through document changes.
+	 * Edits outside patterns remap the offset; edits inside invalidate the pattern.
+	 *
+	 * @param mapPos Maps old-document position to new-document position (ChangeSet.mapPos)
+	 * @param changedRanges [fromA, toA] pairs in old-document coordinates
+	 */
+	function mapThroughChanges(
+		mapPos: (pos: number, assoc?: number) => number,
+		changedRanges: Array<[number, number]>
+	) {
+		let changed = false;
+		const newPatterns = new Map<number, PatternData>();
+
+		for (const [stateId, data] of patterns) {
+			const start = data.info.docOffset;
+			const end = start + data.info.docLength;
+
+			const overlaps = changedRanges.some(
+				([fromA, toA]) => fromA < end && toA > start
+			);
+
+			if (overlaps) {
+				changed = true;
+			} else {
+				const newOffset = mapPos(start, 1);
+				if (newOffset !== start) {
+					changed = true;
+					newPatterns.set(stateId, {
+						...data,
+						info: { ...data.info, docOffset: newOffset }
+					});
+				} else {
+					newPatterns.set(stateId, data);
+				}
+			}
+		}
+
+		if (changed) {
+			patterns = newPatterns;
+			patternsVersion++;
+		}
+	}
+
 	return {
 		get patterns() {
 			return patterns;
@@ -136,7 +180,8 @@ function createPatternHighlightStore() {
 		stopPolling,
 		getPattern,
 		getAllPatterns,
-		getActiveStep
+		getActiveStep,
+		mapThroughChanges
 	};
 }
 

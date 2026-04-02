@@ -93,8 +93,18 @@ class StepHighlightPlugin {
 		this.startPolling();
 	}
 
-	// Note: update() is NOT used for polling control because it only fires
-	// on editor changes, not when audioEngine.isPlaying changes
+	update(update: ViewUpdate) {
+		if (update.docChanged) {
+			const changedRanges: Array<[number, number]> = [];
+			update.changes.iterChangedRanges((fromA: number, toA: number) => {
+				changedRanges.push([fromA, toA]);
+			});
+			patternHighlightStore.mapThroughChanges(
+				(pos, assoc) => update.changes.mapPos(pos, assoc),
+				changedRanges
+			);
+		}
+	}
 
 	destroy() {
 		this.isDestroyed = true;
