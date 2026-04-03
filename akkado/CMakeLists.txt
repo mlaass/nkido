@@ -5,8 +5,15 @@ cmake_minimum_required(VERSION 3.21)
 
 # Allow standalone build (requires cedar to be installed or provided)
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    # Read version from parent VERSION file
+    set(_version_file "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+    if(EXISTS "${_version_file}")
+        file(STRINGS "${_version_file}" _akkado_version)
+    else()
+        set(_akkado_version "0.0.0")
+    endif()
     project(akkado
-        VERSION 0.1.0
+        VERSION ${_akkado_version}
         DESCRIPTION "Akkado audio DSL compiler"
         LANGUAGES CXX
     )
@@ -74,6 +81,13 @@ target_link_libraries(akkado
         cedar
     PRIVATE
         $<BUILD_INTERFACE:enkido_compiler_options>
+)
+
+# Inject version as compile definitions (read from VERSION file)
+target_compile_definitions(akkado PUBLIC
+    AKKADO_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    AKKADO_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    AKKADO_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
 # Alias for use in parent project

@@ -8,13 +8,26 @@ namespace cedar {
 // Forward declarations
 class VM;
 
-/// Cedar version information
-struct Version {
-    static constexpr int major = 0;
-    static constexpr int minor = 1;
-    static constexpr int patch = 0;
+/// Cedar version information (injected via CMake compile definitions)
+#ifndef CEDAR_VERSION_MAJOR
+#define CEDAR_VERSION_MAJOR 0
+#define CEDAR_VERSION_MINOR 0
+#define CEDAR_VERSION_PATCH 0
+#endif
 
-    static constexpr std::string_view string() { return "0.1.0"; }
+#define CEDAR_STRINGIFY_(x) #x
+#define CEDAR_STRINGIFY(x) CEDAR_STRINGIFY_(x)
+
+struct Version {
+    static constexpr int major = CEDAR_VERSION_MAJOR;
+    static constexpr int minor = CEDAR_VERSION_MINOR;
+    static constexpr int patch = CEDAR_VERSION_PATCH;
+
+    static constexpr std::string_view string() {
+        return CEDAR_STRINGIFY(CEDAR_VERSION_MAJOR) "."
+               CEDAR_STRINGIFY(CEDAR_VERSION_MINOR) "."
+               CEDAR_STRINGIFY(CEDAR_VERSION_PATCH);
+    }
 };
 
 /// Default audio configuration

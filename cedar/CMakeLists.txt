@@ -5,8 +5,15 @@ cmake_minimum_required(VERSION 3.21)
 
 # Allow standalone build
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    # Read version from parent VERSION file
+    set(_version_file "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+    if(EXISTS "${_version_file}")
+        file(STRINGS "${_version_file}" _cedar_version)
+    else()
+        set(_cedar_version "0.0.0")
+    endif()
     project(cedar
-        VERSION 0.1.0
+        VERSION ${_cedar_version}
         DESCRIPTION "Cedar audio synthesis engine"
         LANGUAGES CXX
     )
@@ -55,6 +62,13 @@ target_include_directories(cedar
 target_link_libraries(cedar
     PRIVATE
         $<BUILD_INTERFACE:enkido_compiler_options>
+)
+
+# Inject version as compile definitions (read from VERSION file)
+target_compile_definitions(cedar PUBLIC
+    CEDAR_VERSION_MAJOR=${PROJECT_VERSION_MAJOR}
+    CEDAR_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    CEDAR_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
 
 # Enable position-independent code for linking into shared libraries (Python bindings)

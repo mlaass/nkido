@@ -14,13 +14,26 @@ namespace akkado {
 class SampleRegistry;
 class FileResolver;
 
-/// Akkado version information
-struct Version {
-    static constexpr int major = 0;
-    static constexpr int minor = 1;
-    static constexpr int patch = 0;
+/// Akkado version information (injected via CMake compile definitions)
+#ifndef AKKADO_VERSION_MAJOR
+#define AKKADO_VERSION_MAJOR 0
+#define AKKADO_VERSION_MINOR 0
+#define AKKADO_VERSION_PATCH 0
+#endif
 
-    static constexpr std::string_view string() { return "0.1.0"; }
+#define AKKADO_STRINGIFY_(x) #x
+#define AKKADO_STRINGIFY(x) AKKADO_STRINGIFY_(x)
+
+struct Version {
+    static constexpr int major = AKKADO_VERSION_MAJOR;
+    static constexpr int minor = AKKADO_VERSION_MINOR;
+    static constexpr int patch = AKKADO_VERSION_PATCH;
+
+    static constexpr std::string_view string() {
+        return AKKADO_STRINGIFY(AKKADO_VERSION_MAJOR) "."
+               AKKADO_STRINGIFY(AKKADO_VERSION_MINOR) "."
+               AKKADO_STRINGIFY(AKKADO_VERSION_PATCH);
+    }
 };
 
 // RequiredSample is defined in codegen.hpp

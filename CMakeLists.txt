@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.21)
 
+# Read version from single source of truth
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ENKIDO_VERSION)
+
 project(enkido
-    VERSION 0.1.0
+    VERSION ${ENKIDO_VERSION}
     DESCRIPTION "High-performance audio synthesis system"
     LANGUAGES CXX
 )
