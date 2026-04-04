@@ -844,19 +844,52 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 if (arg_node.type == NodeType::Argument) {
                     arg_value = arg_node.first_child;
                 }
-                TypedValue arg_tv = visit(arg_value);
-                arg_buffers.push_back(arg_tv.buffer);
 
-                // Type check against annotation (non-fatal — continue for max error reporting)
-                if (arg_idx < MAX_BUILTIN_PARAMS &&
-                    builtin->param_types[arg_idx] != ParamValueType::Any &&
-                    !arg_tv.error && arg_tv.type != ValueType::Void) {
-                    if (!type_compatible(arg_tv.type, builtin->param_types[arg_idx])) {
-                        error("E160", func_name + "() argument '" +
-                              std::string(builtin->param_names[arg_idx]) + "' expects " +
-                              param_value_type_name(builtin->param_types[arg_idx]) +
-                              ", got " + value_type_name(arg_tv.type),
-                              ast_->arena[arg_value].location);
+                // Check for underscore placeholder: fill with default value
+                const Node& val_node = ast_->arena[arg_value];
+                bool is_placeholder = (val_node.type == NodeType::Identifier &&
+                    std::holds_alternative<Node::IdentifierData>(val_node.data) &&
+                    val_node.as_identifier() == "_");
+
+                if (is_placeholder) {
+                    if (builtin->has_default(arg_idx)) {
+                        std::uint16_t default_buf = buffers_.allocate();
+                        if (default_buf == BufferAllocator::BUFFER_UNUSED) {
+                            error("E101", "Buffer pool exhausted", n.location);
+                            if (pushed_path) pop_path();
+                            return TypedValue::error_val();
+                        }
+                        cedar::Instruction push_inst{};
+                        push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                        push_inst.out_buffer = default_buf;
+                        push_inst.inputs[0] = 0xFFFF;
+                        push_inst.inputs[1] = 0xFFFF;
+                        push_inst.inputs[2] = 0xFFFF;
+                        push_inst.inputs[3] = 0xFFFF;
+                        encode_const_value(push_inst, builtin->get_default(arg_idx));
+                        emit(push_inst);
+                        arg_buffers.push_back(default_buf);
+                    } else {
+                        error("E106", "Cannot skip required parameter '" +
+                              std::string(builtin->param_names[arg_idx]) +
+                              "' — no default value", val_node.location);
+                        arg_buffers.push_back(0);
+                    }
+                } else {
+                    TypedValue arg_tv = visit(arg_value);
+                    arg_buffers.push_back(arg_tv.buffer);
+
+                    // Type check against annotation (non-fatal — continue for max error reporting)
+                    if (arg_idx < MAX_BUILTIN_PARAMS &&
+                        builtin->param_types[arg_idx] != ParamValueType::Any &&
+                        !arg_tv.error && arg_tv.type != ValueType::Void) {
+                        if (!type_compatible(arg_tv.type, builtin->param_types[arg_idx])) {
+                            error("E160", func_name + "() argument '" +
+                                  std::string(builtin->param_names[arg_idx]) + "' expects " +
+                                  param_value_type_name(builtin->param_types[arg_idx]) +
+                                  ", got " + value_type_name(arg_tv.type),
+                                  ast_->arena[arg_value].location);
+                        }
                     }
                 }
 

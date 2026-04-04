@@ -180,30 +180,91 @@ TypedValue CodeGenerator::handle_user_function_call(
             param_bufs.push_back(param_buf);
             break;  // Rest must be last param
         } else if (i < args.size()) {
-            // Check if the argument is a closure or function reference
-            auto func_ref = resolve_function_arg(args[i]);
-            if (func_ref) {
-                // Store as function ref — don't visit (would eagerly compile with unbound params)
-                std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
-                param_function_refs_[param_hash] = *func_ref;
-                param_buf = BufferAllocator::BUFFER_UNUSED;  // placeholder — never used as audio
-            } else {
-                // Check if the argument is a literal - record for match resolution
-                const Node& arg_node = ast_->arena[args[i]];
-                if (arg_node.type == NodeType::StringLit ||
-                    arg_node.type == NodeType::NumberLit ||
-                    arg_node.type == NodeType::BoolLit) {
+            // Check for underscore placeholder: fill with default value
+            const Node& arg_inner = ast_->arena[args[i]];
+            bool is_placeholder = (arg_inner.type == NodeType::Identifier &&
+                std::holds_alternative<Node::IdentifierData>(arg_inner.data) &&
+                arg_inner.as_identifier() == "_");
+
+            if (is_placeholder) {
+                // Use parameter default (same logic as trailing omission below)
+                if (func.params[i].default_value.has_value()) {
+                    param_buf = buffers_.allocate();
+                    if (param_buf == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        param_literals_ = std::move(saved_param_literals);
+                        return TypedValue::void_val();
+                    }
+                    cedar::Instruction push_inst{};
+                    push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                    push_inst.out_buffer = param_buf;
+                    push_inst.inputs[0] = 0xFFFF;
+                    push_inst.inputs[1] = 0xFFFF;
+                    push_inst.inputs[2] = 0xFFFF;
+                    push_inst.inputs[3] = 0xFFFF;
+                    float default_val = static_cast<float>(*func.params[i].default_value);
+                    encode_const_value(push_inst, default_val);
+                    emit(push_inst);
+                } else if (func.params[i].default_node != NULL_NODE &&
+                           !func.params[i].default_string.has_value()) {
+                    ConstEvaluator evaluator(*ast_, *symbols_);
+                    auto result = evaluator.evaluate(func.params[i].default_node);
+                    for (const auto& diag : evaluator.diagnostics()) {
+                        diagnostics_.push_back(diag);
+                    }
+                    if (result && std::holds_alternative<double>(*result)) {
+                        float val = static_cast<float>(std::get<double>(*result));
+                        param_buf = emit_push_const(buffers_, instructions_, val);
+                        if (param_buf == BufferAllocator::BUFFER_UNUSED) {
+                            error("E101", "Buffer pool exhausted", n.location);
+                            param_literals_ = std::move(saved_param_literals);
+                            param_string_defaults_ = std::move(saved_param_string_defaults);
+                            return TypedValue::void_val();
+                        }
+                    } else {
+                        error("E105", "Cannot evaluate default expression at compile time for parameter '" +
+                              func.params[i].name + "'", n.location);
+                        param_literals_ = std::move(saved_param_literals);
+                        param_string_defaults_ = std::move(saved_param_string_defaults);
+                        return TypedValue::void_val();
+                    }
+                } else if (func.params[i].default_string.has_value()) {
+                    param_buf = BufferAllocator::BUFFER_UNUSED;
                     std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
-                    param_literals_[param_hash] = args[i];
+                    param_string_defaults_[param_hash] = *func.params[i].default_string;
+                } else {
+                    error("E106", "Cannot skip required parameter '" +
+                          func.params[i].name + "' — no default value", n.location);
+                    param_literals_ = std::move(saved_param_literals);
+                    param_string_defaults_ = std::move(saved_param_string_defaults);
+                    return TypedValue::void_val();
                 }
-
-                // Visit argument in caller's scope
-                param_buf = visit(args[i]).buffer;
-
-                // Track multi-buffer arguments for polyphonic propagation
-                if (is_multi_buffer(args[i])) {
+            } else {
+                // Check if the argument is a closure or function reference
+                auto func_ref = resolve_function_arg(args[i]);
+                if (func_ref) {
+                    // Store as function ref — don't visit (would eagerly compile with unbound params)
                     std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
-                    param_multi_buffer_sources_[param_hash] = args[i];
+                    param_function_refs_[param_hash] = *func_ref;
+                    param_buf = BufferAllocator::BUFFER_UNUSED;  // placeholder — never used as audio
+                } else {
+                    // Check if the argument is a literal - record for match resolution
+                    const Node& arg_node = ast_->arena[args[i]];
+                    if (arg_node.type == NodeType::StringLit ||
+                        arg_node.type == NodeType::NumberLit ||
+                        arg_node.type == NodeType::BoolLit) {
+                        std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+                        param_literals_[param_hash] = args[i];
+                    }
+
+                    // Visit argument in caller's scope
+                    param_buf = visit(args[i]).buffer;
+
+                    // Track multi-buffer arguments for polyphonic propagation
+                    if (is_multi_buffer(args[i])) {
+                        std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
+                        param_multi_buffer_sources_[param_hash] = args[i];
+                    }
                 }
             }
         } else if (func.params[i].default_value.has_value()) {

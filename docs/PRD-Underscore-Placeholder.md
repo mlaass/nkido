@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — Design complete, no implementation yet.
+> **Status: DONE** — Implemented with smart disambiguation (default-filling vs partial application).
 
 # Underscore Placeholder PRD — Positional Default Skipping
 
@@ -23,7 +23,7 @@ This is especially valuable for DSP functions where default values are carefully
 **Key design decisions:**
 - `_` works for both **builtins** and **user-defined functions** with defaults
 - `_` on a **required parameter** (no default) is a **compile error**
-- `_` is only valid inside **function call argument lists** — error in other contexts
+- Outside function call arguments, `_` remains a normal identifier (e.g., match wildcards)
 - Trailing arguments can still be omitted as today — `_` is only needed to skip **middle** parameters
 - Multiple consecutive `_` are allowed (each skips one position)
 
@@ -88,17 +88,29 @@ delay(%, 0.25, 0.8, _, _)   // Valid but redundant
 ### 2.4 Error Cases
 
 ```akkado
-// _ on required parameter — compile error
+// _ on required parameter — compile error (E106)
 delay(_, 0.25, 0.8)
-// Error: Cannot skip required parameter 'in' — no default value
+// Error E106: Cannot skip required parameter 'in' — no default value
 
-// _ outside function call — compile error
-x = _
-// Error: '_' placeholder only valid in function arguments
-
-// _ in named argument — compile error (positional only)
+// _ in named argument — compile error (E107)
 delay(%, time: _)
-// Error: '_' placeholder not valid in named arguments
+// Error E107: '_' placeholder not valid in named arguments — use named arg omission instead
+```
+
+### 2.5 Non-Assignable: `_` as Reserved Identifier
+
+`_` cannot be used as an assignment target. It is a reserved identifier.
+
+```akkado
+_ = 42           // Error: Cannot assign to reserved identifier '_'
+const _ = 42     // Error: Cannot assign to reserved identifier '_'
+fn _(x) -> x     // Error: Cannot use '_' as a function name
+```
+
+In expression position, `_` is a normal identifier reference (which will fail as "undefined variable" since `_` can never be defined). This preserves its existing use as a wildcard in `match` arms.
+
+```akkado
+match(v) { _: 0 }  // Valid: wildcard (existing behavior)
 ```
 
 ---
@@ -119,12 +131,21 @@ For a call like `delay(%, 0.25, _, _, 0.8)`:
 3. For each argument:
    - If argument is Ident("_"):
      a. Look up parameter at this position
-     b. If parameter has a default → emit PUSH_CONST with default value
-     c. If parameter is required (no default) → emit compile error
+     b. If parameter has a default → emit PUSH_CONST with default value (E106 if no default)
+     c. If argument is named (name: _) → emit error E107
    - Otherwise: visit argument normally
 ```
 
-### 3.3 Detection
+### 3.3 Disambiguation: Default-Filling vs Partial Application
+
+`_` in function call arguments has **two** meanings, disambiguated by parameter metadata:
+
+- **All `_` at positions with defaults** → **default-filling**: `_` is replaced with the parameter's default value at codegen time. The call proceeds normally.
+- **Any `_` at a required position** → **partial application**: the analyzer rewrites the call into a closure (existing behavior).
+
+This is implemented in the analyzer (`analyzer.cpp`) via `all_placeholders_have_defaults()`, checked at both pass 1 (definition collection) and pass 2 (pipe rewriting). When default-filling is determined, the `_` Identifier nodes survive into codegen unchanged.
+
+### 3.4 Detection
 
 In codegen, when processing each argument node, check:
 
@@ -146,8 +167,9 @@ This check happens **before** normal identifier resolution, so `_` never reaches
 | `parser.cpp` | **No change** | Already parses `_` as `Identifier("_")` |
 | `codegen.cpp` | **Modified** | Builtin call: detect `_` args, fill defaults |
 | `codegen_functions.cpp` | **Modified** | User fn call: detect `_` args, fill defaults |
-| `match` wildcards | **No change** | Match arm parsing is a distinct code path |
+| `match` wildcards | **No change** | Match arm parsing is a distinct code path; `_` remains wildcard |
 | Mini-notation `~` | **No change** | Rest in patterns is a separate system |
+| Other expression contexts | **No change** | `_` remains a normal identifier outside call arguments |
 
 ---
 
@@ -155,10 +177,9 @@ This check happens **before** normal identifier resolution, so `_` never reaches
 
 | File | Change |
 |------|--------|
-| `akkado/src/codegen.cpp` | In builtin call compilation (~line 820-1089): when iterating argument nodes, detect `Identifier("_")` and substitute the builtin's default value. Error if parameter has no default. |
-| `akkado/src/codegen_functions.cpp` | In user function call compilation (~line 165-279): same detection — check for `_` placeholder, use `FunctionParamInfo` default. Error if no default exists. |
-| `akkado/src/codegen.cpp` | Add validation: if `_` appears outside a function call argument list (e.g. in assignment, array literal, pipe), emit error. |
-| `akkado/tests/test_codegen.cpp` | Tests for builtin calls with `_`, user fn calls with `_`, error cases |
+| `akkado/src/codegen.cpp` | In builtin call compilation (~line 820-1089): when iterating argument nodes, detect `Identifier("_")` and substitute the builtin's default value. Emit E106 if parameter has no default, E107 if used in named argument position. |
+| `akkado/src/codegen_functions.cpp` | In user function call compilation (~line 165-279): same detection — check for `_` placeholder, use `FunctionParamInfo` default. Emit E106 if no default exists, E107 for named args. |
+| `akkado/tests/test_codegen.cpp` | Tests for builtin calls with `_`, user fn calls with `_`, error cases (E106, E107) |
 | `akkado/tests/test_parser.cpp` | Verify `_` in argument position parses correctly (may already pass) |
 
 ---
@@ -192,17 +213,19 @@ Compile error: rest parameters have no defaults. `_` is not valid in rest parame
 ### 6.4 User Function with Expression Default
 
 ```akkado
-fn f(x, y = x * 2) = x + y
-f(10, _)    // Should use default: y = 10 * 2 = 20
+fn f(x, y = sin(0.5) * 100) = x + y
+f(10, _)    // Uses compile-time evaluated default for y
 ```
-Valid. Expression defaults are evaluated by `ConstEvaluator` — same path as trailing omission today.
+Valid for **constant** expression defaults (literals, math builtins, const variables). `ConstEvaluator` evaluates the default node at compile time — same path as trailing omission today.
+
+**Limitation:** Expression defaults that reference other parameters (e.g., `y = x * 2`) are **not** supported — `ConstEvaluator` does not receive parameter bindings, so it cannot resolve `x`. This fails with E105 ("Cannot evaluate default expression at compile time"). This is an existing limitation of trailing omission, not specific to `_`.
 
 ### 6.5 Named Arguments Mixed with Positional
 
 ```akkado
 delay(%, 0.25, _, wet: 0.8)   // Positional _ then named arg
 ```
-If named arguments are supported: the `_` applies to positional parameter 2 (`fb`). Named args bypass positional ordering. `_` in a named arg position (`wet: _`) is an error since named args already skip by omission.
+The `_` applies to positional parameter 2 (`fb`). Named args bypass positional ordering. `_` in a named arg position (`wet: _`) is error E107, since named args already skip by omission.
 
 ### 6.6 Redundant Trailing Underscores
 
@@ -222,10 +245,10 @@ Valid but redundant. Same result as `delay(%, 0.25, 0.8)`. No warning emitted.
 auto r = compile("delay(osc(\"sin\", 440), 0.25, _, _, 0.8)");
 CHECK(r.success);
 
-// _ on required param → error
+// _ on required param → E106
 auto r2 = compile("delay(_, 0.25, 0.8)");
 CHECK_FALSE(r2.success);
-// Check for appropriate error code
+CHECK(has_error_code(r2, "E106"));
 
 // Same bytecode: explicit defaults vs _
 auto r3 = compile("lp(osc(\"sin\", 440), 5000, _)");
@@ -240,25 +263,23 @@ CHECK(r3.bytecode.size() == r4.bytecode.size());
 auto r = compile("fn f(x, y = 10, z = 20) = x + y + z\nf(1, _, 30)");
 CHECK(r.success);
 
-// _ with expression default
+// _ with constant expression default
 auto r2 = compile("fn g(x, y = 100) = x * y\ng(5, _)");
 CHECK(r2.success);
 
-// _ on required user fn param → error
+// _ on required user fn param → E106
 auto r3 = compile("fn h(x, y) = x + y\nh(1, _)");
 CHECK_FALSE(r3.success);
+CHECK(has_error_code(r3, "E106"));
 ```
 
 ### 7.3 Error Cases
 
 ```cpp
-// _ outside function call
-auto r = compile("x = _");
+// _ in named argument → E107
+auto r = compile("delay(osc(\"sin\", 440), time: _)");
 CHECK_FALSE(r.success);
-
-// _ in array
-auto r2 = compile("[1, _, 3]");
-CHECK_FALSE(r2.success);
+CHECK(has_error_code(r, "E107"));
 ```
 
 ### 7.4 Build & Run
@@ -268,3 +289,29 @@ cmake --build build --target akkado_tests
 ./build/akkado/tests/akkado_tests "[codegen]"
 ./build/akkado/tests/akkado_tests "[parser]"
 ```
+
+---
+
+## 8. Implementation Checklist
+
+- [ ] `codegen.cpp`: Detect `Identifier("_")` in builtin call argument iteration, emit `PUSH_CONST` with default
+- [ ] `codegen.cpp`: Emit E106 when `_` is used on a required builtin parameter
+- [ ] `codegen.cpp`: Emit E107 when `_` is used in a named argument position
+- [ ] `codegen_functions.cpp`: Same `_` detection for user function calls, fill from `FunctionParamInfo` defaults
+- [ ] `codegen_functions.cpp`: Emit E106 for required user fn params, E107 for named args
+- [ ] `test_codegen.cpp`: Builtin `_` tests (skip middle, all placeholders, redundant trailing)
+- [ ] `test_codegen.cpp`: User fn `_` tests (numeric default, expression default, required param error)
+- [ ] `test_codegen.cpp`: Error case tests (E106, E107)
+- [ ] `test_codegen.cpp`: Bytecode equivalence test (explicit defaults vs `_`)
+- [ ] `test_parser.cpp`: Verify `_` in argument position parses as `Identifier("_")`
+
+---
+
+## 9. Done Criteria
+
+- All checklist items complete and tests passing
+- `delay(%, 0.25, _, _, 0.8)` compiles to identical bytecode as `delay(%, 0.25, 0.0, 0.0, 0.8)`
+- `_` on required parameter produces E106 with clear error message
+- `_` in named argument produces E107
+- `_` in non-call contexts (assignment, match, array) is unaffected — remains a normal identifier
+- No regressions in existing `match` wildcard behavior

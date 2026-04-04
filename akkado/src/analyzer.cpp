@@ -49,6 +49,70 @@ AnalysisResult SemanticAnalyzer::analyze(const Ast& ast, std::string_view filena
     return result;
 }
 
+// Check if a call node has _ placeholders at a given position
+static bool is_placeholder_node(const AstArena& arena, NodeIndex child) {
+    const Node& cn = arena[child];
+    if (cn.type == NodeType::Identifier &&
+        std::holds_alternative<Node::IdentifierData>(cn.data) &&
+        cn.as_identifier() == "_") {
+        return true;
+    }
+    if (cn.type == NodeType::Argument && cn.first_child != NULL_NODE) {
+        const Node& inner = arena[cn.first_child];
+        if (inner.type == NodeType::Identifier &&
+            std::holds_alternative<Node::IdentifierData>(inner.data) &&
+            inner.as_identifier() == "_") {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Check if all _ placeholders in a call are at positions with defaults.
+// Returns true if this should be default-filling (not partial application).
+static bool all_placeholders_have_defaults(const AstArena& arena,
+                                            const Node& call_node,
+                                            const SymbolTable& symbols) {
+    if (!std::holds_alternative<Node::IdentifierData>(call_node.data)) {
+        return false;
+    }
+    const std::string& func_name = call_node.as_identifier();
+
+    const BuiltinInfo* builtin = lookup_builtin(func_name);
+
+    const UserFunctionInfo* user_func = nullptr;
+    if (!builtin) {
+        auto sym = symbols.lookup(func_name);
+        if (sym && sym->kind == SymbolKind::UserFunction) {
+            user_func = &sym->user_function;
+        }
+    }
+
+    if (!builtin && !user_func) {
+        return false;  // Unknown function — assume partial application
+    }
+
+    std::size_t arg_idx = 0;
+    NodeIndex child = call_node.first_child;
+    while (child != NULL_NODE) {
+        if (is_placeholder_node(arena, child)) {
+            if (builtin) {
+                if (!builtin->has_default(arg_idx)) return false;
+            } else {
+                if (arg_idx >= user_func->params.size()) return false;
+                const auto& param = user_func->params[arg_idx];
+                bool has_default = param.default_value.has_value() ||
+                                   param.default_node != NULL_NODE ||
+                                   param.default_string.has_value();
+                if (!has_default) return false;
+            }
+        }
+        ++arg_idx;
+        child = arena[child].next_sibling;
+    }
+    return true;
+}
+
 std::string SemanticAnalyzer::extract_definition_name(const Node& n) {
     if (n.type == NodeType::Assignment || n.type == NodeType::ConstDecl) {
         if (std::holds_alternative<Node::IdentifierData>(n.data)) {
@@ -322,8 +386,10 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
                     child = (*input_ast_).arena[child].next_sibling;
                 }
             }
-            if (has_placeholder) {
-                // Will be rewritten to a closure during pipe rewriting
+            if (has_placeholder &&
+                !all_placeholders_have_defaults((*input_ast_).arena,
+                                                 (*input_ast_).arena[rhs], symbols_)) {
+                // Partial application: will be rewritten to a closure during pipe rewriting
                 // Count placeholder params
                 std::size_t placeholder_count = 0;
                 NodeIndex child = (*input_ast_).arena[rhs].first_child;
@@ -667,8 +733,9 @@ NodeIndex SemanticAnalyzer::clone_subtree(NodeIndex src_idx) {
             child = (*input_ast_).arena[child].next_sibling;
         }
 
-        if (has_placeholder) {
-            // Build closure: replace each _ with a generated param name
+        if (has_placeholder &&
+            !all_placeholders_have_defaults((*input_ast_).arena, src, symbols_)) {
+            // Partial application: Build closure replacing each _ with a generated param name
             // 1. Clone the call, replacing _ with generated param names
             NodeIndex cloned_call = clone_node(src_idx);
             std::vector<std::string> param_names;
@@ -1365,9 +1432,12 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
             // Shouldn't happen - unknown data type for Identifier node
             return;
         }
-        auto sym = symbols_.lookup(name);
-        if (!sym) {
-            error("E005", "Undefined identifier: '" + name + "'", n.location);
+        // Skip validation for _ placeholder — handled by codegen in call arguments
+        if (name != "_") {
+            auto sym = symbols_.lookup(name);
+            if (!sym) {
+                error("E005", "Undefined identifier: '" + name + "'", n.location);
+            }
         }
         // FunctionValue and UserFunction can be used as values
         // (already allowed by symbol table lookup)

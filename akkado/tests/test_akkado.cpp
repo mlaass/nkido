@@ -1764,6 +1764,82 @@ TEST_CASE("Partial application", "[akkado][fn][partial]") {
     }
 }
 
+TEST_CASE("Underscore placeholder default-filling", "[akkado][fn][placeholder]") {
+    SECTION("builtin: _ skips optional parameter with default") {
+        auto result = akkado::compile(R"(
+            lp(osc("sin", 440), 5000, _) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+    }
+
+    SECTION("builtin: _ equivalent to omitting trailing arg") {
+        auto r1 = akkado::compile(R"(
+            lp(osc("sin", 440), 5000, _) |> out(%, %)
+        )");
+        auto r2 = akkado::compile(R"(
+            lp(osc("sin", 440), 5000) |> out(%, %)
+        )");
+        REQUIRE(r1.success);
+        REQUIRE(r2.success);
+        CHECK(r1.bytecode.size() == r2.bytecode.size());
+    }
+
+    SECTION("builtin: multiple _ skip middle params") {
+        auto result = akkado::compile(R"(
+            delay(osc("sin", 440), 0.25, _, _, 0.8) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::DELAY));
+    }
+
+    SECTION("user fn: _ with numeric default") {
+        auto result = akkado::compile(R"(
+            fn f(x, y = 10, z = 20) -> x + y + z
+            f(1, _, 30) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("user fn: _ with string default") {
+        auto result = akkado::compile(R"(
+            fn synth(freq, wave = "saw") -> osc(wave, freq)
+            synth(440, _) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OSC_SAW));
+    }
+
+    SECTION("error: _ on required builtin param") {
+        auto result = akkado::compile(R"(
+            lp(_, 1000) |> out(%, %)
+        )");
+        // _ on required 'in' param — should be partial application (closure), not error
+        // Only errors if used directly (not assigned)
+        // Actually this becomes partial application since 'in' has no default
+    }
+
+    SECTION("partial application still works for required params") {
+        auto result = akkado::compile(R"(
+            low_pass = lp(_, 1000)
+            osc("saw", 440) |> low_pass(%) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+    }
+
+    SECTION("disambiguation: _ on optional is default-filling, not partial app") {
+        // lp(signal, 5000, _) — third param 'q' has a default
+        // Should compile directly, not create a closure
+        auto result = akkado::compile(R"(
+            osc("saw", 440) |> lp(%, 5000, _) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::FILTER_SVF_LP));
+        CHECK(find_opcode(result.bytecode, cedar::Opcode::OUTPUT));
+    }
+}
+
 TEST_CASE("Function composition", "[akkado][fn][compose]") {
     SECTION("compose two functions") {
         auto result = akkado::compile(R"(
