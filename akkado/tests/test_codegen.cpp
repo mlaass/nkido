@@ -2842,6 +2842,31 @@ TEST_CASE("Codegen: Pipe expressions", "[codegen]") {
     }
 }
 
+TEST_CASE("Codegen: >> and @ aliases", "[codegen]") {
+    SECTION(">> and @ produce same bytecode as |> and %") {
+        auto r1 = akkado::compile("osc(\"sin\", 440) |> out(%, %)");
+        auto r2 = akkado::compile("osc(\"sin\", 440) >> out(@, @)");
+        REQUIRE(r1.success);
+        REQUIRE(r2.success);
+        CHECK(r1.bytecode.size() == r2.bytecode.size());
+    }
+
+    SECTION("@ field access compiles") {
+        auto result = akkado::compile("pat(\"c4 e4 g4\") >> osc(\"sin\", @.freq)");
+        CHECK(result.success);
+    }
+
+    SECTION("@ in unexpected context still errors") {
+        auto result = akkado::compile("@");
+        REQUIRE_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E003") found = true;
+        }
+        CHECK(found);
+    }
+}
+
 TEST_CASE("Codegen: Sample pattern event inspection", "[codegen][samples][debug]") {
     SECTION("sample pattern compiles with SAMPLE_PLAY and correct events") {
         auto result = akkado::compile(R"(pat("hh hh hh [hh hh] hh hh hh [hh oh]") |> out(%))");

@@ -935,6 +935,35 @@ TEST_CASE("Lexer complex expressions", "[lexer]") {
         CHECK(tokens[10].type == TokenType::RParen);
     }
 
+    SECTION(">> alias for pipe") {
+        auto [tokens, diags] = lex("saw(440) >> lp(@, 1000)");
+        REQUIRE(diags.empty());
+
+        // saw ( 440 ) >> lp ( @ , 1000 )
+        CHECK(tokens[0].type == TokenType::Identifier);
+        CHECK(tokens[1].type == TokenType::LParen);
+        CHECK(tokens[2].type == TokenType::Number);
+        CHECK(tokens[3].type == TokenType::RParen);
+        CHECK(tokens[4].type == TokenType::Pipe);
+        CHECK(tokens[5].type == TokenType::Identifier);
+        CHECK(tokens[6].type == TokenType::LParen);
+        CHECK(tokens[7].type == TokenType::At);
+        CHECK(tokens[8].type == TokenType::Comma);
+        CHECK(tokens[9].type == TokenType::Number);
+        CHECK(tokens[10].type == TokenType::RParen);
+    }
+
+    SECTION(">> does not break >= or >") {
+        auto [tokens, diags] = lex("a > b >= c");
+        REQUIRE(diags.empty());
+
+        CHECK(tokens[0].type == TokenType::Identifier);
+        CHECK(tokens[1].type == TokenType::Greater);
+        CHECK(tokens[2].type == TokenType::Identifier);
+        CHECK(tokens[3].type == TokenType::GreaterEqual);
+        CHECK(tokens[4].type == TokenType::Identifier);
+    }
+
     SECTION("closure") {
         auto [tokens, diags] = lex("(x, y) -> x + y");
         REQUIRE(diags.empty());

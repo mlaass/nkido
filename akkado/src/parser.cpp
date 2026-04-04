@@ -446,6 +446,7 @@ NodeIndex Parser::parse_prefix() {
         case TokenType::Identifier:
             return parse_identifier_or_call();
         case TokenType::Hole:
+        case TokenType::At:
             return parse_hole();
         case TokenType::LParen:
             return parse_grouping();
@@ -539,7 +540,7 @@ NodeIndex Parser::parse_string() {
 }
 
 NodeIndex Parser::parse_hole() {
-    Token tok = advance();  // consume '%'
+    Token tok = advance();  // consume '%' or '@'
     NodeIndex node = make_node(NodeType::Hole, tok);
 
     // Check for field access: %.field
@@ -564,7 +565,7 @@ NodeIndex Parser::parse_hole() {
                 arena_[node].data = Node::HoleData{std::string(field_tok.lexeme)};
             }
         } else {
-            error("Expected field name after '%.'");
+            error("Expected field name after hole '.' access");
             arena_[node].data = Node::HoleData{std::nullopt};
         }
     } else {

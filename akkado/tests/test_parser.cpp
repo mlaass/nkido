@@ -464,8 +464,8 @@ TEST_CASE("Parser error handling", "[parser]") {
     }
 
     SECTION("invalid token") {
-        auto [tokens, lex_diags] = lex("x @ y");  // @ is not a valid operator
-        auto [ast, parse_diags] = parse(std::move(tokens), "x @ y");
+        auto [tokens, lex_diags] = lex("x $ y");  // $ is not a valid token
+        auto [ast, parse_diags] = parse(std::move(tokens), "x $ y");
         // Should either lex error or parse error
         bool has_error = !lex_diags.empty() || !parse_diags.empty();
         CHECK(has_error);
@@ -1354,6 +1354,54 @@ TEST_CASE("Parser hole field access", "[parser][records]") {
         REQUIRE(ast.arena[rhs].type == NodeType::Hole);
         auto& hole_data = ast.arena[rhs].as_hole();
         CHECK_FALSE(hole_data.field_name.has_value());
+    }
+}
+
+TEST_CASE("Parser >> and @ aliases", "[parser]") {
+    SECTION(">> as pipe alias") {
+        auto ast = parse_ok("saw(440) >> lp(%, 1000)");
+        NodeIndex root = ast.root;
+        NodeIndex pipe = ast.arena[root].first_child;
+        REQUIRE(ast.arena[pipe].type == NodeType::Pipe);
+
+        NodeIndex lhs = ast.arena[pipe].first_child;
+        REQUIRE(ast.arena[lhs].type == NodeType::Call);
+        NodeIndex rhs = ast.arena[lhs].next_sibling;
+        REQUIRE(ast.arena[rhs].type == NodeType::Call);
+    }
+
+    SECTION("@ as hole alias") {
+        auto ast = parse_ok("1 |> @ + 2");
+        NodeIndex root = ast.root;
+        NodeIndex pipe = ast.arena[root].first_child;
+        REQUIRE(ast.arena[pipe].type == NodeType::Pipe);
+
+        // RHS is desugared to add(@, 2) Call
+        NodeIndex lhs = ast.arena[pipe].first_child;
+        NodeIndex rhs = ast.arena[lhs].next_sibling;
+        REQUIRE(ast.arena[rhs].type == NodeType::Call);
+        CHECK(ast.arena[rhs].as_identifier() == "add");
+    }
+
+    SECTION("@ with field access") {
+        auto ast = parse_ok("pat(\"c4\") >> @.freq");
+        NodeIndex root = ast.root;
+        NodeIndex pipe = ast.arena[root].first_child;
+        REQUIRE(ast.arena[pipe].type == NodeType::Pipe);
+
+        NodeIndex lhs = ast.arena[pipe].first_child;
+        NodeIndex rhs = ast.arena[lhs].next_sibling;
+        REQUIRE(ast.arena[rhs].type == NodeType::Hole);
+        auto& hole_data = ast.arena[rhs].as_hole();
+        REQUIRE(hole_data.field_name.has_value());
+        CHECK(hole_data.field_name.value() == "freq");
+    }
+
+    SECTION(">> and @ together in chain") {
+        auto ast = parse_ok("saw(440) >> lp(@, 1000) >> @ * 0.5");
+        NodeIndex root = ast.root;
+        NodeIndex outer_pipe = ast.arena[root].first_child;
+        REQUIRE(ast.arena[outer_pipe].type == NodeType::Pipe);
     }
 }
 

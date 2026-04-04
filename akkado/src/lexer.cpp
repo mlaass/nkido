@@ -276,6 +276,9 @@ Token Lexer::lex_token() {
             return make_token(TokenType::Less);
 
         case '>':
+            if (match('>')) {
+                return make_token(TokenType::Pipe);  // >> alias for |>
+            }
             if (match('=')) {
                 return make_token(TokenType::GreaterEqual);
             }
