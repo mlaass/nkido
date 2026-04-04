@@ -5,7 +5,7 @@
  */
 
 import { DEFAULT_DRUM_KIT } from '$lib/audio/default-samples';
-import { DEFAULT_SOUNDFONTS, resolveDefaultSoundFontUrl } from '$lib/audio/default-soundfonts';
+import { DEFAULT_SOUNDFONTS, resolveDefaultSoundFontUrls } from '$lib/audio/default-soundfonts';
 import { settingsStore } from './settings.svelte';
 import { bankRegistry, type SampleReference } from '$lib/audio/bank-registry';
 import { loadFile, type FileSource } from '$lib/io/file-loader';
@@ -964,12 +964,21 @@ function createAudioEngine() {
 				if (state.loadedSoundfonts.some((s) => s.name === sf.filename)) continue;
 
 				// Resolve short names (e.g., "gm") to default soundfont URLs
-				const defaultUrl = resolveDefaultSoundFontUrl(sf.filename);
-				const url = defaultUrl ?? sf.filename;
+				const defaultUrls = resolveDefaultSoundFontUrls(sf.filename);
+				const urls = defaultUrls.length > 0 ? defaultUrls : [sf.filename];
 
-				try {
-					await loadSoundFontFromUrl(sf.filename, url);
-				} catch (e) {
+				let loaded = false;
+				for (const url of urls) {
+					try {
+						await loadSoundFontFromUrl(sf.filename, url);
+						loaded = true;
+						break;
+					} catch {
+						// Try next URL
+					}
+				}
+				if (!loaded) {
+					const e = new Error(`All URLs failed for '${sf.filename}'`);
 					console.warn(`[AudioEngine] Failed to load SoundFont '${sf.filename}':`, e);
 					return {
 						success: false,
@@ -1268,15 +1277,21 @@ function createAudioEngine() {
 				// Skip if already loaded
 				if (state.loadedSoundfonts.some((s) => s.name === sf.name)) continue;
 
-				try {
-					const info = await loadSoundFontFromUrl(sf.name, sf.url);
-					if (info) {
-						console.log(`[AudioEngine] Default SoundFont '${sf.name}' loaded: ${info.presetCount} presets`);
-					} else {
-						console.warn(`[AudioEngine] Default SoundFont '${sf.name}' failed to load`);
+				let loaded = false;
+				for (const url of sf.urls) {
+					try {
+						const info = await loadSoundFontFromUrl(sf.name, url);
+						if (info) {
+							console.log(`[AudioEngine] Default SoundFont '${sf.name}' loaded: ${info.presetCount} presets`);
+							loaded = true;
+							break;
+						}
+					} catch {
+						// Try next URL
 					}
-				} catch (err) {
-					console.warn(`[AudioEngine] Default SoundFont '${sf.name}' error:`, err);
+				}
+				if (!loaded) {
+					console.warn(`[AudioEngine] Default SoundFont '${sf.name}' failed to load from all URLs`);
 				}
 			}
 		})();

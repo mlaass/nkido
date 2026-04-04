@@ -1,13 +1,13 @@
 export interface DefaultSoundFont {
 	name: string; // Reference name for soundfont() calls
-	url: string; // Static asset URL
+	urls: string[]; // Static asset URLs (tried in order, first success wins)
 }
 
 export const DEFAULT_SOUNDFONTS: DefaultSoundFont[] = [
-	{ name: 'gm', url: '/soundfonts/MuseScore_General.sf3' }
+	{ name: 'gm', urls: ['/soundfonts/TimGM6mb.sf3', '/soundfonts/TimGM6mb.sf2'] }
 ];
 
-export function resolveDefaultSoundFontUrl(name: string): string | null {
+export function resolveDefaultSoundFontUrls(name: string): string[] {
 	const sf = DEFAULT_SOUNDFONTS.find((s) => s.name === name);
-	return sf?.url ?? null;
+	return sf?.urls ?? [];
 }
