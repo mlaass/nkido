@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — No TypedValue struct or type checking infrastructure exists.
+> **Status: PHASE 1 COMPLETE** — TypedValue struct, ValueType enum, and visit() returning TypedValue are implemented (`akkado/include/akkado/typed_value.hpp`). All ad-hoc maps replaced by `node_types_`. Phase 2 (type annotations on builtins) and Phase 3 (leveraging types for new features) remain.
 
 # PRD: Akkado Compiler Type System
 

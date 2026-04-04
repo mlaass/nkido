@@ -1,4 +1,4 @@
-> **Status: PARTIAL** — Phases 1+3 done (arrays, map, chord expansion). Phases 2, 4-8 intentionally deferred to object system revamp (see Section 8).
+> **Status: PARTIAL** — Phases 1, 3, 6 done. Phase 2 mostly resolved via dot-call desugaring. Phase 7 (time/structure modifiers) and Phase 8 (algorithmic generators) are unblocked and in progress. Phase 4 (voicing) deferred. Phase 5 (extended note properties) partially done.
 
 # PRD: Strudel-Style Pattern System Extensions
 
@@ -149,11 +149,13 @@ drums.slow(2).rev() |> sampler(%) |> out(%, %)
 | Chord expansion | ✓ Complete | Chords in mini-notation expand to multi-voice via `pat()`/`chord()` |
 | Chord parsing | ✓ Complete | Strudel-compatible `chord("Am")` inside patterns |
 | `C4'` standalone syntax | Deprecated | Stub (root only) — use chords inside `pat()`/`chord()` instead |
-| Method chaining | Deferred | Awaiting object system revamp (Section 8) |
-| Voicing system | Deferred | Depends on method chaining (Section 8) |
-| Polymeter `{x}` | Deferred | Nice-to-have, not blocking core functionality |
+| Dot-call syntax | ✓ Complete | `pat("c4").slow(2)` desugars to `slow(pat("c4"), 2)` |
+| Pattern transforms | ✓ Partial | `slow`, `fast`, `rev`, `transpose`, `velocity`, `bank`, `variant` done. Time/structure modifiers (Phase 7) in progress |
+| Polymeter `{x}` | ✓ Complete | Tokens, lexer, parser, AST node, evaluator all implemented and tested |
+| TypedValue system | ✓ Complete | Full type tracking replaces ad-hoc maps (see PRD-Compiler-Type-System) |
+| Voicing system | Deferred | Algorithms not yet implemented |
 | String-as-pattern | Deferred | Explicit `pat()` is the endorsed approach |
-| Algorithmic generators | Deferred | Nice-to-have |
+| Algorithmic generators | Partial | `euclid(k, n, rot)` exists as Cedar opcode. `run()`, `binary()` not yet implemented |
 
 ## 4. Implementation Phases
 
@@ -308,58 +310,75 @@ note("c4").velocity(0.7).dur(0.5)
 - `akkado/src/pattern_eval.cpp` — Property methods
 - `akkado/src/codegen.cpp` — Property handling
 
-### Phase 6: Polymeter
+### Phase 6: Polymeter — ✓ COMPLETE
 
-**Goal**: `{x y}` and `{x}%n` syntax.
+**Status**: Fully implemented and tested.
 
-**Scope**:
-1. Curly brace tokens in mini-lexer
-2. Polymeter AST node
-3. LCM-based pattern alignment
-4. `polymeterSteps(n, pattern)` functional equivalent
+**Implemented**:
+1. `LBrace`/`RBrace`/`Percent` tokens in `mini_token.hpp`
+2. Lexer handles `{`, `}`, `%` in `mini_lexer.cpp`
+3. `MiniPolymeter` AST node with `MiniPolymeterData.step_count` in `ast.hpp`
+4. Parser: `parse_polymeter()` in `mini_parser.cpp` handles `{x y}` and `{x y}%n`
+5. Evaluator: `eval_polymeter()` in `pattern_eval.cpp` — divides parent duration into N equal steps, cycles through children
 
 **Syntax**:
 ```akkado
 "[bd sd] {hh hh hh}"   // 2 vs 3 polyrhythm
-"{bd sd hh cp}%5"      // 5-step pattern
+"{bd sd hh cp}%5"      // 5-step pattern over cycle
 ```
 
+**Tests**: `test_mini_notation.cpp` — polymeter tokens, basic parsing, step count, nested polymeter, evaluation
+
+### Phase 7: Time & Structure Modifiers — IN PROGRESS
+
+**Goal**: Strudel-compatible pattern transform functions. All are compile-time transforms on the event list, callable via both functional and dot-call syntax (e.g. `early(pat, 0.25)` or `pat.early(0.25)`).
+
+**Already implemented** (same architecture): `slow`, `fast`, `rev`, `transpose`, `velocity`, `bank`, `variant`
+
+**To implement** — compile-time event transforms following the existing pattern (register in `builtins.hpp` with NOP opcode, add to `is_pattern_call()`, add transform logic in `compile_pattern_for_transform()`, add handler in `codegen_patterns.cpp`, register dispatch in `codegen.cpp`):
+
+| Function | Args | Semantics (per Strudel) |
+|----------|------|------------------------|
+| `early(pat, n)` | n: cycles | Shift all events earlier by n cycles (wrap around). Equivalent to Tidal's `<~` |
+| `late(pat, n)` | n: cycles | Shift all events later by n cycles (wrap around). Equivalent to Tidal's `~>` |
+| `palindrome(pat)` | — | Reverse event order every other cycle. Alternates forward/backward playback |
+| `iter(pat, n)` | n: subdivisions | Divide pattern into n parts, play sequentially, increment starting subdivision each cycle (wraps). **Requires runtime cycle tracking** |
+| `iterBack(pat, n)` | n: subdivisions | Same as `iter` but decrements starting subdivision each cycle |
+| `ply(pat, n)` | n: repeats | Repeat each event n times within its original timespan |
+| `linger(pat, n)` | n: fraction (0-1) | Keep only the first n fraction of the pattern, repeat to fill the cycle |
+| `zoom(pat, start, end)` | start/end: 0-1 | Extract the `[start, end)` time range and stretch it to fill the cycle |
+| `compress(pat, start, end)` | start/end: 0-1 | Squeeze the entire pattern into `[start, end)`, leaving silence elsewhere. **Note:** naming conflicts with `comp` audio compressor alias — may need `pcompress` or type-based disambiguation |
+| `segment(pat, n)` | n: int | Sample the pattern at n evenly-spaced points per cycle, converting continuous to discrete |
+| `swingBy(pat, amount, n)` | amount: 0-1, n: slices | Divide cycle into n slices, delay events in the second half of each slice by `amount` relative to half-slice size. 0=straight, 0.5=half-note delay, 1=wraps to straight |
+| `swing(pat, n)` | n: slices | Shorthand for `swingBy(pat, 1/3, n)` — standard jazz swing feel |
+
+**Implementation notes:**
+- Most transforms are purely compile-time (modify `cedar::Event` fields in `compile_pattern_for_transform()`)
+- `iter`/`iterBack` need runtime cycle awareness — may require generating multiple cycles of events or a new approach
+- `palindrome` can be implemented by doubling `cycle_length` and appending reversed events
+- `segment` converts continuous patterns to discrete — may need special handling for non-pattern inputs
+
 **Files to Modify**:
-- `akkado/include/akkado/mini_token.hpp` — Curly brace tokens
-- `akkado/src/mini_lexer.cpp` — Polymeter tokens
-- `akkado/src/mini_parser.cpp` — Polymeter AST node
-- `akkado/src/pattern_eval.cpp` — LCM alignment
+- `akkado/include/akkado/builtins.hpp` — Register new NOP builtins
+- `akkado/include/akkado/codegen.hpp` — Declare handler functions
+- `akkado/src/codegen.cpp` — Register dispatch entries
+- `akkado/src/codegen_patterns.cpp` — Handler implementations + `compile_pattern_for_transform()` cases + `is_pattern_call()` entries
 
-### Phase 7: Time & Structure Modifiers
+### Phase 8: Algorithmic Generators — PARTIAL
 
-**Goal**: Full Strudel modifier set.
+**Already implemented:**
+- `euclid(hits, steps, rot)` — Cedar opcode `EUCLID`, runtime euclidean rhythm generator with optional rotation
+- Euclidean in mini-notation — `(k,n)` syntax inside `pat()`
 
-**Categories**:
+**To implement** — pattern constructors that generate event sequences at compile time:
 
-| Category | Methods |
-|----------|---------|
-| Speed | `slow(n)`, `fast(n)`, `fastGap(n)`, `cpm(n)` |
-| Offset | `early(n)`, `late(n)`, `ribbon(n)` |
-| Reorder | `rev()`, `palindrome()`, `iter(n)`, `iterBack(n)`, `ply(n)` |
-| Segment | `segment(n)`, `compress(s,e)`, `zoom(s,e)`, `linger(n)`, `swing(n)`, `swingBy(n,div)` |
-| Scope | `inside(n,fn)`, `outside(n,fn)` |
+| Function | Args | Description |
+|----------|------|-------------|
+| `run(n)` | n: int | Integer sequence pattern with values 0, 1, 2, ... n-1 as evenly-spaced events |
+| `binary(n)` | n: int | Binary representation of n as trigger pattern (1=trigger, 0=rest) |
+| `binaryN(n, bits)` | n: int, bits: int | Fixed-width binary pattern (zero-padded to `bits` width) |
 
-**Files to Modify**:
-- `akkado/src/pattern_eval.cpp` — All time modifiers
-- `akkado/include/akkado/pattern_eval.hpp` — Method declarations
-
-### Phase 8: Algorithmic Generators
-
-**Goal**: Pattern generation functions.
-
-| Function | Description |
-|----------|-------------|
-| `run(n)` | Integer sequence 0 to n-1 |
-| `binary(n)` | Binary representation as pattern |
-| `binaryN(n, bits)` | Fixed-width binary |
-| `euclid(k, n)` | Euclidean rhythm |
-| `euclidRot(k, n, r)` | Rotated euclidean |
-| `euclidLegato(k, n)` | Legato euclidean |
+**Implementation approach**: These are pattern *constructors* (like `pat()`), not transforms. They generate a `PatternEventStream` at compile-time, then emit `SEQPAT_QUERY`/`SEQPAT_STEP` instructions referencing the generated events.
 
 ## 5. Open Questions
 
@@ -424,72 +443,47 @@ Edge cases where valid mini-notation could also be a valid string:
 - Live-coding workflow supports expressive chord/pattern manipulation
 - No performance regression in audio path
 
-## 8. Deferred to Object System Revamp
+## 8. Resolved and Remaining Deferrals
 
-The following features require method chaining and are deferred until the object system is revamped to ensure coherent design across all types (patterns, arrays, chords, audio signals).
+### Resolved: Method Chaining via Dot-Call Desugaring
 
-### Method Chaining (Deferred)
+The original blocker for Phase 7 was method chaining. This has been resolved via **dot-call desugaring**: `pat("c4").slow(2)` is parsed and desugared to `slow(pat("c4"), 2)` at the AST level. This works for all pattern transforms, array operations, and audio functions uniformly.
 
-**Time Manipulation**:
-- `.slow(n)` - stretch pattern over n cycles
-- `.fast(n)` - compress pattern to 1/n cycles
-- `.fastGap(n)` - fast with gaps
-- `.cpm(n)` - cycles per minute
-
-**Time Offset**:
-- `.early(n)` - shift events earlier
-- `.late(n)` - shift events later
-- `.ribbon(n)` - continuous offset
-
-**Reordering**:
-- `.rev()` - reverse event order
-- `.palindrome()` - forward then backward
-- `.iter(n)` - rotate pattern
-- `.iterBack(n)` - rotate backward
-- `.ply(n)` - repeat each event
-
-**Segmentation**:
-- `.segment(n)` - sample pattern at n points
-- `.compress(start, end)` - time range
-- `.zoom(start, end)` - focus on range
-- `.linger(n)` - repeat first n
-- `.swing(n)` - swing timing
-- `.swingBy(amount, division)` - configurable swing
-
-**Scope**:
-- `.inside(n, fn)` - apply fn inside n cycles
-- `.outside(n, fn)` - apply fn outside n cycles
-
-### Note Properties (Deferred)
-
-- `.velocity(pattern)` - per-note velocity
-- `.bend(pattern)` - pitch bend
-- `.aftertouch(pattern)` - channel pressure
-- `.dur(pattern)` - note duration
-
-### Voicing (Deferred)
-
-- `.anchor(note)` - voicing center of gravity
-- `.mode("below" | "above" | "duck" | "root")` - voicing mode
-- Voice leading algorithms
-- Custom voicing dictionaries via `addVoicings(name, map)`
-
-### String-as-Pattern (Deferred)
+All time/structure modifiers can be implemented as regular functions and automatically gain dot-call syntax. No special object system needed.
 
 ```akkado
-// Deferred: auto-parsing strings as patterns
-"bd sd".slow(2)  // Would require method chaining
+// Both forms work identically today:
+slow(pat("c4 e4"), 2)       // functional
+pat("c4 e4").slow(2)        // dot-call (desugars to above)
 
-// Current: explicit pat() function
-pat("bd sd")     // Works now
+// Chaining works:
+pat("c4 e4").slow(2).rev()  // desugars to rev(slow(pat("c4 e4"), 2))
 ```
 
-### Rationale
+### Resolved: TypedValue System
 
-Method chaining should be designed holistically to work consistently across:
-- Patterns: `pat("bd sd").slow(2)`
-- Arrays: `[1, 2, 3].map(x => x * 2)`
-- Chords: `chord("Am").anchor("c5")`
-- Audio signals: potentially `osc("saw", 440).lp(1000)`
+The `TypedValue` struct, `ValueType` enum, and `visit()` returning typed values are fully implemented (see PRD-Compiler-Type-System). This replaces the old ad-hoc maps and enables type-aware compilation. Pattern, Record, Array, Signal, Number, String, Function, and Void types are all tracked.
 
-Adding method chaining piecemeal would create inconsistent APIs. Better to defer until the object model is designed to support uniform method dispatch across all value types.
+### Still Deferred
+
+**Voicing system** (Phase 4):
+- `.anchor(note)` / `anchor(chord, note)` — voicing center of gravity
+- `.mode("below" | "above" | "duck" | "root")` — voicing mode
+- Voice leading algorithms
+- Custom voicing dictionaries via `addVoicings(name, map)`
+- Can be implemented as regular functions with dot-call. Deferred due to algorithm complexity, not architecture.
+
+**String-as-Pattern auto-parsing**:
+- `"bd sd".slow(2)` — auto-parsing bare strings as patterns
+- Current approach: explicit `pat("bd sd").slow(2)`
+- Deferred: design question about disambiguation, not a technical blocker
+
+**Scope modifiers** (lower priority):
+- `inside(n, fn)` — apply fn inside n cycles
+- `outside(n, fn)` — apply fn outside n cycles
+- These take function arguments and apply them at different time scales. Requires more design thought around how closures interact with pattern transforms.
+
+**Extended note properties** (partially done):
+- `velocity(pat, value)` — implemented as pattern transform
+- Mini-notation velocity suffix `c4:0.8` — implemented
+- `.bend(pattern)`, `.aftertouch(pattern)`, `.dur(pattern)` — deferred, can be added as transforms following same pattern
