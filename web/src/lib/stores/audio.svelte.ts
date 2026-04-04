@@ -1274,6 +1274,7 @@ function createAudioEngine() {
 
 		(async () => {
 			for (const sf of DEFAULT_SOUNDFONTS) {
+				if (!sf.preload) continue;
 				// Skip if already loaded
 				if (state.loadedSoundfonts.some((s) => s.name === sf.name)) continue;
 
