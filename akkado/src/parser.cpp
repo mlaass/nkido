@@ -242,6 +242,10 @@ NodeIndex Parser::parse_statement() {
         if (match(TokenType::Fn)) {
             return parse_fn_def(/*is_const=*/true);
         }
+        if (check(TokenType::Underscore)) {
+            error("Cannot assign to reserved identifier '_'");
+            return NULL_NODE;
+        }
         if (check(TokenType::Identifier)) {
             Token name = advance();
             return parse_const_decl(name);
@@ -260,7 +264,15 @@ NodeIndex Parser::parse_statement() {
         return parse_post_stmt();
     }
 
-    // Check for assignment: identifier = expr
+    // Check for assignment: identifier = expr (block _ = ...)
+    if (check(TokenType::Underscore) && current_idx_ + 1 < tokens_.size() &&
+        tokens_[current_idx_ + 1].type == TokenType::Equals) {
+        error("Cannot assign to reserved identifier '_'");
+        advance();  // consume _
+        advance();  // consume =
+        parse_expression();  // consume RHS for error recovery
+        return NULL_NODE;
+    }
     if (check(TokenType::Identifier)) {
         if (current_idx_ + 1 < tokens_.size() &&
             tokens_[current_idx_ + 1].type == TokenType::Equals) {
@@ -1379,6 +1391,10 @@ NodeIndex Parser::parse_const_decl(const Token& name_token) {
 NodeIndex Parser::parse_fn_def(bool is_const) {
     Token fn_tok = previous();  // 'fn' was already consumed
 
+    if (check(TokenType::Underscore)) {
+        error("Cannot use '_' as a function name");
+        return NULL_NODE;
+    }
     if (!check(TokenType::Identifier)) {
         error("Expected function name after 'fn'");
         return NULL_NODE;

@@ -1189,6 +1189,29 @@ TEST_CASE("Parser underscore placeholder", "[parser]") {
         REQUIRE(ast.arena[inner].type == NodeType::Identifier);
         CHECK(ast.arena[inner].as_identifier() == "_");
     }
+
+    SECTION("cannot assign to underscore") {
+        auto [tokens, lex_diags] = lex("_ = 42");
+        auto [ast, parse_diags] = parse(std::move(tokens), "_ = 42");
+        CHECK(!parse_diags.empty());
+    }
+
+    SECTION("cannot const assign to underscore") {
+        auto [tokens, lex_diags] = lex("const _ = 42");
+        auto [ast, parse_diags] = parse(std::move(tokens), "const _ = 42");
+        CHECK(!parse_diags.empty());
+    }
+
+    SECTION("cannot use underscore as function name") {
+        auto [tokens, lex_diags] = lex("fn _(x) -> x");
+        auto [ast, parse_diags] = parse(std::move(tokens), "fn _(x) -> x");
+        CHECK(!parse_diags.empty());
+    }
+
+    SECTION("underscore in match is valid wildcard") {
+        auto ast = parse_ok("match(x) { _: 0 }");
+        REQUIRE(ast.valid());
+    }
 }
 
 // ============================================================================
