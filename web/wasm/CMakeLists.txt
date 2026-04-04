@@ -2,7 +2,14 @@
 # Build with: emcmake cmake -B build && cmake --build build
 
 cmake_minimum_required(VERSION 3.21)
-project(enkido_wasm LANGUAGES CXX)
+
+# Read version so cedar's compile definitions resolve correctly
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../VERSION" ENKIDO_VERSION)
+
+project(enkido_wasm
+    VERSION ${ENKIDO_VERSION}
+    LANGUAGES CXX
+)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
