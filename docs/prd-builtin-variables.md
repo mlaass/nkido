@@ -4,159 +4,67 @@
 
 `bpm = 120` appears in the default editor code, tutorials, language spec, and examples — but it does nothing. It compiles as a regular variable assignment (stores 120 in a buffer). The actual BPM is controlled externally via the Transport UI → AudioWorklet → WASM → `VM::set_bpm()`. We need to make `bpm = 120` actually set the tempo, and add the general concept of "builtin variables" (readable/writable identifiers backed by VM state).
 
-## Approach: Compile-time metadata + runtime read opcode
+## Approach: Desugar to getter/setter builtins (no new opcodes)
 
-**Writes (`bpm = 120`)**: The compiler intercepts assignment to builtin variables, evaluates the RHS as a compile-time constant via `ConstEvaluator`, and stores the value as metadata in `CodeGenResult`. The host applies the value when loading the program.
+Each builtin variable `X` maps to a pair of getter/setter builtin functions. The compiler desugars variable syntax into function calls:
 
-**Reads (`x = 60 / bpm`)**: A new opcode (`GETVAR_BPM`) fills an output buffer with the current `ctx.bpm` value, allowing `bpm` to be used in expressions.
+- **`X = value`** → desugars to `set_X(value)` — a special call handler (like `param()`) that extracts the constant at compile time and stores it as metadata in `CodeGenResult`. No runtime opcode emitted.
+- **`expr using X`** → desugars to `get_X()` — emits `ENV_GET` with a reserved key (e.g., `"__bpm"`). The host writes the current value into the EnvMap, so reads track live changes (including Transport UI adjustments).
 
-**Two builtin variables initially**: `bpm` (read-write) and `sr` (read-only).
+No new opcodes. No new SymbolKind. The getter/setter functions reuse existing infrastructure (ENV_GET, special call handlers, compile-time metadata).
+
+**Initial builtin variables**: `bpm` (read-write) and `sr` (read-only).
 
 ## Changes
 
-### 1. Cedar VM — New opcodes
+### 1. Builtin variable registry — new data structure
 
-**`cedar/include/cedar/vm/instruction.hpp`** — Add two opcodes in an unused range (e.g., 190-191):
+**`akkado/include/akkado/builtins.hpp`** — Add a builtin variable definition table (alongside existing `BUILTIN_FUNCTIONS`):
+
 ```cpp
-// Builtin variable access (190-199)
-GETVAR_BPM = 190,   // Fill output buffer with ctx.bpm
-GETVAR_SR = 191,     // Fill output buffer with ctx.sample_rate
-```
+struct BuiltinVarDef {
+    std::string_view getter_name;   // "get_bpm"
+    std::string_view setter_name;   // "set_bpm" (empty = read-only)
+    std::string_view env_key;       // "__bpm" — reserved EnvMap key for getter
+    float default_value;            // 120.0f
+    float min_value;                // 1.0f
+    float max_value;                // 999.0f
+};
 
-**`cedar/include/cedar/opcodes/` — New file `builtins.hpp`** (or add to `sequencing.hpp`):
-```cpp
-inline void op_getvar_bpm(ExecutionContext& ctx, const Instruction& inst) {
-    float* out = ctx.buffers->get(inst.out_buffer);
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) out[i] = ctx.bpm;
-}
-inline void op_getvar_sr(ExecutionContext& ctx, const Instruction& inst) {
-    float* out = ctx.buffers->get(inst.out_buffer);
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) out[i] = ctx.sample_rate;
-}
-```
-
-**`cedar/src/vm/vm.cpp`** — Add dispatch cases in the main switch.
-
-### 2. Akkado Compiler — Symbol table
-
-**`akkado/include/akkado/symbol_table.hpp`**:
-
-Add new enum value:
-```cpp
-enum class SymbolKind : std::uint8_t {
-    Variable,
-    Builtin,
-    BuiltinVariable,  // <-- NEW
-    Parameter,
-    // ...
+inline const std::unordered_map<std::string_view, BuiltinVarDef> BUILTIN_VARIABLES = {
+    {"bpm", {"get_bpm", "set_bpm", "__bpm", 120.0f, 1.0f, 999.0f}},
+    {"sr",  {"get_sr",  "",         "__sr",  48000.0f, 0.0f, 0.0f}},
 };
 ```
 
-Add info struct:
-```cpp
-struct BuiltinVarInfo {
-    cedar::Opcode read_opcode;  // Opcode to emit when reading
-    bool writable;              // true for bpm, false for sr
-    float default_value;        // For metadata (120.0 for bpm)
-    float min_value;            // Validation
-    float max_value;            // Validation
-};
-```
+### 2. Register getter/setter as regular builtins
 
-Add field to `Symbol`:
-```cpp
-BuiltinVarInfo builtin_var;  // Only valid if kind == BuiltinVariable
-```
+**`akkado/src/symbol_table.cpp`** in `register_builtins()`:
 
-**`akkado/src/symbol_table.cpp`** — Register in `register_builtins()`:
-```cpp
-// Builtin variables
-{
-    Symbol sym{};
-    sym.kind = SymbolKind::BuiltinVariable;
-    sym.name = "bpm";
-    sym.name_hash = fnv1a_hash("bpm");
-    sym.buffer_index = 0xFFFF;
-    sym.builtin_var = {cedar::Opcode::GETVAR_BPM, true, 120.0f, 1.0f, 999.0f};
-    define(sym);
-}
-{
-    Symbol sym{};
-    sym.kind = SymbolKind::BuiltinVariable;
-    sym.name = "sr";
-    sym.name_hash = fnv1a_hash("sr");
-    sym.buffer_index = 0xFFFF;
-    sym.builtin_var = {cedar::Opcode::GETVAR_SR, false, 48000.0f, 0.0f, 0.0f};
-    define(sym);
-}
-```
+After registering `BUILTIN_FUNCTIONS`, register getter/setter functions for each builtin variable. The getter is a zero-arg builtin that maps to a special call handler. The setter is a one-arg builtin that also maps to a special call handler.
 
-### 3. Akkado Compiler — Analyzer
+No new SymbolKind needed — these are just regular `SymbolKind::Builtin` entries with special call handlers.
+
+### 3. Analyzer — prevent shadowing
 
 **`akkado/src/analyzer.cpp`** in `collect_definitions()` (~line 189):
 
-Before the immutability check, skip assignments to writable builtin variables:
+When the analyzer sees `bpm = 120`, it currently tries to register `bpm` as a `Variable`. Since `bpm` is in the `BUILTIN_VARIABLES` table:
+- If the variable is writable: don't register as Variable, skip the rest (the codegen will handle it via the setter)
+- If the variable is read-only (`sr`): emit error E170
+- `const bpm = 120`: emit error — cannot declare builtin variable as const
+
+### 4. Codegen — desugaring in Identifier and Assignment
+
+**`akkado/src/codegen.cpp`**:
+
+**Assignment case** (~line 510): Before the existing pattern check, check if `var_name` is in `BUILTIN_VARIABLES`:
 ```cpp
-if (n.type == NodeType::Assignment) {
-    const std::string& name = n.as_identifier();
-    
-    // Allow assignment to writable builtin variables (bpm)
-    auto existing = symbols_.lookup(name);
-    if (existing && existing->kind == SymbolKind::BuiltinVariable) {
-        if (!existing->builtin_var.writable) {
-            error("E170", "Cannot assign to read-only builtin '" + name + "'", n.location);
-        }
-        // Don't re-register as Variable — skip the rest of collect_definitions for this node
-        return; // (or continue to next sibling)
-    }
-    
-    // Existing immutability check...
-    if (symbols_.is_defined_in_current_scope(name)) {
-        error("E150", "Cannot reassign immutable variable '" + name + "'", n.location);
-    }
-    // ... rest of existing code
-```
-
-### 4. Akkado Compiler — Codegen
-
-**`akkado/include/akkado/codegen.hpp`** — Add metadata struct and field:
-```cpp
-struct BuiltinVarOverride {
-    std::string name;
-    float value;
-    SourceLocation location;
-};
-```
-
-Add to `CodeGenResult`:
-```cpp
-std::vector<BuiltinVarOverride> builtin_var_overrides;
-```
-
-Add to `CodeGenerator` private members:
-```cpp
-std::vector<BuiltinVarOverride> builtin_var_overrides_;
-```
-
-**`akkado/src/codegen.cpp`** — Two changes:
-
-**Identifier case** (~line 421): Add before the existing `Variable`/`Parameter` case or after it:
-```cpp
-if (sym->kind == SymbolKind::BuiltinVariable) {
-    std::uint16_t out = buffers_.allocate();
-    cedar::Instruction inst = cedar::Instruction::make_nullary(
-        sym->builtin_var.read_opcode, out);
-    emit(inst);
-    return cache_and_return(node, TypedValue::signal(out));
-}
-```
-
-**Assignment case** (~line 510): Add early check before the pattern check:
-```cpp
-auto sym = symbols_->lookup(var_name);
-if (sym && sym->kind == SymbolKind::BuiltinVariable) {
-    if (!sym->builtin_var.writable) {
-        error("E170", "Cannot assign to read-only builtin variable '" + var_name + "'", n.location);
+auto bv_it = BUILTIN_VARIABLES.find(var_name);
+if (bv_it != BUILTIN_VARIABLES.end()) {
+    const auto& bv = bv_it->second;
+    if (bv.setter_name.empty()) {
+        error("E170", "Cannot assign to read-only builtin '" + var_name + "'", n.location);
         return TypedValue::error_val();
     }
     // Evaluate RHS as compile-time constant
@@ -170,82 +78,128 @@ if (sym && sym->kind == SymbolKind::BuiltinVariable) {
         error("E171", "Builtin variable '" + var_name + "' requires a scalar value", n.location);
         return TypedValue::error_val();
     }
-    error("E172", "'" + var_name + "' must be assigned a constant expression (e.g., bpm = 120)", n.location);
+    error("E172", "'" + var_name + "' must be a constant (e.g., bpm = 120)", n.location);
     return TypedValue::error_val();
 }
 ```
 
-**`generate()` function**: Wire `builtin_var_overrides_` into the result, clear on init.
+**Identifier case** (~line 421): Before the existing Variable/Parameter check, check if identifier is in `BUILTIN_VARIABLES`:
+```cpp
+auto bv_it = BUILTIN_VARIABLES.find(name);
+if (bv_it != BUILTIN_VARIABLES.end()) {
+    // Desugar to ENV_GET with reserved key
+    const auto& bv = bv_it->second;
+    std::uint32_t key_hash = cedar::fnv1a_hash_runtime(bv.env_key.data(), bv.env_key.size());
+    
+    // Emit PUSH_CONST for default value, then ENV_GET
+    std::uint16_t default_buf = buffers_.allocate();
+    cedar::Instruction push{};
+    push.opcode = cedar::Opcode::PUSH_CONST;
+    push.out_buffer = default_buf;
+    encode_const_value(push, bv.default_value);
+    emit(push);
+    
+    std::uint16_t out = buffers_.allocate();
+    cedar::Instruction env{};
+    env.opcode = cedar::Opcode::ENV_GET;
+    env.out_buffer = out;
+    env.inputs[0] = default_buf;
+    env.state_id = key_hash;
+    emit(env);
+    
+    return cache_and_return(node, TypedValue::signal(out));
+}
+```
 
-### 5. Akkado top-level — CompileResult
+### 5. CodeGenResult metadata
+
+**`akkado/include/akkado/codegen.hpp`** — Add:
+```cpp
+struct BuiltinVarOverride {
+    std::string name;
+    float value;
+    SourceLocation location;
+};
+```
+
+Add to `CodeGenResult`:
+```cpp
+std::vector<BuiltinVarOverride> builtin_var_overrides;
+```
+
+Add `builtin_var_overrides_` to `CodeGenerator` private members. Wire into `generate()` return value.
+
+### 6. CompileResult passthrough
 
 **`akkado/include/akkado/akkado.hpp`** — Add to `CompileResult`:
 ```cpp
 std::vector<BuiltinVarOverride> builtin_var_overrides;
 ```
 
-**`akkado/src/akkado.cpp`** (~line 194): Add after param_decls move:
-```cpp
-result.builtin_var_overrides = std::move(gen.builtin_var_overrides);
-```
+**`akkado/src/akkado.cpp`** — Wire through after param_decls.
 
-### 6. WASM Bindings
+### 7. WASM bindings
 
-**`web/wasm/enkido_wasm.cpp`** — Add exports to query overrides from `g_compile_result`:
+**`web/wasm/enkido_wasm.cpp`** — Add exports:
 ```cpp
 WASM_EXPORT uint32_t akkado_get_builtin_var_override_count();
 WASM_EXPORT const char* akkado_get_builtin_var_override_name(uint32_t index);
 WASM_EXPORT float akkado_get_builtin_var_override_value(uint32_t index);
 ```
 
-### 7. Web — AudioWorklet
+### 8. Host writes builtin var values into EnvMap
 
 **`web/static/worklet/cedar-processor.js`**:
-- Add `extractBuiltinVarOverrides()` method (mirrors `extractParamDecls` pattern)
-- In `compile()`: extract overrides, include in message posted back to main thread
-- In `loadCompiledProgram()`: apply `bpm` override via `this.module._cedar_set_bpm(value)` before loading
+- When BPM changes (setBpm message), also write to EnvMap via `cedar_set_param("__bpm", value)` — so reads of `bpm` via ENV_GET return the live value.
+- Similarly for sample rate: write `__sr` into EnvMap at init time.
+- On compile: extract overrides via new WASM exports, apply `bpm` override via `_cedar_set_bpm()`, and also update EnvMap `__bpm` key.
+- Post overrides back to main thread in compiled message.
 
-### 8. Web — Audio Store
+### 9. Web — Audio Store
 
 **`web/src/lib/stores/audio.svelte.ts`**:
-- In `handleWorkletMessage` for `'compiled'` case: read `builtinVarOverrides` from message
-- If BPM override present, update `state.bpm` to sync the Transport UI display
+- In `handleWorkletMessage` for `'compiled'` case: if BPM override present, update `state.bpm` to sync Transport UI.
 
-### 9. Web — Transport UI (minor)
+### 10. Web — Transport UI
 
-**`web/src/lib/components/Transport/Transport.svelte`**: Already reactive to `audioEngine.bpm`. May need to ensure `bpmInput` local state re-syncs when `audioEngine.bpm` changes from compilation (likely already works via existing `$derived`).
+**`web/src/lib/components/Transport/Transport.svelte`**: `bpmInput` is `$state` (not `$derived`), so it won't auto-sync when `audioEngine.bpm` changes from compilation. Add a `$effect` to re-sync:
+```ts
+$effect(() => { bpmInput = audioEngine.bpm.toString(); });
+```
 
 ## Edge Cases
 
-- **`bpm = 60 * 2`**: Works — `ConstEvaluator` handles arithmetic on constants
-- **`bpm = param("tempo", 120, 60, 200)`**: Rejected with E172 — not a constant expression. Correct behavior (dynamic BPM from code would fight with Transport UI)
-- **Multiple `bpm =` lines**: Last one wins (overrides applied in order). Could optionally warn.
-- **`sr = 44100`**: Rejected with E170 — read-only
-- **`x = 60 / bpm`**: Works — `bpm` emits GETVAR_BPM opcode, result used in division
-- **Hot-swap**: BPM override applied in `loadCompiledProgram()` before program starts, crossfade uses new BPM for both channels (correct)
+- **`bpm = 60 * 2`**: Works — `ConstEvaluator` handles arithmetic on constants → override value 120.0
+- **`bpm = param("tempo", 120, 60, 200)`**: Rejected with E172 — not a constant expression
+- **`const bpm = 120`**: Error — cannot declare builtin variable as const
+- **`sr = 44100`**: Error E170 — read-only
+- **`x = 60 / bpm`**: Works — desugars to ENV_GET("__bpm"), returns live runtime value
+- **Multiple `bpm =` lines**: Last one wins (overrides applied in order)
+- **Hot-swap**: BPM override applied before program load, crossfade uses new BPM
 - **Removing `bpm =` from code**: BPM stays at Transport UI value (no override = no change)
+- **Transport UI changes BPM after code set it**: Works — both paths write to ctx.bpm and EnvMap
 
 ## Key Files
-- `cedar/include/cedar/vm/instruction.hpp` — Opcode enum
-- `cedar/src/vm/vm.cpp` — VM dispatch
-- `akkado/include/akkado/symbol_table.hpp` — SymbolKind, BuiltinVarInfo, Symbol
-- `akkado/src/symbol_table.cpp` — register_builtins()
-- `akkado/src/analyzer.cpp` — collect_definitions() immutability bypass
-- `akkado/include/akkado/codegen.hpp` — BuiltinVarOverride, CodeGenResult, CodeGenerator members
-- `akkado/src/codegen.cpp` — Identifier + Assignment cases
-- `akkado/include/akkado/akkado.hpp` — CompileResult
+- `akkado/include/akkado/builtins.hpp` — BuiltinVarDef table
+- `akkado/src/symbol_table.cpp` — register getter/setter builtins
+- `akkado/src/analyzer.cpp` — collect_definitions() skip for builtin vars
+- `akkado/include/akkado/codegen.hpp` — BuiltinVarOverride struct, CodeGenResult field
+- `akkado/src/codegen.cpp` — Identifier + Assignment desugaring
+- `akkado/include/akkado/akkado.hpp` — CompileResult field
 - `akkado/src/akkado.cpp` — Wire overrides through
 - `web/wasm/enkido_wasm.cpp` — WASM exports
-- `web/static/worklet/cedar-processor.js` — Extract + apply overrides
+- `web/static/worklet/cedar-processor.js` — EnvMap writes + override extraction
 - `web/src/lib/stores/audio.svelte.ts` — Sync Transport UI
+- `web/src/lib/components/Transport/Transport.svelte` — $effect for bpmInput sync
 
 ## Verification
 
-1. **C++ tests**: Build akkado_tests, add test cases:
+1. **C++ tests**:
    - `bpm = 120` → `builtin_var_overrides` contains `{bpm, 120.0}`
-   - `x = bpm` → emits `GETVAR_BPM` instruction
-   - `sr = 44100` → error E170
-   - `bpm = sin(1)` → error E172 (not constant)
    - `bpm = 60 * 2` → override value is 120.0
-2. **VM tests**: `GETVAR_BPM` fills buffer with ctx.bpm value
-3. **Web integration**: Compile `bpm = 140`, verify Transport shows 140, patterns play at 140 BPM
+   - `x = bpm` → emits ENV_GET with `__bpm` key hash
+   - `sr = 44100` → error E170
+   - `const bpm = 120` → error
+   - `bpm = sin(1)` → error E172
+2. **Integration**: Compile `bpm = 140`, verify Transport shows 140, patterns play at 140 BPM
+3. **Live tracking**: Set `bpm = 120` in code, change to 160 via Transport, verify `60 / bpm` uses 160
