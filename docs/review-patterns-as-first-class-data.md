@@ -1,12 +1,14 @@
 # Review: Patterns as First-Class Data in Akkado
 
-> A comprehensive analysis of the gap between Akkado's pattern system and its typed data primitives, with approaches to bridge them.
+> A comprehensive analysis of the gap between Akkado's pattern system and its typed data primitives, with approaches to bridge them — focusing on runtime manipulation within Cedar's zero-allocation constraints.
 
 ## Context
 
 Akkado has a powerful mini-notation system for defining musical patterns (`pat("c4 e4 g4")`), and a rich set of typed primitives (records, arrays, numbers, signals). However, these two worlds are largely disconnected. Patterns are opaque compile-time artifacts — you can create them from strings, access their output fields, and apply a fixed set of transforms, but you cannot construct, decompose, inspect, or manipulate them using the same record/array/number primitives that the rest of the language provides.
 
-This document catalogs what's already possible, identifies the gaps, and discusses approaches to close them.
+More critically, pattern *content* is entirely static at runtime. Once compiled, the events in a pattern cannot be changed by signals, parameters, or external input. This rules out dynamic arpeggiators, evolving melodies, reactive compositions, and any use case where pattern data needs to respond to the live state of the system.
+
+This document catalogs what's already possible, identifies the gaps, and proposes approaches that leverage Cedar's existing runtime infrastructure to close them — without violating the zero-allocation audio thread constraint.
 
 ---
 
@@ -54,6 +56,14 @@ sum([1, 2, 3])
 zip(freqs, vels)
 ```
 
+### Existing Runtime Infrastructure (relevant to this review)
+- **Arena allocator**: 32MB bump allocator. Sequence events already live here as mutable structs (`Event*` pointers into arena memory). No heap allocation needed for in-place mutation.
+- **`query_pattern()`**: Re-expands source `Sequence` events into `OutputEvents` every cycle. Mutations to source events propagate automatically on the next cycle boundary.
+- **EnvMap**: 256-slot lock-free parameter system with per-sample interpolation. Already bridges host thread → audio thread for `param()`, `toggle()`, `button()`.
+- **Sample-and-hold**: `SAHState` captures a signal value on trigger rising edge — an established "sample at event time" pattern.
+- **Ring buffer writes**: Delay lines write into pre-allocated circular buffers via `write_pos` advancement. Same pattern could apply to event data.
+- **Array opcodes**: `ARRAY_PACK`, `ARRAY_INDEX`, `ARRAY_FILL` etc. operate on 128-element buffers. Usable as lookup tables.
+
 ---
 
 ## 2. The Gaps
@@ -64,10 +74,10 @@ You cannot build a pattern from arrays of records:
 ```akkado
 // IMPOSSIBLE today:
 events = [{freq: 440, time: 0.0, dur: 0.5}, {freq: 880, time: 0.5, dur: 0.5}]
-my_pat = pattern(events)  // ← does not exist
+my_pat = pattern(events)  // does not exist
 ```
 
-Patterns can *only* originate from string literals parsed by the mini-notation parser, or from the `euclid` opcode. There's no way to use the language's own data structures (records, arrays, numbers) to define what a pattern contains.
+Patterns can *only* originate from string literals parsed by the mini-notation parser, or from the `euclid` opcode.
 
 ### Gap 2: No decomposition of patterns into language values
 
@@ -75,13 +85,13 @@ You cannot get a pattern's events out as an array:
 ```akkado
 // IMPOSSIBLE today:
 p = pat("c4 e4 g4")
-events = p.events      // ← does not exist
-first = events[0]      // ← can't index into pattern events
-first.freq             // ← can't read event fields as compile-time values
-len(events)            // ← can't count events
+events = p.events      // does not exist
+first = events[0]
+first.freq
+len(events)
 ```
 
-The only way to "read" a pattern is through its 5 audio-rate field buffers (`freq`, `vel`, `trig`, `gate`, `type`), which produce one value per block at runtime. The individual events — their times, durations, velocities, note values — are invisible to the language.
+The only way to "read" a pattern is through its 5 audio-rate field buffers.
 
 ### Gap 3: No event-level manipulation
 
@@ -89,11 +99,11 @@ You cannot map, filter, or transform individual events using the language's func
 ```akkado
 // IMPOSSIBLE today:
 pat("c4 e4 g4 b4")
-  |> filter_events(%, e -> e.freq > 400)    // ← keep only high notes
-  |> map_events(%, e -> {..e, vel: e.vel * 0.5})  // ← halve velocities
+  |> filter_events(%, e -> e.freq > 400)
+  |> map_events(%, e -> {..e, vel: e.vel * 0.5})
 ```
 
-The existing transforms (`slow`, `transpose`, etc.) are a closed set of compiler-recognized functions. Users cannot define their own event-level transformations.
+The existing transforms (`slow`, `transpose`, etc.) are a closed set. Users cannot define their own.
 
 ### Gap 4: No pattern composition from parts
 
@@ -102,24 +112,25 @@ You cannot merge, concatenate, or interleave patterns:
 // IMPOSSIBLE today:
 kicks = pat("bd ~ bd ~")
 snares = pat("~ sd ~ sd")
-combined = stack(kicks, snares)   // ← does not exist
-appended = cat(kicks, snares)     // ← does not exist
+combined = stack(kicks, snares)
+appended = cat(kicks, snares)
 ```
-
-The only way to layer patterns is via the mini-notation itself (`[bd, sd]` for polyrhythm) or by running separate pattern pipelines to the same `out()`.
 
 ### Gap 5: Limited event fields
 
-`PatternPayload` exposes exactly 5 fields: `freq`, `vel`, `trig`, `gate`, `type`. The underlying `Event` struct also has `time`, `duration`, `chance`, `source_offset` — but these are not accessible from the language. User-defined fields (e.g., `pan`, `cutoff`, `detune`) are not possible.
+`PatternPayload` exposes exactly 5 fields. The underlying `Event` struct also has `time`, `duration`, `chance`, `source_offset` — but these are not accessible from the language. User-defined fields (e.g., `pan`, `cutoff`, `detune`) are not possible.
 
-### Gap 6: No runtime pattern construction or modification
+### Gap 6: No runtime pattern modification (the critical gap)
 
-All pattern data is baked into `StateInitData` at compile time. There's no mechanism to:
-- Build patterns from runtime values (e.g., random note sequences)
-- Modify a pattern's events based on a live control signal
-- Conditionally include/exclude events at runtime
+All pattern data is baked into `StateInitData` at compile time. There is no mechanism to:
+- Change which notes an arpeggiator plays based on a live chord input
+- Evolve a melody over time using randomness or algorithmic mutation
+- React to streaming event data (MIDI, OSC, sensor input)
+- Build dynamic compositions where pattern content responds to the system's state
 
-This is partially by design (zero-allocation constraint), but the boundary between "compile-time programmable" and "runtime opaque" is more restrictive than it needs to be.
+This is the gap that most limits Akkado's expressiveness for live performance and generative music. The compile-time approach handles static patterns well, but music is fundamentally dynamic.
+
+**The key insight**: Cedar's zero-allocation constraint means "no malloc on the audio thread," not "immutable data." Events are arena-allocated structs with stable pointers. They can be mutated in-place. `query_pattern()` re-reads them every cycle. The infrastructure for runtime mutation already exists — it just isn't exposed to the language.
 
 ---
 
@@ -127,11 +138,11 @@ This is partially by design (zero-allocation constraint), but the boundary betwe
 
 ### PRD-Pattern-Array-Note-Extensions
 - **Covers**: Array type, map(), chord system, dot-call, polymeter, time/structure modifiers
-- **Doesn't cover**: Programmatic event construction, pattern decomposition, event-level map/filter, user-defined event fields
+- **Doesn't cover**: Runtime event mutation, programmatic event construction, event-level map/filter, user-defined event fields
 
 ### Vision-Language-Evolution
 - **Covers**: `state` keyword, delay lines, module system, type system, const fn
-- **Doesn't cover**: Pattern ↔ record/array bridging. The vision document classifies pattern transforms as "needs Pattern as first-class type" but defines "first-class" as "method chaining + type checking", not "constructible/decomposable from language primitives"
+- **Doesn't cover**: Pattern ↔ record/array bridging. The vision document classifies pattern transforms as "needs Pattern as first-class type" but defines "first-class" as "method chaining + type checking", not "constructible/decomposable/mutable"
 
 ### PRD-Compiler-Type-System
 - **Covers**: TypedValue with Pattern variant, field access, type checking
@@ -139,152 +150,223 @@ This is partially by design (zero-allocation constraint), but the boundary betwe
 
 ### PRD Records and Field Access
 - **Covers**: Record literals, field access, pipe binding, pattern event fields via `%`
-- **Doesn't cover**: Events-as-records, constructing patterns from records
+- **Doesn't cover**: Events-as-records, constructing patterns from records, mutating event data at runtime
 
 ---
 
 ## 4. Approaches to Close the Gaps
 
-### Approach A: Compile-Time Event Arrays (Recommended Starting Point)
+### Approach A: Mutable Event Slots (Recommended Starting Point)
 
-**Core idea**: Let patterns be constructed from and decomposed into arrays of event records at compile time.
+**Core idea**: Events in `SequenceState.sequences[].events[]` are arena-allocated, mutable structs. New opcodes write into event fields in-place. `query_pattern()` re-reads source events every cycle, so mutations propagate automatically.
 
 ```akkado
-// Construction: array of event records → pattern
+// Arpeggiator: chord input writes into a pattern's event slots
+chord_notes = chord_detect(midi_in)  // produces array of frequencies
+p = pat("x x x x")  // 4-slot rhythmic scaffold
+
+// Each event's pitch comes from the live chord
+p.set_freq(0, chord_notes[0])
+p.set_freq(1, chord_notes[1])
+p.set_freq(2, chord_notes[2])
+p.set_freq(3, chord_notes[3])
+
+p as e |> osc("sin", e.freq) |> % * e.vel |> out(%, %)
+```
+
+**How it works at the VM level**:
+1. Compiler emits pattern as usual — arena-allocated `Event` structs with placeholder values
+2. New opcode `SEQ_EVENT_SET` takes: `state_id` (which pattern), `event_index`, `field_id` (freq/vel/chance/duration), `value` (from input buffer)
+3. Opcode writes directly into `state.sequences[0].events[idx].values[0] = value` (or `.velocity`, `.chance`, etc.)
+4. Next `SEQPAT_QUERY` call runs `query_pattern()` which re-expands from source events — mutations are picked up
+5. No allocation. Just a store to an existing memory location.
+
+**What this unlocks**:
+- **Dynamic arpeggiators**: Write chord tones into event slots, pattern plays them rhythmically
+- **Evolving melodies**: Noise/LFO → `SEQ_EVENT_SET` → pitch drift over time
+- **Reactive patterns**: EnvMap params or MIDI → event field mutation
+- **Probabilistic composition**: Modulate `event.chance` to fade events in/out
+
+**Implementation cost**: One new opcode. No new state types. No arena changes. Compiler needs to track event count per pattern for bounds checking.
+
+**Limitations**: Can only mutate events that exist at compile time. Cannot add/remove events or change timing structure. This is a feature, not a bug — it keeps the rhythmic skeleton stable while content evolves.
+
+### Approach B: Indirection Tables
+
+**Core idea**: Separate *what* plays from *when* it plays. Events store indices into a lookup table. The lookup table is a signal-rate buffer that can be written from anywhere.
+
+```akkado
+// Pre-allocate a 8-slot pitch table
+pitch_table = table(8)
+
+// Fill it with a scale
+pitch_table.set(0, 261.6)  // C4
+pitch_table.set(1, 293.7)  // D4
+pitch_table.set(2, 329.6)  // E4
+// ... etc
+
+// Pattern references table indices, not literal pitches
+pat("0 2 4 7").lookup(pitch_table) as e
+  |> osc("sin", e.freq)
+  |> out(%, %)
+
+// Later: mutate the table to change what the pattern plays
+// (e.g., modulate by LFO, switch scales, react to input)
+pitch_table.set(0, 440.0)  // now slot 0 plays A4 instead of C4
+```
+
+**How it works at the VM level**:
+1. A "table" is a pre-allocated buffer in the arena (like delay line memory) — fixed size, stable pointer
+2. New opcode `TABLE_SET(state_id, index, value)` writes to the table at a given index
+3. New opcode `TABLE_GET(state_id, index)` reads from the table — usable as a `SEQPAT_STEP` post-process
+4. Or: modify `SEQPAT_STEP` to treat `evt.values[]` as indices and dereference through a table buffer
+
+**What this unlocks**:
+- **Scale switching**: Swap all 7 table entries = instant key change
+- **Chord-aware arpeggiation**: External process fills table with current chord tones
+- **Stochastic melodies**: Random process mutates table slots independently
+- **Decoupled rhythm and melody**: One pattern defines when, the table defines what
+
+**Implementation cost**: Two new opcodes + a simple `TableState` (pointer + size, arena-allocated). The `SEQPAT_STEP` lookup variant is a small modification to existing code.
+
+**Relationship to Approach A**: Complementary. Approach A mutates events directly (good for per-event control). Approach B provides shared lookup (good when multiple patterns should reference the same pitch/velocity vocabulary).
+
+### Approach C: Signal-Sampled Events
+
+**Core idea**: Instead of hardcoded values in events, an event "samples" a live signal at its trigger time. The event defines *when* to sample; the signal defines *what* to capture.
+
+```akkado
+// Pattern provides triggers only (rhythm)
+p = pat("x x x [x x]")
+
+// Signal provides values (melody)
+melody = lfo("sah", 1) * 500 + 200  // random S&H melody
+
+// At each trigger, SEQPAT_STEP captures the current value of melody
+p.sample_freq(melody) as e
+  |> osc("sin", e.freq) |> % * e.vel |> out(%, %)
+```
+
+**How it works at the VM level**:
+1. `SEQPAT_STEP` gains an optional input buffer: `inputs[4]` = "value override signal"
+2. When `inputs[4] != BUFFER_UNUSED` and a trigger fires (crossing an event time), the opcode reads `override_signal[i]` instead of `evt.values[voice_index]`
+3. The captured value is held until the next trigger (sample-and-hold behavior, reusing the established pattern from `SAHState`)
+4. No new state types needed — just a `float held_value` field added to `SequenceState`
+
+**What this unlocks**:
+- **Signal-driven melodies**: Any audio-rate signal becomes a pitch source, quantized to the pattern's rhythm
+- **Modular patching idiom**: "Trigger is the clock, signal is the data" — familiar to modular synth users
+- **Layered randomness**: Different signals for freq, vel, type → each dimension evolves independently
+
+**Implementation cost**: Minimal — one extra input check in `SEQPAT_STEP`, one extra float in `SequenceState`. The hardest part is the Akkado syntax design, not the VM work.
+
+**Limitation**: All events in the pattern sample the *same* signal. For per-event differentiation, combine with Approach A or B.
+
+### Approach D: Compile-Time Event Arrays (Complementary)
+
+**Core idea**: Let patterns be constructed from and decomposed into arrays of event records at compile time. This bridges the record/array world with the pattern world, enabling programmatic pattern generation.
+
+```akkado
+// Construction: array of event records -> pattern
 my_pat = pattern([
   {note: 60, time: 0.0, dur: 0.5, vel: 1.0},
   {note: 64, time: 0.5, dur: 0.5, vel: 0.8},
   {note: 67, time: 1.0, dur: 0.5, vel: 0.6}
 ])
 
-// Decomposition: pattern → array of event records
+// Decomposition: pattern -> array of event records
 events = pat("c4 e4 g4").events
 
 // Manipulation: use existing array tools
 loud = events |> map(%, e -> {..e, vel: 1.0})
 high_only = events |> filter(%, e -> e.note > 62)
-with_pan = events |> map(%, (e, i) -> {..e, pan: i / len(events)})
 
 // Recompose
 pattern(loud) |> osc("sin", %.freq) |> out(%, %)
 ```
 
-**Why this fits Akkado**:
-- All operations are compile-time — no runtime allocations, no new opcodes
-- Leverages existing record spread, array map/fold/filter, and pattern codegen
-- The `SequenceCompiler` already produces `Event` lists — this just exposes that representation upward to the language level
-- Consistent with Akkado's Faust-style "compile-time composition" philosophy
+**Why this is complementary, not primary**: All operations are compile-time — no runtime dynamism. But it's the foundation for programmatic pattern *generation*. You'd use this to algorithmically construct the initial pattern structure, then use Approaches A/B/C to make it dynamic at runtime.
 
-**Implementation sketch**:
-1. Define a canonical event record shape: `{note, time, dur, vel, chance, type_id, ...}`
-2. Add `pattern(events_array)` constructor that takes an Array of Records and feeds them into `SequenceCompiler` (or directly into `Sequence` structs)
-3. Add `.events` accessor on Pattern values that returns the compiled event list as an Array of Records
-4. Events round-trip: `p.events |> pattern(%)` should be identity
+**Implementation**: Define a canonical event record shape. Add `pattern(events_array)` that feeds into `SequenceCompiler`. Add `.events` accessor that returns compiled events as an Array of Records. Round-trip guarantee: `p.events |> pattern(%)` ≡ `p`.
 
-**What this unlocks**:
-- Programmatic pattern generation via `range()` + `map()`
-- Event filtering, sorting, shuffling using existing array ops
-- User-defined transforms as regular functions
-- Pattern merging via array concatenation
-- Algorithmic composition (e.g., generate events from mathematical sequences)
+### Approach E: Pattern Combinators
 
-**Complexity**: Medium. No new VM opcodes. Requires bridging between `RecordPayload`/`ArrayPayload` and `SequenceCompiler` event data. The compile-time constraint means all array operations must resolve to constants.
-
-### Approach B: User-Defined Event Fields
-
-**Core idea**: Extend the 5-field `PatternPayload` with user-defined fields.
+**Core idea**: Composition operators that work on Pattern-typed values.
 
 ```akkado
-// Attach arbitrary fields in mini-notation via method syntax
-pat("c4 e4 g4").set("pan", [0.0, 0.5, 1.0])
-
-// Or via event records
-pattern([
-  {note: 60, pan: 0.0, cutoff: 2000},
-  {note: 64, pan: 0.5, cutoff: 4000},
-]) as e |> osc("sin", e.freq) |> pan(%, e.pan) |> lp(%, e.cutoff)
+stack(pat("bd ~ bd ~"), pat("~ sd ~ sd"))  // layer (simultaneous)
+cat(pat("c4 e4"), pat("g4 b4"))            // sequence (consecutive)
+interleave(pat("c4 e4 g4"), pat("d4 f4 a4"))  // alternate events
 ```
 
-**Implementation considerations**:
-- Each custom field needs a buffer allocation (like the existing freq/vel/trig/gate/type)
-- The `PatternPayload::fields` array is currently fixed at 5 — could switch to a map or extend the array with a dynamic section
-- Field names would need compile-time resolution (string interning already exists)
-- `SEQPAT_STEP` would need to support additional output buffers
+**If patterns are decomposable** (Approach D), these are array operations: `stack` = concat events + time-scale, `cat` = concat with time offset, etc. Dedicated combinators would be more ergonomic and could produce optimized compiled output.
 
-**Complexity**: Medium-High. Touches the Cedar VM's `SEQPAT_*` opcodes and `SequenceState`. But the mechanism is a natural extension of what already exists.
-
-### Approach C: Pattern Combinators
-
-**Core idea**: Provide composition operators that work on Pattern-typed values.
-
-```akkado
-// Stack (simultaneous)
-stack(pat("bd ~ bd ~"), pat("~ sd ~ sd"))
-
-// Concatenate (sequential)
-cat(pat("c4 e4"), pat("g4 b4"))
-
-// Interleave (alternating events)
-interleave(pat("c4 e4 g4"), pat("d4 f4 a4"))
-
-// Conditional
-when(beat(4), pat("cp"), pat("~"))
-```
-
-**This is partially achievable today** if patterns are decomposable to event arrays (Approach A), since `stack` = array concat + adjust times, `cat` = array concat with offset, etc. But dedicated combinators would be more ergonomic and could optimize the compiled output.
-
-**Complexity**: Low-Medium if built on top of Approach A. Each combinator is a compile-time function that manipulates event arrays.
-
-### Approach D: Runtime Pattern Mutation (Deferred)
-
-Full runtime pattern manipulation (e.g., events chosen by live signals) would require:
-- Runtime event arrays in the Cedar VM
-- Dynamic `Sequence` rebuilding within the audio thread (violates zero-alloc)
-- Or: a pre-allocated event pool with runtime selection masks
-
-This conflicts fundamentally with Cedar's zero-allocation constraint. The pragmatic path is to keep pattern *structure* compile-time but allow runtime *parameter modulation* of event fields (which already works via the buffer system — `%.freq` is a runtime signal).
-
-**Recommendation**: Defer. The compile-time approach (A+B+C) covers the vast majority of use cases. Runtime mutation can be revisited if/when the `state` keyword lands, which would enable user-defined sequencers.
+**Implementation cost**: Low-Medium if built on Approach D. Each combinator is a compile-time function that manipulates event arrays before feeding them into `SequenceCompiler`.
 
 ---
 
 ## 5. Recommended Phasing
 
-### Phase 1: Event Record Bridge (Approach A)
-- `pattern(array_of_records)` — construct pattern from event records
-- `.events` accessor — decompose pattern to event record array
-- Canonical event record shape with well-defined fields
-- Round-trip guarantee: `p.events |> pattern(%)` ≡ `p`
-- **This is the keystone**: once events are arrays of records, all existing array/record tools apply automatically
+### Phase 1: Signal-Sampled Events (Approach C) — Quick Win
 
-### Phase 2: Pattern Combinators (Approach C)
-- `stack(p1, p2, ...)` — layer patterns
-- `cat(p1, p2, ...)` — sequence patterns
-- `interleave(p1, p2)` — alternate events
-- Built on Phase 1 internals (event array manipulation)
+**Why first**: Minimal implementation effort (one input check in `SEQPAT_STEP`), massive expressiveness gain. Immediately enables signal-driven melodies, modular-style patching, and layered randomness. No new opcodes, no new state types. The VM change is ~20 lines.
 
-### Phase 3: User-Defined Event Fields (Approach B)
-- Extend `PatternPayload` beyond the 5 fixed fields
-- Support arbitrary named fields in event records
-- Dynamic `SEQPAT_STEP` buffer allocation for custom fields
+**Delivers**: Dynamic melodies, signal-to-rhythm quantization, LFO/noise-driven pitch.
 
-### Phase 4: Algorithmic Constructors
-- `pattern_from(n, fn)` — generate n events from a function
-- `subdivide(n)` — n equal-time events with index
-- Integration with `range()`, `linspace()`, etc.
+### Phase 2: Mutable Event Slots (Approach A) — Core Runtime Capability
+
+**Why second**: One new opcode unlocks per-event mutation. This is the foundation for arpeggiators, evolving sequences, and reactive patterns. Combined with Phase 1, covers the vast majority of "dynamic pattern" use cases.
+
+**Delivers**: Arpeggiators, per-event pitch/velocity/chance mutation, MIDI-driven pattern content.
+
+### Phase 3: Indirection Tables (Approach B) — Shared Vocabulary
+
+**Why third**: Builds on the mutation concept but adds a shared lookup layer. Enables scale switching, chord-aware arpeggiation, and shared pitch vocabularies across multiple patterns. Useful but less urgent than direct mutation.
+
+**Delivers**: Scale/key switching, shared pitch tables, chord-to-arpeggio workflows.
+
+### Phase 4: Compile-Time Event Arrays + Combinators (Approaches D & E)
+
+**Why fourth**: These are about pattern *construction* and *composition*, not runtime dynamism. Important for algorithmic composition and ergonomics, but the runtime approaches (Phases 1-3) deliver the most impactful new capabilities.
+
+**Delivers**: Programmatic pattern generation, pattern decomposition, stack/cat/interleave combinators.
 
 ---
 
 ## 6. Key Design Questions
 
-1. **Event record shape**: What fields are canonical? Minimal (`{note, time, dur, vel}`) vs. maximal (include `chance`, `type_id`, `sample`, `bank`, etc.)? Should unknown fields pass through silently or error?
+### Runtime Mutation
 
-2. **Compile-time only or const-fn evaluable?**: If `pattern()` only accepts literal arrays, it's straightforward. If it should work with `const fn` results (e.g., algorithmic generation), the compile-time evaluator needs to handle record construction.
+1. **Granularity of mutation**: Should `SEQ_EVENT_SET` operate per-event-per-field (fine-grained but verbose) or accept a "field mask + values array" (batch update but more complex opcode)? Per-event-per-field is simpler to implement and compose.
 
-3. **Mini-notation interop**: Should `pat("c4 e4").events` return the *same* record shape as what `pattern()` accepts? Perfect round-tripping is valuable but means exposing internal details like `type_id` and `source_offset`.
+2. **Timing of mutation propagation**: Mutations take effect on the next `query_pattern()` call (next cycle boundary). Is per-cycle granularity fast enough? At 120 BPM with 4-beat cycles, that's 2 seconds. For sub-cycle mutation, we could force a re-query — but that adds complexity. Alternatively, mutations could target `OutputEvents` directly for instant effect within the current cycle.
 
-4. **Filter semantics**: If you filter events out of a pattern, what happens to the timing? Do remaining events keep their absolute times (leaving gaps) or redistribute (closing gaps)? Both are useful — probably need both modes.
+3. **Bounds safety**: `SEQ_EVENT_SET(state_id, event_index, ...)` needs to bounds-check `event_index < num_events`. Out-of-bounds should be a silent no-op (not a crash). The compiler should expose event count so Akkado code can iterate safely.
 
-5. **Polyphonic events**: Chords produce multi-value events (`num_values > 1`). How should these appear in the event record? Array-valued `note` field? Multiple records at the same time? This affects how `map` over events interacts with chords.
+4. **Multiple voices in events**: Events hold up to 4 values (for chords). Should `set_freq` target a specific voice index, or replace all voices? Probably need `set_freq(event_idx, voice_idx, value)` for chord-aware mutation.
 
-6. **Naming**: `pattern()` vs `seq()` vs `events_to_pat()`? `.events` vs `.to_array()` vs `.decompose()`?
+### Signal Sampling
+
+5. **Hold behavior**: When `SEQPAT_STEP` samples a signal at trigger time, what value does it output between triggers? Last sampled value (sample-and-hold) is the natural choice, matching existing `SAHState` semantics. But should there be a "glide" option that interpolates toward the next sample?
+
+6. **Per-field override**: Should signal sampling be available for velocity and type_id too, not just frequency? Likely yes — `p.sample_vel(signal)`, `p.sample_type(signal)`. Each adds one input buffer to `SEQPAT_STEP` (or a separate opcode).
+
+### Indirection Tables
+
+7. **Table size**: Fixed at compile time (like delay line buffer sizes)? Or resizable within a pre-allocated maximum? Fixed is simpler and fits the arena model.
+
+8. **Table ↔ event binding**: How does an event "know" to look up its value in a table? Options: (a) store index in `evt.values[]` and mark the pattern as "uses indirection" via a flag; (b) a post-processing opcode that replaces `SEQPAT_STEP` output with a table lookup; (c) a dedicated `SEQPAT_STEP_TABLE` opcode variant. Option (b) is most composable — it's just `table_get(pitch_table, floor(%.freq))`.
+
+### Compile-Time Event Arrays
+
+9. **Event record shape**: What fields are canonical? Minimal (`{note, time, dur, vel}`) vs. maximal (include `chance`, `type_id`, etc.)? Unknown fields should error at compile time.
+
+10. **Filter semantics**: If you filter events out of a pattern, what happens to timing? Absolute times (leaving gaps) vs. redistribute (closing gaps)? Both are useful — probably need both modes.
+
+11. **Round-trip fidelity**: Should `pat("c4 e4").events` return the *same* record shape as what `pattern()` accepts? Perfect round-tripping is valuable but means exposing internal details like `type_id` and `source_offset`.
+
+### Syntax
+
+12. **Naming**: `p.set_freq(idx, val)` vs `set_event(p, idx, "freq", val)` vs `p[idx].freq = val`? The last is most ergonomic but requires assignment semantics the language doesn't have. Method syntax (`.set_freq()`) is consistent with existing pattern transforms.
+
+13. **Table syntax**: `table(8)` vs `[0; 8]` (Rust-style fill) vs something else? Tables are a new concept — the name should make clear they're mutable and fixed-size, distinct from arrays (which are compile-time and immutable).
