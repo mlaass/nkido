@@ -50,6 +50,7 @@ struct CompileResult {
     std::vector<RequiredSoundFont> required_soundfonts;  // SoundFont files needed at runtime
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
+    std::vector<BuiltinVarOverride> builtin_var_overrides;  // Builtin variable overrides (bpm, sr)
 };
 
 /// Compile Akkado source code to Cedar bytecode

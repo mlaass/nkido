@@ -47,6 +47,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     required_soundfonts_.clear();
     param_decls_.clear();
     viz_decls_.clear();
+    builtin_var_overrides_.clear();
     filename_ = std::string(filename);
     path_stack_.clear();
     anonymous_counter_ = 0;
@@ -62,7 +63,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     if (!ast.valid()) {
         error("E100", "Invalid AST", {});
-        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, false};
+        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, {}, false};
     }
 
     // Visit root (Program node)
@@ -86,7 +87,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     return {std::move(instructions_), std::move(source_locations_), std::move(diagnostics_),
             std::move(state_inits_), std::move(required_samples_vec), std::move(required_samples_extended_),
             std::move(required_soundfonts_),
-            std::move(param_decls_), std::move(viz_decls_), success};
+            std::move(param_decls_), std::move(viz_decls_), std::move(builtin_var_overrides_), success};
 }
 
 TypedValue CodeGenerator::visit(NodeIndex node) {
@@ -420,6 +421,52 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
         case NodeType::Identifier: {
             const std::string& name = n.as_identifier();
+
+            // Builtin variable read (bpm, sr) — desugar to ENV_GET
+            {
+                auto bv_it = BUILTIN_VARIABLES.find(name);
+                if (bv_it != BUILTIN_VARIABLES.end()) {
+                    const auto& bv = bv_it->second;
+                    std::uint32_t key_hash = cedar::fnv1a_hash_runtime(
+                        bv.env_key.data(), bv.env_key.size());
+
+                    // Emit PUSH_CONST for default/fallback value
+                    std::uint16_t fallback_buf = buffers_.allocate();
+                    if (fallback_buf == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        return TypedValue::error_val();
+                    }
+                    cedar::Instruction push_inst{};
+                    push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                    push_inst.out_buffer = fallback_buf;
+                    push_inst.inputs[0] = 0xFFFF;
+                    push_inst.inputs[1] = 0xFFFF;
+                    push_inst.inputs[2] = 0xFFFF;
+                    push_inst.inputs[3] = 0xFFFF;
+                    encode_const_value(push_inst, bv.default_value);
+                    emit(push_inst);
+
+                    // Emit ENV_GET with reserved key hash
+                    std::uint16_t out_buf = buffers_.allocate();
+                    if (out_buf == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        return TypedValue::error_val();
+                    }
+                    cedar::Instruction env_inst{};
+                    env_inst.opcode = cedar::Opcode::ENV_GET;
+                    env_inst.out_buffer = out_buf;
+                    env_inst.inputs[0] = fallback_buf;
+                    env_inst.inputs[1] = 0xFFFF;
+                    env_inst.inputs[2] = 0xFFFF;
+                    env_inst.inputs[3] = 0xFFFF;
+                    env_inst.inputs[4] = 0xFFFF;
+                    env_inst.state_id = key_hash;
+                    emit(env_inst);
+
+                    return cache_and_return(node, TypedValue::signal(out_buf));
+                }
+            }
+
             auto sym = symbols_->lookup(name);
 
             if (!sym) {
@@ -518,6 +565,42 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
             }
 
             const std::string& var_name = n.as_identifier();
+
+            // Builtin variable assignment (bpm = 120) — extract compile-time constant
+            {
+                auto bv_it = BUILTIN_VARIABLES.find(var_name);
+                if (bv_it != BUILTIN_VARIABLES.end()) {
+                    const auto& bv = bv_it->second;
+                    if (bv.setter_name.empty()) {
+                        error("E170", "Cannot assign to read-only builtin variable '" +
+                              std::string(var_name) + "'", n.location);
+                        return TypedValue::error_val();
+                    }
+                    // Evaluate RHS as compile-time constant
+                    ConstEvaluator evaluator(*ast_, *symbols_);
+                    auto const_val = evaluator.evaluate(value_idx);
+                    for (const auto& diag : evaluator.diagnostics()) {
+                        diagnostics_.push_back(diag);
+                    }
+                    if (const_val) {
+                        if (auto* scalar = std::get_if<double>(&*const_val)) {
+                            float fval = static_cast<float>(*scalar);
+                            if (bv.min_value != 0.0f || bv.max_value != 0.0f) {
+                                fval = std::max(bv.min_value, std::min(bv.max_value, fval));
+                            }
+                            builtin_var_overrides_.push_back({
+                                std::string(var_name), fval, n.location});
+                            return cache_and_return(node, TypedValue::void_val());
+                        }
+                        error("E171", "Builtin variable '" + std::string(var_name) +
+                              "' requires a scalar value", n.location);
+                        return TypedValue::error_val();
+                    }
+                    error("E172", "'" + std::string(var_name) +
+                          "' must be a compile-time constant (e.g., bpm = 120)", n.location);
+                    return TypedValue::error_val();
+                }
+            }
 
             // Check if this is a pattern assignment
             auto sym = symbols_->lookup(var_name);

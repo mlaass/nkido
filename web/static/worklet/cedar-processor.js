@@ -104,6 +104,9 @@ class CedarProcessor extends AudioWorkletProcessor {
 			this.module._cedar_init();
 			this.module._cedar_set_sample_rate(sampleRate);
 
+			// Write sample rate to EnvMap for `sr` variable reads
+			this.setParam('__sr', sampleRate);
+
 			// Get output buffer pointers
 			this.outputLeftPtr = this.module._cedar_get_output_left();
 			this.outputRightPtr = this.module._cedar_get_output_right();
@@ -143,6 +146,8 @@ class CedarProcessor extends AudioWorkletProcessor {
 			case 'setBpm':
 				if (this.module) {
 					this.module._cedar_set_bpm(msg.bpm);
+					// Also update EnvMap so ENV_GET("__bpm") reflects the new value
+					this.setParam('__bpm', msg.bpm);
 				}
 				break;
 
@@ -436,6 +441,23 @@ class CedarProcessor extends AudioWorkletProcessor {
 	}
 
 	/**
+	 * Extract builtin variable overrides from compile result into JS objects.
+	 * Must be called immediately after compilation, before any memory growth.
+	 */
+	extractBuiltinVarOverrides() {
+		if (!this.module._akkado_get_builtin_var_override_count) return [];
+		const count = this.module._akkado_get_builtin_var_override_count();
+		const overrides = [];
+		for (let i = 0; i < count; i++) {
+			const namePtr = this.module._akkado_get_builtin_var_override_name(i);
+			const name = namePtr ? this.module.UTF8ToString(namePtr) : '';
+			const value = this.module._akkado_get_builtin_var_override_value(i);
+			overrides.push({ name, value });
+		}
+		return overrides;
+	}
+
+	/**
 	 * Extract all state initialization data from compile result into JS objects.
 	 * Must be called immediately after compilation, before any memory growth.
 	 */
@@ -554,9 +576,21 @@ class CedarProcessor extends AudioWorkletProcessor {
 					// Extract visualization declarations for UI generation
 					const vizDecls = this.extractVizDecls();
 
+					// Extract builtin variable overrides (bpm, sr)
+					const builtinVarOverrides = this.extractBuiltinVarOverrides();
+
 					// CRITICAL: Clear the compile result NOW, before returning
 					// This ensures we don't have stale pointers when memory grows
 					this.module._akkado_clear_result();
+
+					// Apply builtin variable overrides
+					for (const override of builtinVarOverrides) {
+						if (override.name === 'bpm') {
+							this.module._cedar_set_bpm(override.value);
+						}
+						// Write to EnvMap so ENV_GET reads the value
+						this.setParam('__' + override.name, override.value);
+					}
 
 					// Extract disassembly for debug panel
 					let disassembly = null;
@@ -592,6 +626,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 						requiredSoundfonts,
 						paramDecls,
 						vizDecls,
+						builtinVarOverrides,
 						disassembly
 					});
 				} else {

@@ -4632,3 +4632,140 @@ TEST_CASE("Codegen: spectrum() now emits FFT_PROBE", "[codegen][viz]") {
     auto* probe = find_instruction(insts, cedar::Opcode::PROBE);
     CHECK(probe == nullptr);
 }
+
+// =============================================================================
+// Builtin Variable Tests
+// =============================================================================
+
+TEST_CASE("Codegen: bpm assignment generates override metadata", "[codegen][builtins]") {
+    SECTION("basic bpm assignment") {
+        auto result = akkado::compile(R"(
+            bpm = 120
+            saw(220) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        REQUIRE(result.builtin_var_overrides.size() == 1);
+        CHECK(result.builtin_var_overrides[0].name == "bpm");
+        CHECK(result.builtin_var_overrides[0].value == Catch::Approx(120.0f));
+
+        // bpm is only assigned, not read — no ENV_GET emitted for __bpm
+        auto insts = get_instructions(result);
+        bool found_bpm_env_get = false;
+        std::uint32_t bpm_hash = cedar::fnv1a_hash_runtime("__bpm", 5);
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::ENV_GET && inst.state_id == bpm_hash) {
+                found_bpm_env_get = true;
+            }
+        }
+        CHECK_FALSE(found_bpm_env_get);
+    }
+
+    SECTION("bpm with arithmetic expression") {
+        auto result = akkado::compile(R"(
+            bpm = 60 * 2
+            saw(220) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        REQUIRE(result.builtin_var_overrides.size() == 1);
+        CHECK(result.builtin_var_overrides[0].value == Catch::Approx(120.0f));
+    }
+
+    SECTION("bpm value is clamped to valid range") {
+        auto result = akkado::compile(R"(
+            bpm = 0.5
+            saw(220) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        REQUIRE(result.builtin_var_overrides.size() == 1);
+        CHECK(result.builtin_var_overrides[0].value == Catch::Approx(1.0f));
+    }
+}
+
+TEST_CASE("Codegen: reading bpm emits ENV_GET", "[codegen][builtins]") {
+    auto result = akkado::compile(R"(
+        x = 60 / bpm
+        saw(x) |> out(%, %)
+    )");
+    REQUIRE(result.success);
+
+    auto insts = get_instructions(result);
+    std::uint32_t bpm_hash = cedar::fnv1a_hash_runtime("__bpm", 5);
+    bool found = false;
+    for (const auto& inst : insts) {
+        if (inst.opcode == cedar::Opcode::ENV_GET && inst.state_id == bpm_hash) {
+            found = true;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("Codegen: sr is read-only", "[codegen][builtins]") {
+    SECTION("sr assignment is error") {
+        auto result = akkado::compile(R"(
+            sr = 44100
+            saw(220) |> out(%, %)
+        )");
+        REQUIRE_FALSE(result.success);
+        bool found_e170 = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E170") found_e170 = true;
+        }
+        CHECK(found_e170);
+    }
+
+    SECTION("reading sr emits ENV_GET") {
+        auto result = akkado::compile(R"(
+            x = 220 / sr
+            saw(x) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        auto insts = get_instructions(result);
+        std::uint32_t sr_hash = cedar::fnv1a_hash_runtime("__sr", 4);
+        bool found = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::ENV_GET && inst.state_id == sr_hash) {
+                found = true;
+            }
+        }
+        CHECK(found);
+    }
+}
+
+TEST_CASE("Codegen: const bpm is error", "[codegen][builtins]") {
+    auto result = akkado::compile(R"(
+        const bpm = 120
+        saw(220) |> out(%, %)
+    )");
+    REQUIRE_FALSE(result.success);
+    bool found_e170 = false;
+    for (const auto& d : result.diagnostics) {
+        if (d.code == "E170") found_e170 = true;
+    }
+    CHECK(found_e170);
+}
+
+TEST_CASE("Codegen: bpm with non-constant expression is error", "[codegen][builtins]") {
+    auto result = akkado::compile(R"(
+        bpm = param("tempo", 120, 60, 200)
+        saw(220) |> out(%, %)
+    )");
+    REQUIRE_FALSE(result.success);
+    bool found_e172 = false;
+    for (const auto& d : result.diagnostics) {
+        if (d.code == "E172") found_e172 = true;
+    }
+    CHECK(found_e172);
+}
+
+TEST_CASE("Codegen: multiple bpm assignments both stored", "[codegen][builtins]") {
+    auto result = akkado::compile(R"(
+        bpm = 100
+        bpm = 140
+        saw(220) |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    REQUIRE(result.builtin_var_overrides.size() == 2);
+    CHECK(result.builtin_var_overrides[0].value == Catch::Approx(100.0f));
+    CHECK(result.builtin_var_overrides[1].value == Catch::Approx(140.0f));
+}

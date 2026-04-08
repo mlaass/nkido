@@ -192,6 +192,24 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
         // Check if RHS is a pattern expression (MiniLiteral)
         NodeIndex rhs = n.first_child;
 
+        // Builtin variable assignment (bpm, sr) — skip normal registration
+        {
+            auto bv_it = BUILTIN_VARIABLES.find(name);
+            if (bv_it != BUILTIN_VARIABLES.end()) {
+                if (bv_it->second.setter_name.empty()) {
+                    error("E170", "Cannot assign to read-only builtin variable '" + name + "'", n.location);
+                }
+                // Skip variable registration — codegen handles the desugaring
+                // Still recurse into children for nested definitions
+                NodeIndex child = n.first_child;
+                while (child != NULL_NODE) {
+                    collect_definitions(child);
+                    child = (*input_ast_).arena[child].next_sibling;
+                }
+                return;
+            }
+        }
+
         // Immutability check: error if variable already defined in current scope
         if (symbols_.is_defined_in_current_scope(name)) {
             error("E150", "Cannot reassign immutable variable '" + name + "'", n.location);
@@ -481,6 +499,15 @@ void SemanticAnalyzer::collect_definitions(NodeIndex node) {
     if (n.type == NodeType::ConstDecl) {
         // Const variable declaration: const x = expr
         const std::string& name = n.as_identifier();
+
+        // Cannot declare builtin variable as const
+        {
+            auto bv_it = BUILTIN_VARIABLES.find(name);
+            if (bv_it != BUILTIN_VARIABLES.end()) {
+                error("E170", "Cannot declare builtin variable '" + name + "' as const", n.location);
+                return;
+            }
+        }
 
         if (symbols_.is_defined_in_current_scope(name)) {
             error("E150", "Cannot reassign immutable variable '" + name + "'", n.location);
@@ -1436,7 +1463,11 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
         if (name != "_") {
             auto sym = symbols_.lookup(name);
             if (!sym) {
-                error("E005", "Undefined identifier: '" + name + "'", n.location);
+                // Builtin variables (bpm, sr) are not in the symbol table —
+                // they're desugared to ENV_GET in codegen
+                if (BUILTIN_VARIABLES.find(name) == BUILTIN_VARIABLES.end()) {
+                    error("E005", "Undefined identifier: '" + name + "'", n.location);
+                }
             }
         }
         // FunctionValue and UserFunction can be used as values

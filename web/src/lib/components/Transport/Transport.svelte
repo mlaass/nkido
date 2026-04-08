@@ -3,6 +3,7 @@
 	import { editorStore } from '$stores/editor.svelte';
 
 	let bpmInput = $state(audioEngine.bpm.toString());
+	$effect(() => { bpmInput = audioEngine.bpm.toString(); });
 	let volumePercent = $derived(Math.round(audioEngine.volume * 100));
 
 	async function handlePlayPause() {

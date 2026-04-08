@@ -1266,6 +1266,38 @@ WASM_EXPORT uint32_t akkado_get_param_source_length(uint32_t index) {
 }
 
 // ============================================================================
+// Builtin Variable Override API
+// ============================================================================
+
+/**
+ * Get number of builtin variable overrides from compile result
+ * @return Number of overrides
+ */
+WASM_EXPORT uint32_t akkado_get_builtin_var_override_count() {
+    return static_cast<uint32_t>(g_compile_result.builtin_var_overrides.size());
+}
+
+/**
+ * Get builtin variable override name by index
+ * @param index Override index (0 to count-1)
+ * @return Pointer to null-terminated name string, or nullptr if invalid
+ */
+WASM_EXPORT const char* akkado_get_builtin_var_override_name(uint32_t index) {
+    if (index >= g_compile_result.builtin_var_overrides.size()) return nullptr;
+    return g_compile_result.builtin_var_overrides[index].name.c_str();
+}
+
+/**
+ * Get builtin variable override value by index
+ * @param index Override index
+ * @return Override value as float
+ */
+WASM_EXPORT float akkado_get_builtin_var_override_value(uint32_t index) {
+    if (index >= g_compile_result.builtin_var_overrides.size()) return 0.0f;
+    return g_compile_result.builtin_var_overrides[index].value;
+}
+
+// ============================================================================
 // Visualization Declaration API
 // ============================================================================
 

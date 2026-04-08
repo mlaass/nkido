@@ -920,4 +920,24 @@ inline std::string_view canonical_name(std::string_view name) {
     return name;
 }
 
+// ============================================================================
+// Builtin Variables (bpm, sr)
+// ============================================================================
+
+/// Definition of a builtin variable that desugars to ENV_GET reads and
+/// compile-time constant extraction for writes.
+struct BuiltinVarDef {
+    std::string_view getter_name;   // "get_bpm"
+    std::string_view setter_name;   // "set_bpm" (empty = read-only)
+    std::string_view env_key;       // "__bpm" — reserved EnvMap key for getter
+    float default_value;            // 120.0f
+    float min_value;                // 1.0f (0 = no clamping)
+    float max_value;                // 999.0f (0 = no clamping)
+};
+
+inline const std::unordered_map<std::string_view, BuiltinVarDef> BUILTIN_VARIABLES = {
+    {"bpm", {"get_bpm", "set_bpm", "__bpm", 120.0f, 1.0f, 999.0f}},
+    {"sr",  {"get_sr",  "",         "__sr",  48000.0f, 0.0f, 0.0f}},
+};
+
 } // namespace akkado

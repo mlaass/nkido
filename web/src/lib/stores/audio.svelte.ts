@@ -420,6 +420,16 @@ function createAudioEngine() {
 					}
 					// Update visualization declarations
 					state.vizDecls = result.vizDecls ?? [];
+					// Apply builtin variable overrides (e.g., bpm from code)
+					const overrides = msg.builtinVarOverrides as
+						Array<{ name: string; value: number }> | undefined;
+					if (overrides) {
+						for (const override of overrides) {
+							if (override.name === 'bpm') {
+								state.bpm = override.value;
+							}
+						}
+					}
 					// Store disassembly for debug panel
 					state.disassembly = result.disassembly ?? null;
 				} else {

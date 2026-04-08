@@ -197,6 +197,9 @@ CompileResult compile(std::string_view source, std::string_view filename,
     result.viz_decls = std::move(gen.viz_decls);
     source_map.adjust_viz_decls(result.viz_decls);
 
+    // Copy builtin variable overrides
+    result.builtin_var_overrides = std::move(gen.builtin_var_overrides);
+
     result.success = true;
     return result;
 }

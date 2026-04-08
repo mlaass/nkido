@@ -53,6 +53,17 @@ struct ParamDecl {
 };
 
 // ============================================================================
+// Builtin Variable Overrides
+// ============================================================================
+
+/// Override for a builtin variable extracted at compile time (e.g., bpm = 120)
+struct BuiltinVarOverride {
+    std::string name;        // "bpm"
+    float value;             // 120.0f
+    SourceLocation location;
+};
+
+// ============================================================================
 // Visualization Exposure System
 // ============================================================================
 
@@ -181,6 +192,7 @@ struct CodeGenResult {
     std::vector<RequiredSoundFont> required_soundfonts;  // SoundFont files needed at runtime
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
+    std::vector<BuiltinVarOverride> builtin_var_overrides;  // Builtin variable overrides (bpm, sr)
     bool success = false;
 };
 
@@ -461,6 +473,7 @@ private:
     std::vector<StateInitData> state_inits_;  // State initialization data
     std::vector<ParamDecl> param_decls_;      // Declared parameters
     std::vector<VisualizationDecl> viz_decls_;  // Declared visualizations
+    std::vector<BuiltinVarOverride> builtin_var_overrides_;  // Builtin var overrides
     std::string filename_;
     SourceLocation current_source_loc_;  // Current source location for emitted instructions
 
