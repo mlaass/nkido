@@ -20,6 +20,7 @@ struct OscState {
     bool initialized = false; // Skip anti-aliasing on first sample
 };
 
+#ifndef CEDAR_NO_MINBLEP
 // MinBLEP oscillator state with residual buffer
 struct MinBLEPOscState {
     float phase = 0.0f;
@@ -50,6 +51,7 @@ struct MinBLEPOscState {
         initialized = false;
     }
 };
+#endif // CEDAR_NO_MINBLEP
 
 // Oversampled oscillator state (4x)
 // For even cleaner FM synthesis at high modulation indices
@@ -475,6 +477,7 @@ struct SamplerState {
 // SoundFont Voice State
 // ============================================================================
 
+#ifndef CEDAR_NO_SOUNDFONT
 // Per-voice state for SoundFont playback
 struct SFVoice {
     float position = 0.0f;       // Current playback position in sample frames
@@ -606,6 +609,7 @@ struct SoundFontVoiceState {
         }
     }
 };
+#endif // CEDAR_NO_SOUNDFONT
 
 // ============================================================================
 // Dynamics States
@@ -1187,6 +1191,7 @@ struct ProbeState {
     }
 };
 
+#ifndef CEDAR_NO_FFT
 // FFT probe state for spectral visualization (waterfall, spectrum)
 // Accumulates samples and computes FFT when a full frame is collected.
 // Buffers are arena-allocated to keep variant size small.
@@ -1211,13 +1216,16 @@ struct FFTProbeState {
     // Implementation in cedar/src/dsp/fft.cpp
     void write_block(const float* samples, std::size_t count);
 };
+#endif // CEDAR_NO_FFT
 
 // Variant holding all possible DSP state types
 // std::monostate represents stateless operations
 using DSPState = std::variant<
     std::monostate,
     OscState,
+#ifndef CEDAR_NO_MINBLEP
     MinBLEPOscState,
+#endif
     OscState4x,
     SVFState,
     NoiseState,
@@ -1252,7 +1260,9 @@ using DSPState = std::variant<
     PhaserState,
     // Sampler states
     SamplerState,
+#ifndef CEDAR_NO_SOUNDFONT
     SoundFontVoiceState,
+#endif
     // Dynamics states
     CompressorState,
     LimiterState,
@@ -1267,7 +1277,9 @@ using DSPState = std::variant<
     PolyAllocState,
     // Visualization states
     ProbeState,
+#ifndef CEDAR_NO_FFT
     FFTProbeState,
+#endif
     // Extended parameters (for opcodes with 7+ params)
     ExtendedParams<3>,   // 8-param opcodes (5 inputs + 3 extended)
     ExtendedParams<5>,   // 10-param opcodes (5 inputs + 5 extended)

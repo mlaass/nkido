@@ -34,21 +34,55 @@ else()
     set(CEDAR_BUILD_TESTS ${ENKIDO_BUILD_TESTS})
 endif()
 
-# Cedar library
-add_library(cedar STATIC
+# Feature toggles (all ON by default for full builds)
+option(CEDAR_ENABLE_AUDIO_DECODERS "Include MP3/FLAC/OGG decoders" ON)
+option(CEDAR_ENABLE_SOUNDFONT      "Include SoundFont (SF2) support" ON)
+option(CEDAR_ENABLE_FFT            "Include FFT support (KissFFT)" ON)
+option(CEDAR_ENABLE_FILE_IO        "Include filesystem-based file loading" ON)
+option(CEDAR_ENABLE_MINBLEP        "Include MinBLEP anti-aliased oscillators" ON)
+option(CEDAR_FLOAT_ONLY            "Use float instead of double for beat timing" OFF)
+
+# Memory constant overrides (empty = use defaults)
+set(CEDAR_BLOCK_SIZE "" CACHE STRING "Override BLOCK_SIZE (default 128)")
+set(CEDAR_MAX_BUFFERS "" CACHE STRING "Override MAX_BUFFERS (default 256)")
+set(CEDAR_MAX_STATES "" CACHE STRING "Override MAX_STATES (default 512)")
+set(CEDAR_MAX_VARS "" CACHE STRING "Override MAX_VARS (default 4096)")
+set(CEDAR_MAX_PROGRAM_SIZE "" CACHE STRING "Override MAX_PROGRAM_SIZE (default 4096)")
+set(CEDAR_MAX_ENV_PARAMS "" CACHE STRING "Override MAX_ENV_PARAMS (default 256)")
+set(CEDAR_ARENA_SIZE "" CACHE STRING "Override AudioArena size in bytes (default 33554432)")
+
+# Core sources (always compiled)
+set(CEDAR_SOURCES
     src/cedar.cpp
     src/vm/vm.cpp
-    src/opcodes/minblep_table.cpp
-    src/opcodes/minblep_state.cpp
-    src/io/audio_decoder.cpp
-    src/audio/soundfont.cpp
-    src/dsp/fft.cpp
 )
 
-# Add file_loader only for native builds (not WASM)
-if(NOT EMSCRIPTEN)
-    target_sources(cedar PRIVATE src/io/file_loader.cpp)
+# Conditional sources
+if(CEDAR_ENABLE_AUDIO_DECODERS)
+    list(APPEND CEDAR_SOURCES src/io/audio_decoder.cpp)
 endif()
+
+if(CEDAR_ENABLE_SOUNDFONT)
+    list(APPEND CEDAR_SOURCES src/audio/soundfont.cpp)
+endif()
+
+if(CEDAR_ENABLE_FFT)
+    list(APPEND CEDAR_SOURCES src/dsp/fft.cpp)
+endif()
+
+if(CEDAR_ENABLE_MINBLEP)
+    list(APPEND CEDAR_SOURCES
+        src/opcodes/minblep_table.cpp
+        src/opcodes/minblep_state.cpp
+    )
+endif()
+
+if(CEDAR_ENABLE_FILE_IO AND NOT EMSCRIPTEN)
+    list(APPEND CEDAR_SOURCES src/io/file_loader.cpp)
+endif()
+
+# Cedar library
+add_library(cedar STATIC ${CEDAR_SOURCES})
 
 target_include_directories(cedar
     PUBLIC
@@ -70,6 +104,35 @@ target_compile_definitions(cedar PUBLIC
     CEDAR_VERSION_MINOR=${PROJECT_VERSION_MINOR}
     CEDAR_VERSION_PATCH=${PROJECT_VERSION_PATCH}
 )
+
+# Feature toggle compile definitions
+if(NOT CEDAR_ENABLE_AUDIO_DECODERS)
+    target_compile_definitions(cedar PUBLIC CEDAR_NO_AUDIO_DECODERS=1)
+endif()
+if(NOT CEDAR_ENABLE_SOUNDFONT)
+    target_compile_definitions(cedar PUBLIC CEDAR_NO_SOUNDFONT=1)
+endif()
+if(NOT CEDAR_ENABLE_FFT)
+    target_compile_definitions(cedar PUBLIC CEDAR_NO_FFT=1)
+endif()
+if(NOT CEDAR_ENABLE_FILE_IO OR EMSCRIPTEN)
+    target_compile_definitions(cedar PUBLIC CEDAR_NO_FILE_IO=1)
+endif()
+if(NOT CEDAR_ENABLE_MINBLEP)
+    target_compile_definitions(cedar PUBLIC CEDAR_NO_MINBLEP=1)
+endif()
+if(CEDAR_FLOAT_ONLY)
+    target_compile_definitions(cedar PUBLIC CEDAR_FLOAT_ONLY=1)
+endif()
+
+# Memory constant overrides
+foreach(_var IN ITEMS CEDAR_BLOCK_SIZE CEDAR_MAX_BUFFERS CEDAR_MAX_STATES
+                      CEDAR_MAX_VARS CEDAR_MAX_PROGRAM_SIZE CEDAR_MAX_ENV_PARAMS
+                      CEDAR_ARENA_SIZE)
+    if(NOT "${${_var}}" STREQUAL "")
+        target_compile_definitions(cedar PUBLIC ${_var}=${${_var}})
+    endif()
+endforeach()
 
 # Enable position-independent code for linking into shared libraries (Python bindings)
 set_target_properties(cedar PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -13,7 +13,9 @@
 #include "filters.hpp"
 #include "envelopes.hpp"
 #include "samplers.hpp"
+#ifndef CEDAR_NO_SOUNDFONT
 #include "soundfont.hpp"
+#endif
 #include "delays.hpp"
 #include "sequencing.hpp"
 #include "distortion.hpp"

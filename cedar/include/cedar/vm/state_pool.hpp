@@ -270,6 +270,7 @@ public:
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
+#ifndef CEDAR_NO_MINBLEP
             else if constexpr (std::is_same_v<T, MinBLEPOscState>) {
                 json << R"({"type":"MinBLEPOscState")";
                 json << R"(,"phase":)" << state.phase;
@@ -277,6 +278,7 @@ public:
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
+#endif
             else if constexpr (std::is_same_v<T, SVFState>) {
                 json << R"({"type":"SVFState")";
                 json << R"(,"ic1eq":)" << state.ic1eq;
@@ -544,6 +546,7 @@ public:
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
+#ifndef CEDAR_NO_FFT
             else if constexpr (std::is_same_v<T, FFTProbeState>) {
                 json << R"({"type":"FFTProbeState")";
                 json << R"(,"fft_size":)" << state.fft_size;
@@ -552,6 +555,7 @@ public:
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
+#endif
             else {
                 json << R"({"type":"Unknown"})";
             }

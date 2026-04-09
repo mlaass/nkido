@@ -250,6 +250,7 @@ inline void op_probe(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+#ifndef CEDAR_NO_FFT
 // FFT_PROBE: Accumulate samples and compute FFT for spectral visualization
 // The signal passes through unchanged (out = in)
 // rate field encodes fft_size as log2: 8=256, 9=512, 10=1024, 11=2048
@@ -281,6 +282,7 @@ inline void op_fft_probe(ExecutionContext& ctx, const Instruction& inst) {
         out[i] = in[i];
     }
 }
+#endif // CEDAR_NO_FFT
 
 // Helper: Create instruction with float constant stored in state_id
 inline Instruction make_const_instruction(Opcode op, std::uint16_t out, float value) {

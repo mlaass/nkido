@@ -68,6 +68,43 @@
             "cacheVariables": {
                 "ENKIDO_ENABLE_COVERAGE": "ON"
             }
+        },
+        {
+            "name": "minsize",
+            "displayName": "Minimum Size (LTO, -Os)",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "MinSizeRel",
+                "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
+                "ENKIDO_BUILD_TESTS": "OFF",
+                "ENKIDO_BUILD_TOOLS": "OFF",
+                "ENKIDO_BUILD_AKKADO": "OFF"
+            }
+        },
+        {
+            "name": "minsize-stripped",
+            "displayName": "Minimum Size (no decoders/soundfont/FFT/minblep)",
+            "inherits": "minsize",
+            "cacheVariables": {
+                "CEDAR_ENABLE_AUDIO_DECODERS": "OFF",
+                "CEDAR_ENABLE_SOUNDFONT": "OFF",
+                "CEDAR_ENABLE_FFT": "OFF",
+                "CEDAR_ENABLE_FILE_IO": "OFF",
+                "CEDAR_ENABLE_MINBLEP": "OFF"
+            }
+        },
+        {
+            "name": "esp32",
+            "displayName": "ESP32 (reduced memory, no optional modules)",
+            "inherits": "minsize-stripped",
+            "cacheVariables": {
+                "CEDAR_MAX_BUFFERS": "64",
+                "CEDAR_MAX_STATES": "128",
+                "CEDAR_MAX_VARS": "512",
+                "CEDAR_MAX_PROGRAM_SIZE": "1024",
+                "CEDAR_ARENA_SIZE": "262144",
+                "CEDAR_FLOAT_ONLY": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -86,6 +123,18 @@
         {
             "name": "coverage",
             "configurePreset": "coverage"
+        },
+        {
+            "name": "minsize",
+            "configurePreset": "minsize"
+        },
+        {
+            "name": "minsize-stripped",
+            "configurePreset": "minsize-stripped"
+        },
+        {
+            "name": "esp32",
+            "configurePreset": "esp32"
         }
     ],
     "testPresets": [

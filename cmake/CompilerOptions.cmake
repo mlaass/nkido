@@ -72,6 +72,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         $<$<CONFIG:Debug>:-O0 -g3 -fno-omit-frame-pointer>
         $<$<CONFIG:Release>:-O3 -DNDEBUG>
         $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
+        $<$<CONFIG:MinSizeRel>:-Os -DNDEBUG -fno-exceptions -fno-rtti -ffunction-sections -fdata-sections>
     )
 endif()
 

@@ -4,7 +4,9 @@
 #include "../vm/instruction.hpp"
 #include "../dsp/constants.hpp"
 #include "dsp_state.hpp"
+#ifndef CEDAR_NO_MINBLEP
 #include "minblep.hpp"
+#endif
 #include <cmath>
 #include <algorithm>
 
@@ -358,6 +360,7 @@ inline void op_osc_phasor(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+#ifndef CEDAR_NO_MINBLEP
 // ============================================================================
 // MinBLEP Oscillators - Perfect harmonic purity for PWM and distortion
 // ============================================================================
@@ -426,6 +429,7 @@ inline void op_osc_sqr_minblep(ExecutionContext& ctx, const Instruction& inst) {
         state.initialized = true;
     }
 }
+#endif // CEDAR_NO_MINBLEP
 
 // ============================================================================
 // PWM Oscillators - Pulse Width Modulation
@@ -556,6 +560,7 @@ inline void op_osc_saw_pwm(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+#ifndef CEDAR_NO_MINBLEP
 // SQR_PWM_MINBLEP oscillator: highest quality PWM square wave
 // in0: frequency (Hz)
 // in1: PWM (-1 to +1, where 0 = 50% duty cycle)
@@ -619,6 +624,7 @@ inline void op_osc_sqr_pwm_minblep(ExecutionContext& ctx, const Instruction& ins
         state.initialized = true;
     }
 }
+#endif // CEDAR_NO_MINBLEP
 
 // ============================================================================
 // Oversampled Oscillators - For alias-free FM synthesis

@@ -8,7 +8,9 @@
 #include <cstring>
 #include <fstream>
 #include "cedar/audio/wav_loader.hpp"
+#ifndef CEDAR_NO_AUDIO_DECODERS
 #include "cedar/io/audio_decoder.hpp"
+#endif
 
 namespace cedar {
 
@@ -151,6 +153,7 @@ public:
                           wav.channels, static_cast<float>(wav.sample_rate));
     }
 
+#ifndef CEDAR_NO_AUDIO_DECODERS
     /// Load a sample from audio data in any supported format (WAV, OGG, FLAC, MP3)
     /// Auto-detects the format from magic bytes
     /// @param name Sample name for lookup
@@ -165,6 +168,7 @@ public:
         return load_sample(name, decoded.samples.data(), decoded.num_frames,
                           decoded.channels, static_cast<float>(decoded.sample_rate));
     }
+#endif
 
     /// Get sample by ID
     [[nodiscard]] const SampleData* get_sample(std::uint32_t sample_id) const {

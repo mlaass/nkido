@@ -19,7 +19,12 @@ namespace cedar {
 class AudioArena {
 public:
     // Default size: 32MB (enough for ~8 large reverbs + many delays)
+    // Overridable via CEDAR_ARENA_SIZE compile definition
+#ifdef CEDAR_ARENA_SIZE
+    static constexpr std::size_t DEFAULT_SIZE = CEDAR_ARENA_SIZE;
+#else
     static constexpr std::size_t DEFAULT_SIZE = 32 * 1024 * 1024;
+#endif
 
     // Alignment for SIMD operations
     static constexpr std::size_t ALIGNMENT = 32;
@@ -30,7 +35,15 @@ public:
     {
         // size must be multiple of alignment for aligned_alloc
         std::size_t aligned_size = (size_ + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
+#ifdef CEDAR_USE_POSIX_MEMALIGN
+        void* raw = nullptr;
+        if (posix_memalign(&raw, ALIGNMENT, aligned_size) != 0) {
+            raw = nullptr;
+        }
+        memory_ = static_cast<float*>(raw);
+#else
         memory_ = static_cast<float*>(std::aligned_alloc(ALIGNMENT, aligned_size));
+#endif
 
         if (!memory_) {
             size_ = 0;  // Mark as invalid

@@ -6,7 +6,9 @@
 #include "state_pool.hpp"
 #include "env_map.hpp"
 #include "sample_bank.hpp"
+#ifndef CEDAR_NO_SOUNDFONT
 #include "../audio/soundfont.hpp"
+#endif
 #include "swap_controller.hpp"
 #include "crossfade_state.hpp"
 #include "../opcodes/dsp_state.hpp"
@@ -133,9 +135,11 @@ public:
     [[nodiscard]] SampleBank& sample_bank() { return sample_bank_; }
     [[nodiscard]] const SampleBank& sample_bank() const { return sample_bank_; }
 
+#ifndef CEDAR_NO_SOUNDFONT
     // Get SoundFont registry (for SF2 management)
     [[nodiscard]] SoundFontRegistry& soundfont_registry() { return soundfont_registry_; }
     [[nodiscard]] const SoundFontRegistry& soundfont_registry() const { return soundfont_registry_; }
+#endif
 
     // Initialize a SequenceState with compiled sequences (arena-allocated)
     // Used by compiler to set up the simplified sequence-based patterns
@@ -227,7 +231,9 @@ private:
     StatePool state_pool_;
     EnvMap env_map_;
     SampleBank sample_bank_;
+#ifndef CEDAR_NO_SOUNDFONT
     SoundFontRegistry soundfont_registry_;
+#endif
     AudioArena audio_arena_;
 };
 

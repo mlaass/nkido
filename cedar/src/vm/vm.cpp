@@ -277,13 +277,22 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
         : nullptr;
 
     if (seq_state && seq_state->output.num_events > 0) {
+        const float cycle_length = seq_state->cycle_length;
+#ifdef CEDAR_FLOAT_ONLY
+        // Float-only beat timing (precision degrades after ~6 min at 48kHz)
+        const float spb = (60.0f / ctx_.bpm) * ctx_.sample_rate;
+        const float beat_start = static_cast<float>(ctx_.global_sample_counter) / spb;
+        const float cycle_pos = std::fmod(beat_start, cycle_length);
+        const std::uint32_t current_cycle =
+            static_cast<std::uint32_t>(std::floor(beat_start / cycle_length));
+        const float block_end_pos = cycle_pos + static_cast<float>(BLOCK_SIZE) / spb;
+#else
         // Use double precision for beat timing to avoid float32 precision loss
         // after ~6 minutes (global_sample_counter > 2^24)
         const double spb_d = (60.0 / static_cast<double>(ctx_.bpm))
                            * static_cast<double>(ctx_.sample_rate);
         const double beat_start_d =
             static_cast<double>(ctx_.global_sample_counter) / spb_d;
-        const float cycle_length = seq_state->cycle_length;
         const double cycle_pos_d =
             std::fmod(beat_start_d, static_cast<double>(cycle_length));
         const std::uint32_t current_cycle =
@@ -294,6 +303,7 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
         const float spb = static_cast<float>(spb_d);
         const float cycle_pos = static_cast<float>(cycle_pos_d);
         const float block_end_pos = static_cast<float>(block_end_pos_d);
+#endif
 
         // Reset pending gate transitions for all voices
         if (poly_state.voices) {
@@ -514,9 +524,11 @@ void VM::execute(const Instruction& inst) {
             op_osc_phasor(ctx_, inst);
             break;
 
+#ifndef CEDAR_NO_MINBLEP
         case Opcode::OSC_SQR_MINBLEP:
             op_osc_sqr_minblep(ctx_, inst);
             break;
+#endif
 
         // === PWM Oscillators ===
         case Opcode::OSC_SQR_PWM:
@@ -527,9 +539,11 @@ void VM::execute(const Instruction& inst) {
             op_osc_saw_pwm(ctx_, inst);
             break;
 
+#ifndef CEDAR_NO_MINBLEP
         case Opcode::OSC_SQR_PWM_MINBLEP:
             op_osc_sqr_pwm_minblep(ctx_, inst);
             break;
+#endif
 
         // === Oversampled Oscillators (4x only, 2x variants removed) ===
         case Opcode::OSC_SIN_4X:
@@ -761,9 +775,11 @@ void VM::execute(const Instruction& inst) {
             op_sample_play_loop(ctx_, inst, &sample_bank_);
             break;
 
+#ifndef CEDAR_NO_SOUNDFONT
         case Opcode::SOUNDFONT_VOICE:
             op_soundfont_voice(ctx_, inst, &sample_bank_, &soundfont_registry_);
             break;
+#endif
 
         // === Delays ===
         case Opcode::DELAY:
@@ -972,9 +988,11 @@ void VM::execute(const Instruction& inst) {
             op_probe(ctx_, inst);
             break;
 
+#ifndef CEDAR_NO_FFT
         case Opcode::FFT_PROBE:
             op_fft_probe(ctx_, inst);
             break;
+#endif
 
         // === Invalid ===
         [[unlikely]] case Opcode::INVALID:
