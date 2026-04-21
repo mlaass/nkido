@@ -173,6 +173,120 @@ TEST_CASE("Types: stateless opcodes auto-lift on stereo input", "[types][stereo]
 // Mixed-channel arithmetic (PRD §5.3 rule 4, §10.11)
 // =============================================================================
 
+// =============================================================================
+// Declarative BuiltinSignature catalog (PRD §5.2, G1)
+//
+// Each auto_lift=true builtin category gets one representative: a stereo input
+// must produce a single instruction of the builtin's opcode carrying the
+// STEREO_INPUT flag, not two separately-emitted mono passes.
+// =============================================================================
+
+TEST_CASE("Types: declarative auto-lift per category", "[types][stereo][auto-lift]") {
+    SECTION("filter lp (FILTER_SVF_LP) auto-lifts on stereo") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            lp(s, 800, 0.7) |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 1);
+        auto* op = find_instruction(insts, cedar::Opcode::FILTER_SVF_LP);
+        REQUIRE(op != nullptr);
+        CHECK((op->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+    }
+
+    SECTION("delay (DELAY) auto-lifts on stereo") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            delay(s, 0.25, 0.5) |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::DELAY) == 1);
+        auto* op = find_instruction(insts, cedar::Opcode::DELAY);
+        REQUIRE(op != nullptr);
+        CHECK((op->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+    }
+
+    SECTION("freeverb (REVERB_FREEVERB) auto-lifts on stereo") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            freeverb(s, 0.85, 0.5) |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::REVERB_FREEVERB) == 1);
+        auto* op = find_instruction(insts, cedar::Opcode::REVERB_FREEVERB);
+        REQUIRE(op != nullptr);
+        CHECK((op->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+    }
+
+    SECTION("comp (DYNAMICS_COMP) auto-lifts on stereo") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            comp(s, -12, 4) |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* op = find_instruction(insts, cedar::Opcode::DYNAMICS_COMP);
+        REQUIRE(op != nullptr);
+        CHECK((op->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+    }
+
+    SECTION("chorus (EFFECT_CHORUS) auto-lifts on stereo") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            chorus(s, 0.5, 0.5) |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* op = find_instruction(insts, cedar::Opcode::EFFECT_CHORUS);
+        REQUIRE(op != nullptr);
+        CHECK((op->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+    }
+}
+
+// =============================================================================
+// E186 — declarative channel-type mismatch (PRD §5.3 rule 1)
+//
+// Non-auto-lift builtins reject a stereo signal in a Mono slot with E186.
+// Special-handler builtins continue to emit E181–E185; E186 is for the generic
+// dispatch path only.
+// =============================================================================
+
+TEST_CASE("Types: E186 rejects stereo on non-auto-lift builtins", "[types][stereo][errors]") {
+    SECTION("adsr with stereo gate is E186") {
+        // adsr is intentionally NOT auto-lifted: a stereo gate is a code smell.
+        // See plan: `adsr`/`ar` declare their gate slot as Mono, auto_lift=false.
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            adsr(s, 0.01, 0.1, 0.5, 0.3) |> out(%)
+        )");
+        CHECK_FALSE(result.success);
+        CHECK(has_diagnostic(result, "E186"));
+    }
+
+    SECTION("saw oscillator with stereo freq is E186") {
+        // Oscillators are mono generators per PRD §5.2; stereo frequency input
+        // is rejected rather than silently lifted or chord-expanded.
+        auto result = akkado::compile(R"(
+            f = stereo(saw(1), saw(2))
+            saw(f) |> out(%)
+        )");
+        CHECK_FALSE(result.success);
+        CHECK(has_diagnostic(result, "E186"));
+    }
+
+    SECTION("mono(mono) still emits E181, not E186") {
+        // Special-handler builtins keep their specific error codes so the user
+        // gets the precise "this is a stereo-only function" message.
+        auto result = akkado::compile("mono(saw(220)) |> out(%)");
+        CHECK_FALSE(result.success);
+        CHECK(has_diagnostic(result, "E181"));
+        CHECK_FALSE(has_diagnostic(result, "E186"));
+    }
+}
+
 TEST_CASE("Types: mixed mono/stereo arithmetic", "[types][stereo][arithmetic]") {
     // mono + stereo broadcasts the mono operand across both channels.
     // Array-broadcasting in the binary-op path naturally produces 2 output

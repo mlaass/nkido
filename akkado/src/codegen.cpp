@@ -1060,6 +1060,49 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 }
             }
 
+            // PRD §5.3 rule 1 / §5.2 (G1): declarative channel-type mismatch.
+            // For builtins that do not opt into auto-lift, a stereo signal in
+            // a Mono slot (or vice versa) is a compile error E186. Special-
+            // handler builtins (stereo/mono/left/right/pan/width/ms_encode/
+            // ms_decode/pingpong) never reach this path — they enforce their
+            // own signatures with E181–E184. `out()` is handled above via
+            // E185 and the single-arg expansion branch.
+            if (func_name != "out" && !builtin->auto_lift) {
+                NodeIndex ch = n.first_child;
+                for (std::size_t ai = 0; ai < arg_buffers.size() &&
+                        ai < MAX_BUILTIN_PARAMS && ch != NULL_NODE; ++ai,
+                        ch = ast_->arena[ch].next_sibling) {
+                    const Node& arg_node = ast_->arena[ch];
+                    NodeIndex arg_value = (arg_node.type == NodeType::Argument) ?
+                                         arg_node.first_child : ch;
+                    TypedValue resolved = visit(arg_value);
+                    if (resolved.type != ValueType::Signal) continue;
+                    ChannelCount actual = (resolved.is_stereo() &&
+                                          resolved.right_buffer != 0xFFFF)
+                                          ? ChannelCount::Stereo
+                                          : ChannelCount::Mono;
+                    ChannelCount expected = builtin->input_channels[ai];
+                    if (actual != expected) {
+                        std::string param_label;
+                        if (!builtin->param_names[ai].empty()) {
+                            param_label = " '" + std::string(builtin->param_names[ai]) + "'";
+                        }
+                        std::string hint = (expected == ChannelCount::Mono)
+                            ? " Use `left(x)`, `right(x)`, or `mono(x)` to reduce to mono."
+                            : " Use `stereo(x)` to promote to stereo.";
+                        error("E186",
+                              "'" + std::string(func_name) +
+                              "' expects " + channel_count_name(expected) +
+                              " for argument" + param_label +
+                              " (position " + std::to_string(ai + 1) + "), got " +
+                              channel_count_name(actual) + "." + hint,
+                              ast_->arena[ch].location);
+                        if (pushed_path) pop_path();
+                        return TypedValue::error_val();
+                    }
+                }
+            }
+
             // Multi-buffer argument detection (stereo or chord expansion).
             // Stereo auto-lift runs regardless of `requires_state` — stateless
             // ops (fold, saturate, distort_tanh, ...) must also run twice on
@@ -1102,7 +1145,15 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                     }
                 }
 
-                is_stereo_expansion = (expansion_arg_idx >= 0 &&
+                // Stereo auto-lift is driven by the builtin's declarative
+                // `auto_lift` flag (PRD §5.2, G1 — declarative BuiltinSignature
+                // catalog). Builtins that don't opt in (oscillators, math,
+                // non-lift operations) are NOT silently lifted on stereo input;
+                // mismatches are caught by the E186 channel-type check
+                // downstream. Chord expansion (>2 voices) still fires on its
+                // own branch regardless of `auto_lift`.
+                is_stereo_expansion = (builtin->auto_lift &&
+                                      expansion_arg_idx >= 0 &&
                                       expansion_buffers.size() == 2 &&
                                       is_stereo(arg_nodes[static_cast<std::size_t>(expansion_arg_idx)]));
             }
@@ -1380,7 +1431,18 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
             }
 
             emit(inst);
-            return cache_and_return(node, TypedValue::signal(out));
+            // Propagate the builtin's declared output channel count (PRD §5.2).
+            // For the common mono-in/mono-out case this stays Mono. It is the
+            // hook for future stereo-native generators (e.g. `in()`) to emit
+            // Stereo results through the generic path; today all stereo-output
+            // builtins route through codegen_stereo.cpp, so this only ever
+            // takes the Mono branch in the current tree.
+            TypedValue result = TypedValue::signal(out);
+            result.channels = builtin->output_channels;
+            if (result.channels == ChannelCount::Stereo) {
+                result.right_buffer = static_cast<std::uint16_t>(out + 1);
+            }
+            return cache_and_return(node, result);
         }
 
         case NodeType::BinaryOp: {
