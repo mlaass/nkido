@@ -28,14 +28,14 @@ Live-coding a synth is useful, but many musical workflows want to *process* an e
 |---|---|---|
 | Cedar graph input | None — all signal generated internally | External PCM via `in()` |
 | `ExecutionContext` buffers | `output_left`, `output_right` | Adds `input_left`, `input_right` |
-| WASM entry point | `cedar_process_block()` writes outputs | Adds `cedar_set_input_buffer(L, R)` before block |
+| WASM entry point | `cedar_process_block()` writes outputs | Worklet writes WASM-owned input buffers via `cedar_get_input_left/right()` pointers before each block |
 | AudioWorklet (`cedar-processor.js`) | Reads WASM output, writes WebAudio destination | Also routes a `MediaStream` to WASM input |
 | CLI (`AudioEngine`) | SDL2 output stream | Adds SDL2 input stream, configurable device |
 | Godot | (covered by separate PRD) | Must populate `input_left/right` pre-block |
 
 ### 1.2 No "input" concept exists
 
-A grep for an `IN` / `INPUT` / `MIC` opcode in `cedar/include/cedar/vm/instruction.hpp` returns nothing. Every signal source in the system today is either an oscillator, a noise generator, a pattern, a sample player, or a parameter lookup. `ExecutionContext` (`cedar/include/cedar/vm/context.hpp:17-88`) has only output pointers.
+No audio-input opcode exists in the `Opcode` enum in `cedar/include/cedar/vm/instruction.hpp` — the `STEREO_INPUT` identifier in that file is a dispatch flag bit introduced by [`prd-stereo-support.md`](prd-stereo-support.md) for dual-pass auto-lift, not an input source. Every signal source in the system today is either an oscillator, a noise generator, a pattern, a sample player, or a parameter lookup. `ExecutionContext` (`cedar/include/cedar/vm/context.hpp:17-88`) has only output pointers.
 
 ---
 
@@ -178,9 +178,9 @@ Pseudocode:
 ```cpp
 // In cedar/include/cedar/opcodes/utility.hpp (stateless; no dsp_state)
 void op_input(ExecutionContext& ctx, const Instruction& inst) {
-    // output_buf is the left slot; right is guaranteed adjacent (output_buf + 1)
-    float* out_l = ctx.buffers->get(inst.output_buf);
-    float* out_r = ctx.buffers->get(inst.output_buf + 1);
+    // out_buffer is the left slot; right is guaranteed adjacent (out_buffer + 1)
+    float* out_l = ctx.buffers->get(inst.out_buffer);
+    float* out_r = ctx.buffers->get(inst.out_buffer + 1);
     if (ctx.input_left && ctx.input_right) {
         std::memcpy(out_l, ctx.input_left,  BLOCK_SIZE * sizeof(float));
         std::memcpy(out_r, ctx.input_right, BLOCK_SIZE * sizeof(float));
@@ -191,15 +191,21 @@ void op_input(ExecutionContext& ctx, const Instruction& inst) {
 }
 ```
 
+The `TypedValue` returned by codegen uses the `TypedValue::stereo_signal(left, right)` factory (from [`prd-stereo-support.md`](prd-stereo-support.md) §5.1), so `channels = Stereo` and `right_buffer = left + 1` are set consistently with the rest of the stereo type system.
+
 ### 4.4 Akkado builtin
 
 `akkado/include/akkado/builtins.hpp`:
 
 ```cpp
 {"in", {cedar::Opcode::INPUT, 0, 1, false,  // 0 required + 1 optional
-        {"source", "", "", "", ""},
-        {NAN, NAN, NAN, NAN, NAN},           // no default (string handled separately)
-        "Live audio input. Optional source: 'mic' (default), 'tab', 'file:NAME'."}}
+        {"source", "", "", "", "", ""},
+        {NAN, NAN, NAN, NAN, NAN},           // defaults array only encodes numeric
+                                             // defaults; the string `source` has
+                                             // no numeric default
+        "Live audio input. Optional source: 'mic' (default), 'tab', 'file:NAME'.",
+        /*extended_param_count=*/0,
+        /*param_types=*/{akkado::ParamValueType::String, {}, {}, {}, {}, {}}}}
 ```
 
 Per the type-system extension in [`prd-stereo-support.md`](prd-stereo-support.md) §5.2, `in()` has the channel-type signature:
@@ -210,7 +216,7 @@ Per the type-system extension in [`prd-stereo-support.md`](prd-stereo-support.md
   auto_lift:       false }   // fixed output type
 ```
 
-The `source` argument is a string. Strings are not buffer inputs — the codegen intercepts string literals and attaches them as metadata (existing pattern, see how `osc("saw", ...)` handles the waveform string).
+The `source` argument is a string. Strings are not buffer inputs — the codegen intercepts them (via `ParamValueType::String`) and attaches them as metadata on the emitted instruction. The existing pattern to mirror is `soundfont(pattern, "file.sf2", preset)`, implemented in `CodeGenerator::handle_soundfont_call` (`akkado/src/codegen_patterns.cpp:2766`), which takes a string-literal filename and stores it in a compile-side required-resource table forwarded to the host.
 
 ### 4.5 Host integration — Web
 
@@ -220,11 +226,10 @@ The `source` argument is a string. Strings are not buffer inputs — the codegen
 static float g_input_left [BLOCK_SIZE] = {0};
 static float g_input_right[BLOCK_SIZE] = {0};
 
-EMSCRIPTEN_KEEPALIVE
-void cedar_set_input_buffer(const float* l, const float* r) {
-    std::memcpy(g_input_left,  l, BLOCK_SIZE * sizeof(float));
-    std::memcpy(g_input_right, r, BLOCK_SIZE * sizeof(float));
-}
+// Mirror the output path: expose WASM-owned buffer pointers so the worklet
+// writes directly into the heap, avoiding an extra copy per block.
+EMSCRIPTEN_KEEPALIVE float* cedar_get_input_left()  { return g_input_left;  }
+EMSCRIPTEN_KEEPALIVE float* cedar_get_input_right() { return g_input_right; }
 
 // In cedar_process_block, before running VM:
 ctx.input_left  = g_input_left;
@@ -243,14 +248,15 @@ Compiler emits a call alongside bytecode if it sees a string literal in `in('...
 **AudioWorklet** (`web/static/worklet/cedar-processor.js`):
 
 - Receive a `MediaStream` from main thread via `MessagePort`.
-- AudioWorklet `process(inputs, outputs)` already receives `inputs[0]` — route channels 0/1 into `cedar_set_input_buffer` before calling `cedar_process_block`.
+- On init, cache `inputLeftPtr = module._cedar_get_input_left()` and `inputRightPtr = module._cedar_get_input_right()` (symmetric to the existing `outputLeftPtr` / `outputRightPtr`).
+- AudioWorklet `process(inputs, outputs)` already receives `inputs[0]` — before calling `cedar_process_block`, copy `inputs[0][0]` / `inputs[0][1]` (or duplicate `inputs[0][0]` to both for mono sources) directly into the WASM heap at `inputLeftPtr` / `inputRightPtr` using a fresh `Float32Array(module.wasmMemory.buffer)` view.
 
-**Main thread** (`web/src/lib/stores/audio.svelte.ts` + new `input-source.svelte.ts`):
+**Main thread** (`web/src/lib/stores/audio.svelte.ts` + new `web/src/lib/audio/input-source.ts`):
 
 - Source selection state: `'mic' | 'tab' | { file: string }`.
 - `'mic'`: `navigator.mediaDevices.getUserMedia({ audio: { echoCancellation, noiseSuppression, autoGainControl } })` with toggles from settings.
 - `'tab'`: `navigator.mediaDevices.getDisplayMedia({ audio: true, video: false })`.
-- `'file:NAME'`: resolve file from the uploaded-files registry, decode, loop through an `AudioBufferSourceNode`.
+- `'file:NAME'`: resolve file from the existing `akkado::SampleRegistry` / web upload flow (the same registry that feeds `cedar_load_sample` / `cedar_load_audio_data` — see `web/src/lib/audio/bank-registry.ts` and `CedarProcessor.loadSampleAudio` in `web/static/worklet/cedar-processor.js`), decode, and loop through an `AudioBufferSourceNode` with `loop = true`. WebAudio handles resampling from the file's native rate to the `AudioContext` rate automatically. No crossfade at the loop boundary in MVP (sample-accurate wrap; clicks are acceptable as long as the file is well-formed). If the file isn't decoded yet, `in()` returns silence until decode completes — no blocking.
 - Connect chosen source → `MediaStreamAudioSourceNode` (or file equivalent) → AudioWorklet input port.
 
 **UI** (`web/src/lib/components/Panel/AudioInputPanel.svelte`, new):
@@ -295,7 +301,7 @@ The Godot extension must, before each `process_block()` call, fill `ctx.input_le
 | CLI `AudioEngine` | **Modified** | Capture device, `--list-devices`, `--input-device` |
 | Generated opcode metadata | **Modified** | Rebuild via `bun run build:opcodes` |
 | Documentation | **New** | Entry in `web/static/docs/` for `in()` |
-| Sample-loading subsystem | **Reused** | `file:NAME` source uses existing uploaded-file registry |
+| Sample-loading subsystem | **Reused** | `file:NAME` source uses `akkado::SampleRegistry` and the existing web upload flow |
 | Godot extension | **Unaffected by this PRD** | Must eventually implement contract |
 | Python `cedar_core` bindings | **Unaffected** | Future extension |
 
@@ -314,7 +320,7 @@ The Godot extension must, before each `process_block()` call, fill `ctx.input_le
 | `akkado/include/akkado/builtins.hpp` | Register `in` builtin |
 | `akkado/src/analyzer.cpp` | Accept optional string argument; validate format |
 | `akkado/src/codegen.cpp` | Emit host-side source-set call for `in('...')` (if non-default) |
-| `web/wasm/enkido_wasm.cpp` | Export `cedar_set_input_buffer`, `cedar_set_input_source`; wire into `process_block` |
+| `web/wasm/enkido_wasm.cpp` | Export `cedar_get_input_left`, `cedar_get_input_right`, `cedar_set_input_source`; wire `ctx.input_left/right` into `cedar_process_block` |
 | `web/static/worklet/cedar-processor.js` | Route `inputs[0]` into WASM each block |
 | `web/src/lib/stores/audio.svelte.ts` | Source-selection state, permission handling, `MediaStream` routing |
 | `web/src/lib/components/Panel/*` | Add audio-input panel to sidebar tabs |
@@ -329,8 +335,14 @@ The Godot extension must, before each `process_block()` call, fill `ctx.input_le
 | `web/src/lib/components/Panel/AudioInputPanel.svelte` | UI for source selection and constraints |
 | `web/src/lib/audio/input-source.ts` | MediaStream acquisition & switching |
 | `web/static/docs/in.md` | Docs page for the `in()` builtin |
-| `cedar/tests/test_input_opcode.cpp` | Unit tests for INPUT opcode |
-| `akkado/tests/test_in_builtin.cpp` | Compile tests for `in()` and `in('...')` |
+| `experiments/test_op_input.py` | Python experiment: verify INPUT copies `input_left/right` to output register and writes silence when pointers are null |
+
+### Modify (tests)
+
+| File | Change |
+|---|---|
+| `cedar/tests/test_vm.cpp` | Add `[input]` test cases for INPUT opcode (memcpy path, silent-fallback path, statelessness) |
+| `akkado/tests/test_codegen.cpp` | Add compile tests for `in()`, `in('mic')`, `in('tab')`, `in('file:NAME')`, and `in('garbage')` error case |
 
 ### Explicitly NOT changed
 
@@ -371,18 +383,27 @@ The Godot extension must, before each `process_block()` call, fill `ctx.input_le
 
 ## 8. Testing / Verification
 
-### 8.1 Cedar unit tests (`cedar/tests/test_input_opcode.cpp`)
+### 8.1 Cedar unit tests (added to `cedar/tests/test_vm.cpp` under `[input]` tag)
 
 - INPUT opcode with non-null `input_left/right` copies buffer contents to register.
 - INPUT opcode with null pointers writes zeros.
 - INPUT opcode is stateless (running it twice with same inputs produces identical output).
+- Confirm the adjacent-buffer invariant: `out_buffer + 1` is the right-channel slot, matching the convention used by `PAN`, `WIDTH`, etc. in `cedar/include/cedar/opcodes/stereo.hpp`.
 
-### 8.2 Akkado tests (`akkado/tests/test_in_builtin.cpp`)
+### 8.2 Akkado tests (added to `akkado/tests/test_codegen.cpp` under `[input]` tag)
 
-- `in()` compiles and emits an INPUT instruction.
+- `in()` compiles and emits an INPUT instruction with a `TypedValue` built via `TypedValue::stereo_signal(left, right)` (i.e. `channels == ChannelCount::Stereo`, `right_buffer == left + 1`).
+- Feeding `in()` into a mono DSP builtin (e.g. `in() |> lp(%, 2000)`) emits one instruction with the `InstructionFlag::STEREO_INPUT` bit set and allocates an adjacent L/R output pair (depends on stereo-PRD Phase 4 auto-lift codegen landing first).
 - `in('mic')`, `in('tab')`, `in('file:sample.wav')` all compile.
 - `in('garbage_value')` is a compile-time error.
 - `in() |> out` end-to-end compiles and produces runnable bytecode.
+
+### 8.2a Python experiment (`experiments/test_op_input.py`)
+
+- Build instruction sequence: `INPUT` → `OUTPUT` (stereo).
+- Feed known L/R buffers through `cedar_core` harness (requires minor harness extension to set `ctx.input_left/right` — document this in the experiment).
+- Verify output equals input bit-for-bit when pointers are set; verify silence when pointers are null.
+- Save WAV for human evaluation as per `docs/dsp-experiment-methodology.md`.
 
 ### 8.3 Web manual tests
 
@@ -458,7 +479,7 @@ Same Akkado program compiled and run on both platforms with the same input (a pr
 
 ## 10. Open Questions
 
-- **Dependency ordering on stereo PRD.** This PRD's `in()` type signature assumes `ChannelCount` and adjacent-buffer output pairs from [`prd-stereo-support.md`](prd-stereo-support.md). If `in()` ships before the stereo PRD is implemented, the INPUT opcode still works (host fills two buffers, opcode copies them), but the *Akkado-level* stereo behavior (auto-lift through downstream mono DSP) won't exist — users would need to pipe through existing stereo opcodes (`width`, `pingpong`) or explicit `pan(left(in), right(in))` routing. Recommendation: land the stereo PRD's Phase 1–2 (type system + `mono()` builtin) before wiring `in()` into auto-lift, so the UX promised in §3 is real on day one.
+- **Dependency ordering on stereo PRD.** This PRD's `in()` type signature assumes `ChannelCount` and adjacent-buffer output pairs from [`prd-stereo-support.md`](prd-stereo-support.md). The Target Syntax in §3 — most notably `in() |> lp(%, 2000) |> out` — relies on the stereo PRD's **Phase 1** (type system), **Phase 3** (`STEREO_INPUT` VM dispatch), and **Phase 4** (auto-lift codegen) all being in place. If `in()` ships before Phases 3–4 land, the INPUT opcode still works (host fills two buffers, opcode copies them), but downstream mono DSP silently drops the right channel — users would need to pipe through existing stereo opcodes (`width`, `pingpong`) or explicit `pan(left(in()), right(in()))` routing. Recommendation: land the stereo PRD's Phases 1–4 before wiring `in()` into auto-lift, so the UX promised in §3 is real on day one.
 - **Source string grammar** — the PRD uses `'mic'`, `'tab'`, `'file:NAME'`. Should `file:` support relative paths, IDs, or both? Recommend: whatever the existing sample-loading uses.
 - **Does hot-swap pause capture?** Optimization, not correctness. Deferred to implementation.
 - **Latency measurement / alignment** — out of scope; users who need tight input-output alignment can add a short delay manually.
