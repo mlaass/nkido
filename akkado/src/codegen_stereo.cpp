@@ -168,15 +168,14 @@ TypedValue CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
         bool input_is_stereo = is_stereo(mono_node) || is_stereo_buffer(mono_buf);
 
         if (input_is_stereo) {
-            // Already stereo - just propagate
-            StereoBuffers stereo;
-            if (is_stereo(mono_node)) {
-                stereo = get_stereo_buffers(mono_node);
-            } else {
-                stereo = get_stereo_buffers_by_buffer(mono_buf);
-            }
-            register_stereo(node, stereo.left, stereo.right);
-            return cache_and_return(node, TypedValue::stereo_signal(stereo.left, stereo.right));
+            // PRD §10.3: calling stereo() on an already-stereo signal is a
+            // compile error. Rationale: silent pass-through hides bugs where
+            // the user thought something upstream was still mono.
+            error("E182",
+                  "stereo() got a Stereo argument; value is already stereo. "
+                  "stereo() takes a mono signal or two mono signals.",
+                  n.location);
+            return TypedValue::error_val();
         }
 
         // Mono input - allocate two new buffers and copy
@@ -227,8 +226,10 @@ TypedValue CodeGenerator::handle_left_call(NodeIndex node, const Node& n) {
         return cache_and_return(node, TypedValue::signal(stereo.left));
     }
 
-    // Not stereo - return the mono signal as-is
-    return cache_and_return(node, TypedValue::signal(buf));
+    // PRD §4.4: left() requires a Stereo argument — silently passing a mono
+    // signal through would hide bugs and contradict the documented contract.
+    error("E183", "left() expects Stereo, got Mono", n.location);
+    return TypedValue::error_val();
 }
 
 // right(stereo) -> extract right channel
@@ -256,8 +257,9 @@ TypedValue CodeGenerator::handle_right_call(NodeIndex node, const Node& n) {
         return cache_and_return(node, TypedValue::signal(stereo.right));
     }
 
-    // Not stereo - return the mono signal as-is
-    return cache_and_return(node, TypedValue::signal(buf));
+    // PRD §4.4: right() requires a Stereo argument — see left() for rationale.
+    error("E184", "right() expects Stereo, got Mono", n.location);
+    return TypedValue::error_val();
 }
 
 // pan(mono, pos) -> equal-power mono → stereo pan (PAN opcode)

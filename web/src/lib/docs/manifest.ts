@@ -2,6 +2,7 @@
 // Do not edit manually - run: bun run build:docs
 
 export const slugToPath: Record<string, string> = {
+	"signals": "concepts/signals.md",
 	"05-testing-progression": "tutorials/05-testing-progression.md",
 	"03-synthesis": "tutorials/03-synthesis.md",
 	"02-filters": "tutorials/02-filters.md",
@@ -138,11 +139,58 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "DOCUMENTATION_GUIDE",
 			"title": "Documentation Guide"
+		},
+		{
+			"slug": "signals",
+			"title": "Mono & Stereo Signals"
 		}
 	]
 };
 
 export const lookup: Record<string, { slug: string; category: string; title: string; anchor?: string }> = {
+	"mono": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "mono",
+		"anchor": "mono"
+	},
+	"stereo": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "stereo",
+		"anchor": "stereo"
+	},
+	"channels": {
+		"slug": "signals",
+		"category": "concepts",
+		"title": "Mono & Stereo Signals"
+	},
+	"auto-lift": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Auto-lift",
+		"anchor": "auto-lift"
+	},
+	"conversion": {
+		"slug": "signals",
+		"category": "concepts",
+		"title": "Mono & Stereo Signals"
+	},
+	"downmix": {
+		"slug": "signals",
+		"category": "concepts",
+		"title": "Mono & Stereo Signals"
+	},
+	"upmix": {
+		"slug": "signals",
+		"category": "concepts",
+		"title": "Mono & Stereo Signals"
+	},
+	"signal types": {
+		"slug": "signals",
+		"category": "concepts",
+		"title": "Mono & Stereo Signals"
+	},
 	"testing": {
 		"slug": "05-testing-progression",
 		"category": "tutorials",
@@ -764,18 +812,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "language",
 		"title": "Operators"
 	},
-	"stereo": {
-		"slug": "stereo",
-		"category": "builtins",
-		"title": "stereo",
-		"anchor": "stereo"
-	},
-	"mono": {
-		"slug": "stereo",
-		"category": "builtins",
-		"title": "mono",
-		"anchor": "mono"
-	},
 	"left, right": {
 		"slug": "stereo",
 		"category": "builtins",
@@ -806,12 +842,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "pingpong",
 		"anchor": "pingpong"
 	},
-	"auto-lift": {
-		"slug": "stereo",
-		"category": "builtins",
-		"title": "Auto-lift",
-		"anchor": "auto-lift"
-	},
 	"left": {
 		"slug": "stereo",
 		"category": "builtins",
@@ -828,16 +858,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Stereo"
 	},
 	"ms_decode": {
-		"slug": "stereo",
-		"category": "builtins",
-		"title": "Stereo"
-	},
-	"downmix": {
-		"slug": "stereo",
-		"category": "builtins",
-		"title": "Stereo"
-	},
-	"channels": {
 		"slug": "stereo",
 		"category": "builtins",
 		"title": "Stereo"
@@ -1503,6 +1523,7 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 };
 
 export const previews: Record<string, string> = {
+	"signals": "Akkado has two kinds of audio signals: Mono (one channel) and Stereo (two channels, L and R). Every expression the compiler sees has a known...",
 	"05-testing-progression": "Work through each level in order. Report back which levels work, fail, or have issues.",
 	"03-synthesis": "Now that you know oscillators and filters, let's combine them into complete synthesizer voices with amplitude envelopes.",
 	"02-filters": "Filters are essential tools for sculpting your sounds. They remove or emphasize certain frequencies, transforming raw oscillators into musical...",

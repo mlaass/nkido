@@ -863,6 +863,22 @@ TypedValue CodeGenerator::handle_binary_op_call(NodeIndex node, const Node& n) {
         result_buffers.push_back(res);
     }
 
+    // PRD §5.3 rule 4 / §10.11: when either operand was Stereo (or a Mono
+    // broadcast against one), the 2-buffer broadcast result is a Stereo
+    // signal, not a generic Array. Tag it as such so downstream auto-lift
+    // and out() treat it correctly. We only do this when: exactly 2 output
+    // buffers, the buffers are adjacent (L, L+1), and at least one operand
+    // was a stereo signal (as opposed to, say, a chord-expansion Array).
+    bool a_stereo = a_multi && is_stereo(args.nodes[0]);
+    bool b_stereo = b_multi && is_stereo(args.nodes[1]);
+    if (result_buffers.size() == 2 && (a_stereo || b_stereo) &&
+        result_buffers[1] == result_buffers[0] + 1) {
+        register_stereo(node, result_buffers[0], result_buffers[1]);
+        auto tv = TypedValue::stereo_signal(result_buffers[0], result_buffers[1]);
+        node_types_[node] = tv;
+        return tv;
+    }
+
     return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 

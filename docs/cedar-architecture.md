@@ -56,8 +56,8 @@ The compiler thread produces bytecode and submits it to the triple-buffer swap c
 ```
 Byte:  0       1       2-3          4-5     6-7     8-9    10-11   12-13   14-15   16-19
      +-------+-------+------------+-------+-------+-------+-------+-------+-------+-----------+
-     |opcode | rate  | out_buffer |  in0  |  in1  |  in2  |  in3  |  in4  | (pad) | state_id  |
-     | (u8)  | (u8)  |   (u16)    | (u16) | (u16) | (u16) | (u16) | (u16) |       |   (u32)   |
+     |opcode | rate  | out_buffer |  in0  |  in1  |  in2  |  in3  |  in4  | flags | state_id  |
+     | (u8)  | (u8)  |   (u16)    | (u16) | (u16) | (u16) | (u16) | (u16) | (u16) |   (u32)   |
      +-------+-------+------------+-------+-------+-------+-------+-------+-------+-----------+
 ```
 
@@ -67,12 +67,24 @@ Byte:  0       1       2-3          4-5     6-7     8-9    10-11   12-13   14-15
 | `rate` | 8 bits | `0` = audio-rate (per-sample), `1` = control-rate (per-block), or packed enum parameters (LFO shape, clock mode, array length) |
 | `out_buffer` | 16 bits | Destination buffer index (0–254). Buffer 255 is reserved as `BUFFER_ZERO` (always 0.0) |
 | `inputs[0–4]` | 5 × 16 bits | Input buffer indices. `0xFFFF` = unused |
+| `flags` | 16 bits | Per-instruction attribute bits. Currently defined: `STEREO_INPUT` (bit 0) |
 | `state_id` | 32 bits | FNV-1a hash for persistent DSP state lookup. `0` = stateless |
 
 Design notes:
 - Fixed 20-byte width for cache-friendly sequential access (`alignas(4)`, `static_assert(sizeof == 20)`)
+- The `flags` field occupies what used to be implicit padding before the 4-byte-aligned `state_id`, so struct size is unchanged
 - 32-bit `state_id` avoids birthday-paradox collisions at 512 states (16-bit would collide at ~256)
 - Convenience constructors: `make_nullary` through `make_quinary` for 0–5 input arities
+
+#### `STEREO_INPUT` flag
+
+When `flags & InstructionFlag::STEREO_INPUT` is set, the VM runs the opcode *twice* per invocation — once for the left channel, once for the right — with independent per-channel DSP state. This is how Akkado's auto-lift (PRD-Stereo-Support §6) turns any mono opcode into a stereo variant at zero opcode-table cost:
+
+- **Left pass:** reads `inputs[i]`, writes `out_buffer`, uses `state_id`.
+- **Right pass:** reads `inputs[0] + 1` (the adjacent right buffer), writes `out_buffer + 1`, uses `state_id XOR STEREO_STATE_XOR_R` (a golden-ratio constant) so L and R have independent filter memory, delay lines, oscillator phase, etc.
+- **Scalar/control inputs** (`inputs[1..4]`) are shared — both channels see the same cutoff frequency, resonance, etc. Per-channel control requires explicit stereo construction.
+
+Stateless opcodes (distortion, fold, saturate) simply ignore the XOR'd `state_id` and produce correct audio without any special handling. See `cedar/src/vm/vm.cpp` (`VM::execute`) for the dispatch wrapper.
 
 ### Rate Field Overloading
 

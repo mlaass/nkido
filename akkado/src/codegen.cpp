@@ -493,6 +493,17 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                     tv = *sym->typed_value;
                 }
 
+                // Promote to Stereo when the symbol's buffer is the left side
+                // of a known stereo pair. This lets later passes (out()
+                // validation, auto-lift) see the channel type through a
+                // `let`-bound variable like `s = stereo(...)`.
+                if (tv.type == ValueType::Signal && tv.channels == ChannelCount::Mono) {
+                    auto pair_it = stereo_buffer_pairs_.find(tv.buffer);
+                    if (pair_it != stereo_buffer_pairs_.end()) {
+                        tv = TypedValue::stereo_signal(tv.buffer, pair_it->second);
+                    }
+                }
+
                 return cache_and_return(node, tv);
             }
 
@@ -980,6 +991,42 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 arg = ast_->arena[arg].next_sibling;
             }
 
+            // PRD §4.4 / §5.3 rule 2: out(L, R) expects two Mono signals.
+            // Any Stereo in either slot is a compile error — tell the user
+            // exactly how to fix it (wrap the stereo in out(sig) or split
+            // with left()/right()).
+            //
+            // Only flag when the argument's resolved TypedValue is stereo
+            // (channels == Stereo with a valid right_buffer). Checking
+            // `stereo_buffer_pairs_` would false-positive on `left(s)` /
+            // `right(s)` extractions that legitimately reuse the pair's
+            // left/right buffer as a mono signal.
+            if (func_name == "out" && arg_buffers.size() == 2) {
+                NodeIndex ch = n.first_child;
+                for (std::size_t ai = 0; ai < 2 && ch != NULL_NODE; ++ai,
+                         ch = ast_->arena[ch].next_sibling) {
+                    const Node& arg_node = ast_->arena[ch];
+                    NodeIndex arg_value = (arg_node.type == NodeType::Argument) ?
+                                         arg_node.first_child : ch;
+                    // Rely on TypedValue.channels — node-level
+                    // is_stereo() has a buffer-pair fallback that false-
+                    // positives on an explicit `left(s)` extraction.
+                    // Re-visit (cache-hit cheap) to resolve identifiers.
+                    TypedValue resolved = visit(arg_value);
+                    bool this_is_stereo = resolved.is_stereo()
+                                          && resolved.right_buffer != 0xFFFF;
+                    if (this_is_stereo) {
+                        error("E185",
+                              "out() expects Mono for argument " + std::to_string(ai + 1) +
+                              ", got Stereo. Use `out(stereo_sig)` for a stereo signal, "
+                              "or `out(left(s), right(s))` to route channels explicitly.",
+                              ast_->arena[ch].location);
+                        if (pushed_path) pop_path();
+                        return TypedValue::error_val();
+                    }
+                }
+            }
+
             // Special case: out() with single argument
             // Check if the argument is stereo - if so, use both channels
             if (func_name == "out" && arg_buffers.size() == 1) {
@@ -1013,15 +1060,17 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 }
             }
 
-            // UGen Auto-Expansion: If this is a stateful UGen and an argument is multi-buffer,
-            // expand to N instances. E.g., [440, 550, 660] |> sine(%) produces 3 oscillators.
-            if (builtin->requires_state && !arg_buffers.empty()) {
-                // Find expansion argument: first multi-buffer argument
-                int expansion_arg_idx = -1;
-                std::vector<std::uint16_t> expansion_buffers;
+            // Multi-buffer argument detection (stereo or chord expansion).
+            // Stereo auto-lift runs regardless of `requires_state` — stateless
+            // ops (fold, saturate, distort_tanh, ...) must also run twice on
+            // stereo input per PRD §5.2. Chord expansion-to-N still only
+            // applies to stateful UGens (per-voice state).
+            int expansion_arg_idx = -1;
+            std::vector<std::uint16_t> expansion_buffers;
+            std::vector<NodeIndex> arg_nodes;
+            bool is_stereo_expansion = false;
 
-                // Track argument nodes for multi-buffer lookup
-                std::vector<NodeIndex> arg_nodes;
+            if (!arg_buffers.empty()) {
                 NodeIndex arg_iter = n.first_child;
                 while (arg_iter != NULL_NODE) {
                     const Node& arg_node = ast_->arena[arg_iter];
@@ -1031,24 +1080,18 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                     arg_iter = ast_->arena[arg_iter].next_sibling;
                 }
 
-                // Look for first multi-buffer argument
-                // Also check if an identifier references a parameter bound to multi-buffer source
                 for (std::size_t i = 0; i < arg_nodes.size(); ++i) {
-                    // Direct multi-buffer check
                     if (is_multi_buffer(arg_nodes[i])) {
                         expansion_arg_idx = static_cast<int>(i);
                         expansion_buffers = get_multi_buffers(arg_nodes[i]);
                         break;
                     }
-
-                    // Check if identifier references a parameter with multi-buffer source
                     const Node& arg_n = ast_->arena[arg_nodes[i]];
                     if (arg_n.type == NodeType::Identifier) {
                         const std::string& name = arg_n.as_identifier();
                         std::uint32_t param_hash = fnv1a_hash(name);
                         auto pit = param_multi_buffer_sources_.find(param_hash);
                         if (pit != param_multi_buffer_sources_.end()) {
-                            // This parameter was bound to a multi-buffer argument
                             NodeIndex source_node = pit->second;
                             if (is_multi_buffer(source_node)) {
                                 expansion_arg_idx = static_cast<int>(i);
@@ -1059,104 +1102,100 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                     }
                 }
 
-                // Check if the expansion argument is stereo (exactly 2 buffers from a stereo source)
-                bool is_stereo_expansion = (expansion_arg_idx >= 0 &&
-                                           expansion_buffers.size() == 2 &&
-                                           is_stereo(arg_nodes[static_cast<std::size_t>(expansion_arg_idx)]));
+                is_stereo_expansion = (expansion_arg_idx >= 0 &&
+                                      expansion_buffers.size() == 2 &&
+                                      is_stereo(arg_nodes[static_cast<std::size_t>(expansion_arg_idx)]));
+            }
 
-                // Stereo auto-lift (PRD §4.2, §6.2): for a stereo signal flowing
-                // into a mono DSP op, emit a single instruction with
-                // InstructionFlag::STEREO_INPUT set. The VM runs the opcode
-                // twice — once for L, once for R — with per-channel state
-                // (state_id XOR'd on the R pass). This replaces the
-                // two-instruction chord-expansion path for stereo specifically.
-                if (is_stereo_expansion) {
-                    current_source_loc_ = call_loc;
+            if (is_stereo_expansion) {
+                current_source_loc_ = call_loc;
 
-                    std::size_t n_params = builtin->total_params();
-                    auto expanded_args = arg_buffers;
+                std::size_t n_params = builtin->total_params();
+                auto expanded_args = arg_buffers;
 
-                    // Make sure the primary signal arg points at the LEFT buffer
-                    // of the stereo pair — the VM computes R as left+1 at dispatch.
-                    expanded_args[static_cast<std::size_t>(expansion_arg_idx)] =
-                        expansion_buffers[0];
+                // Make sure the primary signal arg points at the LEFT buffer
+                // of the stereo pair — the VM computes R as left+1 at dispatch.
+                expanded_args[static_cast<std::size_t>(expansion_arg_idx)] =
+                    expansion_buffers[0];
 
-                    // Fill in any remaining defaults with control-rate constants
-                    for (std::size_t j = expanded_args.size(); j < n_params; ++j) {
-                        if (builtin->has_default(j)) {
-                            std::uint16_t default_buf = buffers_.allocate();
-                            if (default_buf == BufferAllocator::BUFFER_UNUSED) {
-                                error("E101", "Buffer pool exhausted", n.location);
-                                if (pushed_path) pop_path();
-                                return TypedValue::error_val();
-                            }
-                            cedar::Instruction push_inst{};
-                            push_inst.opcode = cedar::Opcode::PUSH_CONST;
-                            push_inst.out_buffer = default_buf;
-                            push_inst.inputs[0] = 0xFFFF;
-                            push_inst.inputs[1] = 0xFFFF;
-                            push_inst.inputs[2] = 0xFFFF;
-                            push_inst.inputs[3] = 0xFFFF;
-                            encode_const_value(push_inst, builtin->get_default(j));
-                            emit(push_inst);
-                            expanded_args.push_back(default_buf);
+                // Fill in any remaining defaults with control-rate constants
+                for (std::size_t j = expanded_args.size(); j < n_params; ++j) {
+                    if (builtin->has_default(j)) {
+                        std::uint16_t default_buf = buffers_.allocate();
+                        if (default_buf == BufferAllocator::BUFFER_UNUSED) {
+                            error("E101", "Buffer pool exhausted", n.location);
+                            if (pushed_path) pop_path();
+                            return TypedValue::error_val();
                         }
+                        cedar::Instruction push_inst{};
+                        push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                        push_inst.out_buffer = default_buf;
+                        push_inst.inputs[0] = 0xFFFF;
+                        push_inst.inputs[1] = 0xFFFF;
+                        push_inst.inputs[2] = 0xFFFF;
+                        push_inst.inputs[3] = 0xFFFF;
+                        encode_const_value(push_inst, builtin->get_default(j));
+                        emit(push_inst);
+                        expanded_args.push_back(default_buf);
                     }
-
-                    // Allocate adjacent L/R output pair (BufferAllocator is linear
-                    // so two back-to-back allocations are guaranteed adjacent).
-                    std::uint16_t out_left = buffers_.allocate();
-                    std::uint16_t out_right = buffers_.allocate();
-                    if (out_left == BufferAllocator::BUFFER_UNUSED ||
-                        out_right == BufferAllocator::BUFFER_UNUSED) {
-                        error("E101", "Buffer pool exhausted", n.location);
-                        if (pushed_path) pop_path();
-                        return TypedValue::error_val();
-                    }
-                    if (out_right != out_left + 1) {
-                        error("E166", "Internal error: stereo buffer allocation not adjacent",
-                              n.location);
-                        if (pushed_path) pop_path();
-                        return TypedValue::error_val();
-                    }
-
-                    cedar::Instruction inst{};
-                    inst.opcode = builtin->opcode;
-                    inst.out_buffer = out_left;
-                    inst.inputs[0] = expanded_args.size() > 0 ? expanded_args[0] : 0xFFFF;
-                    inst.inputs[1] = expanded_args.size() > 1 ? expanded_args[1] : 0xFFFF;
-                    inst.inputs[2] = expanded_args.size() > 2 ? expanded_args[2] : 0xFFFF;
-                    inst.inputs[3] = expanded_args.size() > 3 ? expanded_args[3] : 0xFFFF;
-                    inst.inputs[4] = expanded_args.size() > 4 ? expanded_args[4] : 0xFFFF;
-                    inst.rate = 0;
-                    inst.flags = cedar::InstructionFlag::STEREO_INPUT;
-
-                    // FM detection operates on the L pass's frequency input; the R
-                    // pass sees the same buffer (VM only shifts inputs[0]).
-                    if (is_upgradeable_oscillator(inst.opcode) && !expanded_args.empty()) {
-                        if (is_fm_modulated(expanded_args[0])) {
-                            inst.opcode = upgrade_for_fm(inst.opcode);
-                        }
-                    }
-
-                    // State ID uses the /L suffix so the mono path
-                    // (fnv1a(semantic_path)) stays backward-compatible for
-                    // hot-swap (PRD §5.4). The VM XORs this with
-                    // STEREO_STATE_XOR_R for the R-channel pass.
-                    push_path("L");
-                    inst.state_id = compute_state_id();
-                    pop_path();
-                    emit(inst);
-
-                    if (pushed_path) pop_path();
-
-                    register_stereo(node, out_left, out_right);
-                    return cache_and_return(node,
-                        TypedValue::stereo_signal(out_left, out_right));
                 }
 
-                // If we have an expansion argument, generate N instances
-                if (expansion_arg_idx >= 0 && expansion_buffers.size() > 1) {
+                // Allocate adjacent L/R output pair (BufferAllocator is linear
+                // so two back-to-back allocations are guaranteed adjacent).
+                std::uint16_t out_left = buffers_.allocate();
+                std::uint16_t out_right = buffers_.allocate();
+                if (out_left == BufferAllocator::BUFFER_UNUSED ||
+                    out_right == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    if (pushed_path) pop_path();
+                    return TypedValue::error_val();
+                }
+                if (out_right != out_left + 1) {
+                    error("E166", "Internal error: stereo buffer allocation not adjacent",
+                          n.location);
+                    if (pushed_path) pop_path();
+                    return TypedValue::error_val();
+                }
+
+                cedar::Instruction inst{};
+                inst.opcode = builtin->opcode;
+                inst.out_buffer = out_left;
+                inst.inputs[0] = expanded_args.size() > 0 ? expanded_args[0] : 0xFFFF;
+                inst.inputs[1] = expanded_args.size() > 1 ? expanded_args[1] : 0xFFFF;
+                inst.inputs[2] = expanded_args.size() > 2 ? expanded_args[2] : 0xFFFF;
+                inst.inputs[3] = expanded_args.size() > 3 ? expanded_args[3] : 0xFFFF;
+                inst.inputs[4] = expanded_args.size() > 4 ? expanded_args[4] : 0xFFFF;
+                inst.rate = 0;
+                inst.flags = cedar::InstructionFlag::STEREO_INPUT;
+
+                // FM detection operates on the L pass's frequency input; the R
+                // pass sees the same buffer (VM only shifts inputs[0]).
+                if (is_upgradeable_oscillator(inst.opcode) && !expanded_args.empty()) {
+                    if (is_fm_modulated(expanded_args[0])) {
+                        inst.opcode = upgrade_for_fm(inst.opcode);
+                    }
+                }
+
+                // State ID uses the /L suffix so the mono path
+                // (fnv1a(semantic_path)) stays backward-compatible for
+                // hot-swap (PRD §5.4). The VM XORs this with
+                // STEREO_STATE_XOR_R for the R-channel pass. Stateless
+                // opcodes simply ignore state_id, so the /L path is
+                // harmless there.
+                push_path("L");
+                inst.state_id = compute_state_id();
+                pop_path();
+                emit(inst);
+
+                if (pushed_path) pop_path();
+
+                register_stereo(node, out_left, out_right);
+                return cache_and_return(node,
+                    TypedValue::stereo_signal(out_left, out_right));
+            }
+
+            // Chord expansion to N instances (stateful UGens only — per-voice state).
+            if (builtin->requires_state && expansion_arg_idx >= 0 && expansion_buffers.size() > 1) {
                     std::vector<TypedValue> result_elements;
                     std::size_t n_params = builtin->total_params();
 
@@ -1226,23 +1265,16 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                         pop_path();
                     }
 
-                    // Pop the outer stateful path
-                    if (pushed_path) pop_path();
+                // Pop the outer stateful path
+                if (pushed_path) pop_path();
 
-                    // Build array result
-                    std::uint16_t first_buf = result_elements[0].buffer;
-                    auto tv = TypedValue::make_array(std::move(result_elements), first_buf);
+                // Build array result. Stereo-source expansion is already
+                // routed through the STEREO_INPUT path above, so we never
+                // hit this branch with is_stereo_expansion==true.
+                std::uint16_t first_buf = result_elements[0].buffer;
+                auto tv = TypedValue::make_array(std::move(result_elements), first_buf);
 
-                    // If the expansion was from a stereo source, also register as stereo
-                    if (is_stereo_expansion) {
-                        auto bufs = buffers_of(tv);
-                        if (bufs.size() == 2) {
-                            stereo_outputs_[node] = {bufs[0], bufs[1]};
-                        }
-                    }
-
-                    return cache_and_return(node, tv);
-                }
+                return cache_and_return(node, tv);
             }
 
             // Restore call location before emitting default parameter instructions

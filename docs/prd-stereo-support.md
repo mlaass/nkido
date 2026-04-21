@@ -1,4 +1,4 @@
-> **Status: PROPOSED** — Language-level PRD. A companion VM-level PRD (stereo-native opcodes) is referenced as a separate, independent track.
+> **Status: COMPLETE** — Implemented and audited 2026-04-21. See `docs/audits/prd-stereo-support_audit_2026-04-21.md`. The `BuiltinSignature` catalog from §5.2 was accepted as Partial — `TypedValue` channel tagging was used instead. A companion VM-level PRD (stereo-native opcodes) remains a separate, independent track.
 >
 > **Intended final location**: `docs/prd-stereo-support.md` (matches the project's newer lowercase convention).
 
