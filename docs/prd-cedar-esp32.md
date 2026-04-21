@@ -6,9 +6,9 @@
 
 ## 1. Context
 
-Enkido's `cedar/` library is a zero-allocation, host-API-agnostic audio synthesis engine. It already builds cleanly for embedded targets: commit `c9701a4` added an `esp32` CMake preset and `minsize-stripped` variant that produces a ~146 KB stripped binary (see `scripts/cedar-size-report.sh` output). The preset tightens memory limits (`ARENA_SIZE=262144`, `MAX_VARS=512`, `MAX_STATES=128`) and disables optional modules (audio decoders, SoundFont, FFT, file I/O, MinBLEP).
+Enkido's `cedar/` library is a zero-allocation, host-API-agnostic audio synthesis engine. Commit `c9701a4` added an `esp32` CMake preset and `minsize-stripped` variant that tighten memory limits (`ARENA_SIZE=262144`, `MAX_BUFFERS=64`, `MAX_STATES=128`, `MAX_VARS=512`, `MAX_PROGRAM_SIZE=1024`, `FLOAT_ONLY=ON`) and disable optional modules (audio decoders, SoundFont, FFT, file I/O, MinBLEP). Built with the host compiler, the stripped archive is ~146 KB (see `scripts/cedar-size-report.sh` and `docs/cedar-size-report.md`). This is a size-optimized *profile*, not yet a cross-compiled build: no xtensa toolchain is configured in this repo, so the profile demonstrates the memory/feature shape but has not actually been compiled for xtensa-esp32. Establishing that cross-compile is the first task of cedar-esp32.
 
-**What is missing** to actually run on hardware: an ESP-IDF project skeleton. There is no `idf_component.yml`, no `main/`, no `sdkconfig.defaults`, no partition table, no audio I/O driver, no bytecode loader. The CMake config proves Cedar *compiles* for xtensa-esp32, but nothing runs yet.
+**What is missing** to actually run on hardware: an ESP-IDF project skeleton. There is no `idf_component.yml`, no `main/`, no `sdkconfig.defaults`, no partition table, no audio I/O driver, no bytecode loader — and no xtensa toolchain integration.
 
 This PRD proposes a new sibling repository, **`cedar-esp32`**, that provides the ESP-IDF project glue, ESP-ADF integration, and board-support code needed to boot an AI-Thinker ESP32-A1S Audio Kit 2.2 and play Cedar bytecode out of the onboard ES8388 codec. The enkido repo is consumed as a git submodule so Cedar stays authoritative in one place.
 
@@ -21,7 +21,7 @@ This PRD proposes a new sibling repository, **`cedar-esp32`**, that provides the
 | Today | With cedar-esp32 |
 |---|---|
 | `cmake --preset esp32` builds a static lib; no runtime. | `idf.py build` produces flashable firmware. |
-| No audio driver; Cedar expects host to provide I/O buffers. | ESP-ADF pipeline feeds I2S → ES8388 → headphone/speaker. |
+| No audio driver; Cedar's `VM::process_block(L, R)` needs host-supplied output buffers. | ESP-ADF pipeline feeds I2S → ES8388 → headphone/speaker. Live external input (`in()`) depends on [`prd-audio-input.md`](prd-audio-input.md) landing; until it does, cedar-esp32 is output-only. |
 | No way to run user code on the device. | UART bytecode loader + A1S onboard buttons for live control. |
 | Board-specific pins/clocks live nowhere. | `sdkconfig.defaults` + pinned ADF fork carry A1S 2.2 board config. |
 | Samples can't be decoded on-device. | ESP-ADF decoders (WAV/MP3/FLAC) feed raw PCM to Cedar samplers. |
@@ -33,13 +33,13 @@ This PRD proposes a new sibling repository, **`cedar-esp32`**, that provides the
 ### Goals
 
 1. **Flashable firmware**: `idf.py build flash monitor` from a clean checkout produces a working A1S 2.2 binary.
-2. **Audio out**: ES8388 codec drives the headphone jack at 44.1 kHz / 128-sample blocks (defaults; menuconfig-tunable).
+2. **Audio out**: ES8388 codec drives the headphone jack at 48 kHz / 128-sample blocks (matches the project-wide default in `CLAUDE.md`; menuconfig-tunable).
 3. **Hardcoded demo**: Boots, runs an embedded Cedar bytecode blob, plays audio immediately.
-4. **Bytecode upload over UART**: Host-side `cedar-push` tool streams new bytecode; device swaps programs at the next block boundary with a 5–10 ms micro-crossfade (matches Cedar's A/B channel semantics).
+4. **Bytecode upload over UART**: Host-side `cedar-push` tool streams new bytecode; the device calls `VM::load_program()`, which queues the swap for the next block boundary. Cedar's built-in crossfade (3 blocks default, configurable 2–5 via `set_crossfade_blocks()`) handles the fade — ≈8 ms at 48 kHz / 128.
 5. **Sample decode via ESP-ADF**: WAV/MP3/FLAC decoded by ADF pipeline → raw PCM buffers Cedar samplers consume by ID.
 6. **Hardware controls**: A1S onboard keys (KEY1–KEY6) mapped to Akkado `param()`/`toggle()`/`button()` slots. External pot support over ADC documented but optional.
 7. **Build reproducibility**: `README` documents both local ESP-IDF install and `espressif/idf` Docker workflow. Either produces byte-identical output at the same SHAs.
-8. **Size fit**: Firmware fits in standard 4 MB flash; PSRAM used freely for sample buffers and Cedar arena.
+8. **Size fit**: Firmware fits in standard 4 MB flash; PSRAM used freely for sample buffers and Cedar arena. _Actual xtensa binary size is a Phase 1 deliverable — the ~146 KB host figure does not include xtensa code expansion, ESP-IDF/FreeRTOS baseline, ESP-ADF, decoders, or the app layer._
 
 ### Non-Goals
 
@@ -63,7 +63,7 @@ cd cedar-esp32
 idf.py set-target esp32
 idf.py menuconfig                # optional: tweak SR, block size
 idf.py -p /dev/ttyUSB0 flash monitor
-# → boots, prints "cedar-esp32 ready, SR=44100 block=128"
+# → boots, prints "cedar-esp32 ready, SR=48000 block=128"
 # → plays hardcoded demo tone
 ```
 
@@ -199,13 +199,16 @@ TYPE:
 
 Host tool `cedar-push` sends `SWAP_BYTECODE`, waits for `ACK`, exits. No streaming — whole blob fits in a single frame (size bounded by `MAX_PROGRAM_SIZE=1024` opcodes ≈ 16 KB).
 
-See `docs/uart-protocol.md` for the full spec.
+**Operational parameters** (full details in `docs/uart-protocol.md`):
+- **Baud**: 460800 default (shared with `idf.py monitor`). Configurable via menuconfig.
+- **Max LEN**: the loader hard-caps LEN at `MAX_PROGRAM_SIZE * sizeof(Instruction) + header overhead` (~16.5 KB); oversized frames are rejected with `NACK[PROGRAM_TOO_LARGE]` without allocating.
+- **Resync**: per-frame timeout of 2 s from magic-byte to CRC. On timeout, bad CRC, or garbage LEN, the parser drops back to scanning for the next `0xCE 0xDA` sequence — a torn transmission never permanently wedges the loader.
 
 ### 5.4 Memory budget (PSRAM variant, typical A1S)
 
 | Region | Size | Location | Notes |
 |---|---|---|---|
-| Cedar arena | 256 KB | PSRAM | `CEDAR_ARENA_SIZE=262144` from esp32 preset |
+| Cedar arena | 256 KB | PSRAM | `CEDAR_ARENA_SIZE=262144` from esp32 preset. PSRAM chosen because internal SRAM is already claimed by IDF/ADF baseline, VM state, and DMA buffers; arena access is per-block (128 frames) which amortizes PSRAM latency over cache lines. |
 | Sample PCM buffers | ≤2 MB | PSRAM | ADF decoders fill; Cedar samplers reference |
 | Cedar VM state (stack, vars, states) | ~40 KB | Internal SRAM | Tight real-time access |
 | I2S DMA buffers | 4×1024 frames | Internal SRAM | ADF default |
@@ -216,7 +219,18 @@ Non-PSRAM fallback: reduce arena to 64 KB, disable sample decoding. Phase-1 firm
 
 ### 5.5 Hot-swap semantics
 
-Reuse Cedar's existing A/B channel crossfade (see `cedar/include/cedar/vm/vm.hpp`). UART loader writes new bytecode to the inactive channel, flips the atomic active-channel pointer at the next block boundary, and applies Cedar's built-in 10 ms crossfade. No new synchronization primitives needed — this path is already exercised by the desktop/web runtimes.
+The UART task calls `VM::load_program(std::span<const Instruction>)` (see `cedar/include/cedar/vm/vm.hpp:54`), which returns a `LoadResult` and queues the program for swap at the next block boundary. Cedar's internal A/B slot + crossfade (`set_crossfade_blocks()`, 2–5 blocks, default 3 ≈ 8 ms at 48 kHz / 128) handles the atomic pointer flip and fade. No new synchronization primitives are needed on the device — this path is already exercised by the desktop/web runtimes.
+
+### 5.6 Dependencies
+
+| Dependency | Required version | Notes |
+|---|---|---|
+| ESP-IDF | ≥ 5.1 (tested on 5.x release branch) | Declared in `components/cedar/idf_component.yml`. |
+| xtensa-esp-elf toolchain | Bundled with ESP-IDF install | Installed by `$IDF_PATH/install.sh`. |
+| ESP-ADF | `donny681/esp-adf`, pinned by submodule tag | Community fork with A1S 2.2 board support. Mainline ADF lacks A1S 2.2 config — migration tracked as OQ#3. |
+| Python | ≥ 3.9 (for `cedar-push`) | Uses `pyserial`; installed via `uv tool install .`. |
+| Docker (optional) | ≥ 24.x | Only for the `espressif/idf:release-v5.x` workflow. |
+| Hardware | AI-Thinker ESP32-A1S Audio Kit 2.2 with PSRAM | Non-PSRAM variants listed as future work (§8). |
 
 ---
 
@@ -284,7 +298,7 @@ Each phase ends with a concrete verification step run on the actual hardware.
 - Embedded demo bytecode compiled from `assets/demo.akk` at build time
 - `README` with local-IDF quickstart
 
-**Verify:** `idf.py flash monitor`; expect steady tone out of headphones (4.1.2).
+**Verify:** `idf.py flash monitor`; expect steady tone out of headphones (4.1.2). Measured targets: end-to-end audio latency ≤ 10 ms (ADF input → I2S out at 48 kHz / 128 blk); sustained CPU < 70 % on the audio core for the demo patch; no I2S XRUNs over a 30-minute soak. Record xtensa firmware size (`.bin`) into `docs/size-baseline.md` as the Phase 1 deliverable replacing the host 146 KB figure.
 
 ### Phase 2 — UART Bytecode Loader + Hot-Swap
 
@@ -295,7 +309,7 @@ Each phase ends with a concrete verification step run on the actual hardware.
 - Integration with Cedar's existing A/B channel crossfade
 - `docs/uart-protocol.md` spec
 
-**Verify:** Compile two different `.akk` patches; push each; confirm audible crossfade (<20 ms) with no clicks.
+**Verify:** Compile two different `.akk` patches; push each; confirm audible crossfade (<20 ms) with no clicks. Measured target: UART-push-to-audible-change latency ≤ 200 ms end-to-end (host `cedar-push` invocation → first block of the new program reaches the codec).
 
 ### Phase 3 — Hardware Controls (KEY1–KEY6)
 
@@ -347,6 +361,7 @@ Each phase ends with a concrete verification step run on the actual hardware.
 6. **Sample decode failure (Phase 4).** ADF error propagated via log; Cedar sampler ID returns silence rather than UB.
 7. **I2S DMA underrun under heavy DSP load.** Audio task priority set above everything except IDF-critical tasks; UART loader runs on core 0 to avoid stealing cycles.
 8. **Simultaneous `monitor` output + UART frame.** Monitor output is plain ASCII; frame parser requires the 2-byte magic `0xCE 0xDA` — collisions with log text are astronomically unlikely and non-destructive (CRC rejects).
+9. **Runtime-hung patch (valid bytecode but pathological behavior: infinite recursion, extreme CPU load, DMA starvation).** The IDF task watchdog is armed on the audio task. On timeout, the device rolls back to the prior active bytecode (the inactive slot retains the last-known-good program during a pending swap) and logs `watchdog_rollback` over UART. If the already-running active program triggers the watchdog (no rollback target), the device resets cleanly — bootloader comes back up, UART loader is immediately available.
 
 ---
 
@@ -388,6 +403,7 @@ cd cedar-esp32
 
 ## 11. Open Questions
 
-1. **Cedar sample API for externally-decoded PCM.** Phase 4 may require a small extension to Cedar samplers to accept pre-decoded PCM buffers from PSRAM by ID. Review during Phase 2 after the runtime surface is clearer; may be no-op if existing sampler API already supports this via `set_param` buffer-index pattern (memory note: `set_param("name", value)` returns buffer indices ≥ 10).
+1. **Zero-copy sample reference for ADF-decoded PCM.** `SampleBank::load_sample(name, const float* data, num_frames, channels, sr)` (see `cedar/include/cedar/vm/sample_bank.hpp:91`) already accepts pre-decoded PCM, but the implementation `memcpy`s into a `std::vector<float>` (`sample_bank.hpp:117`). With a ~2 MB ADF decode budget plus a duplicate Cedar copy, we approach half of typical A1S PSRAM on a single large sample. Phase 4 decides: (a) absorb the duplication (simpler, fits on 8 MB PSRAM boards), or (b) add `SampleBank::register_sample_view(name, std::span<const float>, channels, sr)` that stores a non-owning view into ADF-owned PSRAM. Revisit after Phase 2 when runtime surface is firmer.
 2. **Key mapping semantics for overflow params.** If a patch declares 8 `param()`s but the device has 6 keys, are params 7–8 unreachable, or do we pack `param`s and `toggle`s separately? Defer to Phase 3; suggest packing all three kinds into a single ordered list of up to 6.
 3. **donny681/esp-adf licensing + drift.** Fork is community-maintained. If it goes stale, Phase 5+ may need to migrate to mainline with custom A1S 2.2 board code. Monitor; no action needed for Phase 1.
+4. **C++ exceptions in ESP-IDF.** IDF defaults to `CONFIG_COMPILER_CXX_EXCEPTIONS=n`. Cedar is C++ and uses STL containers (`std::unordered_map`, `std::vector`) in `SampleBank` and `SoundFontRegistry`, which throw on allocation failure. Phase 1 must decide: (a) enable exceptions in `sdkconfig.defaults` and accept the code-size cost (~30–60 KB typical), or (b) add a `-DCEDAR_NO_EXCEPTIONS` build path that uses `std::nothrow` / status returns at the STL boundary. Revisit as a Phase 1 deliverable — measurable once the first xtensa build succeeds.
