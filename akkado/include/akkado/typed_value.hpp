@@ -21,6 +21,17 @@ enum class ValueType : std::uint8_t {
     Void       // No value (statements, directives)
 };
 
+/// Channel count for signal values. When Stereo, `right_buffer` holds the
+/// right channel and must equal `buffer + 1` (adjacent-buffer invariant).
+enum class ChannelCount : std::uint8_t {
+    Mono   = 0,
+    Stereo = 1,
+};
+
+constexpr const char* channel_count_name(ChannelCount c) {
+    return c == ChannelCount::Stereo ? "Stereo" : "Mono";
+}
+
 struct TypedValue;
 
 /// Pattern payload: field buffers + state metadata
@@ -65,6 +76,15 @@ struct TypedValue {
     std::uint16_t buffer = 0xFFFF;
     bool error = false;
 
+    /// Channel count for Signal values. Defaults to Mono; set to Stereo by
+    /// stereo-producing handlers (stereo(), pan(), pingpong(), ...) and by
+    /// auto-lifted DSP operations whose input was Stereo.
+    ChannelCount channels = ChannelCount::Mono;
+
+    /// Right-channel buffer index when `channels == Stereo`. Required to equal
+    /// `buffer + 1` (adjacent-buffer invariant enforced by BufferAllocator).
+    std::uint16_t right_buffer = 0xFFFF;
+
     // Compound type payloads (shared_ptr for cheap copies)
     std::shared_ptr<PatternPayload> pattern;
     std::shared_ptr<RecordPayload> record;
@@ -73,12 +93,24 @@ struct TypedValue {
     // String ID (FNV-1a hash) for ValueType::String
     std::uint32_t string_id = 0;
 
+    /// True when this value represents a stereo signal.
+    [[nodiscard]] bool is_stereo() const { return channels == ChannelCount::Stereo; }
+
     // --- Factory helpers ---
 
     static TypedValue signal(std::uint16_t buf) {
         TypedValue tv;
         tv.type = ValueType::Signal;
         tv.buffer = buf;
+        return tv;
+    }
+
+    static TypedValue stereo_signal(std::uint16_t left, std::uint16_t right) {
+        TypedValue tv;
+        tv.type = ValueType::Signal;
+        tv.buffer = left;
+        tv.right_buffer = right;
+        tv.channels = ChannelCount::Stereo;
         return tv;
     }
 

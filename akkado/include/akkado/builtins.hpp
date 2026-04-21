@@ -722,10 +722,13 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                    {"voices", "instrument", "input", "", "", ""},
                    {NAN, NAN, NAN, NAN, NAN},
                    "Polyphonic voice manager"}},
-    {"mono",      {cedar::Opcode::NOP, 1, 1, false,
-                   {"instrument", "input", "", "", "", ""},
+    // Dual-role builtin: mono(stereo_signal) downmixes stereo→mono via (L+R)*0.5,
+    // while mono(instrument) is the monophonic voice manager. The codegen
+    // dispatcher routes based on argument type (see handle_mono_call).
+    {"mono",      {cedar::Opcode::MONO_DOWNMIX, 1, 1, false,
+                   {"signal_or_instrument", "input", "", "", "", ""},
                    {NAN, NAN, NAN, NAN, NAN},
-                   "Monophonic voice manager"}},
+                   "Stereo-to-mono downmix (L+R)*0.5, or monophonic voice manager"}},
     {"legato",    {cedar::Opcode::NOP, 1, 1, false,
                    {"instrument", "input", "", "", "", ""},
                    {NAN, NAN, NAN, NAN, NAN},

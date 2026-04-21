@@ -137,6 +137,8 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::MS_ENCODE: return "MS_ENCODE";
         case Opcode::MS_DECODE: return "MS_DECODE";
         case Opcode::DELAY_PINGPONG: return "DELAY_PINGPONG";
+        case Opcode::MONO_DOWNMIX: return "MONO_DOWNMIX";
+        case Opcode::PAN_STEREO: return "PAN_STEREO";
         case Opcode::PROBE: return "PROBE";
         case Opcode::FFT_PROBE: return "FFT_PROBE";
         case Opcode::IFFT: return "IFFT";

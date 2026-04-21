@@ -114,6 +114,53 @@ inline void op_ms_decode(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// MONO_DOWNMIX: Sum stereo signal to mono with 0.5 gain
+// in0: left input
+// in1: right input
+// out_buffer: mono output
+//
+// Formula: out[i] = (L[i] + R[i]) * 0.5
+// Standard sum-to-mono convention — 0dB for correlated content, -3dB for
+// uncorrelated content (e.g. a sine panned hard to both channels stays 0dB;
+// independent noise in L and R sums at -3dB RMS).
+[[gnu::always_inline]]
+inline void op_mono_downmix(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    const float* in_left = ctx.buffers->get(inst.inputs[0]);
+    const float* in_right = ctx.buffers->get(inst.inputs[1]);
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        out[i] = (in_left[i] + in_right[i]) * 0.5f;
+    }
+}
+
+// PAN_STEREO: Equal-power stereo balance (the DAW "pan" knob on a stereo track)
+// in0: left input
+// in1: right input
+// in2: pan position (-1 = hard left, 0 = center -3dB, +1 = hard right)
+// out_buffer: left output
+// out_buffer+1: right output
+//
+// L_out = L_in * cos((p+1) * PI/4), R_out = R_in * sin((p+1) * PI/4).
+// This is balance, not re-panning: at p=-1, R_out=0 and L_out=L_in (not L+R).
+[[gnu::always_inline]]
+inline void op_pan_stereo(ExecutionContext& ctx, const Instruction& inst) {
+    float* out_left = ctx.buffers->get(inst.out_buffer);
+    float* out_right = ctx.buffers->get(inst.out_buffer + 1);
+    const float* in_left = ctx.buffers->get(inst.inputs[0]);
+    const float* in_right = ctx.buffers->get(inst.inputs[1]);
+    const float* pos = ctx.buffers->get(inst.inputs[2]);
+
+    constexpr float PI_OVER_4 = 0.7853981633974483f;
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        float p = std::clamp(pos[i], -1.0f, 1.0f);
+        float angle = (p + 1.0f) * PI_OVER_4;
+        out_left[i] = in_left[i] * std::cos(angle);
+        out_right[i] = in_right[i] * std::sin(angle);
+    }
+}
+
 // ============================================================================
 // Stereo Effects
 // ============================================================================

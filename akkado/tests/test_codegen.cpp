@@ -3590,16 +3590,23 @@ TEST_CASE("Codegen: out() with stereo signal", "[codegen][stereo]") {
 }
 
 TEST_CASE("Codegen: stereo propagation through mono effects", "[codegen][stereo]") {
-    SECTION("stereo through filter expands to two filters") {
+    // With auto-lift (PRD-Stereo-Support §4.2, §6.2), a stereo signal flowing
+    // into a mono DSP op emits a SINGLE instruction carrying the
+    // STEREO_INPUT flag. The VM runs the opcode twice at dispatch, once per
+    // channel, with independent per-channel state — producing the same audio
+    // as two separate instructions but with half the bytecode.
+    SECTION("stereo through filter emits one instruction with STEREO_INPUT flag") {
         auto result = akkado::compile(R"(
             s = stereo(saw(218), saw(222))
             lp(s, 1000)
         )");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
-        // Should have 2 oscillators and 2 filters (one per channel)
         CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
-        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 1);
+        auto* lp = find_instruction(insts, cedar::Opcode::FILTER_SVF_LP);
+        REQUIRE(lp != nullptr);
+        CHECK((lp->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
     }
 
     SECTION("stereo through chain of effects") {
@@ -3610,8 +3617,14 @@ TEST_CASE("Codegen: stereo propagation through mono effects", "[codegen][stereo]
         REQUIRE(result.success);
         auto insts = get_instructions(result);
         CHECK(count_instructions(insts, cedar::Opcode::OSC_SAW) == 2);
-        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 2);
-        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_HP) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 1);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_HP) == 1);
+        auto* lp = find_instruction(insts, cedar::Opcode::FILTER_SVF_LP);
+        auto* hp = find_instruction(insts, cedar::Opcode::FILTER_SVF_HP);
+        REQUIRE(lp != nullptr);
+        REQUIRE(hp != nullptr);
+        CHECK((lp->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+        CHECK((hp->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
     }
 
     SECTION("stereo through delay") {
@@ -3621,8 +3634,10 @@ TEST_CASE("Codegen: stereo propagation through mono effects", "[codegen][stereo]
         )");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
-        // Each channel gets its own delay
-        CHECK(count_instructions(insts, cedar::Opcode::DELAY) == 2);
+        CHECK(count_instructions(insts, cedar::Opcode::DELAY) == 1);
+        auto* d = find_instruction(insts, cedar::Opcode::DELAY);
+        REQUIRE(d != nullptr);
+        CHECK((d->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
     }
 }
 
@@ -3665,10 +3680,124 @@ TEST_CASE("Codegen: stereo pipeline examples", "[codegen][stereo]") {
         CHECK(find_instruction(insts, cedar::Opcode::OSC_SAW) != nullptr);
         // stereo() from mono creates 2 COPYs
         CHECK(count_instructions(insts, cedar::Opcode::COPY) == 2);
-        // lp() expands to 2 filters
-        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 2);
+        // lp() auto-lifts to 1 stereo-flagged instruction (was 2 before §6.2)
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 1);
+        auto* lp = find_instruction(insts, cedar::Opcode::FILTER_SVF_LP);
+        REQUIRE(lp != nullptr);
+        CHECK((lp->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
         CHECK(find_instruction(insts, cedar::Opcode::DELAY_PINGPONG) != nullptr);
         CHECK(find_instruction(insts, cedar::Opcode::OUTPUT) != nullptr);
+    }
+}
+
+// =============================================================================
+// PRD-Stereo-Support: mono() downmix and auto-lift behavior
+// =============================================================================
+
+TEST_CASE("Codegen: mono() downmix", "[codegen][stereo][mono]") {
+    SECTION("mono(stereo) emits MONO_DOWNMIX opcode") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            mono(s)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* dm = find_instruction(insts, cedar::Opcode::MONO_DOWNMIX);
+        REQUIRE(dm != nullptr);
+    }
+
+    SECTION("mono() followed by mono DSP does not auto-lift") {
+        // mono(s) produces a Mono signal; lp() takes mono in, emits one
+        // plain (non-STEREO_INPUT) FILTER_SVF_LP instruction.
+        auto result = akkado::compile(R"(
+            stereo(saw(218), saw(222))
+            |> mono(%)
+            |> lp(%, 500)
+            |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::FILTER_SVF_LP) == 1);
+        auto* lp = find_instruction(insts, cedar::Opcode::FILTER_SVF_LP);
+        REQUIRE(lp != nullptr);
+        CHECK((lp->flags & cedar::InstructionFlag::STEREO_INPUT) == 0);
+    }
+
+    SECTION("mono(mono) is an error") {
+        auto result = akkado::compile("mono(saw(220))");
+        CHECK(!result.success);
+        bool found_e181 = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E181") found_e181 = true;
+        }
+        CHECK(found_e181);
+    }
+
+    SECTION("mono(fn) still dispatches to voice manager") {
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq)
+            pat("c4 e4 g4") |> mono(%, lead) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
+    }
+}
+
+TEST_CASE("Codegen: stereo auto-lift state IDs", "[codegen][stereo][auto-lift]") {
+    SECTION("auto-lift keeps single state_id — VM XORs for R pass") {
+        // The auto-lifted instruction carries one state_id (the L side). The
+        // VM derives the R-channel state_id at dispatch via XOR with
+        // STEREO_STATE_XOR_R, so each channel has independent DSP memory.
+        auto result = akkado::compile(R"(
+            stereo(saw(218), saw(222)) |> lp(%, 500)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* lp = find_instruction(insts, cedar::Opcode::FILTER_SVF_LP);
+        REQUIRE(lp != nullptr);
+        CHECK((lp->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+        CHECK(lp->state_id != 0);
+    }
+
+    SECTION("mono path state_id differs from auto-lifted state_id") {
+        // Mono: fnv1a(path). Stereo auto-lift: fnv1a(path + "/L").
+        // Different hashes → hot-swap correctly treats them as distinct ops.
+        auto mono_result = akkado::compile("saw(220) |> lp(%, 500) |> out(%)");
+        auto stereo_result = akkado::compile(
+            "stereo(saw(220)) |> lp(%, 500) |> out(%)");
+        REQUIRE(mono_result.success);
+        REQUIRE(stereo_result.success);
+
+        auto mono_insts = get_instructions(mono_result);
+        auto stereo_insts = get_instructions(stereo_result);
+
+        auto* mono_lp = find_instruction(mono_insts, cedar::Opcode::FILTER_SVF_LP);
+        auto* stereo_lp = find_instruction(stereo_insts, cedar::Opcode::FILTER_SVF_LP);
+        REQUIRE(mono_lp != nullptr);
+        REQUIRE(stereo_lp != nullptr);
+        CHECK(mono_lp->state_id != stereo_lp->state_id);
+    }
+}
+
+TEST_CASE("Codegen: pan(stereo) dispatches to PAN_STEREO", "[codegen][stereo][pan]") {
+    SECTION("pan(mono, pos) emits PAN") {
+        auto result = akkado::compile("pan(saw(220), 0.3) |> out(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::PAN) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::PAN_STEREO) == nullptr);
+    }
+
+    SECTION("pan(stereo, pos) emits PAN_STEREO for equal-power balance") {
+        auto result = akkado::compile(R"(
+            s = stereo(saw(218), saw(222))
+            pan(s, 0.3) |> out(%)
+        )");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::PAN_STEREO) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::PAN) == nullptr);
     }
 }
 

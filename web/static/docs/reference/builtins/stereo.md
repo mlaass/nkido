@@ -1,0 +1,161 @@
+---
+title: Stereo
+category: builtins
+order: 12
+keywords: [stereo, mono, left, right, pan, width, ms_encode, ms_decode, pingpong, downmix, channels, auto-lift]
+---
+
+# Stereo
+
+Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every
+signal; mono DSP ops applied to a stereo signal **auto-lift** — a single
+instruction runs twice at dispatch with independent per-channel state. No more
+manually duplicating a chain for L and R.
+
+## stereo
+
+**Create a stereo signal** from mono or two separate signals.
+
+| Param | Type   | Description |
+|-------|--------|-------------|
+| L     | signal | Mono signal (duplicated to both channels), or left channel if `R` given |
+| R     | signal | Right channel (optional) |
+
+```akk
+// Duplicate a mono signal into stereo
+osc("saw", 220) |> stereo() |> out(%)
+
+// Build a stereo image from two oscillators
+stereo(osc("saw", 218), osc("saw", 222)) |> out(%)
+```
+
+---
+
+## mono
+
+**Sum-to-mono downmix** of a stereo signal: `out = (L + R) * 0.5`.
+
+| Param | Type   | Description |
+|-------|--------|-------------|
+| sig   | stereo | Stereo signal to downmix |
+
+Standard sum-to-mono convention — correlated content stays at 0 dB;
+uncorrelated content sums at roughly -3 dB RMS.
+
+```akk
+// Downmix a stereo reverb tail before sidechain detection
+wet = src |> stereo() |> freeverb(%, 0.8, 0.5)
+env = wet |> mono() |> env_follower(%)
+```
+
+Calling `mono()` on a mono signal is a compile-time error — call it only on
+stereo signals. (When passed a function instead of a signal, `mono()` falls
+back to the monophonic voice-manager form: `mono(instrument)`.)
+
+---
+
+## left, right
+
+**Channel extraction** from a stereo signal.
+
+```akk
+s = stereo(osc("sin", 220), osc("sin", 330))
+left(s)   // → Mono
+right(s)  // → Mono
+```
+
+---
+
+## pan
+
+**Panning** with equal-power (constant-power) law.
+
+| Signature | Behaviour |
+|-----------|-----------|
+| `pan(mono, pos)` | Position a mono signal in the stereo field. Emits `PAN`. |
+| `pan(stereo, pos)` | Balance an already-stereo signal. Emits `PAN_STEREO`. |
+
+Position is `-1` (hard left) … `0` (centre, -3 dB) … `+1` (hard right).
+
+```akk
+// Mono → stereo pan
+osc("saw", 220) |> pan(%, lfo(0.25)) |> out(%)
+
+// Stereo balance on a stereo bus
+stereo(osc("saw", 218), osc("saw", 222))
+  |> pan(%, 0.3)
+  |> out(%)
+```
+
+The stereo form is DAW-style balance, not re-panning each channel. At
+`pos = -1`, the right channel is silenced and the left passes through at
+unity; at `pos = 0`, both channels are scaled by `cos(π/4) ≈ 0.707`.
+
+---
+
+## width
+
+**Stereo width** control using mid/side processing internally.
+
+```akk
+// Narrow to mono (width=0), original (1), wide (>1)
+stereo_sig |> width(%, 1.4) |> out(%)
+```
+
+---
+
+## ms_encode, ms_decode
+
+**Mid/side processing** — encode stereo to M/S, process, decode back.
+
+```akk
+// M/S processing: boost sides (wider stereo) while preserving centre
+stereo_sig
+  |> ms_encode(%)
+  |> % * stereo(1.0, 2.0)   // scale mid 1.0, side 2.0
+  |> ms_decode(%)
+  |> out(%)
+```
+
+---
+
+## pingpong
+
+**True stereo ping-pong delay** where echoes cross between L and R.
+
+| Param | Type   | Description |
+|-------|--------|-------------|
+| sig   | stereo | Stereo input |
+| time  | signal | Delay time (seconds) |
+| fb    | signal | Feedback (0..1) |
+| width | signal | Pan width (0 = centre, 1 = full ping-pong). Optional. |
+
+```akk
+osc("saw", 110)
+  |> stereo()
+  |> pingpong(%, 0.375, 0.6)
+  |> out(%)
+```
+
+---
+
+## Auto-lift
+
+Any mono DSP op (`lp`, `hp`, `delay`, `freeverb`, `saturate`, ...) applied
+to a stereo signal **auto-lifts**: the compiler emits one instruction
+flagged `STEREO_INPUT`, and the VM runs the op twice at dispatch — once per
+channel — with independent per-channel DSP state.
+
+```akk
+// One instruction per effect; VM runs each op twice at dispatch.
+osc("saw", 220)
+  |> stereo()
+  |> lp(%, 500, 0.7)          // stereo lowpass, independent filter state
+  |> delay(%, 0.25, 0.5)      // stereo delay lines per channel
+  |> freeverb(%, 0.85, 0.5)   // stereo reverb
+  |> out(%)
+```
+
+Scalar / control-rate parameters (cutoff, Q, feedback, ...) are shared
+between the L and R passes — if you want independent parameters per
+channel, split the chain manually with `stereo(lp(left(s), cutL), lp(right(s), cutR))`.

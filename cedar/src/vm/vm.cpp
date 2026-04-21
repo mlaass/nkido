@@ -459,6 +459,26 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
 }
 
 void VM::execute(const Instruction& inst) {
+    // STEREO_INPUT auto-lift: run the opcode twice with per-channel state.
+    // Left pass uses original buffers/state; right pass shifts the primary
+    // signal input (inputs[0]) and out_buffer to the adjacent right buffer
+    // and XORs state_id so left and right have independent DSP memory.
+    // Scalar/control inputs (inputs[1..4]) are shared between passes.
+    if (inst.flags & InstructionFlag::STEREO_INPUT) [[unlikely]] {
+        Instruction left = inst;
+        left.flags = static_cast<std::uint16_t>(inst.flags & ~InstructionFlag::STEREO_INPUT);
+        execute(left);
+
+        Instruction right = left;
+        right.out_buffer = static_cast<std::uint16_t>(inst.out_buffer + 1);
+        if (inst.inputs[0] != BUFFER_UNUSED) {
+            right.inputs[0] = static_cast<std::uint16_t>(inst.inputs[0] + 1);
+        }
+        right.state_id = inst.state_id ^ STEREO_STATE_XOR_R;
+        execute(right);
+        return;
+    }
+
     // Switch dispatch - compiler generates jump table for O(1) dispatch
     // [[likely]] hints help branch prediction for common opcodes
     switch (inst.opcode) {
@@ -975,6 +995,14 @@ void VM::execute(const Instruction& inst) {
 
         case Opcode::DELAY_PINGPONG:
             op_delay_pingpong(ctx_, inst);
+            break;
+
+        case Opcode::MONO_DOWNMIX:
+            op_mono_downmix(ctx_, inst);
+            break;
+
+        case Opcode::PAN_STEREO:
+            op_pan_stereo(ctx_, inst);
             break;
 
         // === Polyphony ===

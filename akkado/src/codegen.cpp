@@ -839,7 +839,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"soundfont", &CodeGenerator::handle_soundfont_call},
                 // Polyphony
                 {"poly",   &CodeGenerator::handle_poly_call},
-                {"mono",   &CodeGenerator::handle_poly_call},
+                {"mono",   &CodeGenerator::handle_mono_call},
                 {"legato", &CodeGenerator::handle_poly_call},
             };
 
@@ -1063,6 +1063,97 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 bool is_stereo_expansion = (expansion_arg_idx >= 0 &&
                                            expansion_buffers.size() == 2 &&
                                            is_stereo(arg_nodes[static_cast<std::size_t>(expansion_arg_idx)]));
+
+                // Stereo auto-lift (PRD §4.2, §6.2): for a stereo signal flowing
+                // into a mono DSP op, emit a single instruction with
+                // InstructionFlag::STEREO_INPUT set. The VM runs the opcode
+                // twice — once for L, once for R — with per-channel state
+                // (state_id XOR'd on the R pass). This replaces the
+                // two-instruction chord-expansion path for stereo specifically.
+                if (is_stereo_expansion) {
+                    current_source_loc_ = call_loc;
+
+                    std::size_t n_params = builtin->total_params();
+                    auto expanded_args = arg_buffers;
+
+                    // Make sure the primary signal arg points at the LEFT buffer
+                    // of the stereo pair — the VM computes R as left+1 at dispatch.
+                    expanded_args[static_cast<std::size_t>(expansion_arg_idx)] =
+                        expansion_buffers[0];
+
+                    // Fill in any remaining defaults with control-rate constants
+                    for (std::size_t j = expanded_args.size(); j < n_params; ++j) {
+                        if (builtin->has_default(j)) {
+                            std::uint16_t default_buf = buffers_.allocate();
+                            if (default_buf == BufferAllocator::BUFFER_UNUSED) {
+                                error("E101", "Buffer pool exhausted", n.location);
+                                if (pushed_path) pop_path();
+                                return TypedValue::error_val();
+                            }
+                            cedar::Instruction push_inst{};
+                            push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                            push_inst.out_buffer = default_buf;
+                            push_inst.inputs[0] = 0xFFFF;
+                            push_inst.inputs[1] = 0xFFFF;
+                            push_inst.inputs[2] = 0xFFFF;
+                            push_inst.inputs[3] = 0xFFFF;
+                            encode_const_value(push_inst, builtin->get_default(j));
+                            emit(push_inst);
+                            expanded_args.push_back(default_buf);
+                        }
+                    }
+
+                    // Allocate adjacent L/R output pair (BufferAllocator is linear
+                    // so two back-to-back allocations are guaranteed adjacent).
+                    std::uint16_t out_left = buffers_.allocate();
+                    std::uint16_t out_right = buffers_.allocate();
+                    if (out_left == BufferAllocator::BUFFER_UNUSED ||
+                        out_right == BufferAllocator::BUFFER_UNUSED) {
+                        error("E101", "Buffer pool exhausted", n.location);
+                        if (pushed_path) pop_path();
+                        return TypedValue::error_val();
+                    }
+                    if (out_right != out_left + 1) {
+                        error("E166", "Internal error: stereo buffer allocation not adjacent",
+                              n.location);
+                        if (pushed_path) pop_path();
+                        return TypedValue::error_val();
+                    }
+
+                    cedar::Instruction inst{};
+                    inst.opcode = builtin->opcode;
+                    inst.out_buffer = out_left;
+                    inst.inputs[0] = expanded_args.size() > 0 ? expanded_args[0] : 0xFFFF;
+                    inst.inputs[1] = expanded_args.size() > 1 ? expanded_args[1] : 0xFFFF;
+                    inst.inputs[2] = expanded_args.size() > 2 ? expanded_args[2] : 0xFFFF;
+                    inst.inputs[3] = expanded_args.size() > 3 ? expanded_args[3] : 0xFFFF;
+                    inst.inputs[4] = expanded_args.size() > 4 ? expanded_args[4] : 0xFFFF;
+                    inst.rate = 0;
+                    inst.flags = cedar::InstructionFlag::STEREO_INPUT;
+
+                    // FM detection operates on the L pass's frequency input; the R
+                    // pass sees the same buffer (VM only shifts inputs[0]).
+                    if (is_upgradeable_oscillator(inst.opcode) && !expanded_args.empty()) {
+                        if (is_fm_modulated(expanded_args[0])) {
+                            inst.opcode = upgrade_for_fm(inst.opcode);
+                        }
+                    }
+
+                    // State ID uses the /L suffix so the mono path
+                    // (fnv1a(semantic_path)) stays backward-compatible for
+                    // hot-swap (PRD §5.4). The VM XORs this with
+                    // STEREO_STATE_XOR_R for the R-channel pass.
+                    push_path("L");
+                    inst.state_id = compute_state_id();
+                    pop_path();
+                    emit(inst);
+
+                    if (pushed_path) pop_path();
+
+                    register_stereo(node, out_left, out_right);
+                    return cache_and_return(node,
+                        TypedValue::stereo_signal(out_left, out_right));
+                }
 
                 // If we have an expansion argument, generate N instances
                 if (expansion_arg_idx >= 0 && expansion_buffers.size() > 1) {

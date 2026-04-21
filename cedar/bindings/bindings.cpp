@@ -127,7 +127,12 @@ PYBIND11_MODULE(cedar_core, m) {
         .value("MS_ENCODE", cedar::Opcode::MS_ENCODE)
         .value("MS_DECODE", cedar::Opcode::MS_DECODE)
         .value("DELAY_PINGPONG", cedar::Opcode::DELAY_PINGPONG)
+        .value("MONO_DOWNMIX", cedar::Opcode::MONO_DOWNMIX)
+        .value("PAN_STEREO", cedar::Opcode::PAN_STEREO)
         .export_values();
+
+    // Instruction flag constants (bit values)
+    m.attr("STEREO_INPUT_FLAG") = cedar::InstructionFlag::STEREO_INPUT;
 
     // --- Instruction ---
     py::class_<cedar::Instruction>(m, "Instruction")
@@ -135,6 +140,7 @@ PYBIND11_MODULE(cedar_core, m) {
         .def_readwrite("opcode", &cedar::Instruction::opcode)
         .def_readwrite("rate", &cedar::Instruction::rate)
         .def_readwrite("out_buffer", &cedar::Instruction::out_buffer)
+        .def_readwrite("flags", &cedar::Instruction::flags)
         .def_readwrite("state_id", &cedar::Instruction::state_id)
         // Factory methods
         .def_static("make_nullary", &cedar::Instruction::make_nullary,

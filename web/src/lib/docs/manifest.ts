@@ -13,6 +13,7 @@ export const slugToPath: Record<string, string> = {
 	"variables": "reference/language/variables.md",
 	"closures": "reference/language/closures.md",
 	"operators": "reference/language/operators.md",
+	"stereo": "reference/builtins/stereo.md",
 	"sequencing": "reference/builtins/sequencing.md",
 	"delays": "reference/builtins/delays.md",
 	"filters": "reference/builtins/filters.md",
@@ -95,6 +96,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "utility",
 			"title": "Utility"
+		},
+		{
+			"slug": "stereo",
+			"title": "Stereo"
 		},
 		{
 			"slug": "visualizations",
@@ -758,6 +763,84 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "operators",
 		"category": "language",
 		"title": "Operators"
+	},
+	"stereo": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "stereo",
+		"anchor": "stereo"
+	},
+	"mono": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "mono",
+		"anchor": "mono"
+	},
+	"left, right": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "left, right",
+		"anchor": "left-right"
+	},
+	"pan": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "pan",
+		"anchor": "pan"
+	},
+	"width": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "width",
+		"anchor": "width"
+	},
+	"ms_encode, ms_decode": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "ms_encode, ms_decode",
+		"anchor": "ms-encode-ms-decode"
+	},
+	"pingpong": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "pingpong",
+		"anchor": "pingpong"
+	},
+	"auto-lift": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Auto-lift",
+		"anchor": "auto-lift"
+	},
+	"left": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Stereo"
+	},
+	"right": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Stereo"
+	},
+	"ms_encode": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Stereo"
+	},
+	"ms_decode": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Stereo"
+	},
+	"downmix": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Stereo"
+	},
+	"channels": {
+		"slug": "stereo",
+		"category": "builtins",
+		"title": "Stereo"
 	},
 	"euclid": {
 		"slug": "sequencing",
@@ -1431,6 +1514,7 @@ export const previews: Record<string, string> = {
 	"variables": "Variables store values for reuse throughout your patch.",
 	"closures": "Closures are anonymous functions that capture their environment. They're the bridge between patterns and synthesis.",
 	"operators": "Akkado uses operators for arithmetic, signal flow, and more.",
+	"stereo": "Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every signal; mono DSP ops applied to a stereo signal auto-lift — a...",
 	"sequencing": "Timing and sequencing functions create rhythmic patterns, triggers, and automation curves synchronized to the global clock.",
 	"delays": "Delay effects create copies of a signal offset in time, enabling echoes, rhythmic effects, and spatial depth.",
 	"filters": "Filters shape the frequency content of signals by attenuating or boosting certain frequencies.",

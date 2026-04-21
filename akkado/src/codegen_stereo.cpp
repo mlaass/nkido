@@ -20,6 +20,13 @@ void CodeGenerator::register_stereo(NodeIndex node, std::uint16_t left, std::uin
     stereo_outputs_[node] = {left, right};
     // Also register by buffer index for variable propagation
     stereo_buffer_pairs_[left] = right;
+    // If node_types_ already has an entry, patch in the stereo fields so
+    // downstream consumers (e.g. auto-lift) can read channels off TypedValue.
+    auto it = node_types_.find(node);
+    if (it != node_types_.end()) {
+        it->second.channels = ChannelCount::Stereo;
+        it->second.right_buffer = right;
+    }
 }
 
 bool CodeGenerator::is_stereo(NodeIndex node) const {
@@ -73,6 +80,73 @@ CodeGenerator::StereoBuffers CodeGenerator::get_stereo_buffers_by_buffer(std::ui
 // Stereo handlers
 // ============================================================================
 
+// mono(stereo) -> sum-to-mono downmix (L+R)*0.5
+// Dispatches to the poly()-style voice-manager form mono(instrument) /
+// mono(input, instrument) when ANY argument resolves to a function reference,
+// preserving backward compatibility with the existing mono voice manager
+// (which accepts `mono(fn)`, `mono(fn, pattern)`, or `mono(pattern, fn)`).
+TypedValue CodeGenerator::handle_mono_call(NodeIndex node, const Node& n) {
+    // Any function-valued argument → route to the voice manager.
+    for (NodeIndex arg = n.first_child; arg != NULL_NODE;
+         arg = ast_->arena[arg].next_sibling) {
+        NodeIndex unwrapped = unwrap_argument(ast_->arena, arg);
+        if (resolve_function_arg(unwrapped).has_value()) {
+            return handle_poly_call(node, n);
+        }
+    }
+
+    auto args = extract_call_args(ast_->arena, n.first_child, 1, 1);
+    if (!args.valid || args.nodes.empty()) {
+        error("E180", "mono() requires 1 stereo-signal argument", n.location);
+        return TypedValue::error_val();
+    }
+
+    NodeIndex signal_node = args.nodes[0];
+    TypedValue input = visit(signal_node);
+
+    // Resolve stereo via TypedValue.channels first, fall back to legacy maps
+    // for signals routed through variables before the type system reached them.
+    bool input_is_stereo = input.is_stereo()
+                           || is_stereo(signal_node)
+                           || is_stereo_buffer(input.buffer);
+    if (!input_is_stereo) {
+        error("E181", "mono() expects Stereo, got Mono. Call mono() only on "
+                      "stereo signals — use stereo() to convert mono to stereo.",
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    std::uint16_t left_buf = input.buffer;
+    std::uint16_t right_buf = input.right_buffer;
+    if (right_buf == 0xFFFF) {
+        // Variable/alias path — look up via legacy map
+        StereoBuffers sb = is_stereo(signal_node)
+            ? get_stereo_buffers(signal_node)
+            : get_stereo_buffers_by_buffer(left_buf);
+        left_buf = sb.left;
+        right_buf = sb.right;
+    }
+
+    std::uint16_t out_buf = buffers_.allocate();
+    if (out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::error_val();
+    }
+
+    cedar::Instruction inst{};
+    inst.opcode = cedar::Opcode::MONO_DOWNMIX;
+    inst.out_buffer = out_buf;
+    inst.inputs[0] = left_buf;
+    inst.inputs[1] = right_buf;
+    inst.inputs[2] = 0xFFFF;
+    inst.inputs[3] = 0xFFFF;
+    inst.inputs[4] = 0xFFFF;
+    inst.state_id = 0;
+    emit(inst);
+
+    return cache_and_return(node, TypedValue::signal(out_buf));
+}
+
 // stereo(mono) -> duplicate mono to both L and R
 // stereo(left, right) -> create stereo pair from two signals
 TypedValue CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
@@ -102,7 +176,7 @@ TypedValue CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
                 stereo = get_stereo_buffers_by_buffer(mono_buf);
             }
             register_stereo(node, stereo.left, stereo.right);
-            return cache_and_return(node, TypedValue::signal(stereo.left));
+            return cache_and_return(node, TypedValue::stereo_signal(stereo.left, stereo.right));
         }
 
         // Mono input - allocate two new buffers and copy
@@ -125,7 +199,7 @@ TypedValue CodeGenerator::handle_stereo_call(NodeIndex node, const Node& n) {
     }
 
     register_stereo(node, left_buf, right_buf);
-    return cache_and_return(node, TypedValue::signal(left_buf));
+    return cache_and_return(node, TypedValue::stereo_signal(left_buf, right_buf));
 }
 
 // left(stereo) -> extract left channel
@@ -186,17 +260,33 @@ TypedValue CodeGenerator::handle_right_call(NodeIndex node, const Node& n) {
     return cache_and_return(node, TypedValue::signal(buf));
 }
 
-// pan(mono, position) -> create stereo from mono with panning
+// pan(mono, pos) -> equal-power mono → stereo pan (PAN opcode)
+// pan(stereo, pos) -> equal-power stereo balance (PAN_STEREO opcode, per PRD §5.5)
 TypedValue CodeGenerator::handle_pan_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 2, 2);
 
     if (!args.valid || args.nodes.size() < 2) {
-        error("E165", "pan() requires 2 arguments: pan(mono, position)", n.location);
+        error("E165", "pan() requires 2 arguments: pan(signal, position)", n.location);
         return TypedValue::void_val();
     }
 
-    std::uint16_t mono_buf = visit(args.nodes[0]).buffer;
+    TypedValue src = visit(args.nodes[0]);
     std::uint16_t pos_buf = visit(args.nodes[1]).buffer;
+
+    bool src_is_stereo = src.is_stereo()
+                         || is_stereo(args.nodes[0])
+                         || is_stereo_buffer(src.buffer);
+
+    // Resolve L/R buffers for the stereo-balance overload
+    std::uint16_t src_left = src.buffer;
+    std::uint16_t src_right = src.right_buffer;
+    if (src_is_stereo && src_right == 0xFFFF) {
+        StereoBuffers sb = is_stereo(args.nodes[0])
+            ? get_stereo_buffers(args.nodes[0])
+            : get_stereo_buffers_by_buffer(src_left);
+        src_left = sb.left;
+        src_right = sb.right;
+    }
 
     // Allocate two adjacent output buffers for stereo
     std::uint16_t left_buf = buffers_.allocate();
@@ -208,26 +298,32 @@ TypedValue CodeGenerator::handle_pan_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    // Ensure right_buf = left_buf + 1 (required by PAN opcode)
+    // Ensure right_buf = left_buf + 1 (required by PAN/PAN_STEREO opcodes)
     if (right_buf != left_buf + 1) {
         error("E166", "Internal error: stereo buffer allocation not adjacent", n.location);
         return TypedValue::void_val();
     }
 
-    // Emit PAN instruction
     cedar::Instruction inst{};
-    inst.opcode = cedar::Opcode::PAN;
     inst.out_buffer = left_buf;  // L output; R is implicitly left_buf + 1
-    inst.inputs[0] = mono_buf;
-    inst.inputs[1] = pos_buf;
-    inst.inputs[2] = 0xFFFF;
+    if (src_is_stereo) {
+        inst.opcode = cedar::Opcode::PAN_STEREO;
+        inst.inputs[0] = src_left;
+        inst.inputs[1] = src_right;
+        inst.inputs[2] = pos_buf;
+    } else {
+        inst.opcode = cedar::Opcode::PAN;
+        inst.inputs[0] = src.buffer;
+        inst.inputs[1] = pos_buf;
+        inst.inputs[2] = 0xFFFF;
+    }
     inst.inputs[3] = 0xFFFF;
     inst.inputs[4] = 0xFFFF;
     inst.state_id = 0;
     emit(inst);
 
     register_stereo(node, left_buf, right_buf);
-    return cache_and_return(node, TypedValue::signal(left_buf));
+    return cache_and_return(node, TypedValue::stereo_signal(left_buf, right_buf));
 }
 
 // width(stereo, amount) or width(L, R, amount) -> adjust stereo width
@@ -296,7 +392,7 @@ TypedValue CodeGenerator::handle_width_call(NodeIndex node, const Node& n) {
     emit(inst);
 
     register_stereo(node, out_left, out_right);
-    return cache_and_return(node, TypedValue::signal(out_left));
+    return cache_and_return(node, TypedValue::stereo_signal(out_left, out_right));
 }
 
 // ms_encode(stereo) or ms_encode(L, R) -> convert to mid/side
@@ -364,7 +460,7 @@ TypedValue CodeGenerator::handle_ms_encode_call(NodeIndex node, const Node& n) {
 
     // Register as stereo-like (mid/side pair)
     register_stereo(node, out_mid, out_side);
-    return cache_and_return(node, TypedValue::signal(out_mid));
+    return cache_and_return(node, TypedValue::stereo_signal(out_mid, out_side));
 }
 
 // ms_decode(ms) or ms_decode(M, S) -> convert mid/side to stereo
@@ -445,7 +541,7 @@ TypedValue CodeGenerator::handle_ms_decode_call(NodeIndex node, const Node& n) {
     emit(inst);
 
     register_stereo(node, out_left, out_right);
-    return cache_and_return(node, TypedValue::signal(out_left));
+    return cache_and_return(node, TypedValue::stereo_signal(out_left, out_right));
 }
 
 // pingpong(stereo, time, fb) or pingpong(L, R, time, fb, width?) -> true stereo ping-pong delay
@@ -541,7 +637,7 @@ TypedValue CodeGenerator::handle_pingpong_call(NodeIndex node, const Node& n) {
     emit(inst);
 
     register_stereo(node, out_left, out_right);
-    return cache_and_return(node, TypedValue::signal(out_left));
+    return cache_and_return(node, TypedValue::stereo_signal(out_left, out_right));
 }
 
 }  // namespace akkado

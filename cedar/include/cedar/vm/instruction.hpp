@@ -181,6 +181,8 @@ enum class Opcode : std::uint8_t {
     MS_ENCODE = 172,         // Mid/side encode: out=M, out+1=S, in0=L, in1=R
     MS_DECODE = 173,         // Mid/side decode: out=L, out+1=R, in0=M, in1=S
     DELAY_PINGPONG = 174,    // Ping-pong delay: out=L', out+1=R', in0=L, in1=R, in2=time, in3=fb, in4=pan_width
+    MONO_DOWNMIX = 175,      // Stereo-to-mono sum: out=mono, in0=L, in1=R, out[i] = (L[i] + R[i]) * 0.5
+    PAN_STEREO = 176,        // Stereo balance (equal-power): out=L', out+1=R', in0=L, in1=R, in2=pos (-1..1)
 
     // Visualization/Debug (180-189)
     PROBE = 180,             // Capture signal to ring buffer for visualization: out=passthrough, in0=signal
@@ -191,8 +193,24 @@ enum class Opcode : std::uint8_t {
     INVALID = 255
 };
 
+// Instruction flag bits (16-bit field, room for future per-instruction attributes).
+// STEREO_INPUT: run the opcode twice with independent per-channel state (see
+// prd-stereo-support.md §6). Left-channel pass reads inputs[i] and writes
+// out_buffer; right-channel pass reads inputs[i]+1 (for stereo inputs) and
+// writes out_buffer+1, with state_id XOR'd by STEREO_STATE_XOR_R.
+namespace InstructionFlag {
+    constexpr std::uint16_t STEREO_INPUT = 1u << 0;
+}
+
+// XOR mask applied to state_id on the right-channel pass of a STEREO_INPUT
+// instruction, so left and right have independent per-channel DSP state.
+// Value is a non-zero FNV-1a-style odd constant (golden ratio).
+constexpr std::uint32_t STEREO_STATE_XOR_R = 0x9E3779B9u;
+
 // 160-bit (20 byte) fixed-width instruction for fast decoding
-// Layout: [opcode:8][rate:8][out:16][in0:16][in1:16][in2:16][in3:16][in4:16][state_id:32]
+// Layout: [opcode:8][rate:8][out:16][in0:16][in1:16][in2:16][in3:16][in4:16][flags:16][state_id:32]
+// The 2-byte `flags` field occupies what was previously padding inserted by
+// the compiler to align `state_id` to 4 bytes — struct size is unchanged.
 // Note: rate field also used for extra packed parameters (e.g., LFO shape)
 // State ID uses full 32-bit FNV-1a hash to avoid collisions (birthday paradox at 256 states with 16-bit)
 struct alignas(4) Instruction {
@@ -200,31 +218,32 @@ struct alignas(4) Instruction {
     std::uint8_t rate;          // 0=audio-rate, 1=control-rate, or packed params
     std::uint16_t out_buffer;   // Output buffer index
     std::uint16_t inputs[5];    // Input buffer indices (0xFFFF = unused)
+    std::uint16_t flags;        // Per-instruction attribute flags (see InstructionFlag)
     std::uint32_t state_id;     // Semantic hash for state lookup (full 32-bit FNV-1a)
 
     // Convenience constructors
     static Instruction make_nullary(Opcode op, std::uint16_t out, std::uint32_t state = 0) {
-        return {op, 0, out, {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, state};
+        return {op, 0, out, {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, 0, state};
     }
 
     static Instruction make_unary(Opcode op, std::uint16_t out, std::uint16_t in0, std::uint32_t state = 0) {
-        return {op, 0, out, {in0, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, state};
+        return {op, 0, out, {in0, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, 0, state};
     }
 
     static Instruction make_binary(Opcode op, std::uint16_t out, std::uint16_t in0, std::uint16_t in1, std::uint32_t state = 0) {
-        return {op, 0, out, {in0, in1, 0xFFFF, 0xFFFF, 0xFFFF}, state};
+        return {op, 0, out, {in0, in1, 0xFFFF, 0xFFFF, 0xFFFF}, 0, state};
     }
 
     static Instruction make_ternary(Opcode op, std::uint16_t out, std::uint16_t in0, std::uint16_t in1, std::uint16_t in2, std::uint32_t state = 0) {
-        return {op, 0, out, {in0, in1, in2, 0xFFFF, 0xFFFF}, state};
+        return {op, 0, out, {in0, in1, in2, 0xFFFF, 0xFFFF}, 0, state};
     }
 
     static Instruction make_quaternary(Opcode op, std::uint16_t out, std::uint16_t in0, std::uint16_t in1, std::uint16_t in2, std::uint16_t in3, std::uint32_t state = 0) {
-        return {op, 0, out, {in0, in1, in2, in3, 0xFFFF}, state};
+        return {op, 0, out, {in0, in1, in2, in3, 0xFFFF}, 0, state};
     }
 
     static Instruction make_quinary(Opcode op, std::uint16_t out, std::uint16_t in0, std::uint16_t in1, std::uint16_t in2, std::uint16_t in3, std::uint16_t in4, std::uint32_t state = 0) {
-        return {op, 0, out, {in0, in1, in2, in3, in4}, state};
+        return {op, 0, out, {in0, in1, in2, in3, in4}, 0, state};
     }
 };
 

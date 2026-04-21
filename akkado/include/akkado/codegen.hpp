@@ -392,6 +392,11 @@ private:
     /// Handle stereo(mono) or stereo(left, right) - create stereo signal
     TypedValue handle_stereo_call(NodeIndex node, const Node& n);
 
+    /// Handle mono(stereo) - downmix stereo to mono via (L+R)*0.5.
+    /// Dispatches to the voice-manager form mono(instrument) when the
+    /// argument resolves to a function reference instead of a signal.
+    TypedValue handle_mono_call(NodeIndex node, const Node& n);
+
     /// Handle left(stereo) - extract left channel
     TypedValue handle_left_call(NodeIndex node, const Node& n);
 

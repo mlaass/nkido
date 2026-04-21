@@ -1213,7 +1213,7 @@ TEST_CASE("VM external parameter binding", "[vm][env]") {
         // Create fallback buffer
         std::array<Instruction, 2> program = {
             make_const_instruction(Opcode::PUSH_CONST, 1, 0.25f),  // fallback = 0.25
-            Instruction{Opcode::ENV_GET, 0, 0, {1, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, fnv1a_hash("Missing")}
+            Instruction{Opcode::ENV_GET, 0, 0, {1, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF}, 0, fnv1a_hash("Missing")}
         };
         vm.load_program_immediate(program);
 
