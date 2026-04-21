@@ -1,125 +1,247 @@
 #!/bin/bash
 # Cedar binary size report generator.
-# Builds Cedar across multiple configurations and emits a markdown report
-# comparing archive sizes, stripped sizes, and per-object text sections.
+# Builds Cedar across multiple configurations and emits a markdown report:
+#   - Summary sizes (archive, stripped, text)
+#   - Delta vs. baseline
+#   - Feature matrix (what is enabled in each config)
+#   - Per-object text breakdown
 #
 # Usage:
 #   scripts/cedar-size-report.sh                  # print to stdout
 #   scripts/cedar-size-report.sh -o report.md     # write to file
-#   scripts/cedar-size-report.sh --quick          # only size-focused configs
-#   scripts/cedar-size-report.sh --configs a,b,c  # custom list
+#   scripts/cedar-size-report.sh --quick          # skip debug build
+#   scripts/cedar-size-report.sh --configs a,b,c  # custom subset
+#
+# ──────────────────────────────────────────────────────────────────────────
+# To add a new feature: append to FEATURES_TOGGLE or FEATURES_MEMORY.
+# To add a new config: append to CONFIGS, then any overrides to CONFIG_OVERRIDES.
+# The cmake flags, feature matrix, and description rows are all derived.
+# ──────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# --- Args ---
+# ============================================================================
+# Data model — single source of truth for features and configs
+# ============================================================================
+
+# Feature toggles: NAME|DEFAULT|DESCRIPTION
+#   Compiled as -DCEDAR_ENABLE_<NAME>=<value> unless NAME == FLOAT_ONLY
+#   (which is -DCEDAR_FLOAT_ONLY — it's a behavior flag, not an enable flag).
+FEATURES_TOGGLE=(
+    "AUDIO_DECODERS|ON|MP3/FLAC/OGG decoders (stb_vorbis, dr_flac, minimp3)"
+    "SOUNDFONT|ON|SoundFont (SF2) support via TinySoundFont"
+    "FFT|ON|FFT support (KissFFT) for FFT_PROBE opcode"
+    "FILE_IO|ON|std::filesystem-based file loading"
+    "MINBLEP|ON|MinBLEP anti-aliased oscillators"
+    "FLOAT_ONLY|OFF|Use float instead of double for beat timing"
+)
+
+# Memory overrides: NAME|DEFAULT|DESCRIPTION
+#   Compiled as -DCEDAR_<NAME>=<value> when non-default.
+FEATURES_MEMORY=(
+    "BLOCK_SIZE|128|Samples per audio block"
+    "MAX_BUFFERS|256|Buffer pool size (registers)"
+    "MAX_STATES|512|DSP state pool size"
+    "MAX_VARS|4096|Variable slots"
+    "MAX_PROGRAM_SIZE|4096|Program bytecode capacity"
+    "ARENA_SIZE|33554432|AudioArena bytes (default 32 MB)"
+)
+
+# Configs: NAME|BUILD_TYPE|DESCRIPTION
+CONFIGS=(
+    "debug|Debug|Debug, all features, -O0 -g3"
+    "release|Release|Release, all features, -O3"
+    "minsize|MinSizeRel|MinSizeRel, all features, -Os"
+    "minsize-stripped|MinSizeRel|MinSizeRel, no optional modules"
+    "esp32|MinSizeRel|ESP32 profile: stripped + reduced memory + float-only"
+)
+
+# Per-config overrides: CONFIG|FEATURE|VALUE
+#   Only list values that differ from the feature's default.
+CONFIG_OVERRIDES=(
+    # minsize-stripped turns off all optional modules
+    "minsize-stripped|AUDIO_DECODERS|OFF"
+    "minsize-stripped|SOUNDFONT|OFF"
+    "minsize-stripped|FFT|OFF"
+    "minsize-stripped|FILE_IO|OFF"
+    "minsize-stripped|MINBLEP|OFF"
+
+    # esp32 inherits the stripped settings plus reduced memory and float-only
+    "esp32|AUDIO_DECODERS|OFF"
+    "esp32|SOUNDFONT|OFF"
+    "esp32|FFT|OFF"
+    "esp32|FILE_IO|OFF"
+    "esp32|MINBLEP|OFF"
+    "esp32|FLOAT_ONLY|ON"
+    "esp32|MAX_BUFFERS|64"
+    "esp32|MAX_STATES|128"
+    "esp32|MAX_VARS|512"
+    "esp32|MAX_PROGRAM_SIZE|1024"
+    "esp32|ARENA_SIZE|262144"
+)
+
+# ============================================================================
+# Data accessors
+# ============================================================================
+
+# field <n> <record>   extract the Nth pipe-separated field
+field() { echo "$2" | awk -F'|' -v i="$1" '{print $i}'; }
+
+# feature_default <name>   look up a feature's default value (toggle or memory)
+feature_default() {
+    local name="$1"
+    for f in "${FEATURES_TOGGLE[@]}" "${FEATURES_MEMORY[@]}"; do
+        if [ "$(field 1 "$f")" = "$name" ]; then
+            field 2 "$f"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# feature_kind <name>   echo "toggle" or "memory"
+feature_kind() {
+    local name="$1"
+    for f in "${FEATURES_TOGGLE[@]}"; do
+        [ "$(field 1 "$f")" = "$name" ] && echo "toggle" && return
+    done
+    for f in "${FEATURES_MEMORY[@]}"; do
+        [ "$(field 1 "$f")" = "$name" ] && echo "memory" && return
+    done
+    return 1
+}
+
+# get_value <config> <feature>   override if present, else default
+get_value() {
+    local cfg="$1" feat="$2"
+    for ov in "${CONFIG_OVERRIDES[@]}"; do
+        if [ "$(field 1 "$ov")" = "$cfg" ] && [ "$(field 2 "$ov")" = "$feat" ]; then
+            field 3 "$ov"
+            return 0
+        fi
+    done
+    feature_default "$feat"
+}
+
+# config_field <config> <n>   pull a field from the CONFIGS table
+config_field() {
+    local cfg="$1" n="$2"
+    for c in "${CONFIGS[@]}"; do
+        if [ "$(field 1 "$c")" = "$cfg" ]; then
+            field "$n" "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# cmake_flags_for <config>   derive full cmake flag string from data model
+cmake_flags_for() {
+    local cfg="$1"
+    local build_type
+    build_type=$(config_field "$cfg" 2) || return 1
+
+    local flags="-DCMAKE_BUILD_TYPE=$build_type"
+    flags+=" -DENKIDO_BUILD_TESTS=OFF -DENKIDO_BUILD_TOOLS=OFF -DENKIDO_BUILD_AKKADO=OFF"
+
+    # Toggle features
+    for f in "${FEATURES_TOGGLE[@]}"; do
+        local name default value
+        name=$(field 1 "$f")
+        default=$(field 2 "$f")
+        value=$(get_value "$cfg" "$name")
+        [ "$value" = "$default" ] && continue
+        if [ "$name" = "FLOAT_ONLY" ]; then
+            flags+=" -DCEDAR_FLOAT_ONLY=$value"
+        else
+            flags+=" -DCEDAR_ENABLE_$name=$value"
+        fi
+    done
+
+    # Memory overrides
+    for f in "${FEATURES_MEMORY[@]}"; do
+        local name default value
+        name=$(field 1 "$f")
+        default=$(field 2 "$f")
+        value=$(get_value "$cfg" "$name")
+        [ "$value" = "$default" ] && continue
+        flags+=" -DCEDAR_$name=$value"
+    done
+
+    echo "$flags"
+}
+
+# ============================================================================
+# Argument parsing
+# ============================================================================
+
 OUTPUT=""
-CONFIGS=""
+CONFIGS_ARG=""
 QUICK=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -o|--output) OUTPUT="$2"; shift 2 ;;
         --quick)     QUICK=1; shift ;;
-        --configs)   CONFIGS="$2"; shift 2 ;;
+        --configs)   CONFIGS_ARG="$2"; shift 2 ;;
         -h|--help)
-            head -12 "$0" | sed 's/^# \?//'; exit 0 ;;
+            awk '/^#!/{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
+            exit 0 ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
 
-# Default config list: order matters for table rows
-if [ -z "$CONFIGS" ]; then
-    if [ "$QUICK" -eq 1 ]; then
-        CONFIGS="release,minsize,minsize-stripped,esp32"
-    else
-        CONFIGS="debug,release,minsize,minsize-stripped,esp32"
-    fi
+# Resolve which configs to build
+if [ -n "$CONFIGS_ARG" ]; then
+    IFS=',' read -ra SELECTED <<< "$CONFIGS_ARG"
+else
+    SELECTED=()
+    for c in "${CONFIGS[@]}"; do
+        name=$(field 1 "$c")
+        if [ "$QUICK" -eq 1 ] && [ "$name" = "debug" ]; then
+            continue
+        fi
+        SELECTED+=("$name")
+    done
 fi
 
-# Map config name -> cmake flags (no LTO for apples-to-apples size)
-cmake_flags_for() {
-    case "$1" in
-        debug)
-            echo "-DCMAKE_BUILD_TYPE=Debug -DENKIDO_BUILD_TESTS=OFF -DENKIDO_BUILD_TOOLS=OFF -DENKIDO_BUILD_AKKADO=OFF"
-            ;;
-        release)
-            echo "-DCMAKE_BUILD_TYPE=Release -DENKIDO_BUILD_TESTS=OFF -DENKIDO_BUILD_TOOLS=OFF -DENKIDO_BUILD_AKKADO=OFF"
-            ;;
-        minsize)
-            echo "-DCMAKE_BUILD_TYPE=MinSizeRel -DENKIDO_BUILD_TESTS=OFF -DENKIDO_BUILD_TOOLS=OFF -DENKIDO_BUILD_AKKADO=OFF"
-            ;;
-        minsize-stripped)
-            echo "-DCMAKE_BUILD_TYPE=MinSizeRel -DENKIDO_BUILD_TESTS=OFF -DENKIDO_BUILD_TOOLS=OFF -DENKIDO_BUILD_AKKADO=OFF -DCEDAR_ENABLE_AUDIO_DECODERS=OFF -DCEDAR_ENABLE_SOUNDFONT=OFF -DCEDAR_ENABLE_FFT=OFF -DCEDAR_ENABLE_FILE_IO=OFF -DCEDAR_ENABLE_MINBLEP=OFF"
-            ;;
-        esp32)
-            echo "-DCMAKE_BUILD_TYPE=MinSizeRel -DENKIDO_BUILD_TESTS=OFF -DENKIDO_BUILD_TOOLS=OFF -DENKIDO_BUILD_AKKADO=OFF -DCEDAR_ENABLE_AUDIO_DECODERS=OFF -DCEDAR_ENABLE_SOUNDFONT=OFF -DCEDAR_ENABLE_FFT=OFF -DCEDAR_ENABLE_FILE_IO=OFF -DCEDAR_ENABLE_MINBLEP=OFF -DCEDAR_MAX_BUFFERS=64 -DCEDAR_MAX_STATES=128 -DCEDAR_MAX_VARS=512 -DCEDAR_MAX_PROGRAM_SIZE=1024 -DCEDAR_ARENA_SIZE=262144 -DCEDAR_FLOAT_ONLY=ON"
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
+# ============================================================================
+# Build & measure
+# ============================================================================
 
-# Human-friendly description for each config
-describe_config() {
-    case "$1" in
-        debug)            echo "Debug, all features, -O0 -g3" ;;
-        release)          echo "Release, all features, -O3" ;;
-        minsize)          echo "MinSizeRel, all features, -Os" ;;
-        minsize-stripped) echo "MinSizeRel, no decoders/SF/FFT/MinBLEP/FileIO" ;;
-        esp32)            echo "ESP32 profile: stripped + reduced memory + float-only" ;;
-        *)                echo "-" ;;
-    esac
-}
-
-# Format bytes as KB with one decimal (e.g. 152.3 KB)
-format_kb() {
-    awk -v b="$1" 'BEGIN { printf "%.1f KB", b/1024 }'
-}
-
-# Query archive size in bytes
 archive_bytes() { stat -c %s "$1"; }
 
-# Strip archive to a temp file, return stripped bytes
 stripped_bytes() {
-    local archive="$1"
     local tmp
     tmp=$(mktemp --suffix=.a)
-    cp "$archive" "$tmp"
+    cp "$1" "$tmp"
     strip "$tmp" 2>/dev/null || true
     stat -c %s "$tmp"
     rm -f "$tmp"
 }
 
-# Sum text section across all cedar object files
 text_total() {
-    local objdir="$1"
-    local total=0
+    local objdir="$1" total=0 t
     while IFS= read -r -d '' obj; do
-        local t
         t=$(size "$obj" 2>/dev/null | awk 'NR==2 {print $1}')
         total=$((total + ${t:-0}))
     done < <(find "$objdir" -name "*.o" -print0)
     echo "$total"
 }
 
-# Extract (basename, text, data, bss) for each .o under objdir
 per_object_rows() {
     local objdir="$1"
     while IFS= read -r -d '' obj; do
-        local name
+        local name sz
         name=$(basename "$obj" .cpp.o)
-        local sz
         sz=$(size "$obj" 2>/dev/null | awk 'NR==2 {printf "%s\t%s\t%s", $1, $2, $3}')
-        if [ -n "$sz" ]; then
-            printf '%s\t%s\n' "$name" "$sz"
-        fi
+        [ -n "$sz" ] && printf '%s\t%s\n' "$name" "$sz"
     done < <(find "$objdir" -name "*.o" -print0 | sort -z)
 }
 
-# --- Run a single config, populate associative-array-ish output ---
-# Writes one line to stdout: "config|archive|stripped|text|objdir"
+format_kb() { awk -v b="$1" 'BEGIN { printf "%.1f KB", b/1024 }'; }
+
 build_and_measure() {
     local name="$1"
     local flags
@@ -135,30 +257,29 @@ build_and_measure() {
     local archive="$build_dir/cedar/libcedar.a"
     local objdir="$build_dir/cedar/CMakeFiles/cedar.dir/src"
 
-    local a s t
-    a=$(archive_bytes "$archive")
-    s=$(stripped_bytes "$archive")
-    t=$(text_total "$objdir")
-
-    printf '%s|%s|%s|%s|%s\n' "$name" "$a" "$s" "$t" "$objdir"
+    printf '%s|%s|%s|%s|%s\n' \
+        "$name" \
+        "$(archive_bytes "$archive")" \
+        "$(stripped_bytes "$archive")" \
+        "$(text_total "$objdir")" \
+        "$objdir"
 }
 
-# --- Build everything, collect results ---
 RESULTS_FILE=$(mktemp)
-IFS=',' read -ra CONFIG_ARR <<< "$CONFIGS"
-for cfg in "${CONFIG_ARR[@]}"; do
+trap 'rm -f "$RESULTS_FILE"' EXIT
+for cfg in "${SELECTED[@]}"; do
     build_and_measure "$cfg" >> "$RESULTS_FILE"
 done
 
-# --- Emit markdown report ---
+# ============================================================================
+# Markdown emission
+# ============================================================================
+
 emit_report() {
-    local timestamp
+    local timestamp host_arch compiler git_hash
     timestamp=$(date -u +"%Y-%m-%d %H:%M UTC")
-    local host_arch
     host_arch=$(uname -m)
-    local compiler
     compiler=$(${CXX:-c++} --version 2>/dev/null | head -1 || echo "unknown")
-    local git_hash
     git_hash=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
     echo "# Cedar Binary Size Report"
@@ -166,23 +287,25 @@ emit_report() {
     echo "_Generated: ${timestamp} | Host: ${host_arch} | Commit: ${git_hash}_"
     echo "_Compiler: ${compiler}_"
     echo
-    echo "## Summary"
+
+    # ── Size summary ──────────────────────────────────────────────────────
+    echo "## Size Summary"
     echo
     echo "| Config | Description | Archive | Stripped | Text (sum) |"
     echo "|--------|-------------|--------:|---------:|-----------:|"
     while IFS='|' read -r name a s t _; do
         local desc
-        desc=$(describe_config "$name")
-        printf "| %s | %s | %s | %s | %s |\n" \
-            "\`$name\`" "$desc" "$(format_kb "$a")" "$(format_kb "$s")" "$(format_kb "$t")"
+        desc=$(config_field "$name" 3)
+        printf "| \`%s\` | %s | %s | %s | %s |\n" \
+            "$name" "$desc" "$(format_kb "$a")" "$(format_kb "$s")" "$(format_kb "$t")"
     done < "$RESULTS_FILE"
     echo
 
-    # Baseline row for delta
-    local baseline_stripped
+    # ── Delta ─────────────────────────────────────────────────────────────
+    local baseline_name baseline_stripped
+    baseline_name=$(head -1 "$RESULTS_FILE" | cut -d'|' -f1)
     baseline_stripped=$(head -1 "$RESULTS_FILE" | cut -d'|' -f3)
-
-    echo "## Size Delta vs. baseline (\`$(head -1 "$RESULTS_FILE" | cut -d'|' -f1)\`)"
+    echo "## Size Delta vs. \`$baseline_name\`"
     echo
     echo "| Config | Stripped | Δ bytes | Δ % |"
     echo "|--------|---------:|--------:|----:|"
@@ -194,11 +317,80 @@ emit_report() {
         else
             pct=$(awk -v d="$delta" -v b="$baseline_stripped" 'BEGIN { printf "%+.1f%%", (d*100.0)/b }')
         fi
-        printf "| %s | %s | %+d | %s |\n" \
-            "\`$name\`" "$(format_kb "$s")" "$delta" "$pct"
+        printf "| \`%s\` | %s | %+d | %s |\n" \
+            "$name" "$(format_kb "$s")" "$delta" "$pct"
     done < "$RESULTS_FILE"
     echo
 
+    # ── Feature matrix ────────────────────────────────────────────────────
+    # Columns = selected configs, Rows = features. Defaults shown for context.
+    echo "## Feature Matrix"
+    echo
+    local -a built_configs=()
+    while IFS='|' read -r name _ _ _ _; do
+        built_configs+=("$name")
+    done < "$RESULTS_FILE"
+
+    # Header
+    local header="| Feature | Default |"
+    local sep="|---------|---------|"
+    for c in "${built_configs[@]}"; do
+        header+=" \`$c\` |"
+        sep+="------|"
+    done
+    echo "### Toggles"
+    echo
+    echo "$header"
+    echo "$sep"
+    for f in "${FEATURES_TOGGLE[@]}"; do
+        local name default value cell
+        name=$(field 1 "$f")
+        default=$(field 2 "$f")
+        local row="| \`$name\` | $default |"
+        for c in "${built_configs[@]}"; do
+            value=$(get_value "$c" "$name")
+            if [ "$value" = "ON" ]; then
+                cell="✓"
+            elif [ "$value" = "OFF" ]; then
+                cell="✗"
+            else
+                cell="$value"
+            fi
+            # Highlight differences from default
+            if [ "$value" != "$default" ]; then
+                cell="**$cell**"
+            fi
+            row+=" $cell |"
+        done
+        echo "$row"
+    done
+    echo
+
+    # Memory overrides — show values; bold if differs from default
+    echo "### Memory"
+    echo
+    echo "$header"
+    echo "$sep"
+    for f in "${FEATURES_MEMORY[@]}"; do
+        local name default value
+        name=$(field 1 "$f")
+        default=$(field 2 "$f")
+        local row="| \`$name\` | $default |"
+        for c in "${built_configs[@]}"; do
+            value=$(get_value "$c" "$name")
+            if [ "$value" = "$default" ]; then
+                row+=" $value |"
+            else
+                row+=" **$value** |"
+            fi
+        done
+        echo "$row"
+    done
+    echo
+    echo "_Bold = overridden from default. ✓/✗ = ON/OFF toggle._"
+    echo
+
+    # ── Per-object breakdown ──────────────────────────────────────────────
     echo "## Per-object Text Sections"
     echo
     while IFS='|' read -r name _ _ _ objdir; do
@@ -208,33 +400,34 @@ emit_report() {
         echo "|--------|-----:|-----:|----:|"
         per_object_rows "$objdir" | sort -k2 -n -r -t$'\t' | \
             while IFS=$'\t' read -r obj text data bss; do
-                printf "| %s | %s | %s | %s |\n" \
-                    "\`$obj\`" "$(format_kb "$text")" "$(format_kb "$data")" "$(format_kb "$bss")"
+                printf "| \`%s\` | %s | %s | %s |\n" \
+                    "$obj" "$(format_kb "$text")" "$(format_kb "$data")" "$(format_kb "$bss")"
             done
         echo
     done < "$RESULTS_FILE"
 
-    echo "## Feature Toggle Reference"
+    # ── Feature reference ────────────────────────────────────────────────
+    echo "## Feature Reference"
+    echo
+    echo "### Toggles"
     echo
     echo "| Toggle | Default | Purpose |"
     echo "|--------|---------|---------|"
-    echo "| \`CEDAR_ENABLE_AUDIO_DECODERS\` | ON | MP3/FLAC/OGG decoders (stb_vorbis, dr_flac, minimp3) |"
-    echo "| \`CEDAR_ENABLE_SOUNDFONT\` | ON | SoundFont (SF2) support via TinySoundFont |"
-    echo "| \`CEDAR_ENABLE_FFT\` | ON | FFT support (KissFFT) for FFT_PROBE opcode |"
-    echo "| \`CEDAR_ENABLE_FILE_IO\` | ON | std::filesystem-based file loading |"
-    echo "| \`CEDAR_ENABLE_MINBLEP\` | ON | MinBLEP anti-aliased oscillators |"
-    echo "| \`CEDAR_FLOAT_ONLY\` | OFF | Use float instead of double for beat timing |"
+    for f in "${FEATURES_TOGGLE[@]}"; do
+        printf "| \`CEDAR_ENABLE_%s\` | %s | %s |\n" \
+            "$(field 1 "$f")" "$(field 2 "$f")" "$(field 3 "$f")"
+    done
     echo
-    echo "## Memory Override Reference"
+    echo "_Note: \`FLOAT_ONLY\` is compiled as \`-DCEDAR_FLOAT_ONLY\` (behavior flag, not enable flag)._"
     echo
-    echo "| Variable | Default |"
-    echo "|----------|--------:|"
-    echo "| \`CEDAR_BLOCK_SIZE\` | 128 |"
-    echo "| \`CEDAR_MAX_BUFFERS\` | 256 |"
-    echo "| \`CEDAR_MAX_STATES\` | 512 |"
-    echo "| \`CEDAR_MAX_VARS\` | 4096 |"
-    echo "| \`CEDAR_MAX_PROGRAM_SIZE\` | 4096 |"
-    echo "| \`CEDAR_ARENA_SIZE\` | 33554432 (32 MB) |"
+    echo "### Memory Overrides"
+    echo
+    echo "| Variable | Default | Purpose |"
+    echo "|----------|--------:|---------|"
+    for f in "${FEATURES_MEMORY[@]}"; do
+        printf "| \`CEDAR_%s\` | %s | %s |\n" \
+            "$(field 1 "$f")" "$(field 2 "$f")" "$(field 3 "$f")"
+    done
 }
 
 if [ -n "$OUTPUT" ]; then
@@ -243,5 +436,3 @@ if [ -n "$OUTPUT" ]; then
 else
     emit_report
 fi
-
-rm -f "$RESULTS_FILE"
