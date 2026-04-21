@@ -681,7 +681,7 @@ public:
 
         // Allocate output events buffer
         // Use total_events * 2 for safety margin (nested sequences can expand)
-        std::uint32_t output_capacity = std::max(32u, total_events * 2);
+        std::uint32_t output_capacity = std::max<std::uint32_t>(32u, total_events * 2);
         std::size_t output_bytes = output_capacity * sizeof(OutputEvents::OutputEvent);
         std::size_t output_floats = (output_bytes + sizeof(float) - 1) / sizeof(float);
         float* output_mem = arena->allocate(output_floats);
