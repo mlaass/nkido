@@ -69,8 +69,9 @@ Stereo is tracked only as **codegen-side metadata** (`CodeGenerator::stereo_outp
 - **Multichannel beyond stereo**: No 5.1, 7.1, Ambisonics, or arbitrary channel counts. Output is always 2 channels.
 - **Cross-channel effects beyond what exists**: No new stereo-specific opcodes (e.g. stereo chorus, stereo flanger) — these are follow-ups, not part of this PRD.
 - **Method-call syntax**: `sig.stereo()` / `sig.mono()` are out of scope. Function-call syntax only.
-- **Signal rate type unification**: This PRD addresses channel count, not audio-rate vs control-rate. Rate stays on `rate` field of `Instruction`.
+- **Signal rate type unification**: This PRD addresses channel count, not audio-rate vs control-rate. The *semantics* of the `rate` field are unchanged; low-level bit layout elsewhere in `Instruction` (e.g. the new `flags` field from §6.1) may change.
 - **Parameter stereo**: A parameter (slider, knob) is always a mono control signal. Stereo promotion happens only at DSP-signal boundaries.
+- **Implementation of stereo-native generator builtins**: This PRD defines the *category* and *type-system slot* for stereo-native generators (§5.2), but does **not** implement any specific stereo-native generator. `in()` is owned by [`prd-audio-input.md`](prd-audio-input.md); stereo-aware `sample()` playback of multi-channel files, stereo synths, and stereo granular/wavetable are separate follow-ups. References to `in()` in this document (§4.3, §5.2) are illustrative only — consumers of the type system, not work this PRD performs.
 
 ---
 
@@ -132,6 +133,17 @@ synth |> stereo()
 
 // Stereo source, sum to mono for sidechain
 sc_env = stereo_drums |> mono() |> env_follower(%)     // Mono control
+
+// Dry/wet mix with mixed channel types (see §5.3 rule 4)
+dry = osc("saw", 220)                                  // Mono
+wet = dry |> stereo() |> freeverb(%, 0.9, 0.5)         // Stereo
+dry * 0.3 + wet * 0.7 |> out(%)                        // Mono + Stereo → Stereo
+// Equivalent to broadcasting dry across both channels of wet.
+
+// Illustrative: once a stereo-native generator exists (e.g. `in()` from
+// prd-audio-input.md — implemented there, not here), its output flows straight
+// into auto-lifted DSP with no `stereo()` wrapper needed.
+in() |> filter_lp(%, 2000, 0.7) |> out(%)              // Stereo in → stereo filter → stereo out
 ```
 
 ### 4.4 Error Cases
@@ -189,26 +201,36 @@ Classification of existing builtins:
 | Category | auto_lift | output_channels | Examples |
 |----------|-----------|-----------------|----------|
 | Mono generators | false | Mono | `osc`, `noise`, `pulse`, `pat` |
+| **Stereo-native generators** | false | Stereo | *Category slot only — no concrete builtin in this category is implemented by this PRD.* Expected first consumer: `in()` from [`prd-audio-input.md`](prd-audio-input.md). Other future candidates: stereo-aware `sample()` for multi-channel files, stereo synths, stereo granular/wavetable. Such builtins emit adjacent L/R buffers directly and do **not** require a `stereo()` wrapper. |
 | Mono-in, mono-out DSP | **true** | follows input | `filter_lp`, `filter_hp`, `svf`, `delay`, `comb`, `freeverb`, `dattorro`, `fdn`, `bitcrush`, `fold`, `saturate`, ADSR, etc. |
 | Stereo constructors | false | Stereo | `stereo(mono)`, `stereo(L, R)` |
 | Mono → Stereo (panning) | false | Stereo | `pan(mono, pos)` (existing equal-power pan law) |
 | Stereo → Stereo (balance) | false | Stereo | `pan(stereo, pos)` (new overload — stereo balance / pan law, see §5.5) |
 | Stereo-in, stereo-out | false | Stereo | `width`, `pingpong`, `ms_encode`, `ms_decode` |
 | Stereo → mono | false | Mono | `mono`, `left`, `right` |
-| Sink | false | — | `out` (accepts Mono or Stereo specially) |
+| Sink | false | — | `out(m) → ()` (Mono, duplicated), `out(s) → ()` (Stereo, split), `out(l, r) → ()` (both Mono, explicit) |
+
+A builtin declares itself stereo-native simply by setting `output_channels = Stereo` in its signature — no special codegen path is needed beyond the adjacent-buffer allocation the compiler already performs for `stereo()`. Downstream auto-lift treats a stereo-native generator's output identically to a `stereo()`-wrapped mono signal.
 
 ### 5.3 Type-Checking Rules
 
+Argument classification is driven by the existing `BuiltinInfo.param_types[i]` field (see `akkado/include/akkado/builtins.hpp`, `enum class ParamValueType`). An argument is a **signal argument** iff `param_types[i] == ParamValueType::Signal`; anything else (`Scalar`, `Pattern`, `String`, etc.) is a **non-signal argument**. Only signal arguments participate in channel-type inference and auto-lift. Non-signal arguments (including control-rate scalars like frequency and resonance) are read as mono control and broadcast unchanged to both channels in the stereo path.
+
 1. For a call `f(a1, ..., aN)` with builtin `f`:
-   - If `f.auto_lift` is false: each `ai.channels` must equal `f.input_channels[i]`. Mismatch → compile error `E2XX`.
-   - If `f.auto_lift` is true and all arguments are Mono: emit opcode as today, result is Mono.
-   - If `f.auto_lift` is true and **at least one signal argument** is Stereo: all signal arguments must be coercible to Stereo (Mono is auto-promoted via duplication — this costs 0 extra opcodes, just a dual read). Parameter-style scalar arguments (frequencies, resonance, etc.) are read as mono control and broadcast. Emit opcode with `STEREO_INPUT` flag; result is Stereo.
+   - If `f.auto_lift` is false: each signal `ai.channels` must equal `f.input_channels[i]`. Mismatch → compile error `E2XX`.
+   - If `f.auto_lift` is true and all signal arguments are Mono: emit opcode as today, result is Mono.
+   - If `f.auto_lift` is true and **at least one signal argument** is Stereo: all signal arguments must be coercible to Stereo (Mono is auto-promoted via duplication — this costs 0 extra opcodes, just a dual read). Non-signal arguments are shared between L and R passes. Emit opcode with `STEREO_INPUT` flag; result is Stereo.
 2. `out()` is special-cased:
    - `out(s)` with `s: Stereo` → split into left/right
    - `out(m)` with `m: Mono` → duplicate to both channels
    - `out(l, r)` with both Mono → explicit left/right
    - Any other combination → compile error
 3. Pipe (`|>`): `a |> f(%, args)` — `%` takes the channel type of `a`; normal call rules then apply.
+4. **Binary operators** (`+`, `-`, `*`, `/`) on signal operands follow auto-lift semantics:
+   - `Mono op Mono` → Mono (as today)
+   - `Stereo op Stereo` → Stereo, per-channel independent (L op L, R op R)
+   - `Mono op Stereo` (and symmetric) → Stereo: the Mono operand is broadcast to both channels (zero-cost dual read of the same buffer). Result is Stereo. This is the canonical dry/wet mixing case: `dry + stereo_wet`.
+   - Multiplication by a scalar control signal (e.g. an envelope or LFO on a stereo bus) falls under this rule — the scalar is a mono signal, shared L/R.
 
 ### 5.4 State ID Derivation for Auto-Lift
 
@@ -220,6 +242,8 @@ state_id_R = fnv1a(semantic_path + "/R")
 ```
 
 The mono, non-lifted case keeps the current derivation (`fnv1a(semantic_path)`) for backward hot-swap compatibility — existing programs with mono opcodes keep their current state IDs and preserve live-coding state across recompiles.
+
+**Stateless auto-lifted opcodes** (e.g. `fold`, `saturate`, simple gain/clip ops where `requires_state == false` in `BuiltinInfo`) have no `state_id` consumer. The suffix rule is a no-op for them; codegen may set both `state_id_L` and `state_id_R` to `0` (or derive them anyway — the VM ignores `state_id` for stateless opcodes). No special case is needed in codegen; the rule just collapses to "doesn't matter" for this class.
 
 ### 5.5 Stereo `pan()` Overload
 
@@ -248,9 +272,43 @@ Both share the user-facing name `pan`; the compiler dispatches based on the chan
 
 ### 6.1 Instruction Format Change
 
-The current `Instruction` struct (`cedar/include/cedar/vm/instruction.hpp:195-229`) is 20 bytes with a `rate` byte. Repurpose two currently-unused bits of `rate` (or add a `flags` byte — TBD during implementation) to carry a `STEREO_INPUT` flag.
+The current `Instruction` struct (`cedar/include/cedar/vm/instruction.hpp:195-229`) is 20 bytes. Its real memory layout, accounting for `alignas(4)` and the 4-byte alignment of `state_id`, is:
 
-**[OPEN QUESTION]**: choose between (a) stealing bits from `rate`, (b) adding a dedicated `flags : u8` field (grows struct to 24 bytes aligned), or (c) using a reserved opcode-table entry per opcode for "stereo variant". Decision deferred to implementation with a default lean toward (b) for clarity.
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 1 | `opcode` |
+| 1 | 1 | `rate` |
+| 2 | 2 | `out_buffer` |
+| 4 | 2 | `inputs[0]` |
+| 6 | 2 | `inputs[1]` |
+| 8 | 2 | `inputs[2]` |
+| 10 | 2 | `inputs[3]` |
+| 12 | 2 | `inputs[4]` |
+| **14** | **2** | **implicit padding (free)** |
+| 16 | 4 | `state_id` |
+
+There are already **2 free bytes of padding at offset 14–15** that exist solely to align `state_id`. These can be claimed for a new `flags` field without increasing struct size.
+
+**Decision (resolves OQ1)**: add a dedicated `std::uint16_t flags` field in the existing padding slot. `STEREO_INPUT` is one bit; the remaining 15 bits are reserved for future per-instruction attributes (control-rate hints, SIMD hints, etc.).
+
+**New layout:**
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 1 | `opcode` |
+| 1 | 1 | `rate` (semantics unchanged) |
+| 2 | 2 | `out_buffer` |
+| 4 | 2 | `inputs[0..4]` (total 10 bytes) |
+| 14 | 2 | **`flags` (new)** — bit 0: `STEREO_INPUT` |
+| 16 | 4 | `state_id` |
+
+`static_assert(sizeof(Instruction) == 20)` still holds. Cache impact: nil.
+
+**Rejected alternatives:**
+- **Steal bits from `rate`** (0 bytes but lossy): `rate` is already overloaded per-opcode — FREEVERB packs wet/dry mix into it, DELAY packs time-unit, COMB packs damping. Stealing bits reduces per-opcode packing headroom and couples an unrelated concern into the field.
+- **Paired opcode entries** (`FILTER_LP_STEREO` etc.): doubles opcode-table entries for every auto-liftable op. §6.2's design goal is explicitly "zero opcode-table cost" — this would violate it.
+
+The earlier framing that option (b) "grows the struct to 24 bytes" was incorrect; that assumed no pre-existing padding.
 
 ### 6.2 Dispatch Semantics
 
@@ -302,7 +360,7 @@ The exact mechanism (temporary local `Instruction` copy vs dispatch-loop branch)
 
 | File | Change |
 |------|--------|
-| `akkado/include/akkado/types.hpp` (or wherever `TypedValue` lives) | Add `ChannelCount` enum, extend `TypedValue` with `right_buffer_id` and `channels` |
+| `akkado/include/akkado/typed_value.hpp` (struct at line 63) | Add `ChannelCount` enum, extend `TypedValue` with `right_buffer_id` and `channels` |
 | `akkado/include/akkado/builtins.hpp` | Extend each builtin entry with `input_channels`, `output_channels`, `auto_lift` |
 | `akkado/src/codegen.cpp` | Type-check rules (§5.3); route auto-lift for stereo-in mono ops; populate `channels` on all produced `TypedValue`s |
 | `akkado/src/codegen_stereo.cpp` | Simplified: reads `TypedValue.channels` instead of external maps; extended to cover auto-lift outputs |
@@ -428,6 +486,12 @@ Pattern events (`pat`, `seq`, `timeline`) are always mono control signals; they 
 ### 10.10 Auto-Lift Interaction With `as` Pipe Binding
 `stereo_sig |> filter_lp(%, 500, 0.7) as s |> out(s)` — `s` has type `Stereo`. `out(s)` uses stereo path. No special handling needed; type flows through the binding.
 
+### 10.11 Mixed-Channel Arithmetic
+`mono_sig + stereo_sig` (and symmetric `*`, `-`, `/`) is valid: the mono operand is broadcast to both channels at zero cost (dual read of the same buffer), result is `Stereo`. See §5.3 rule 4. Canonical use: `dry * 0.3 + stereo_wet * 0.7` for reverb wet/dry mixing where the dry path is mono and the wet path is stereo.
+
+### 10.12 User-Defined Functions and Channel Type
+`my_fx = fn(sig) -> sig |> filter_lp(%, 500, 0.7) |> delay(%, 0.2, 0.5)` — the intended semantics is that `my_fx(mono_in)` produces `Mono` and `my_fx(stereo_in)` produces `Stereo`, with channel-type polymorphism inherited from the body's auto-lift behaviour. The exact inference rule (e.g. parametric channel-type variables, monomorphisation-per-callsite, or something simpler) is an **open question (OQ5)** to resolve jointly with [`PRD-Advanced-Functions`](PRD-Advanced-Functions.md). Until OQ5 is resolved, implementations may restrict user-defined functions to a single channel type per definition (error at call site on mismatch).
+
 ---
 
 ## 11. Testing and Verification
@@ -502,16 +566,18 @@ cd experiments && uv run python test_op_mono_downmix.py
 
 ## 12. Open Questions
 
-- **OQ1**: Instruction flag encoding — steal bits from `rate`, add a new `flags : u8` field, or use paired opcode entries? Default: add `flags : u8` (24-byte aligned struct). Decide during Phase 3 implementation after measuring cache impact.
+- **OQ1**: ~~Instruction flag encoding~~ — **resolved**: add `std::uint16_t flags` in the existing 2-byte alignment padding at offset 14. Struct stays 20 bytes. See §6.1 for layout and rationale.
 - **OQ2**: ~~`mono()` gain choice~~ — **resolved**: `0.5` (standard sum-to-mono).
 - **OQ3**: Should `out()` emit a warning when receiving mono and silently duplicating? Default: no — current behaviour is conventional and expected. Reconsider if users report confusion.
 - **OQ4**: Should the companion "Stereo-Native VM Opcodes" PRD land before or after this one? This PRD does not require it; lifting to that architecture later is a codegen-only change (no language-surface impact). Default: this PRD ships first, companion PRD is an independent follow-up optimisation.
+- **OQ5**: Channel-type polymorphism through user-defined functions (see §10.12). The intended behaviour is that a user function inherits polymorphism from its body (mono-in ⇒ mono-out; stereo-in ⇒ stereo-out with per-channel independent state). The exact inference rule is deferred to joint resolution with [`PRD-Advanced-Functions`](PRD-Advanced-Functions.md). Until resolved, implementations may restrict user-defined functions to a single channel type per definition.
 
 ---
 
 ## 13. Related Work
 
 - **Companion PRD (separate, to-be-written)**: "Stereo-Native VM Opcodes" — makes every opcode output a stereo pair at the VM level, treating mono as a degraded-stereo optimisation and retiring dedicated stereo opcodes. Motivated by avoiding opcode duplication for stereo-aware variants. This PRD is designed to be forward-compatible: the language-level type system and auto-lift semantics described here are unchanged by the VM refactor; only the internal codegen path shifts.
+- **Dependent PRD**: [`prd-audio-input.md`](prd-audio-input.md) — adds `in()` as a stereo-native audio source. That PRD's signature declaration (`output_channels = Stereo`) relies on the type system and stereo-native generator category defined here (§5.2).
 - **Existing work referenced**:
   - `PRD-Crossfade-Audio-Fixes.md` — crossfade machinery, relevant for hot-swap edge cases in §10.6
   - `cedar/include/cedar/opcodes/stereo.hpp` — existing stereo opcode implementations we keep
