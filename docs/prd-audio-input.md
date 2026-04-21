@@ -15,7 +15,7 @@ Live-coding a synth is useful, but many musical workflows want to *process* an e
 - **One new opcode, one new builtin.** `INPUT` opcode + `in` builtin. The language surface is minimal.
 - **Silent fallback.** When input is unavailable (permission denied, device gone, file not loaded), `in()` returns zeros. No crash, no compile error.
 - **Source selection has two layers.** A UI dropdown picks the default source; an optional string argument `in('mic' | 'tab' | 'file:name.wav')` overrides per-compile.
-- **Stereo format is deferred.** The upcoming **Stereo Signal PRD** defines how stereo signals are represented in Akkado. `in()` returns a stereo signal in that format. This PRD assumes that format exists; if the stereo PRD is delayed, `in()` temporarily returns a chord-array `(L, R)` consistent with existing stereo opcodes.
+- **Stereo return via the universal stereo signal semantics PRD** ([`prd-stereo-support.md`](prd-stereo-support.md)). `in()` produces a `Stereo` `TypedValue` with adjacent L/R buffers. Auto-lift then handles the rest — `in() |> lp(%, 2000) |> out` is a stereo lowpass with independent per-channel filter state at no extra user effort.
 - **Host populates input buffers before each block.** `ExecutionContext` gains `input_left` / `input_right` pointers symmetric to the existing `output_left` / `output_right`. Each host (WASM, CLI, Godot) is responsible for filling them.
 
 ---
@@ -53,7 +53,7 @@ A grep for an `IN` / `INPUT` / `MIC` opcode in `cedar/include/cedar/vm/instructi
 
 ### Non-Goals
 
-- **Stereo signal representation** — deferred to the upcoming *Stereo Signal PRD*. `in()` returns whatever that PRD defines; this PRD does not invent new syntax.
+- **Stereo signal representation** — defined by the companion [Universal Stereo Signal Semantics PRD](prd-stereo-support.md). `in()` declares `output_channels = Stereo` in that system; no new syntax is invented here.
 - Feedback-loop detection or auto-attenuation (future work).
 - More than two input channels (multi-channel ASIO, 5.1, etc.).
 - Recording input to disk.
@@ -171,15 +171,16 @@ If either pointer is `nullptr`, the INPUT opcode writes silence. This is the fal
 
 New opcode in `cedar/include/cedar/vm/instruction.hpp` (placement TBD in the enum; next available value in the utility range).
 
-Behavior: copies `input_left` / `input_right` into output buffer register(s). Stateless. Semantics for producing a stereo signal follow the Stereo Signal PRD (e.g. writes to two adjacent buffer slots, or a stereo-pair register).
+Behavior: copies `input_left` / `input_right` into a pair of output buffers. Stateless. The codegen allocates an **adjacent buffer pair** (right = left + 1) per the invariant already enforced by `BufferAllocator` and relied upon by [`prd-stereo-support.md`](prd-stereo-support.md) §5.1 / §5.4. The resulting `TypedValue` has `channels = Stereo`, so downstream mono DSP is auto-lifted transparently.
 
 Pseudocode:
 
 ```cpp
 // In cedar/include/cedar/opcodes/utility.hpp (stateless; no dsp_state)
 void op_input(ExecutionContext& ctx, const Instruction& inst) {
-    float* out_l = ctx.get_output_left(inst);   // per Stereo PRD
-    float* out_r = ctx.get_output_right(inst);
+    // output_buf is the left slot; right is guaranteed adjacent (output_buf + 1)
+    float* out_l = ctx.buffers->get(inst.output_buf);
+    float* out_r = ctx.buffers->get(inst.output_buf + 1);
     if (ctx.input_left && ctx.input_right) {
         std::memcpy(out_l, ctx.input_left,  BLOCK_SIZE * sizeof(float));
         std::memcpy(out_r, ctx.input_right, BLOCK_SIZE * sizeof(float));
@@ -199,6 +200,14 @@ void op_input(ExecutionContext& ctx, const Instruction& inst) {
         {"source", "", "", "", ""},
         {NAN, NAN, NAN, NAN, NAN},           // no default (string handled separately)
         "Live audio input. Optional source: 'mic' (default), 'tab', 'file:NAME'."}}
+```
+
+Per the type-system extension in [`prd-stereo-support.md`](prd-stereo-support.md) §5.2, `in()` has the channel-type signature:
+
+```cpp
+{ input_channels: {},        // no signal inputs
+  output_channels: Stereo,   // produces stereo
+  auto_lift:       false }   // fixed output type
 ```
 
 The `source` argument is a string. Strings are not buffer inputs — the codegen intercepts string literals and attaches them as metadata (existing pattern, see how `osc("saw", ...)` handles the waveform string).
@@ -439,7 +448,6 @@ Same Akkado program compiled and run on both platforms with the same input (a pr
 
 **Future (separate PRDs)**
 
-- Stereo Signal PRD (blocks a final decision on `in()`'s return shape)
 - Feedback-loop detection / auto-attenuation
 - Multi-source routing (`in(0)`, `in(1)`)
 - Python bindings for offline input
@@ -450,7 +458,15 @@ Same Akkado program compiled and run on both platforms with the same input (a pr
 
 ## 10. Open Questions
 
-- **Stereo return format** — pending the Stereo Signal PRD. Fallback plan: if that PRD slips, ship `in()` as a chord-array `(L, R)` consistent with how existing stereo opcodes (e.g. `pan`) work today.
+- **Dependency ordering on stereo PRD.** This PRD's `in()` type signature assumes `ChannelCount` and adjacent-buffer output pairs from [`prd-stereo-support.md`](prd-stereo-support.md). If `in()` ships before the stereo PRD is implemented, the INPUT opcode still works (host fills two buffers, opcode copies them), but the *Akkado-level* stereo behavior (auto-lift through downstream mono DSP) won't exist — users would need to pipe through existing stereo opcodes (`width`, `pingpong`) or explicit `pan(left(in), right(in))` routing. Recommendation: land the stereo PRD's Phase 1–2 (type system + `mono()` builtin) before wiring `in()` into auto-lift, so the UX promised in §3 is real on day one.
 - **Source string grammar** — the PRD uses `'mic'`, `'tab'`, `'file:NAME'`. Should `file:` support relative paths, IDs, or both? Recommend: whatever the existing sample-loading uses.
 - **Does hot-swap pause capture?** Optimization, not correctness. Deferred to implementation.
 - **Latency measurement / alignment** — out of scope; users who need tight input-output alignment can add a short delay manually.
+
+---
+
+## 11. Related Work
+
+- [`prd-stereo-support.md`](prd-stereo-support.md) — Universal Stereo Signal Semantics. Defines the `ChannelCount` type, auto-lift, `stereo()` / `mono()` conversions, and adjacent-buffer-pair invariant that this PRD's `INPUT` opcode relies on.
+- [`prd-sample-loading-before-playback.md`](prd-sample-loading-before-playback.md) and [`web_sample_loading.md`](web_sample_loading.md) — Uploaded-file registry reused by the `in('file:NAME')` source.
+- [`prd-godot-extension.md`](prd-godot-extension.md) — Godot integration where the input buffer contract defined here must be satisfied.
