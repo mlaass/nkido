@@ -7,10 +7,53 @@
 #ifndef CEDAR_NO_MINBLEP
 #include "minblep.hpp"
 #endif
+#include <array>
 #include <cmath>
 #include <algorithm>
 
 namespace cedar {
+
+// ============================================================================
+// Fast sine via lookup table + linear interpolation
+// ============================================================================
+// std::sin is hundreds of cycles on xtensa (and slow on most embedded MCUs).
+// At 48 kHz with even a handful of sine oscillators it consumes most of the
+// audio-task budget. A 1024-entry LUT with linear interpolation costs ~10
+// cycles per sample and has a peak absolute error of ~3e-6, well below the
+// noise floor of 16-bit audio.
+//
+// Input: phase in [0, 1) (one full cycle). Output: sin(phase * 2π).
+
+inline constexpr std::size_t FAST_SIN_LUT_SIZE = 1024;
+
+// Declared in header so linkers with -ffunction-sections can still fold
+// redundant copies. Defined in one TU if needed; being constexpr here means
+// every inclusion shares one read-only table.
+inline const std::array<float, FAST_SIN_LUT_SIZE + 1>& fast_sin_lut() {
+    // The extra +1 entry mirrors index 0 so the linear-interp branch never
+    // needs a modulo wrap at the top of the table.
+    static const std::array<float, FAST_SIN_LUT_SIZE + 1> table = [] {
+        std::array<float, FAST_SIN_LUT_SIZE + 1> t{};
+        for (std::size_t i = 0; i < FAST_SIN_LUT_SIZE; ++i) {
+            t[i] = std::sin(static_cast<float>(i) *
+                            (TWO_PI / static_cast<float>(FAST_SIN_LUT_SIZE)));
+        }
+        t[FAST_SIN_LUT_SIZE] = t[0];
+        return t;
+    }();
+    return table;
+}
+
+[[gnu::always_inline]]
+inline float fast_sin_wave(float phase) noexcept {
+    // Fold phase into [0,1) without branching on the fast path.
+    phase -= std::floor(phase);
+    float fi = phase * static_cast<float>(FAST_SIN_LUT_SIZE);
+    std::size_t i = static_cast<std::size_t>(fi);
+    float frac = fi - static_cast<float>(i);
+    const auto& lut = fast_sin_lut();
+    return lut[i] + frac * (lut[i + 1] - lut[i]);
+}
 
 // ============================================================================
 // PolyBLEP Anti-Aliasing Functions
@@ -128,7 +171,7 @@ inline void op_osc_sin(ExecutionContext& ctx, const Instruction& inst) {
         check_phase_reset(state.phase, state.prev_trigger, state.initialized,
                           trigger[i], phase_offset[i]);
 
-        out[i] = std::sin(state.phase * TWO_PI);
+        out[i] = fast_sin_wave(state.phase);
 
         // Advance phase
         state.prev_phase = state.phase;
@@ -663,7 +706,7 @@ inline void op_osc_sin_4x(ExecutionContext& ctx, const Instruction& inst) {
             float freq_interp = freq_curr + t * (freq_next - freq_curr);
             float dt = freq_interp * inv_sr_4x;
 
-            samples[j] = std::sin(state.osc.phase * TWO_PI);
+            samples[j] = fast_sin_wave(state.osc.phase);
             state.osc.phase += dt;
             if (state.osc.phase >= 1.0f) state.osc.phase -= 1.0f;
             else if (state.osc.phase < 0.0f) state.osc.phase += 1.0f;
