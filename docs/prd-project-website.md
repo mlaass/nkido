@@ -53,18 +53,41 @@ Key decisions made during planning:
 9. **Sponsor surface** — GitHub Sponsors + Ko-fi.
 10. **OSS-appropriate tone** throughout: no "sign up for our newsletter", no aggressive CTAs, no lock-in signals.
 
-### 3.2 Non-Goals (explicitly deferred to future PRDs / versions)
+### 3.2 Non-Goals (hard cuts — not "later")
 
-1. Full mirror of the opcode/builtin reference docs on `nkido.cc` (v1 deep-links into the live app).
-2. `docs.nkido.cc` as a separate site.
-3. Newsletter / email capture (incompatible with the OSS positioning).
-4. User accounts / login / per-user saved patches.
-5. In-browser compiler independent of `live.nkido.cc`.
-6. Internationalization — English only for v1.
-7. A public roadmap page (interesting but maintenance-heavy).
-8. Real-time chat (Discord/Matrix) — can be added later if a channel is created.
-9. Search across all content — v1 relies on the live app's search for reference docs.
-10. Versioned docs (older-version docs) — not needed until a real release split.
+These are explicit scope exclusions. Things that are simply *not in v1 but could ship later* are consolidated in §17 Future Work.
+
+1. **Newsletter / email capture** — incompatible with the OSS positioning. Not "later"; just no.
+2. **User accounts / login / per-user saved patches** — a different product.
+3. **In-browser compiler independent of `live.nkido.cc`** — the project site is marketing + docs, not a second IDE.
+
+### 3.3 Target Experience
+
+Three primary visitor journeys the site is optimized for. Each is a concrete acceptance target for Goal 1 ("under 10 seconds").
+
+**Journey A — First-time visitor from Hacker News / a tweet:**
+
+1. Lands on `nkido.cc/`. Hero headline + one-sentence tagline + two CTAs visible above the fold.
+2. Reads the tagline, scrolls past the click-to-activate iframe poster, scans the 6-item feature grid.
+3. **At ~8–10s of reading**, can state what nkido is ("a live-coded DSP engine that runs in the browser, on native, in Godot, and on ESP32").
+4. Clicks the iframe poster → WASM loads in ≤4s → audio plays on the default patch.
+5. Either stays and edits the patch in place, or clicks "Try it in your browser →" for the full IDE.
+
+**Journey B — Godot game developer evaluating the addon:**
+
+1. Lands on `nkido.cc/godot` (likely via a Godot Asset Library link or README).
+2. Immediately sees "What it is" + an install command + a 10-line GDScript quickstart.
+3. **Within 30s**, has enough to decide whether to `git clone` the addon.
+4. Scrolls for limits/status + a link to the addon repo.
+5. Outcome: leaves with an install decision, not a "what even is this" question.
+
+**Journey C — Returning user jumping to the live IDE:**
+
+1. Lands on `nkido.cc/` (bookmark or muscle memory from old URL).
+2. Clicks `Live` in the top-nav → ends up on `live.nkido.cc` in ≤1 click.
+3. Outcome: the project-site never gets in the way of someone who just wants to code.
+
+Verification of these journeys is specified in §14.2.
 
 ---
 
@@ -143,7 +166,7 @@ Footer: Community · Press · Sponsor · License (MIT) · © notice.
 - **Theme tokens**: import the same CSS custom-property set used by `web/src/app.css` so a theme tweak in the IDE propagates to `nkido.cc` (possibly via a tiny shared `@nkido/theme-tokens` package or a copy-on-build step — see §9.4).
 - **Dark-first** with a light-mode toggle (same pattern as the IDE).
 - **Typography**: match the IDE's font stack. Monospace reserved for code samples and signatures.
-- **Logo**: reuse the existing inline SVG logo component from `web/src/lib/components/Logo/`.
+- **Logo**: extract the SVG paths from `web/src/lib/components/Logo/Logo.svelte` and vendor as a plain `static/logo.svg` in the website repo (referenced via `<img src="/logo.svg">`). Simpler than importing a Svelte component across repos; same "copy + sync manually on change" approach as the design tokens in §9.4.
 - **Illustrations**: simple ASCII-diagram style (matching the project's own PRDs) over heavy 3D / stock imagery.
 - **No email capture, no popups, no tracking banners.** The only call-outs are "Try it now", "See on GitHub", "Sponsor".
 
@@ -163,13 +186,9 @@ Two-layer approach:
    - On `nkido.cc`, every "Reference: `osc`" style link routes to `https://live.nkido.cc/?docs=<keyword>` (URL-param driven), which auto-opens the IDE's docs panel at that entry.
    - This requires a small addition to the live app — see §8.
 
-Rationale: no duplication, no sync pipeline, single source of truth for the reference. The cost is that reference docs require the WASM IDE to load; that's acceptable for v1 because someone reading reference-level docs is, by definition, already trying to write code.
+Rationale: no duplication of reference content, single source of truth for the reference. The only build-time fetches the website does are `CONTRIBUTING.md` from nkido master (§13 Phase 2) and the GitHub Releases API for release-note blog posts (§9.2) — no reference-docs sync pipeline. The cost is that reference docs require the WASM IDE to load; that's acceptable for v1 because someone reading reference-level docs is, by definition, already trying to write code.
 
-### 6.1 Future (explicitly out of scope for v1)
-
-- `docs.nkido.cc` with a full static mirror.
-- Submodule / CI pipeline pulling `web/static/docs/` into the website repo.
-- Search over concept + reference docs on the website.
+*Future docs-layer ideas (mirror, sync pipeline, cross-content search) are consolidated in §17.*
 
 ---
 
@@ -201,7 +220,7 @@ Content sections:
 
 ### 7.3 Content source
 
-Both pages draw from the existing PRDs (`prd-godot-extension.md`, `prd-cedar-esp32.md`) and from the READMEs of those repos. Content lives in the website repo as markdown — no submodule pulls.
+Both pages draw from the existing PRDs (`prd-godot-extension.md`, `prd-cedar-esp32.md`) and from the READMEs of those repos. Content is copied into the website repo as markdown and maintained there — no submodule pulls and no automated sync from the sub-project repos. (Unrelated build-time fetches for `CONTRIBUTING.md` and GitHub Releases are documented in §6 and §9.2.)
 
 ---
 
@@ -220,9 +239,23 @@ Two features on `live.nkido.cc` are preconditions for the project site. Both are
 - Adjust `netlify.toml` on the live site:
   - Ensure the COEP/COOP headers remain for normal routes (needed for AudioWorklet).
   - Add `Cross-Origin-Resource-Policy: cross-origin` on the `/embed` route's assets so they can be loaded by `nkido.cc`.
-  - Add `frame-ancestors 'self' https://nkido.cc` via CSP so only the project site can embed.
+  - Add CSP `frame-ancestors` allowing the project-site origins:
+    ```
+    frame-ancestors 'self' https://nkido.cc https://www.nkido.cc https://*.netlify.app http://localhost:* http://127.0.0.1:*
+    ```
+    The `*.netlify.app` entry covers Netlify branch previews on the website repo; `localhost:*` / `127.0.0.1:*` cover local dev against the prod live-app. If the `*.netlify.app` wildcard feels too broad, replace with the specific Netlify project slug (e.g. `https://*--nkido-cc.netlify.app`).
 
 Edge cases: Safari has historically been strict about COOP/COEP in iframes. Document fallback: if the iframe fails to boot, show the static poster with a "Open in a new tab →" link.
+
+#### 8.1.1 Named-patch manifest
+
+`?patch=<name>` resolves against a manifest shipped with the live app:
+
+- Location: `web/static/embed-patches/<name>.akk` — the Akkado source for each named demo patch.
+- Index: `web/static/embed-patches/index.json` — `{"hello-sine": {"title": "Hello Sine", "description": "..."}}`; the embed boot code uses this to validate names and populate the embed UI's title.
+- Initial set shipped with v1: `hello-sine`, `filter-sweep`, `pattern-basics`, `hot-swap-demo`. These double as the "Try it in your browser" targets the project-site landing page and tutorials link to.
+- Unknown `<name>`: embed boots with the `hello-sine` default and logs a warning (don't show an error page — the iframe should always produce sound on click).
+- Authoring: patches are hand-written in the live-app repo; the project-site repo only references them by name.
 
 ### 8.2 Docs deep-link via URL
 
@@ -230,7 +263,7 @@ Edge cases: Safari has historically been strict about COOP/COEP in iframes. Docu
 
 **Approach**:
 
-- Add a URL-param handler in the live app: `live.nkido.cc/?docs=<keyword>` opens the docs panel at the matching lookup entry (reusing the existing F1-help lookup index at `web/src/lib/docs/lookup-index.ts`).
+- Add a URL-param handler in the live app: `live.nkido.cc/?docs=<keyword>` opens the docs panel at the matching lookup entry (reusing the existing F1-help lookup at `web/src/lib/docs/manifest.ts`, which is generated by `scripts/build-docs-index.ts` and exports a `lookup` record).
 - Unknown keywords open the docs panel at its index view.
 - Also accept `/?doc=<path>` for explicit file paths like `reference/builtins/osc.md`.
 
@@ -258,13 +291,14 @@ These changes are additive; no existing behavior changes.
 - **SvelteKit** with `@sveltejs/adapter-static` (same stack as `web/`).
 - **Svelte 5 runes** for any interactive components (match live app conventions per `CLAUDE.md`).
 - **Vite** for dev server; **Bun** as the package manager (consistent with live app).
-- **Markdown rendering**: `marked` + `gray-matter` (same libs as live app's docs system).
-- **Syntax highlighting**: `shiki` (build-time, zero runtime cost).
+- **Markdown routing**: **mdsvex** preprocessor — enables the `+page.md` convention used in §11.1's route tree so concept/tutorial/blog content is authored as plain markdown with frontmatter and rendered through SvelteKit's standard routing.
+- **Markdown rendering (non-route content)**: `marked` + `gray-matter` for any content loaded outside of mdsvex (e.g. the CONTRIBUTING.md fetch on `/community`). Same libs as live app's docs system.
+- **Syntax highlighting**: `shiki` (build-time, zero runtime cost; configured as the mdsvex highlighter).
 - **Icons**: `lucide-svelte` (same as live app).
 
 ### 9.2 Content model
 
-- **Concept/tutorial docs**: markdown in `src/routes/docs/**/*.md` with frontmatter compatible with the live-app docs convention (`title`, `category`, `keywords`, `order`) so content can later be mirrored if we reverse course on §3.2(1).
+- **Concept/tutorial docs**: markdown in `src/routes/docs/**/*.md` with frontmatter compatible with the live-app docs convention (`title`, `category`, `keywords`, `order`) so content can later be mirrored if we reverse course on the reference-mirror decision (see §17 item 1).
 - **Blog posts**: markdown in `src/routes/blog/*.md` with frontmatter (`title`, `date`, `author`, `slug`, `excerpt`).
 - **Release posts**: generated at build time from the GitHub Releases API for the `mlaass/nkido` repo, cached to `src/lib/data/releases.json` during CI.
 
@@ -325,6 +359,7 @@ nkido.cc/
 ├── .github/workflows/deploy.yml (build + push to Netlify on master, preview on PR)
 ├── static/
 │   ├── favicon.svg
+│   ├── logo.svg                 (vendored from web/src/lib/components/Logo/Logo.svelte)
 │   ├── og-image.png
 │   └── press/                   (logos, screenshots for press kit)
 ├── src/
@@ -362,10 +397,8 @@ nkido.cc/
 │   │   ├── community/+page.svelte       (renders CONTRIBUTING.md)
 │   │   ├── press/+page.md
 │   │   └── +error.svelte                (404)
-│   └── content/
-│       ├── concepts/*.md
-│       ├── tutorials/*.md                (fresh content, not synced)
-│       └── blog/*.md                     (4+ launch posts)
+│   └── (markdown content lives directly under src/routes/**/ as +page.md,
+│        processed by mdsvex — no separate src/content/ tree)
 └── scripts/
     ├── fetch-releases.ts                 (GitHub API → releases.json)
     └── fetch-contributing.ts             (fetch CONTRIBUTING.md from nkido master)
@@ -468,14 +501,7 @@ nkido.cc/
 
 **Verification**: GoatCounter receives pageviews; OG previews render correctly in Slack/Twitter/Discord link unfurls.
 
-### Future (out of scope for v1)
-
-- Full opcode-reference mirror on `nkido.cc`.
-- `docs.nkido.cc` as a separate site.
-- Search across concept + reference docs.
-- Discord/Matrix link once a channel exists.
-- Roadmap page.
-- Additional language translations.
+*Post-v1 roadmap items are consolidated in §17 Future Work.*
 
 ---
 
@@ -495,6 +521,13 @@ nkido.cc/
 - **Deep-link pass**: visit `live.nkido.cc/?docs=osc` in a fresh tab — docs panel opens to `osc`.
 - **Deep-link with invalid keyword**: `?docs=doesnotexist` → docs panel opens at index, no error.
 - **Sub-project page smoke**: follow the install steps on `/godot` and `/esp32` end-to-end.
+
+**Qualitative / messaging tests** (acceptance for Goal 1 and Goal 4 in §3.1; journeys in §3.3):
+
+- **10-second pitch test**: show the landing page to 3 people who have never heard of nkido, with a 10-second cap on reading. Ask "what is nkido?" afterward. Pass if 2 of 3 can answer substantively (e.g. "a live-coding audio thing that runs in browsers and other places"). Iterate hero copy until pass.
+- **Standalone concept-docs readability**: have someone work through the first tutorial on `nkido.cc/docs/tutorials/01-hello-sine` **without opening the live IDE**. Pass if they can describe what a signal / DAG / hot-swap means in their own words afterwards. Validates that concept docs stand on their own (Goal 4).
+- **Godot-dev install-decision test**: show `/godot` to a Godot developer unfamiliar with nkido. Pass if they can state within 30 seconds whether they'd try the addon, and (if yes) what the first command to run is. Validates Journey B in §3.3.
+- **Top-nav discoverability**: ask a returning user to "get to the live IDE from the home page." Pass if they click `Live` in the top-nav within 5 seconds. Validates Journey C.
 
 ### 14.3 Launch checklist
 
@@ -530,3 +563,27 @@ nkido.cc/
 - `docs/netlify_deployment.md` — current live app deployment, reference for new Netlify site setup.
 - `CONTRIBUTING.md` (repo root) — rendered on `/community`.
 - `web/static/docs/DOCUMENTATION_GUIDE.md` — frontmatter / category conventions; website's fresh content reuses them.
+
+---
+
+## 17. Future Work
+
+Items considered and explicitly deferred past v1. Unlike §3.2 (hard cuts), these are *good ideas whose time hasn't come* and are candidates for a v2 PRD once v1 ships and we have usage data.
+
+**Docs layer:**
+
+1. **Full opcode/builtin reference mirror on `nkido.cc`** — currently deep-linked into the live IDE (§6). Mirror would make reference SEO-indexable and crawler-friendly. Depends on a sync pipeline from `web/static/docs/reference/` into the website repo.
+2. **`docs.nkido.cc` as a separate site** — only worth the split if reference-docs traffic dwarfs the marketing site.
+3. **Submodule / CI pipeline pulling `web/static/docs/`** — prerequisite for (1) and (2).
+4. **Search across concept + reference docs on the website** — v1 relies on the live app's search for reference and has no search for concept docs. Acceptable because concept doc volume is small.
+5. **Versioned docs** (older-version docs) — not needed until we ship a real release split (e.g. v1 / v2).
+
+**Community & content:**
+
+6. **Real-time chat link** (Discord / Matrix) — ship once a channel actually exists; don't create a dead channel just for the link.
+7. **Public roadmap page** — interesting but maintenance-heavy; often drifts from reality. Revisit once there's a steady release cadence.
+8. **Internationalization** — English only for v1. Revisit if translators volunteer.
+
+**Tooling:**
+
+9. **Published shared-brand package** (e.g. `@nkido/theme-tokens` and `@nkido/brand`) — currently tokens and logo are copy-on-change (§5, §9.4). Upgrade to a published package if drift becomes painful.
