@@ -1,6 +1,6 @@
 # Cross-platform porting requirements
 
-> **Status: IMPLEMENTED (pending CI verification)** — Portability blockers surfaced in CI on 2026-04-22; source-level fixes applied the same day on `master`. Awaiting a godot-nkido-addon run against this commit to confirm Windows + macOS jobs go green.
+> **Status: VERIFIED** — Portability blockers surfaced in CI on 2026-04-22; source-level fixes applied the same day on `master` and confirmed green via godot-nkido-addon [run 24777116197 attempt 2](https://github.com/mlaass/godot-nkido-addon/actions/runs/24777116197) (all 6 matrix jobs pass across Linux / Windows / macOS × Debug / Release).
 
 ## Context
 
@@ -126,11 +126,10 @@ error: call to deleted function 'from_chars'
 
 ## Verification
 
-After each fix, push to a branch of `godot-nkido-addon` with this commit of nkido checked out, and confirm all 6 matrix jobs in
-`.github/workflows/build.yml` go green:
+Verified 2026-04-23 by re-running the failed workflow against current nkido master (`a483261`). Since `.github/workflows/build.yml` in `godot-nkido-addon` checks out nkido via `actions/checkout@v4` with no `ref`, `gh run rerun <id> --failed` is enough to pick up the fix — no addon commit needed.
 
-- ubuntu-latest / Debug, Release
-- windows-latest / Debug, Release (currently failing on items 1 + 2)
-- macos-latest / Debug, Release (currently failing on item 3)
+All 6 matrix jobs green on [attempt 2](https://github.com/mlaass/godot-nkido-addon/actions/runs/24777116197):
 
-The CI configure step passes on all three OSes — so the build system is already portable; only the source-level fixes above remain.
+- ubuntu-latest / Debug, Release ✓
+- windows-latest / Debug, Release ✓ (was failing on items 1 + 2)
+- macos-latest / Debug, Release ✓ (was failing on item 3)
