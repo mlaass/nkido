@@ -1,5 +1,5 @@
 /**
- * Enkido WASM Bindings
+ * Nkido WASM Bindings
  *
  * Provides a C-style API for Cedar VM and Akkado compiler
  * to be compiled with Emscripten for browser use.
@@ -703,7 +703,7 @@ WASM_EXPORT uint32_t cedar_apply_state_inits() {
 /**
  * Get block size (128 samples)
  */
-WASM_EXPORT uint32_t enkido_get_block_size() {
+WASM_EXPORT uint32_t nkido_get_block_size() {
     return 128;
 }
 
@@ -712,15 +712,15 @@ WASM_EXPORT uint32_t enkido_get_block_size() {
  * @param size Size in bytes
  * @return Pointer to allocated memory, or nullptr on failure
  */
-WASM_EXPORT void* enkido_malloc(uint32_t size) {
+WASM_EXPORT void* nkido_malloc(uint32_t size) {
     return std::malloc(size);
 }
 
 /**
- * Free memory allocated with enkido_malloc
+ * Free memory allocated with nkido_malloc
  * @param ptr Pointer to free
  */
-WASM_EXPORT void enkido_free(void* ptr) {
+WASM_EXPORT void nkido_free(void* ptr) {
     std::free(ptr);
 }
 

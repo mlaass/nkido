@@ -5,7 +5,7 @@
 #include <iomanip>
 #include <cstring>
 
-namespace enkido {
+namespace nkido {
 
 const char* opcode_name(cedar::Opcode op) {
     return cedar::opcode_to_string(op);
@@ -183,4 +183,4 @@ std::string format_program_json(std::span<const cedar::Instruction> program) {
     return oss.str();
 }
 
-}  // namespace enkido
+}  // namespace nkido

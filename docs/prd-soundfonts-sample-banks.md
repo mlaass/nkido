@@ -11,7 +11,7 @@
 
 ### 1.1 Problem Statement
 
-Currently, Enkido has basic sample playback infrastructure with a fixed set of default drum samples. Users cannot:
+Currently, Nkido has basic sample playback infrastructure with a fixed set of default drum samples. Users cannot:
 
 - Load custom sample collections (drum kits, instrument libraries)
 - Use SoundFont (SF2/SF3) files for multi-sampled instruments
@@ -459,7 +459,7 @@ struct SoundFontState {
 **New exports needed for SoundFonts:**
 
 ```cpp
-// web/wasm/enkido_wasm.cpp
+// web/wasm/nkido_wasm.cpp
 
 /// Load SoundFont preset zone data (SF2 parsed in TypeScript)
 /// See §4.5 of file-loading-abstraction.md for serialization format
@@ -667,7 +667,7 @@ cedar/include/cedar/opcodes/
 
 ```
 web/src/lib/stores/audio.svelte.ts     # SoundFont loading methods
-web/wasm/enkido_wasm.cpp               # cedar_load_soundfont_preset()
+web/wasm/nkido_wasm.cpp               # cedar_load_soundfont_preset()
 akkado/include/akkado/mini_token.hpp   # Extend MiniSampleData with bank
 akkado/src/parser.cpp                  # .bank() and :N parsing
 akkado/src/codegen.cpp                 # soundfont() handler
@@ -721,8 +721,8 @@ The following questions have been resolved with decisions documented in [File Lo
 |-----------|----------|--------|
 | BankRegistry | `web/src/lib/audio/bank-registry.ts` | ✓ Complete (355 lines) |
 | Default samples | `web/src/lib/audio/default-samples.ts` | ✓ Complete |
-| WASM sample loading | `web/wasm/enkido_wasm.cpp` | ✓ `cedar_load_sample()`, `cedar_load_sample_wav()` |
-| Sample info exports | `web/wasm/enkido_wasm.cpp` | ✓ `akkado_get_required_sample_*()` |
+| WASM sample loading | `web/wasm/nkido_wasm.cpp` | ✓ `cedar_load_sample()`, `cedar_load_sample_wav()` |
+| Sample info exports | `web/wasm/nkido_wasm.cpp` | ✓ `akkado_get_required_sample_*()` |
 
 ### Not Yet Implemented
 
@@ -759,8 +759,8 @@ This PRD depends on [File Loading Abstraction PRD](prd-file-loading-abstraction.
 | **FileLoader** | `web/src/lib/io/file-loader.ts` | Unified file loading from URL/File/IndexedDB |
 | **FileCache** | `web/src/lib/io/file-cache.ts` | IndexedDB caching with LRU eviction |
 | **Audio decoders** | `web/src/lib/io/audio-decoder.ts` | OGG/FLAC/MP3 via Web Audio API |
-| **WASM: cedar_load_audio_data()** | `web/wasm/enkido_wasm.cpp` | Format-aware audio loading |
-| **WASM: cedar_get_loading_status()** | `web/wasm/enkido_wasm.cpp` | Progress tracking |
+| **WASM: cedar_load_audio_data()** | `web/wasm/nkido_wasm.cpp` | Format-aware audio loading |
+| **WASM: cedar_get_loading_status()** | `web/wasm/nkido_wasm.cpp` | Progress tracking |
 | **MemoryView/OwnedBuffer** | `cedar/include/cedar/io/buffer.hpp` | C++ memory buffer abstraction |
 
 ### Implementation Order

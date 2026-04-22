@@ -107,7 +107,7 @@ A small spinner/dot appears to the right of the stop button in the Transport bar
 | `web/src/lib/stores/editor.svelte.ts` | No changes needed — `evaluate()` already awaits `compile()` |
 | `web/src/lib/components/Transport/Transport.svelte` | Add loading indicator after stop button, bound to `audioEngine.isLoadingSamples` |
 | `web/static/worklet/cedar-processor.js` | No changes needed |
-| `web/wasm/enkido_wasm.cpp` | Remove diagnostic logging (added during investigation) |
+| `web/wasm/nkido_wasm.cpp` | Remove diagnostic logging (added during investigation) |
 | `cedar/include/cedar/opcodes/samplers.hpp` | Remove debug logging |
 | `cedar/include/cedar/opcodes/sequencing.hpp` | Remove debug logging |
 | `cedar/include/cedar/opcodes/sequence.hpp` | Remove `debug_step_count` field |

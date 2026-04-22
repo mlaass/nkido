@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-This document specifies a **tap delay** system for Enkido/Akkado that enables:
+This document specifies a **tap delay** system for Nkido/Akkado that enables:
 - Configurable feedback processing chains using any existing DSP opcodes
 - Compile-time closure inlining between coordinated TAP/WRITE opcodes
 - Full flexibility: filters, distortion, pitch shift, etc. in feedback path

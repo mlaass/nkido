@@ -41,8 +41,8 @@ docs/archive/
 experiments/output/
 
 # Generated WASM
-web/static/wasm/enkido.js
-web/static/wasm/enkido.wasm
+web/static/wasm/nkido.js
+web/static/wasm/nkido.wasm
 
 # Bundled SoundFonts (downloaded via web/scripts/download-soundfonts.sh)
 web/static/soundfonts/

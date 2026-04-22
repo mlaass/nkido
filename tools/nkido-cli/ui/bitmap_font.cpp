@@ -1,7 +1,7 @@
 #include "bitmap_font.hpp"
 #include <cstring>
 
-namespace enkido::ui {
+namespace nkido::ui {
 
 // 8x12 bitmap font data (ASCII 32-126)
 // Each character is 12 bytes, one per row, MSB is leftmost pixel
@@ -298,4 +298,4 @@ int BitmapFont::string_width(const char* str) const {
     return static_cast<int>(std::strlen(str)) * GLYPH_WIDTH;
 }
 
-}  // namespace enkido::ui
+}  // namespace nkido::ui

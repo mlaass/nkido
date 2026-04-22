@@ -85,7 +85,7 @@ Currently, users must memorize function names, parameter orders, and defaults wh
 builtins.hpp (C++ with descriptions)
         │
         ▼
-enkido_wasm.cpp ──new export──▶ akkado_get_builtins_json()
+nkido_wasm.cpp ──new export──▶ akkado_get_builtins_json()
         │
         ▼
 AudioWorklet ──postMessage──▶ Main Thread

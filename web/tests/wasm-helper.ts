@@ -1,16 +1,16 @@
 /**
  * WASM module helper for tests
  *
- * Loads and wraps the Enkido WASM module for testing.
+ * Loads and wraps the Nkido WASM module for testing.
  */
 
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 // Module instance cached between tests
-let moduleInstance: EnkidoModule | null = null;
+let moduleInstance: NkidoModule | null = null;
 
-export interface EnkidoModule {
+export interface NkidoModule {
 	// Memory access
 	ccall: (name: string, returnType: string, argTypes: string[], args: unknown[]) => unknown;
 	cwrap: (name: string, returnType: string, argTypes: string[]) => (...args: unknown[]) => unknown;
@@ -19,15 +19,15 @@ export interface EnkidoModule {
 	UTF8ToString: (ptr: number) => string;
 	stringToUTF8: (str: string, ptr: number, maxBytes: number) => void;
 	lengthBytesUTF8: (str: string) => number;
-	_enkido_malloc: (size: number) => number;
-	_enkido_free: (ptr: number) => void;
+	_nkido_malloc: (size: number) => number;
+	_nkido_free: (ptr: number) => void;
 	HEAPF32: Float32Array;
 	HEAPU8: Uint8Array;
 	wasmMemory?: WebAssembly.Memory;
 }
 
-export interface WrappedEnkido {
-	module: EnkidoModule;
+export interface WrappedNkido {
+	module: NkidoModule;
 
 	// Cedar VM
 	cedar_init: () => void;
@@ -52,16 +52,16 @@ export interface WrappedEnkido {
 }
 
 /**
- * Load the Enkido WASM module
+ * Load the Nkido WASM module
  */
-export async function loadEnkido(): Promise<WrappedEnkido> {
+export async function loadNkido(): Promise<WrappedNkido> {
 	if (moduleInstance) {
 		return wrapModule(moduleInstance);
 	}
 
 	// Read the WASM files
-	const wasmJsPath = resolve(__dirname, '../static/wasm/enkido.js');
-	const wasmBinaryPath = resolve(__dirname, '../static/wasm/enkido.wasm');
+	const wasmJsPath = resolve(__dirname, '../static/wasm/nkido.js');
+	const wasmBinaryPath = resolve(__dirname, '../static/wasm/nkido.wasm');
 
 	// Load the JS glue code
 	const jsCode = readFileSync(wasmJsPath, 'utf-8');
@@ -70,7 +70,7 @@ export async function loadEnkido(): Promise<WrappedEnkido> {
 	// Create a function from the JS code
 	const createModule = new Function(
 		'module',
-		`${jsCode}; return createEnkidoModule;`
+		`${jsCode}; return createNkidoModule;`
 	)({});
 
 	// Initialize the module with the WASM binary
@@ -81,7 +81,7 @@ export async function loadEnkido(): Promise<WrappedEnkido> {
 	return wrapModule(moduleInstance);
 }
 
-function wrapModule(module: EnkidoModule): WrappedEnkido {
+function wrapModule(module: NkidoModule): WrappedNkido {
 	const ccall = module.ccall.bind(module);
 	const cwrap = module.cwrap.bind(module);
 
@@ -120,12 +120,12 @@ function wrapModule(module: EnkidoModule): WrappedEnkido {
 		cedar_has_program,
 
 		cedar_load_program: (bytecode: Uint8Array) => {
-			const ptr = module._enkido_malloc(bytecode.length);
+			const ptr = module._nkido_malloc(bytecode.length);
 			// Write bytecode to WASM memory using fresh heap view
 			const heap = new Uint8Array(module.wasmMemory?.buffer ?? module.HEAPU8?.buffer);
 			heap.set(bytecode, ptr);
 			const result = ccall('cedar_load_program', 'number', ['number', 'number'], [ptr, bytecode.length]) as number;
-			module._enkido_free(ptr);
+			module._nkido_free(ptr);
 			return result;
 		},
 
@@ -133,10 +133,10 @@ function wrapModule(module: EnkidoModule): WrappedEnkido {
 			// Get actual UTF-8 byte length (not JS string length)
 			const utf8ByteLen = module.lengthBytesUTF8(source);
 			const allocLen = utf8ByteLen + 1; // +1 for null terminator
-			const ptr = module._enkido_malloc(allocLen);
+			const ptr = module._nkido_malloc(allocLen);
 			module.stringToUTF8(source, ptr, allocLen);
 			const result = ccall('akkado_compile', 'number', ['number', 'number'], [ptr, utf8ByteLen]) as number;
-			module._enkido_free(ptr);
+			module._nkido_free(ptr);
 			return result;
 		},
 
@@ -163,12 +163,12 @@ function wrapModule(module: EnkidoModule): WrappedEnkido {
 /**
  * Get bytecode from module after compilation
  */
-export function getBytecode(enkido: WrappedEnkido): Uint8Array {
-	const ptr = enkido.akkado_get_bytecode();
-	const size = enkido.akkado_get_bytecode_size();
+export function getBytecode(nkido: WrappedNkido): Uint8Array {
+	const ptr = nkido.akkado_get_bytecode();
+	const size = nkido.akkado_get_bytecode_size();
 	// Create a copy to avoid issues with memory growth
 	const result = new Uint8Array(size);
-	const heap = new Uint8Array(enkido.module.wasmMemory?.buffer ?? enkido.module.HEAPU8.buffer);
+	const heap = new Uint8Array(nkido.module.wasmMemory?.buffer ?? nkido.module.HEAPU8.buffer);
 	for (let i = 0; i < size; i++) {
 		result[i] = heap[ptr + i];
 	}
@@ -178,15 +178,15 @@ export function getBytecode(enkido: WrappedEnkido): Uint8Array {
 /**
  * Get output buffers after processing
  */
-export function getOutputBuffers(enkido: WrappedEnkido): { left: Float32Array; right: Float32Array } {
-	const leftPtr = enkido.cedar_get_output_left();
-	const rightPtr = enkido.cedar_get_output_right();
+export function getOutputBuffers(nkido: WrappedNkido): { left: Float32Array; right: Float32Array } {
+	const leftPtr = nkido.cedar_get_output_left();
+	const rightPtr = nkido.cedar_get_output_right();
 	const blockSize = 128;
 
 	// Create copies to avoid issues with memory growth
 	const left = new Float32Array(blockSize);
 	const right = new Float32Array(blockSize);
-	const heap = new Float32Array(enkido.module.wasmMemory?.buffer ?? enkido.module.HEAPF32.buffer);
+	const heap = new Float32Array(nkido.module.wasmMemory?.buffer ?? nkido.module.HEAPF32.buffer);
 	const leftIdx = leftPtr / 4;
 	const rightIdx = rightPtr / 4;
 
@@ -222,7 +222,7 @@ export interface Disassembly {
 	};
 }
 
-export function getDisassembly(enkido: WrappedEnkido): Disassembly {
-	const json = enkido.akkado_get_disassembly();
+export function getDisassembly(nkido: WrappedNkido): Disassembly {
+	const json = nkido.akkado_get_disassembly();
 	return JSON.parse(json);
 }

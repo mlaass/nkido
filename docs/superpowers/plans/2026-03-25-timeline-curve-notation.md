@@ -33,7 +33,7 @@ None — all changes modify existing files.
 | `akkado/src/lexer.cpp` | Lex `t"..."` / `t\`...\`` prefix |
 | `akkado/src/parser.cpp` | Handle `TokenType::Timeline` in `parse_prefix()`, route to curve-mode `parse_mini` |
 | `akkado/src/codegen_patterns.cpp` | `events_to_breakpoints()` conversion; emit TIMELINE opcode with `StateInitData::Type::Timeline` |
-| `web/wasm/enkido_wasm.cpp` | Handle `Timeline` type in `cedar_apply_state_inits()` |
+| `web/wasm/nkido_wasm.cpp` | Handle `Timeline` type in `cedar_apply_state_inits()` |
 | `akkado/tests/test_mini_notation.cpp` | All curve notation tests (lexer, parser, eval) |
 | `akkado/tests/test_lexer.cpp` | `t"..."` prefix tokenization tests |
 | `akkado/tests/test_codegen.cpp` | Breakpoint generation and TIMELINE opcode emission tests |
@@ -968,7 +968,7 @@ Convert curve events into `TimelineState::Breakpoint` entries and emit the `TIME
 
 **Files:**
 - Modify: `akkado/src/codegen_patterns.cpp` — add `events_to_breakpoints()`, handle Timeline in pattern codegen
-- Modify: `web/wasm/enkido_wasm.cpp` — handle `Timeline` type in `cedar_apply_state_inits()`
+- Modify: `web/wasm/nkido_wasm.cpp` — handle `Timeline` type in `cedar_apply_state_inits()`
 - Test: `akkado/tests/test_codegen.cpp`
 
 - [ ] **Step 1: Write failing tests for breakpoint conversion**
@@ -1335,7 +1335,7 @@ And in the visit function for MiniLiteral, check for the timeline marker:
 
 - [ ] **Step 7: Handle Timeline type in cedar_apply_state_inits()**
 
-In `web/wasm/enkido_wasm.cpp`, in `cedar_apply_state_inits()`, add Timeline handling after the SequenceProgram case:
+In `web/wasm/nkido_wasm.cpp`, in `cedar_apply_state_inits()`, add Timeline handling after the SequenceProgram case:
 
 ```cpp
         } else if (init.type == akkado::StateInitData::Type::Timeline) {
@@ -1354,9 +1354,9 @@ In `web/wasm/enkido_wasm.cpp`, in `cedar_apply_state_inits()`, add Timeline hand
 
 Note: `get_or_create_state` may need to be accessed differently depending on the VM API. Check the existing patterns in the WASM file for how state is accessed. If the VM uses `init_sequence_program_state()` for sequences, there may need to be a similar method for timelines. If the StatePool already supports `get_or_create<TimelineState>`, use that pattern.
 
-- [ ] **Step 8: Also handle in CLI (tools/enkido-cli)**
+- [ ] **Step 8: Also handle in CLI (tools/nkido-cli)**
 
-Check `tools/enkido-cli/` for state_init handling and add Timeline support there too if present.
+Check `tools/nkido-cli/` for state_init handling and add Timeline support there too if present.
 
 - [ ] **Step 9: Run full test suite**
 
@@ -1366,7 +1366,7 @@ Expected: All tests pass.
 - [ ] **Step 10: Commit**
 
 ```bash
-git add akkado/src/codegen_patterns.cpp akkado/include/akkado/codegen.hpp akkado/src/parser.cpp web/wasm/enkido_wasm.cpp
+git add akkado/src/codegen_patterns.cpp akkado/include/akkado/codegen.hpp akkado/src/parser.cpp web/wasm/nkido_wasm.cpp
 git commit -m "Add TIMELINE codegen for curve notation with StateInitData breakpoint population"
 ```
 

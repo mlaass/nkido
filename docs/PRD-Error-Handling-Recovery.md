@@ -424,7 +424,7 @@ Note: Error tokens are skipped only during synchronization (at statement boundar
 | `akkado/src/analyzer.cpp` | **Modified** | "Did you mean?" on E004, E005 |
 | `akkado/src/codegen.cpp` | **Modified** | "Did you mean?" on E102, E107 |
 | `akkado/src/akkado.cpp` | **Modified** | Multi-stage error collection |
-| `web/wasm/enkido_wasm.cpp` | **Modified** | Add `akkado_get_diagnostic_length`, `akkado_get_diagnostic_code` |
+| `web/wasm/nkido_wasm.cpp` | **Modified** | Add `akkado_get_diagnostic_length`, `akkado_get_diagnostic_code` |
 | `web/wasm/CMakeLists.txt` | **Modified** | Export new WASM symbols |
 | `web/static/worklet/cedar-processor.js` | **Modified** | Extract length + code in `extractDiagnostics()` |
 | `web/src/lib/stores/audio.svelte.ts` | **Modified** | Add `length`, `code` to Diagnostic; add `onprocessorerror` |
@@ -455,8 +455,8 @@ Note: Error tokens are skipped only during synchronization (at statement boundar
 
 | File | Change |
 |------|--------|
-| `web/wasm/enkido_wasm.cpp` | Add `akkado_get_diagnostic_length()` and `akkado_get_diagnostic_code()` exports |
-| `web/wasm/CMakeLists.txt` | Add `_akkado_get_diagnostic_length` and `_akkado_get_diagnostic_code` to `ENKIDO_EXPORTED_FUNCTIONS` list |
+| `web/wasm/nkido_wasm.cpp` | Add `akkado_get_diagnostic_length()` and `akkado_get_diagnostic_code()` exports |
+| `web/wasm/CMakeLists.txt` | Add `_akkado_get_diagnostic_length` and `_akkado_get_diagnostic_code` to `NKIDO_EXPORTED_FUNCTIONS` list |
 
 ### 7.3 Web Frontend Changes
 
@@ -476,7 +476,7 @@ Note: Error tokens are skipped only during synchronization (at statement boundar
 
 **Goal**: Fix the most visually obvious problem — errors highlight only the offending token.
 
-**Files**: `enkido_wasm.cpp`, `CMakeLists.txt`, `cedar-processor.js`, `audio.svelte.ts`, `editor.svelte.ts`, `editor-linter.ts`
+**Files**: `nkido_wasm.cpp`, `CMakeLists.txt`, `cedar-processor.js`, `audio.svelte.ts`, `editor.svelte.ts`, `editor-linter.ts`
 
 **Changes**:
 1. Add `akkado_get_diagnostic_length()` and `akkado_get_diagnostic_code()` to WASM exports

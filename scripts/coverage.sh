@@ -37,7 +37,7 @@ lcov --remove coverage.info \
 # Generate HTML report
 genhtml coverage_filtered.info \
     --output-directory coverage_report \
-    --title "Enkido Test Coverage" \
+    --title "Nkido Test Coverage" \
     --legend \
     --branch-coverage \
     --ignore-errors source

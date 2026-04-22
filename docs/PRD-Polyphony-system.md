@@ -4,7 +4,7 @@
 
 ## Executive Summary
 
-This document specifies a unified runtime polyphony system for Enkido built around a single **POLY opcode** that manages voices for any instrument — oscillators, SoundFonts, samplers, FM synths, etc. It replaces the current three incompatible mechanisms with one explicit, composable approach.
+This document specifies a unified runtime polyphony system for Nkido built around a single **POLY opcode** that manages voices for any instrument — oscillators, SoundFonts, samplers, FM synths, etc. It replaces the current three incompatible mechanisms with one explicit, composable approach.
 
 ### Why Refactor?
 

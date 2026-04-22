@@ -32,7 +32,7 @@ function loadSettings(): Settings {
 	if (typeof localStorage === 'undefined') return DEFAULT_SETTINGS;
 
 	try {
-		const stored = localStorage.getItem('enkido-settings');
+		const stored = localStorage.getItem('nkido-settings');
 		if (stored) {
 			return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
 		}
@@ -48,7 +48,7 @@ function createSettingsStore() {
 	function save() {
 		if (typeof localStorage === 'undefined') return;
 		try {
-			localStorage.setItem('enkido-settings', JSON.stringify(settings));
+			localStorage.setItem('nkido-settings', JSON.stringify(settings));
 		} catch (e) {
 			console.warn('Failed to save settings:', e);
 		}

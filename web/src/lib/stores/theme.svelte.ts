@@ -6,7 +6,7 @@ import type { Theme, ThemeColors, ThemeStorageData } from '$lib/types/theme';
 import { COLOR_KEYS, colorKeyToCssVar } from '$lib/types/theme';
 import { PRESET_THEMES, DEFAULT_THEME_ID, getPresetById } from '$lib/themes/presets';
 
-const STORAGE_KEY = 'enkido-theme';
+const STORAGE_KEY = 'nkido-theme';
 
 function loadThemeData(): ThemeStorageData {
 	const defaultData: ThemeStorageData = {
@@ -24,7 +24,7 @@ function loadThemeData(): ThemeStorageData {
 		}
 
 		// Migration: check old settings store for theme preference
-		const oldSettings = localStorage.getItem('enkido-settings');
+		const oldSettings = localStorage.getItem('nkido-settings');
 		if (oldSettings) {
 			const parsed = JSON.parse(oldSettings);
 			if (parsed.theme) {
@@ -35,7 +35,7 @@ function loadThemeData(): ThemeStorageData {
 				}
 				// Remove theme from old settings
 				delete parsed.theme;
-				localStorage.setItem('enkido-settings', JSON.stringify(parsed));
+				localStorage.setItem('nkido-settings', JSON.stringify(parsed));
 			}
 		}
 	} catch (e) {

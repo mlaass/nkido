@@ -1,13 +1,13 @@
-# Enkido WASM Build
+# Nkido WASM Build
 # Build with: emcmake cmake -B build && cmake --build build
 
 cmake_minimum_required(VERSION 3.21)
 
 # Read version so cedar's compile definitions resolve correctly
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../VERSION" ENKIDO_VERSION)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../../VERSION" NKIDO_VERSION)
 
-project(enkido_wasm
-    VERSION ${ENKIDO_VERSION}
+project(nkido_wasm
+    VERSION ${NKIDO_VERSION}
     LANGUAGES CXX
 )
 
@@ -22,25 +22,25 @@ endif()
 
 # Find parent project libraries
 # When building standalone, these paths need to be set
-set(ENKIDO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+set(NKIDO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 
-# Include compiler options (defines enkido_compiler_options interface library)
-if(NOT TARGET enkido_compiler_options)
-    include("${ENKIDO_ROOT}/cmake/CompilerOptions.cmake")
+# Include compiler options (defines nkido_compiler_options interface library)
+if(NOT TARGET nkido_compiler_options)
+    include("${NKIDO_ROOT}/cmake/CompilerOptions.cmake")
 endif()
 
 if(NOT TARGET cedar)
-    add_subdirectory("${ENKIDO_ROOT}/cedar" "${CMAKE_BINARY_DIR}/cedar")
+    add_subdirectory("${NKIDO_ROOT}/cedar" "${CMAKE_BINARY_DIR}/cedar")
 endif()
 
 if(NOT TARGET akkado)
-    add_subdirectory("${ENKIDO_ROOT}/akkado" "${CMAKE_BINARY_DIR}/akkado")
+    add_subdirectory("${NKIDO_ROOT}/akkado" "${CMAKE_BINARY_DIR}/akkado")
 endif()
 
 # WASM module
-add_executable(enkido_wasm enkido_wasm.cpp)
+add_executable(nkido_wasm nkido_wasm.cpp)
 
-target_link_libraries(enkido_wasm
+target_link_libraries(nkido_wasm
     PRIVATE
         cedar
         akkado
@@ -48,13 +48,13 @@ target_link_libraries(enkido_wasm
 
 if(EMSCRIPTEN)
     # Emscripten-specific settings
-    set_target_properties(enkido_wasm PROPERTIES
-        OUTPUT_NAME "enkido"
+    set_target_properties(nkido_wasm PROPERTIES
+        OUTPUT_NAME "nkido"
         SUFFIX ".js"
     )
 
     # Build exported functions list
-    set(ENKIDO_EXPORTED_FUNCTIONS
+    set(NKIDO_EXPORTED_FUNCTIONS
         # Cedar VM
         _cedar_init
         _cedar_destroy
@@ -126,15 +126,15 @@ if(EMSCRIPTEN)
         _cedar_soundfont_presets_json
         _cedar_soundfont_count
         # Utility
-        _enkido_get_block_size
-        _enkido_malloc
-        _enkido_free
+        _nkido_get_block_size
+        _nkido_malloc
+        _nkido_free
     )
-    list(JOIN ENKIDO_EXPORTED_FUNCTIONS "," ENKIDO_EXPORTED_FUNCTIONS_STR)
+    list(JOIN NKIDO_EXPORTED_FUNCTIONS "," NKIDO_EXPORTED_FUNCTIONS_STR)
 
-    target_link_options(enkido_wasm PRIVATE
+    target_link_options(nkido_wasm PRIVATE
         # Export C functions
-        "-sEXPORTED_FUNCTIONS=[${ENKIDO_EXPORTED_FUNCTIONS_STR}]"
+        "-sEXPORTED_FUNCTIONS=[${NKIDO_EXPORTED_FUNCTIONS_STR}]"
 
         # Export runtime functions for memory access
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,getValue,setValue,UTF8ToString,stringToUTF8,lengthBytesUTF8,wasmMemory"
@@ -152,7 +152,7 @@ if(EMSCRIPTEN)
 
         # Module settings
         -sMODULARIZE=1
-        "-sEXPORT_NAME=createEnkidoModule"
+        "-sEXPORT_NAME=createNkidoModule"
         -sENVIRONMENT=web,worker,shell
 
         # Note: Not using Emscripten's built-in AudioWorklet support (-sAUDIO_WORKLET=1)
@@ -166,7 +166,7 @@ if(EMSCRIPTEN)
 
     # Build-type specific options
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_link_options(enkido_wasm PRIVATE
+        target_link_options(nkido_wasm PRIVATE
             -O1
             -g
             -gsource-map
@@ -174,29 +174,29 @@ if(EMSCRIPTEN)
             -sASSERTIONS=0
         )
     else()
-        target_link_options(enkido_wasm PRIVATE
+        target_link_options(nkido_wasm PRIVATE
             -O3
             -flto
         )
     endif()
 
     # Copy output to static directory
-    add_custom_command(TARGET enkido_wasm POST_BUILD
+    add_custom_command(TARGET nkido_wasm POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_SOURCE_DIR}/../static/wasm"
         COMMAND ${CMAKE_COMMAND} -E copy
-            "$<TARGET_FILE_DIR:enkido_wasm>/enkido.js"
+            "$<TARGET_FILE_DIR:nkido_wasm>/nkido.js"
             "${CMAKE_CURRENT_SOURCE_DIR}/../static/wasm/"
         COMMAND ${CMAKE_COMMAND} -E copy
-            "$<TARGET_FILE_DIR:enkido_wasm>/enkido.wasm"
+            "$<TARGET_FILE_DIR:nkido_wasm>/nkido.wasm"
             "${CMAKE_CURRENT_SOURCE_DIR}/../static/wasm/"
         COMMENT "Copying WASM files to static/wasm/"
     )
 
     # Copy source map in debug builds for browser debugging
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        add_custom_command(TARGET enkido_wasm POST_BUILD
+        add_custom_command(TARGET nkido_wasm POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy
-                "$<TARGET_FILE_DIR:enkido_wasm>/enkido.wasm.map"
+                "$<TARGET_FILE_DIR:nkido_wasm>/nkido.wasm.map"
                 "${CMAKE_CURRENT_SOURCE_DIR}/../static/wasm/"
             COMMENT "Copying WASM source map to static/wasm/"
         )

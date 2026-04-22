@@ -5,7 +5,7 @@
 #include <chrono>
 #include <cstring>
 
-namespace enkido {
+namespace nkido {
 
 InputType detect_input_type(const std::string& input) {
     if (input == "-") {
@@ -206,4 +206,4 @@ bool write_bytecode_file(const std::string& path,
     return file.good();
 }
 
-}  // namespace enkido
+}  // namespace nkido

@@ -6,7 +6,7 @@
 #include <array>
 #include <cstdint>
 
-namespace enkido {
+namespace nkido {
 
 // SDL2-based audio engine for real-time playback
 class AudioEngine {
@@ -77,4 +77,4 @@ extern std::atomic<bool> g_signal_received;
 // Install signal handlers (SIGINT, SIGTERM)
 void install_signal_handlers();
 
-}  // namespace enkido
+}  // namespace nkido

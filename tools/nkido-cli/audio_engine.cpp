@@ -6,7 +6,7 @@
 #include <cstring>
 #include <iostream>
 
-namespace enkido {
+namespace nkido {
 
 // Global signal flag
 std::atomic<bool> g_signal_received{false};
@@ -179,4 +179,4 @@ void AudioEngine::get_waveform(float* out, std::size_t count) const {
     }
 }
 
-}  // namespace enkido
+}  // namespace nkido

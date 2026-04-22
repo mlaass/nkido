@@ -7,7 +7,7 @@ add_executable(akkado-cli
 target_link_libraries(akkado-cli
     PRIVATE
         akkado
-        enkido_compiler_options
+        nkido_compiler_options
 )
 
 # Install

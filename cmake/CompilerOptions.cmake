@@ -1,11 +1,11 @@
-# Compiler options and warning flags for Enkido
+# Compiler options and warning flags for Nkido
 
 # Create interface library for shared compiler options
-add_library(enkido_compiler_options INTERFACE)
+add_library(nkido_compiler_options INTERFACE)
 
 # Warning flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(enkido_compiler_options INTERFACE
+    target_compile_options(nkido_compiler_options INTERFACE
         -Wall
         -Wextra
         -Wpedantic
@@ -24,7 +24,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 
     # GCC-specific warnings
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        target_compile_options(enkido_compiler_options INTERFACE
+        target_compile_options(nkido_compiler_options INTERFACE
             -Wduplicated-cond
             -Wduplicated-branches
             -Wlogical-op
@@ -34,14 +34,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 
     # Clang-specific warnings
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        target_compile_options(enkido_compiler_options INTERFACE
+        target_compile_options(nkido_compiler_options INTERFACE
             -Wno-c++98-compat
             -Wno-c++98-compat-pedantic
         )
     endif()
 
 elseif(MSVC)
-    target_compile_options(enkido_compiler_options INTERFACE
+    target_compile_options(nkido_compiler_options INTERFACE
         /W4
         /permissive-
         /w14640  # thread-unsafe static member initialization
@@ -68,7 +68,7 @@ endif()
 
 # Debug/Release specific options
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_compile_options(enkido_compiler_options INTERFACE
+    target_compile_options(nkido_compiler_options INTERFACE
         $<$<CONFIG:Debug>:-O0 -g3 -fno-omit-frame-pointer>
         $<$<CONFIG:Release>:-O3 -DNDEBUG>
         $<$<CONFIG:RelWithDebInfo>:-O2 -g -DNDEBUG>
@@ -77,24 +77,24 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # Sanitizers (debug builds only, not on WASM)
-option(ENKIDO_ENABLE_ASAN "Enable AddressSanitizer" OFF)
-option(ENKIDO_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+option(NKIDO_ENABLE_ASAN "Enable AddressSanitizer" OFF)
+option(NKIDO_ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
 
 if(NOT EMSCRIPTEN)
-    if(ENKIDO_ENABLE_ASAN)
-        target_compile_options(enkido_compiler_options INTERFACE
+    if(NKIDO_ENABLE_ASAN)
+        target_compile_options(nkido_compiler_options INTERFACE
             $<$<CONFIG:Debug>:-fsanitize=address>
         )
-        target_link_options(enkido_compiler_options INTERFACE
+        target_link_options(nkido_compiler_options INTERFACE
             $<$<CONFIG:Debug>:-fsanitize=address>
         )
     endif()
 
-    if(ENKIDO_ENABLE_UBSAN)
-        target_compile_options(enkido_compiler_options INTERFACE
+    if(NKIDO_ENABLE_UBSAN)
+        target_compile_options(nkido_compiler_options INTERFACE
             $<$<CONFIG:Debug>:-fsanitize=undefined>
         )
-        target_link_options(enkido_compiler_options INTERFACE
+        target_link_options(nkido_compiler_options INTERFACE
             $<$<CONFIG:Debug>:-fsanitize=undefined>
         )
     endif()
@@ -102,13 +102,13 @@ endif()
 
 # Emscripten-specific options
 if(EMSCRIPTEN)
-    target_compile_options(enkido_compiler_options INTERFACE
+    target_compile_options(nkido_compiler_options INTERFACE
         -fno-exceptions
         -fno-rtti
         # Note: NOT using -pthread - AudioWorklet doesn't support full pthreads
         # and enabling it causes assertion failures during WASM initialization
     )
-    target_compile_definitions(enkido_compiler_options INTERFACE
-        ENKIDO_WASM=1
+    target_compile_definitions(nkido_compiler_options INTERFACE
+        NKIDO_WASM=1
     )
 endif()

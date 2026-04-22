@@ -3,7 +3,7 @@
 #include <SDL2/SDL.h>
 #include <cstdint>
 
-namespace enkido::ui {
+namespace nkido::ui {
 
 constexpr int GLYPH_WIDTH = 8;
 constexpr int GLYPH_HEIGHT = 12;
@@ -35,4 +35,4 @@ private:
     SDL_Renderer* renderer_ = nullptr;
 };
 
-}  // namespace enkido::ui
+}  // namespace nkido::ui

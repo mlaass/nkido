@@ -140,7 +140,7 @@ std::vector<BuiltinVarOverride> builtin_var_overrides;
 
 ### 7. WASM bindings
 
-**`web/wasm/enkido_wasm.cpp`** — Add exports:
+**`web/wasm/nkido_wasm.cpp`** — Add exports:
 ```cpp
 WASM_EXPORT uint32_t akkado_get_builtin_var_override_count();
 WASM_EXPORT const char* akkado_get_builtin_var_override_name(uint32_t index);
@@ -187,7 +187,7 @@ $effect(() => { bpmInput = audioEngine.bpm.toString(); });
 - `akkado/src/codegen.cpp` — Identifier + Assignment desugaring
 - `akkado/include/akkado/akkado.hpp` — CompileResult field
 - `akkado/src/akkado.cpp` — Wire overrides through
-- `web/wasm/enkido_wasm.cpp` — WASM exports
+- `web/wasm/nkido_wasm.cpp` — WASM exports
 - `web/static/worklet/cedar-processor.js` — EnvMap writes + override extraction
 - `web/src/lib/stores/audio.svelte.ts` — Sync Transport UI
 - `web/src/lib/components/Transport/Transport.svelte` — $effect for bpmInput sync

@@ -66,7 +66,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 				// Remove the em-bootstrap processor registration (release format: inside block)
 				.replace(/registerProcessor\s*\(\s*["']em-bootstrap["'].*?\)\s*\}/g, '}')
 				// Remove auto-execution in AudioWorklet context (release format)
-				.replace(/isWW\s*\|\|=\s*typeof AudioWorkletGlobalScope.*?isWW\s*&&\s*createEnkidoModule\s*\(\s*\)\s*;?/gs, '')
+				.replace(/isWW\s*\|\|=\s*typeof AudioWorkletGlobalScope.*?isWW\s*&&\s*createNkidoModule\s*\(\s*\)\s*;?/gs, '')
 
 				// === DEBUG BUILD patterns ===
 				// Disable AudioWorklet detection (debug format)
@@ -82,10 +82,10 @@ class CedarProcessor extends AudioWorkletProcessor {
 				.replace(/ENVIRONMENT_IS_WASM_WORKER\s*=\s*true/g, 'ENVIRONMENT_IS_WASM_WORKER=false');
 
 			// Create a function that returns the module factory
-			const moduleFactory = new Function(patchedCode + '\nreturn createEnkidoModule;')();
+			const moduleFactory = new Function(patchedCode + '\nreturn createNkidoModule;')();
 
 			if (typeof moduleFactory !== 'function') {
-				throw new Error('createEnkidoModule not found after evaluating code');
+				throw new Error('createNkidoModule not found after evaluating code');
 			}
 
 			console.log('[CedarProcessor] Creating module with wasmBinary:', wasmBinary.byteLength, 'bytes');
@@ -110,7 +110,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 			// Get output buffer pointers
 			this.outputLeftPtr = this.module._cedar_get_output_left();
 			this.outputRightPtr = this.module._cedar_get_output_right();
-			this.blockSize = this.module._enkido_get_block_size();
+			this.blockSize = this.module._nkido_get_block_size();
 
 			this.isInitialized = true;
 			console.log('[CedarProcessor] Module initialized, block size:', this.blockSize);
@@ -485,14 +485,14 @@ class CedarProcessor extends AudioWorkletProcessor {
 	 */
 	getSampleId(name) {
 		const nameLen = this.module.lengthBytesUTF8(name) + 1;
-		const namePtr = this.module._enkido_malloc(nameLen);
+		const namePtr = this.module._nkido_malloc(nameLen);
 		if (!namePtr) return 0;
 
 		try {
 			this.module.stringToUTF8(name, namePtr, nameLen);
 			return this.module._cedar_get_sample_id(namePtr);
 		} finally {
-			this.module._enkido_free(namePtr);
+			this.module._nkido_free(namePtr);
 		}
 	}
 
@@ -527,7 +527,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 			console.log('[CedarProcessor] Compiling source, utf8 bytes:', utf8ByteLen);
 
 			// Allocate source string in WASM memory
-			const sourcePtr = this.module._enkido_malloc(allocLen);
+			const sourcePtr = this.module._nkido_malloc(allocLen);
 			if (sourcePtr === 0) {
 				this.port.postMessage({ type: 'compiled', success: false, diagnostics: [{ severity: 2, message: 'Failed to allocate memory', line: 1, column: 1 }] });
 				return;
@@ -642,7 +642,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 					this.module._akkado_clear_result();
 				}
 			} finally {
-				this.module._enkido_free(sourcePtr);
+				this.module._nkido_free(sourcePtr);
 			}
 		} catch (err) {
 			// CRITICAL: Catch any exception and send error response
@@ -677,7 +677,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 			'state inits:', stateInits.length);
 
 		// Allocate and copy bytecode to WASM memory
-		let bytecodePtr = this.module._enkido_malloc(bytecode.length);
+		let bytecodePtr = this.module._nkido_malloc(bytecode.length);
 		if (bytecodePtr === 0) {
 			this.port.postMessage({ type: 'error', message: 'Failed to allocate bytecode' });
 			return;
@@ -693,7 +693,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 				// SlotBusy - all slots occupied (crossfade in progress)
 				// Keep pendingProgram for retry - DO NOT clear it here
 				console.warn('[CedarProcessor] Slot busy - VM is crossfading');
-				this.module._enkido_free(bytecodePtr);
+				this.module._nkido_free(bytecodePtr);
 				bytecodePtr = 0; // Prevent double-free in finally
 				this.port.postMessage({ type: 'error', message: 'VM busy - crossfade in progress, try again' });
 				return;
@@ -726,7 +726,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 		} finally {
 			// Guard against double-free (bytecodePtr set to 0 on SlotBusy)
 			if (bytecodePtr) {
-				this.module._enkido_free(bytecodePtr);
+				this.module._nkido_free(bytecodePtr);
 			}
 			// Note: pendingProgram is cleared on success, NOT here
 			// This preserves it for retry on SlotBusy
@@ -761,7 +761,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 		console.log('[CedarProcessor] Loading program, bytecode size:', bytecode.length);
 
 		// Allocate bytecode in WASM memory
-		const ptr = this.module._enkido_malloc(bytecode.length);
+		const ptr = this.module._nkido_malloc(bytecode.length);
 		if (ptr === 0) {
 			this.port.postMessage({ type: 'error', message: 'Failed to allocate bytecode' });
 			return;
@@ -782,7 +782,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 				this.port.postMessage({ type: 'error', message: `Load failed with code ${result}` });
 			}
 		} finally {
-			this.module._enkido_free(ptr);
+			this.module._nkido_free(ptr);
 		}
 	}
 
@@ -791,7 +791,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 		// Allocate name string in WASM memory
 		const len = this.module.lengthBytesUTF8(name) + 1;
-		const ptr = this.module._enkido_malloc(len);
+		const ptr = this.module._nkido_malloc(len);
 		if (ptr === 0) return;
 
 		try {
@@ -803,7 +803,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 				this.module._cedar_set_param(ptr, value);
 			}
 		} finally {
-			this.module._enkido_free(ptr);
+			this.module._nkido_free(ptr);
 		}
 	}
 
@@ -817,16 +817,16 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 		// Allocate name string
 		const nameLen = this.module.lengthBytesUTF8(name) + 1;
-		const namePtr = this.module._enkido_malloc(nameLen);
+		const namePtr = this.module._nkido_malloc(nameLen);
 		if (namePtr === 0) {
 			this.port.postMessage({ type: 'error', message: 'Failed to allocate name' });
 			return;
 		}
 
 		// Allocate audio data
-		const audioPtr = this.module._enkido_malloc(audioData.length * 4); // 4 bytes per float
+		const audioPtr = this.module._nkido_malloc(audioData.length * 4); // 4 bytes per float
 		if (audioPtr === 0) {
-			this.module._enkido_free(namePtr);
+			this.module._nkido_free(namePtr);
 			this.port.postMessage({ type: 'error', message: 'Failed to allocate audio data' });
 			return;
 		}
@@ -848,8 +848,8 @@ class CedarProcessor extends AudioWorkletProcessor {
 				this.port.postMessage({ type: 'error', message: 'Failed to load sample: ' + name });
 			}
 		} finally {
-			this.module._enkido_free(namePtr);
-			this.module._enkido_free(audioPtr);
+			this.module._nkido_free(namePtr);
+			this.module._nkido_free(audioPtr);
 		}
 	}
 
@@ -868,7 +868,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 		// Allocate name string
 		const nameLen = this.module.lengthBytesUTF8(name) + 1;
-		const namePtr = this.module._enkido_malloc(nameLen);
+		const namePtr = this.module._nkido_malloc(nameLen);
 		if (namePtr === 0) {
 			this.port.postMessage({ type: 'error', message: 'Failed to allocate name' });
 			return;
@@ -876,9 +876,9 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 		// Allocate audio data
 		const dataArray = new Uint8Array(audioData);
-		const dataPtr = this.module._enkido_malloc(dataArray.length);
+		const dataPtr = this.module._nkido_malloc(dataArray.length);
 		if (dataPtr === 0) {
-			this.module._enkido_free(namePtr);
+			this.module._nkido_free(namePtr);
 			this.port.postMessage({ type: 'error', message: 'Failed to allocate audio data' });
 			return;
 		}
@@ -897,8 +897,8 @@ class CedarProcessor extends AudioWorkletProcessor {
 				this.port.postMessage({ type: 'error', message: 'Failed to load audio sample: ' + name });
 			}
 		} finally {
-			this.module._enkido_free(namePtr);
-			this.module._enkido_free(dataPtr);
+			this.module._nkido_free(namePtr);
+			this.module._nkido_free(dataPtr);
 		}
 	}
 
@@ -916,7 +916,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 		// Allocate name string
 		const nameLen = this.module.lengthBytesUTF8(name) + 1;
-		const namePtr = this.module._enkido_malloc(nameLen);
+		const namePtr = this.module._nkido_malloc(nameLen);
 		if (namePtr === 0) {
 			this.port.postMessage({ type: 'soundFontLoaded', name, success: false, error: 'Failed to allocate name' });
 			return;
@@ -924,14 +924,14 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 		// Allocate SF2 data
 		const dataArray = new Uint8Array(audioData);
-		const dataPtr = this.module._enkido_malloc(dataArray.length);
+		const dataPtr = this.module._nkido_malloc(dataArray.length);
 		if (dataPtr === 0) {
 			const heapMB = this.module.wasmMemory
 				? (this.module.wasmMemory.buffer.byteLength / 1048576).toFixed(0)
 				: '?';
 			const needMB = (dataArray.length / 1048576).toFixed(1);
 			console.error(`[CedarProcessor] Failed to allocate ${needMB} MB for SF2 data (heap: ${heapMB} MB)`);
-			this.module._enkido_free(namePtr);
+			this.module._nkido_free(namePtr);
 			this.port.postMessage({ type: 'soundFontLoaded', name, success: false, error: `Out of memory: could not allocate ${needMB} MB for SoundFont data` });
 			return;
 		}
@@ -974,8 +974,8 @@ class CedarProcessor extends AudioWorkletProcessor {
 				});
 			}
 		} finally {
-			this.module._enkido_free(namePtr);
-			this.module._enkido_free(dataPtr);
+			this.module._nkido_free(namePtr);
+			this.module._nkido_free(dataPtr);
 		}
 	}
 

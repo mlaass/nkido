@@ -16,8 +16,8 @@ Thanks for your interest in contributing to NKIDO! This guide covers everything 
 
 ```bash
 # Clone your fork
-git clone https://github.com/<your-username>/enkido.git
-cd enkido
+git clone https://github.com/<your-username>/nkido.git
+cd nkido
 
 # Configure and build (debug)
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
@@ -34,7 +34,7 @@ See [README.md](README.md) for build presets and additional targets.
 
 ### Reporting Bugs
 
-Open a [GitHub issue](https://github.com/mlaass/enkido/issues) with:
+Open a [GitHub issue](https://github.com/mlaass/nkido/issues) with:
 
 - A clear title describing the problem
 - Steps to reproduce (include Akkado code snippets if applicable)
@@ -66,10 +66,10 @@ All contributions are welcome. Here are some ways to help:
 ## Project Structure
 
 ```
-enkido/
+nkido/
 ├── cedar/          # Audio synthesis engine (standalone C++ library)
 ├── akkado/         # Language compiler (depends on cedar)
-├── tools/          # CLI tools (enkido-cli, akkado-cli)
+├── tools/          # CLI tools (nkido-cli, akkado-cli)
 ├── web/            # SvelteKit web IDE
 ├── experiments/    # Python DSP test scripts
 └── docs/           # Design documents and PRDs
@@ -248,4 +248,4 @@ If a test fails, investigate — don't adjust thresholds or expected values to m
 
 ## Questions?
 
-Open a [discussion](https://github.com/mlaass/enkido/discussions) or ask in a GitHub issue. We're happy to help you find the right place to contribute.
+Open a [discussion](https://github.com/mlaass/nkido/discussions) or ask in a GitHub issue. We're happy to help you find the right place to contribute.

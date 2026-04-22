@@ -220,7 +220,7 @@ The `source` argument is a string. Strings are not buffer inputs — the codegen
 
 ### 4.5 Host integration — Web
 
-**WASM** (`web/wasm/enkido_wasm.cpp`):
+**WASM** (`web/wasm/nkido_wasm.cpp`):
 
 ```cpp
 static float g_input_left [BLOCK_SIZE] = {0};
@@ -272,7 +272,7 @@ Compiler emits a call alongside bytecode if it sees a string literal in `in('...
 
 ### 4.6 Host integration — Native CLI
 
-**`tools/enkido-cli/audio_engine.hpp` / `.cpp`**:
+**`tools/nkido-cli/audio_engine.hpp` / `.cpp`**:
 
 - Open a second SDL2 audio device with `SDL_OpenAudioDevice(..., is_capture=1, ...)`.
 - Capture callback fills an internal ring buffer; playback callback pulls 128 samples and sets `ctx.input_left` / `input_right` before `vm().process_block()`.
@@ -320,13 +320,13 @@ The Godot extension must, before each `process_block()` call, fill `ctx.input_le
 | `akkado/include/akkado/builtins.hpp` | Register `in` builtin |
 | `akkado/src/analyzer.cpp` | Accept optional string argument; validate format |
 | `akkado/src/codegen.cpp` | Emit host-side source-set call for `in('...')` (if non-default) |
-| `web/wasm/enkido_wasm.cpp` | Export `cedar_get_input_left`, `cedar_get_input_right`, `cedar_set_input_source`; wire `ctx.input_left/right` into `cedar_process_block` |
+| `web/wasm/nkido_wasm.cpp` | Export `cedar_get_input_left`, `cedar_get_input_right`, `cedar_set_input_source`; wire `ctx.input_left/right` into `cedar_process_block` |
 | `web/static/worklet/cedar-processor.js` | Route `inputs[0]` into WASM each block |
 | `web/src/lib/stores/audio.svelte.ts` | Source-selection state, permission handling, `MediaStream` routing |
 | `web/src/lib/components/Panel/*` | Add audio-input panel to sidebar tabs |
 | `web/src/lib/settings.svelte.ts` | Persist input-constraint toggles and default source |
-| `tools/enkido-cli/audio_engine.hpp/.cpp` | SDL2 capture device + device selection |
-| `tools/enkido-cli/main.cpp` | `--list-devices` and `--input-device` flags |
+| `tools/nkido-cli/audio_engine.hpp/.cpp` | SDL2 capture device + device selection |
+| `tools/nkido-cli/main.cpp` | `--list-devices` and `--input-device` flags |
 
 ### Create
 
@@ -418,9 +418,9 @@ The Godot extension must, before each `process_block()` call, fill `ctx.input_le
 
 ### 8.4 CLI manual tests
 
-- `enkido-cli --list-devices` prints numbered list of capture devices.
-- `enkido-cli --input-device "USB Audio"` selects named device.
-- `enkido-cli --input-device "nonexistent"` warns and falls back to default.
+- `nkido-cli --list-devices` prints numbered list of capture devices.
+- `nkido-cli --input-device "USB Audio"` selects named device.
+- `nkido-cli --input-device "nonexistent"` warns and falls back to default.
 - Piping input through `in() |> lp(%, 800) |> out` in a `.cedar` file works audibly.
 
 ### 8.5 Cedar → CLI → Web integration sanity

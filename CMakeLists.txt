@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.21)
 
 # Read version from single source of truth
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" ENKIDO_VERSION)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" NKIDO_VERSION)
 
-project(enkido
-    VERSION ${ENKIDO_VERSION}
+project(nkido
+    VERSION ${NKIDO_VERSION}
     DESCRIPTION "High-performance audio synthesis system"
     LANGUAGES CXX
 )
@@ -18,10 +18,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Build options
-option(ENKIDO_BUILD_CEDAR "Build Cedar synth engine" ON)
-option(ENKIDO_BUILD_AKKADO "Build Akkado compiler" ON)
-option(ENKIDO_BUILD_TOOLS "Build CLI tools" ON)
-option(ENKIDO_BUILD_TESTS "Build tests" ON)
+option(NKIDO_BUILD_CEDAR "Build Cedar synth engine" ON)
+option(NKIDO_BUILD_AKKADO "Build Akkado compiler" ON)
+option(NKIDO_BUILD_TOOLS "Build CLI tools" ON)
+option(NKIDO_BUILD_TESTS "Build tests" ON)
 
 # Include CMake modules
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -30,22 +30,22 @@ include(Coverage)
 include(Dependencies)
 
 # Add components
-if(ENKIDO_BUILD_CEDAR)
+if(NKIDO_BUILD_CEDAR)
     add_subdirectory(cedar)
 endif()
 
-if(ENKIDO_BUILD_AKKADO)
-    if(NOT ENKIDO_BUILD_CEDAR)
-        message(FATAL_ERROR "Akkado requires Cedar. Set ENKIDO_BUILD_CEDAR=ON")
+if(NKIDO_BUILD_AKKADO)
+    if(NOT NKIDO_BUILD_CEDAR)
+        message(FATAL_ERROR "Akkado requires Cedar. Set NKIDO_BUILD_CEDAR=ON")
     endif()
     add_subdirectory(akkado)
 endif()
 
-if(ENKIDO_BUILD_TOOLS)
+if(NKIDO_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
 # Testing
-if(ENKIDO_BUILD_TESTS)
+if(NKIDO_BUILD_TESTS)
     enable_testing()
 endif()

@@ -26,9 +26,9 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     option(AKKADO_BUILD_TESTS "Build Akkado tests" ON)
 
     # Standalone: create minimal compiler options
-    add_library(enkido_compiler_options INTERFACE)
+    add_library(nkido_compiler_options INTERFACE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(enkido_compiler_options INTERFACE -Wall -Wextra -Wpedantic)
+        target_compile_options(nkido_compiler_options INTERFACE -Wall -Wextra -Wpedantic)
     endif()
 
     # Find Cedar (must be installed or provided via CMAKE_PREFIX_PATH)
@@ -38,7 +38,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         add_subdirectory(../cedar cedar_build)
     endif()
 else()
-    set(AKKADO_BUILD_TESTS ${ENKIDO_BUILD_TESTS})
+    set(AKKADO_BUILD_TESTS ${NKIDO_BUILD_TESTS})
 endif()
 
 # Akkado library
@@ -80,7 +80,7 @@ target_link_libraries(akkado
     PUBLIC
         cedar
     PRIVATE
-        $<BUILD_INTERFACE:enkido_compiler_options>
+        $<BUILD_INTERFACE:nkido_compiler_options>
 )
 
 # Inject version as compile definitions (read from VERSION file)
@@ -91,7 +91,7 @@ target_compile_definitions(akkado PUBLIC
 )
 
 # Alias for use in parent project
-add_library(enkido::akkado ALIAS akkado)
+add_library(nkido::akkado ALIAS akkado)
 
 # Tests
 if(AKKADO_BUILD_TESTS)

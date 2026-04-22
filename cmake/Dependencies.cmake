@@ -1,9 +1,9 @@
-# External dependencies for Enkido
+# External dependencies for Nkido
 
 include(FetchContent)
 
 # Catch2 for testing
-if(ENKIDO_BUILD_TESTS)
+if(NKIDO_BUILD_TESTS)
     FetchContent_Declare(
         Catch2
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git

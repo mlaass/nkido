@@ -6,32 +6,32 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import {
-	loadEnkido,
+	loadNkido,
 	getBytecode,
 	getDisassembly,
 	getOutputBuffers,
-	type WrappedEnkido
+	type WrappedNkido
 } from './wasm-helper';
 
 describe('Array Compilation', () => {
-	let enkido: WrappedEnkido;
+	let nkido: WrappedNkido;
 
 	beforeAll(async () => {
-		enkido = await loadEnkido();
-		enkido.cedar_init();
-		enkido.cedar_set_sample_rate(48000);
-		enkido.cedar_set_bpm(120);
+		nkido = await loadNkido();
+		nkido.cedar_init();
+		nkido.cedar_set_sample_rate(48000);
+		nkido.cedar_set_bpm(120);
 	});
 
 	afterAll(() => {
-		enkido.cedar_reset();
+		nkido.cedar_reset();
 	});
 
 	it('compiles array literal [1, 2, 3]', () => {
-		const result = enkido.akkado_compile('[1, 2, 3]');
+		const result = nkido.akkado_compile('[1, 2, 3]');
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 		expect(disasm.instructions.length).toBeGreaterThan(0);
 
 		// Should have PUSH_CONST instructions for each element
@@ -44,10 +44,10 @@ describe('Array Compilation', () => {
 			arr = [100, 200, 300]
 			arr[0] |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// Should have OUTPUT instruction
 		const outputs = disasm.instructions.filter((i) => i.opcode === 'OUTPUT');
@@ -59,10 +59,10 @@ describe('Array Compilation', () => {
 			arr = [220, 330, 440, 550]
 			arr[lfo(1) * 3.99] |> osc("sin", %) |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// Should have ARRAY_INDEX for dynamic indexing
 		const arrayIndex = disasm.instructions.filter((i) => i.opcode === 'ARRAY_INDEX');
@@ -79,10 +79,10 @@ describe('Array Compilation', () => {
 		const source = `
 			[220, 330, 440] |> sine(%) |> sum(%) |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// Should have 3 OSC_SIN instructions (one for each frequency)
 		const oscs = disasm.instructions.filter((i) => i.opcode === 'OSC_SIN');
@@ -93,10 +93,10 @@ describe('Array Compilation', () => {
 		const source = `
 			map([1, 2, 3], (x) -> x * 2) |> sum(%) |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// Should have 3 MUL instructions (one for each element)
 		const muls = disasm.instructions.filter((i) => i.opcode === 'MUL');
@@ -107,10 +107,10 @@ describe('Array Compilation', () => {
 		const source = `
 			sum([1, 2, 3, 4]) |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// Sum of 4 elements requires 3 ADD instructions
 		const adds = disasm.instructions.filter((i) => i.opcode === 'ADD');
@@ -121,10 +121,10 @@ describe('Array Compilation', () => {
 		const source = `
 			[1, 2, 3] * 2 |> sum(%) |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// Should have 3 MUL instructions (one for each element)
 		const muls = disasm.instructions.filter((i) => i.opcode === 'MUL');
@@ -135,10 +135,10 @@ describe('Array Compilation', () => {
 		const source = `
 			harmonics(110, 4) |> sine(%) |> sum(%) * 0.25 |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// Should have 4 OSC_SIN instructions
 		const oscs = disasm.instructions.filter((i) => i.opcode === 'OSC_SIN');
@@ -150,10 +150,10 @@ describe('Array Compilation', () => {
 			arr = [10, 20, 30, 40, 50]
 			len(arr) |> out(%, %)
 		`;
-		const result = enkido.akkado_compile(source);
+		const result = nkido.akkado_compile(source);
 		expect(result).toBe(1);
 
-		const disasm = getDisassembly(enkido);
+		const disasm = getDisassembly(nkido);
 
 		// len() should emit a PUSH_CONST with value 5
 		const pushConsts = disasm.instructions.filter((i) => i.opcode === 'PUSH_CONST');
@@ -163,17 +163,17 @@ describe('Array Compilation', () => {
 });
 
 describe('Array Audio Processing', () => {
-	let enkido: WrappedEnkido;
+	let nkido: WrappedNkido;
 
 	beforeAll(async () => {
-		enkido = await loadEnkido();
-		enkido.cedar_init();
-		enkido.cedar_set_sample_rate(48000);
-		enkido.cedar_set_bpm(120);
+		nkido = await loadNkido();
+		nkido.cedar_init();
+		nkido.cedar_set_sample_rate(48000);
+		nkido.cedar_set_bpm(120);
 	});
 
 	afterAll(() => {
-		enkido.cedar_reset();
+		nkido.cedar_reset();
 	});
 
 	it('produces audio from chord (array of frequencies)', () => {
@@ -181,21 +181,21 @@ describe('Array Audio Processing', () => {
 		const source = `
 			[220, 330, 440] |> sine(%) |> sum(%) * 0.3 |> out(%, %)
 		`;
-		const compileResult = enkido.akkado_compile(source);
+		const compileResult = nkido.akkado_compile(source);
 		expect(compileResult).toBe(1);
 
-		const bytecode = getBytecode(enkido);
+		const bytecode = getBytecode(nkido);
 		expect(bytecode.length).toBeGreaterThan(0);
 
-		const loadResult = enkido.cedar_load_program(bytecode);
+		const loadResult = nkido.cedar_load_program(bytecode);
 		expect(loadResult).toBe(0);
 
 		// Process a few blocks
 		for (let i = 0; i < 10; i++) {
-			enkido.cedar_process_block();
+			nkido.cedar_process_block();
 		}
 
-		const output = getOutputBuffers(enkido);
+		const output = getOutputBuffers(nkido);
 
 		// Should have non-zero audio output
 		const maxSample = Math.max(...Array.from(output.left).map(Math.abs));
@@ -209,19 +209,19 @@ describe('Array Audio Processing', () => {
 			wave = [0, 0.5, 1, 0.5, 0, -0.5, -1, -0.5]
 			phasor(110) * 7.99 |> wave[%] * 0.5 |> out(%, %)
 		`;
-		const compileResult = enkido.akkado_compile(source);
+		const compileResult = nkido.akkado_compile(source);
 		expect(compileResult).toBe(1);
 
-		const bytecode = getBytecode(enkido);
-		const loadResult = enkido.cedar_load_program(bytecode);
+		const bytecode = getBytecode(nkido);
+		const loadResult = nkido.cedar_load_program(bytecode);
 		expect(loadResult).toBe(0);
 
 		// Process several blocks to get stable output
 		for (let i = 0; i < 20; i++) {
-			enkido.cedar_process_block();
+			nkido.cedar_process_block();
 		}
 
-		const output = getOutputBuffers(enkido);
+		const output = getOutputBuffers(nkido);
 
 		// Should have audio output in range [-0.5, 0.5]
 		const maxSample = Math.max(...Array.from(output.left).map(Math.abs));
@@ -231,27 +231,27 @@ describe('Array Audio Processing', () => {
 });
 
 describe('Array Error Handling', () => {
-	let enkido: WrappedEnkido;
+	let nkido: WrappedNkido;
 
 	beforeAll(async () => {
-		enkido = await loadEnkido();
-		enkido.cedar_init();
+		nkido = await loadNkido();
+		nkido.cedar_init();
 	});
 
 	afterAll(() => {
-		enkido.cedar_reset();
+		nkido.cedar_reset();
 	});
 
 	it('reports error for undefined array variable', () => {
-		const result = enkido.akkado_compile('undefined_arr[0]');
+		const result = nkido.akkado_compile('undefined_arr[0]');
 		expect(result).toBe(0);
 
-		const diagCount = enkido.akkado_get_diagnostic_count();
+		const diagCount = nkido.akkado_get_diagnostic_count();
 		expect(diagCount).toBeGreaterThan(0);
 	});
 
 	it('compiles empty array without error', () => {
-		const result = enkido.akkado_compile('[] |> out(%, %)');
+		const result = nkido.akkado_compile('[] |> out(%, %)');
 		expect(result).toBe(1);
 	});
 });

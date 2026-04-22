@@ -385,7 +385,7 @@ Files that explicitly **do not change**:
 - `BufferAllocator` (adjacency invariant already correct)
 - `OUTPUT` opcode (`utility.hpp:39-58`)
 - `ExecutionContext` (`context.hpp:15-88`)
-- Web WASM bindings (`web/wasm/enkido_wasm.cpp`) — stereo output already exposed
+- Web WASM bindings (`web/wasm/nkido_wasm.cpp`) — stereo output already exposed
 
 ---
 

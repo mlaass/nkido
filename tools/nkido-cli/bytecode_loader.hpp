@@ -8,7 +8,7 @@
 #include <optional>
 #include <cstdint>
 
-namespace enkido {
+namespace nkido {
 
 // Mode of operation
 enum class Mode {
@@ -96,4 +96,4 @@ bool looks_like_bytecode(const std::vector<std::uint8_t>& data);
 bool write_bytecode_file(const std::string& path,
                          std::span<const cedar::Instruction> instructions);
 
-}  // namespace enkido
+}  // namespace nkido

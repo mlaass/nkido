@@ -5,7 +5,7 @@
 #include <vector>
 #include <cstddef>
 
-namespace enkido::ui {
+namespace nkido::ui {
 
 class TextBuffer {
 public:
@@ -71,4 +71,4 @@ private:
     std::size_t line_end(std::size_t line_idx) const;
 };
 
-}  // namespace enkido::ui
+}  // namespace nkido::ui

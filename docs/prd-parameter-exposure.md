@@ -84,7 +84,7 @@ When values change:
 
 ```gdscript
 # After compilation, params are exposed to Inspector
-@onready var player = $EnkidoPlayer
+@onready var player = $NkidoPlayer
 
 func _ready():
     player.source = '''
@@ -483,7 +483,7 @@ std::uint16_t CodeGenerator::handle_select_call(NodeIndex node, const Node& n) {
 ### 3.5 WASM Interface
 
 ```cpp
-// web/wasm/enkido_wasm.cpp
+// web/wasm/nkido_wasm.cpp
 
 // Number of declared parameters in last compile result
 WASM_EXPORT uint32_t akkado_get_param_decl_count() {

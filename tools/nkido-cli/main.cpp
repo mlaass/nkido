@@ -40,8 +40,8 @@ void print_usage(const char* program) {
               << "  " << program << " ui\n";
 }
 
-std::optional<enkido::Options> parse_args(int argc, char* argv[]) {
-    enkido::Options opts;
+std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
+    nkido::Options opts;
     bool has_mode = false;
     bool has_input = false;
 
@@ -50,19 +50,19 @@ std::optional<enkido::Options> parse_args(int argc, char* argv[]) {
 
         // Modes
         if (arg == "play" && !has_mode) {
-            opts.mode = enkido::Mode::Play;
+            opts.mode = nkido::Mode::Play;
             has_mode = true;
         } else if (arg == "dump" && !has_mode) {
-            opts.mode = enkido::Mode::Dump;
+            opts.mode = nkido::Mode::Dump;
             has_mode = true;
         } else if (arg == "compile" && !has_mode) {
-            opts.mode = enkido::Mode::Compile;
+            opts.mode = nkido::Mode::Compile;
             has_mode = true;
         } else if (arg == "check" && !has_mode) {
-            opts.mode = enkido::Mode::Check;
+            opts.mode = nkido::Mode::Check;
             has_mode = true;
         } else if (arg == "ui" && !has_mode) {
-            opts.mode = enkido::Mode::UI;
+            opts.mode = nkido::Mode::UI;
             has_mode = true;
         }
         // Options
@@ -87,7 +87,7 @@ std::optional<enkido::Options> parse_args(int argc, char* argv[]) {
                 return std::nullopt;
             }
             opts.input = argv[i];
-            opts.input_type = enkido::InputType::InlineSource;
+            opts.input_type = nkido::InputType::InlineSource;
             has_input = true;
         } else if (arg == "-o" || arg == "--output") {
             if (++i >= argc) {
@@ -103,11 +103,11 @@ std::optional<enkido::Options> parse_args(int argc, char* argv[]) {
             opts.verbose = true;
         } else if (arg == "-") {
             opts.input = "-";
-            opts.input_type = enkido::InputType::Stdin;
+            opts.input_type = nkido::InputType::Stdin;
             has_input = true;
         } else if (arg[0] != '-' && !has_input) {
             opts.input = arg;
-            opts.input_type = enkido::detect_input_type(arg);
+            opts.input_type = nkido::detect_input_type(arg);
             has_input = true;
         } else {
             std::cerr << "error: unknown argument: " << arg << "\n";
@@ -116,17 +116,17 @@ std::optional<enkido::Options> parse_args(int argc, char* argv[]) {
     }
 
     // Validate (UI mode doesn't need input)
-    if (!has_input && opts.input_type != enkido::InputType::InlineSource &&
-        opts.mode != enkido::Mode::UI) {
+    if (!has_input && opts.input_type != nkido::InputType::InlineSource &&
+        opts.mode != nkido::Mode::UI) {
         std::cerr << "error: no input specified\n";
         print_usage(argv[0]);
         return std::nullopt;
     }
 
     // Compile mode requires output file
-    if (opts.mode == enkido::Mode::Compile && !opts.output_file) {
+    if (opts.mode == nkido::Mode::Compile && !opts.output_file) {
         // Default output filename
-        if (opts.input_type == enkido::InputType::SourceFile) {
+        if (opts.input_type == nkido::InputType::SourceFile) {
             auto pos = opts.input.rfind('.');
             if (pos != std::string::npos) {
                 opts.output_file = opts.input.substr(0, pos) + ".cedar";
@@ -141,21 +141,21 @@ std::optional<enkido::Options> parse_args(int argc, char* argv[]) {
     return opts;
 }
 
-int handle_check_mode(const enkido::Options& opts) {
+int handle_check_mode(const nkido::Options& opts) {
     // For check mode, we only need to compile and report errors
     std::string source;
     std::string filename;
 
-    if (opts.input_type == enkido::InputType::InlineSource) {
+    if (opts.input_type == nkido::InputType::InlineSource) {
         source = opts.input;
         filename = "<inline>";
-    } else if (opts.input_type == enkido::InputType::Stdin) {
+    } else if (opts.input_type == nkido::InputType::Stdin) {
         std::string line;
         while (std::getline(std::cin, line)) {
             source += line + "\n";
         }
         filename = "<stdin>";
-    } else if (opts.input_type == enkido::InputType::SourceFile) {
+    } else if (opts.input_type == nkido::InputType::SourceFile) {
         std::ifstream file(opts.input);
         if (!file) {
             std::cerr << "error: cannot open file: " << opts.input << "\n";
@@ -200,13 +200,13 @@ int main(int argc, char* argv[]) {
     }
 
     // Handle check mode separately
-    if (opts->mode == enkido::Mode::Check) {
+    if (opts->mode == nkido::Mode::Check) {
         return handle_check_mode(*opts);
     }
 
     // Handle UI mode
-    if (opts->mode == enkido::Mode::UI) {
-        enkido::ui::UIMode ui;
+    if (opts->mode == nkido::Mode::UI) {
+        nkido::ui::UIMode ui;
         if (!ui.init(opts->sample_rate, opts->buffer_size)) {
             std::cerr << "error: failed to initialize UI\n";
             return EXIT_FAILURE;
@@ -215,7 +215,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Load/compile bytecode
-    auto result = enkido::load_bytecode(*opts);
+    auto result = nkido::load_bytecode(*opts);
     if (!result.success) {
         std::cerr << result.error_message << "\n";
         return EXIT_FAILURE;
@@ -229,26 +229,26 @@ int main(int argc, char* argv[]) {
     }
 
     // Handle dump mode or --dump-bytecode
-    if (opts->mode == enkido::Mode::Dump || opts->dump_bytecode) {
+    if (opts->mode == nkido::Mode::Dump || opts->dump_bytecode) {
         if (opts->json_output) {
-            std::cout << enkido::format_program_json(result.instructions);
+            std::cout << nkido::format_program_json(result.instructions);
         } else {
-            std::cout << enkido::format_program(result.instructions);
+            std::cout << nkido::format_program(result.instructions);
         }
 
-        if (opts->mode == enkido::Mode::Dump) {
+        if (opts->mode == nkido::Mode::Dump) {
             return EXIT_SUCCESS;
         }
     }
 
     // Handle compile mode
-    if (opts->mode == enkido::Mode::Compile) {
+    if (opts->mode == nkido::Mode::Compile) {
         if (!opts->output_file) {
             std::cerr << "error: no output file specified\n";
             return EXIT_FAILURE;
         }
 
-        if (!enkido::write_bytecode_file(*opts->output_file, result.instructions)) {
+        if (!nkido::write_bytecode_file(*opts->output_file, result.instructions)) {
             std::cerr << "error: failed to write output file: " << *opts->output_file << "\n";
             return EXIT_FAILURE;
         }
@@ -262,8 +262,8 @@ int main(int argc, char* argv[]) {
     }
 
     // Play mode - initialize audio engine
-    enkido::AudioEngine engine;
-    enkido::AudioEngine::Config audio_config{
+    nkido::AudioEngine engine;
+    nkido::AudioEngine::Config audio_config{
         opts->sample_rate,
         opts->buffer_size,
         2  // stereo
@@ -282,7 +282,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Install signal handlers for graceful shutdown
-    enkido::install_signal_handlers();
+    nkido::install_signal_handlers();
 
     // Start playback
     if (!engine.start()) {

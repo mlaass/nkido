@@ -127,7 +127,7 @@ cmake --build build --target akkado
 ./build/akkado/tests/akkado_tests "[parser]"  # Run by tag
 
 # Run CLI tools
-./build/tools/enkido-cli/enkido-cli --help
+./build/tools/nkido-cli/nkido-cli --help
 ./build/tools/akkado-cli/akkado-cli --help
 
 # Using presets
@@ -144,7 +144,7 @@ cmake --build build-cedar
 ## Project Structure
 
 ```
-enkido/
+nkido/
 ├── cedar/          # Synth engine (standalone library)
 │   ├── include/cedar/
 │   ├── src/
@@ -154,7 +154,7 @@ enkido/
 │   ├── src/
 │   └── tests/
 ├── tools/
-│   ├── enkido-cli/ # Bytecode player with audio engine
+│   ├── nkido-cli/ # Bytecode player with audio engine
 │   └── akkado-cli/ # Compiler CLI
 ├── web/            # SvelteKit web app
 │   ├── src/
@@ -212,7 +212,7 @@ Stores in `src/lib/stores/`:
 **Theme System**:
 - CSS variables defined in `app.css`, dynamically set by theme store
 - 7 preset themes (GitHub Dark/Light, Monokai, Dracula, Solarized, Nord, High Contrast)
-- Custom themes stored in localStorage (`enkido-theme` key)
+- Custom themes stored in localStorage (`nkido-theme` key)
 - All UI elements use CSS variables for consistent theming
 
 ### Documentation System
@@ -250,8 +250,8 @@ And generates:
 - `cedar/include/cedar/generated/opcode_metadata.hpp` - provides `cedar::opcode_to_string()` and `cedar::opcode_is_stateful()`
 
 The generated header is used by:
-- `web/wasm/enkido_wasm.cpp` - for debug disassembly in web UI
-- `tools/enkido-cli/bytecode_dump.cpp` - for CLI bytecode inspection
+- `web/wasm/nkido_wasm.cpp` - for debug disassembly in web UI
+- `tools/nkido-cli/bytecode_dump.cpp` - for CLI bytecode inspection
 
 ### Pattern Debug Serialization
 

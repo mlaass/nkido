@@ -341,8 +341,8 @@ function createAudioEngine() {
 			// Pre-fetch WASM JS code and binary in parallel
 			console.log('[AudioEngine] Fetching WASM module...');
 			const [jsResponse, wasmResponse] = await Promise.all([
-				fetch('/wasm/enkido.js'),
-				fetch('/wasm/enkido.wasm')
+				fetch('/wasm/nkido.js'),
+				fetch('/wasm/nkido.wasm')
 			]);
 			wasmJsCode = await jsResponse.text();
 			wasmBinary = await wasmResponse.arrayBuffer();

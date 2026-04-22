@@ -1,6 +1,6 @@
 > **Status: NOT STARTED** — Separate project, no implementation exists.
 
-# PRD: Godot Extension for Enkido
+# PRD: Godot Extension for Nkido
 
 **Status:** Draft
 **Author:** Claude
@@ -17,7 +17,7 @@ Game developers using Godot Engine need ways to create dynamic, reactive audio t
 
 ### 1.2 Proposed Solution
 
-Create a GDExtension that embeds Enkido (Akkado + Cedar) directly into Godot, allowing:
+Create a GDExtension that embeds Nkido (Akkado + Cedar) directly into Godot, allowing:
 - Live-coding audio synthesis within the game engine
 - Real-time parameter binding from game state to audio
 - Zero-latency adaptive music without middleware
@@ -46,7 +46,7 @@ Create a GDExtension that embeds Enkido (Akkado + Cedar) directly into Godot, al
 ```gdscript
 extends Node2D
 
-@onready var music: EnkidoPlayer = $EnkidoPlayer
+@onready var music: NkidoPlayer = $NkidoPlayer
 
 func _ready():
     # Load from file
@@ -77,11 +77,11 @@ func _process(delta):
 
 ### 2.2 Inspector Integration
 
-When an `EnkidoPlayer` node is selected:
+When an `NkidoPlayer` node is selected:
 
 ```
 ┌─────────────────────────────────────────┐
-│ EnkidoPlayer                            │
+│ NkidoPlayer                            │
 ├─────────────────────────────────────────┤
 │ Source                                  │
 │ ┌─────────────────────────────────────┐ │
@@ -115,7 +115,7 @@ When an `EnkidoPlayer` node is selected:
 
 extends Node
 
-@onready var music: EnkidoPlayer = $Music
+@onready var music: NkidoPlayer = $Music
 
 var combat_intensity: float = 0.0
 
@@ -161,7 +161,7 @@ func on_boss_appear():
 
 extends CharacterBody2D
 
-@onready var sfx: EnkidoPlayer = $JumpSFX
+@onready var sfx: NkidoPlayer = $JumpSFX
 
 func _ready():
     sfx.source = '''
@@ -187,29 +187,29 @@ func jump():
 ### 3.1 Repository Structure
 
 ```
-enkido-godot/
+nkido-godot/
 ├── .github/
 │   └── workflows/
 │       └── build.yml           # CI for Windows/Linux/macOS
 ├── SConstruct                  # Godot build system
-├── enkido/                     # Git submodule → enkido repo
+├── nkido/                     # Git submodule → nkido repo
 ├── godot-cpp/                  # Git submodule → godot-cpp
 ├── src/
 │   ├── register_types.cpp      # GDExtension entry point
 │   ├── register_types.hpp
-│   ├── enkido_engine.hpp       # Singleton for global state
-│   ├── enkido_engine.cpp
-│   ├── enkido_player.hpp       # Per-instance player node
-│   ├── enkido_player.cpp
-│   ├── enkido_audio_stream.hpp # Custom AudioStream
-│   ├── enkido_audio_stream.cpp
-│   ├── enkido_audio_stream_playback.hpp
-│   ├── enkido_audio_stream_playback.cpp
-│   └── enkido_resource_loader.hpp  # .akk file importer
+│   ├── nkido_engine.hpp       # Singleton for global state
+│   ├── nkido_engine.cpp
+│   ├── nkido_player.hpp       # Per-instance player node
+│   ├── nkido_player.cpp
+│   ├── nkido_audio_stream.hpp # Custom AudioStream
+│   ├── nkido_audio_stream.cpp
+│   ├── nkido_audio_stream_playback.hpp
+│   ├── nkido_audio_stream_playback.cpp
+│   └── nkido_resource_loader.hpp  # .akk file importer
 ├── addons/
-│   └── enkido/
+│   └── nkido/
 │       ├── plugin.cfg          # Editor plugin metadata
-│       ├── enkido_inspector.gd # Custom inspector for params
+│       ├── nkido_inspector.gd # Custom inspector for params
 │       └── icons/              # Node icons
 ├── demo/
 │   ├── project.godot
@@ -226,7 +226,7 @@ enkido-godot/
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         EnkidoEngine                                │
+│                         NkidoEngine                                │
 │                         (Singleton)                                 │
 ├─────────────────────────────────────────────────────────────────────┤
 │ - sample_bank_: SampleBank                                          │
@@ -243,7 +243,7 @@ enkido-godot/
                                     │ references
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         EnkidoPlayer                                │
+│                         NkidoPlayer                                │
 │                         (Node)                                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │ - vm_: std::unique_ptr<Cedar::VM>                                   │
@@ -280,10 +280,10 @@ enkido-godot/
                                     │ creates
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                      EnkidoAudioStream                              │
+│                      NkidoAudioStream                              │
 │                      (AudioStream)                                  │
 ├─────────────────────────────────────────────────────────────────────┤
-│ - player_: EnkidoPlayer*                                            │
+│ - player_: NkidoPlayer*                                            │
 ├─────────────────────────────────────────────────────────────────────┤
 │ + instantiate_playback() -> AudioStreamPlayback                     │
 │ + get_length() -> float  // Returns 0 (infinite)                    │
@@ -292,10 +292,10 @@ enkido-godot/
                                     │ creates
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                  EnkidoAudioStreamPlayback                          │
+│                  NkidoAudioStreamPlayback                          │
 │                  (AudioStreamPlayback)                              │
 ├─────────────────────────────────────────────────────────────────────┤
-│ - player_: EnkidoPlayer*                                            │
+│ - player_: NkidoPlayer*                                            │
 │ - output_buffer_: std::vector<AudioFrame>                           │
 ├─────────────────────────────────────────────────────────────────────┤
 │ + _mix(buffer: AudioFrame*, rate: float, frames: int) -> int        │
@@ -312,13 +312,13 @@ enkido-godot/
 │                          Main Thread                                │
 │  (GDScript, Inspector, Editor)                                      │
 ├─────────────────────────────────────────────────────────────────────┤
-│  EnkidoPlayer::compile()                                            │
+│  NkidoPlayer::compile()                                            │
 │    - Parse Akkado source                                            │
 │    - Generate bytecode                                              │
 │    - Extract param declarations                                     │
 │    - Load bytecode into VM (thread-safe swap)                       │
 │                                                                     │
-│  EnkidoPlayer::set_param("volume", 0.5)                             │
+│  NkidoPlayer::set_param("volume", 0.5)                             │
 │    - env_map_.set_param("volume", 0.5, 20.0f)                       │
 │    - Lock-free atomic write                                         │
 └───────────────────────────────┬─────────────────────────────────────┘
@@ -328,7 +328,7 @@ enkido-godot/
 │                         Audio Thread                                │
 │  (Godot AudioServer callback)                                       │
 ├─────────────────────────────────────────────────────────────────────┤
-│  EnkidoAudioStreamPlayback::_mix()                                  │
+│  NkidoAudioStreamPlayback::_mix()                                  │
 │    while (frames_remaining > 0) {                                   │
 │        vm->process_block();           // Cedar VM execution         │
 │        env_map_.update_interpolation_block();                       │
@@ -345,7 +345,7 @@ enkido-godot/
 ### 3.4 Memory Layout
 
 ```
-EnkidoPlayer Instance
+NkidoPlayer Instance
 ├── Cedar::VM
 │   ├── BufferPool (pre-allocated signal buffers)
 │   │   └── 4096 × 128 floats = 2MB
@@ -365,29 +365,29 @@ EnkidoPlayer Instance
 
 ## 4. API Reference
 
-### 4.1 EnkidoEngine (Autoload Singleton)
+### 4.1 NkidoEngine (Autoload Singleton)
 
 ```gdscript
-# Access via EnkidoEngine singleton (registered as autoload)
+# Access via NkidoEngine singleton (registered as autoload)
 
 # Set global BPM (affects all players unless overridden)
-EnkidoEngine.set_bpm(120.0)
-var bpm = EnkidoEngine.get_bpm()
+NkidoEngine.set_bpm(120.0)
+var bpm = NkidoEngine.get_bpm()
 
 # Load samples globally (shared across all players)
-var sample_id = EnkidoEngine.load_sample("kick", "res://samples/kick.wav")
+var sample_id = NkidoEngine.load_sample("kick", "res://samples/kick.wav")
 
 # Check if sample is loaded
-var id = EnkidoEngine.get_sample_id("kick")  # Returns -1 if not found
+var id = NkidoEngine.get_sample_id("kick")  # Returns -1 if not found
 
 # Clear all samples (e.g., on scene change)
-EnkidoEngine.clear_samples()
+NkidoEngine.clear_samples()
 
 # Get/set sample rate (usually matches AudioServer)
-var rate = EnkidoEngine.get_sample_rate()
+var rate = NkidoEngine.get_sample_rate()
 ```
 
-### 4.2 EnkidoPlayer (Node)
+### 4.2 NkidoPlayer (Node)
 
 #### Properties
 
@@ -480,7 +480,7 @@ signal playback_stopped()
 # Load .akk file as resource
 var music_script = load("res://audio/theme.akk")
 
-# Use with EnkidoPlayer
+# Use with NkidoPlayer
 player.source_file = "res://audio/theme.akk"
 # OR
 player.source = music_script.get_source()
@@ -496,9 +496,9 @@ player.source = music_script.get_source()
 // src/register_types.cpp
 
 #include "register_types.hpp"
-#include "enkido_engine.hpp"
-#include "enkido_player.hpp"
-#include "enkido_audio_stream.hpp"
+#include "nkido_engine.hpp"
+#include "nkido_player.hpp"
+#include "nkido_audio_stream.hpp"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/class_db.hpp>
@@ -507,35 +507,35 @@ player.source = music_script.get_source()
 
 using namespace godot;
 
-void initialize_enkido_module(ModuleInitializationLevel p_level) {
+void initialize_nkido_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
 
     // Register classes
-    ClassDB::register_class<EnkidoEngine>();
-    ClassDB::register_class<EnkidoPlayer>();
-    ClassDB::register_class<EnkidoAudioStream>();
-    ClassDB::register_class<EnkidoAudioStreamPlayback>();
+    ClassDB::register_class<NkidoEngine>();
+    ClassDB::register_class<NkidoPlayer>();
+    ClassDB::register_class<NkidoAudioStream>();
+    ClassDB::register_class<NkidoAudioStreamPlayback>();
 
     // Create singleton
     Engine::get_singleton()->register_singleton(
-        "EnkidoEngine",
-        memnew(EnkidoEngine)
+        "NkidoEngine",
+        memnew(NkidoEngine)
     );
 }
 
-void uninitialize_enkido_module(ModuleInitializationLevel p_level) {
+void uninitialize_nkido_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) {
         return;
     }
 
     // Clean up singleton
-    Engine::get_singleton()->unregister_singleton("EnkidoEngine");
+    Engine::get_singleton()->unregister_singleton("NkidoEngine");
 }
 
 extern "C" {
-    GDExtensionBool GDE_EXPORT enkido_library_init(
+    GDExtensionBool GDE_EXPORT nkido_library_init(
         GDExtensionInterfaceGetProcAddress p_get_proc_address,
         const GDExtensionClassLibraryPtr p_library,
         GDExtensionInitialization *r_initialization
@@ -544,8 +544,8 @@ extern "C" {
             p_get_proc_address, p_library, r_initialization
         );
 
-        init_obj.register_initializer(initialize_enkido_module);
-        init_obj.register_terminator(uninitialize_enkido_module);
+        init_obj.register_initializer(initialize_nkido_module);
+        init_obj.register_terminator(uninitialize_nkido_module);
         init_obj.set_minimum_library_initialization_level(
             MODULE_INITIALIZATION_LEVEL_SCENE
         );
@@ -555,10 +555,10 @@ extern "C" {
 }
 ```
 
-### 5.2 EnkidoEngine Singleton
+### 5.2 NkidoEngine Singleton
 
 ```cpp
-// src/enkido_engine.hpp
+// src/nkido_engine.hpp
 
 #pragma once
 
@@ -568,8 +568,8 @@ extern "C" {
 
 namespace godot {
 
-class EnkidoEngine : public Object {
-    GDCLASS(EnkidoEngine, Object)
+class NkidoEngine : public Object {
+    GDCLASS(NkidoEngine, Object)
 
 private:
     std::unique_ptr<cedar::SampleBank> sample_bank_;
@@ -580,8 +580,8 @@ protected:
     static void _bind_methods();
 
 public:
-    EnkidoEngine();
-    ~EnkidoEngine() override;
+    NkidoEngine();
+    ~NkidoEngine() override;
 
     // BPM
     void set_bpm(float bpm);
@@ -596,7 +596,7 @@ public:
     int get_sample_id(const String& name) const;
     void clear_samples();
 
-    // Internal access for EnkidoPlayer
+    // Internal access for NkidoPlayer
     cedar::SampleBank* get_sample_bank() const { return sample_bank_.get(); }
 };
 
@@ -604,35 +604,35 @@ public:
 ```
 
 ```cpp
-// src/enkido_engine.cpp
+// src/nkido_engine.cpp
 
-#include "enkido_engine.hpp"
+#include "nkido_engine.hpp"
 #include <godot_cpp/classes/audio_server.hpp>
 #include <godot_cpp/classes/file_access.hpp>
 
 namespace godot {
 
-void EnkidoEngine::_bind_methods() {
-    ClassDB::bind_method(D_METHOD("set_bpm", "bpm"), &EnkidoEngine::set_bpm);
-    ClassDB::bind_method(D_METHOD("get_bpm"), &EnkidoEngine::get_bpm);
+void NkidoEngine::_bind_methods() {
+    ClassDB::bind_method(D_METHOD("set_bpm", "bpm"), &NkidoEngine::set_bpm);
+    ClassDB::bind_method(D_METHOD("get_bpm"), &NkidoEngine::get_bpm);
 
     ClassDB::bind_method(D_METHOD("set_sample_rate", "rate"),
-                         &EnkidoEngine::set_sample_rate);
+                         &NkidoEngine::set_sample_rate);
     ClassDB::bind_method(D_METHOD("get_sample_rate"),
-                         &EnkidoEngine::get_sample_rate);
+                         &NkidoEngine::get_sample_rate);
 
     ClassDB::bind_method(D_METHOD("load_sample", "name", "path"),
-                         &EnkidoEngine::load_sample);
+                         &NkidoEngine::load_sample);
     ClassDB::bind_method(D_METHOD("get_sample_id", "name"),
-                         &EnkidoEngine::get_sample_id);
+                         &NkidoEngine::get_sample_id);
     ClassDB::bind_method(D_METHOD("clear_samples"),
-                         &EnkidoEngine::clear_samples);
+                         &NkidoEngine::clear_samples);
 
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bpm"),
                  "set_bpm", "get_bpm");
 }
 
-EnkidoEngine::EnkidoEngine() {
+NkidoEngine::NkidoEngine() {
     sample_bank_ = std::make_unique<cedar::SampleBank>();
 
     // Get sample rate from AudioServer
@@ -642,21 +642,21 @@ EnkidoEngine::EnkidoEngine() {
     }
 }
 
-EnkidoEngine::~EnkidoEngine() = default;
+NkidoEngine::~NkidoEngine() = default;
 
-void EnkidoEngine::set_bpm(float bpm) {
+void NkidoEngine::set_bpm(float bpm) {
     global_bpm_ = std::max(1.0f, std::min(999.0f, bpm));
 }
 
-float EnkidoEngine::get_bpm() const {
+float NkidoEngine::get_bpm() const {
     return global_bpm_;
 }
 
-int EnkidoEngine::load_sample(const String& name, const String& path) {
+int NkidoEngine::load_sample(const String& name, const String& path) {
     // Load audio file using Godot's file system
     auto file = FileAccess::open(path, FileAccess::READ);
     if (!file.is_valid()) {
-        ERR_PRINT("EnkidoEngine: Failed to open sample file: " + path);
+        ERR_PRINT("NkidoEngine: Failed to open sample file: " + path);
         return -1;
     }
 
@@ -672,22 +672,22 @@ int EnkidoEngine::load_sample(const String& name, const String& path) {
     );
 }
 
-int EnkidoEngine::get_sample_id(const String& name) const {
+int NkidoEngine::get_sample_id(const String& name) const {
     std::string name_str = name.utf8().get_data();
     return sample_bank_->get_id(name_str.c_str());
 }
 
-void EnkidoEngine::clear_samples() {
+void NkidoEngine::clear_samples() {
     sample_bank_->clear();
 }
 
 } // namespace godot
 ```
 
-### 5.3 EnkidoPlayer Node
+### 5.3 NkidoPlayer Node
 
 ```cpp
-// src/enkido_player.hpp
+// src/nkido_player.hpp
 
 #pragma once
 
@@ -701,16 +701,16 @@ void EnkidoEngine::clear_samples() {
 
 namespace godot {
 
-class EnkidoAudioStream;
+class NkidoAudioStream;
 
-class EnkidoPlayer : public Node {
-    GDCLASS(EnkidoPlayer, Node)
+class NkidoPlayer : public Node {
+    GDCLASS(NkidoPlayer, Node)
 
 private:
     // Audio components
     std::unique_ptr<cedar::VM> vm_;
     cedar::EnvMap env_map_;
-    Ref<EnkidoAudioStream> audio_stream_;
+    Ref<NkidoAudioStream> audio_stream_;
     AudioStreamPlayer* stream_player_ = nullptr;
 
     // Source
@@ -738,8 +738,8 @@ protected:
     static void _bind_methods();
 
 public:
-    EnkidoPlayer();
-    ~EnkidoPlayer() override;
+    NkidoPlayer();
+    ~NkidoPlayer() override;
 
     void _ready() override;
     void _process(double delta) override;
@@ -788,79 +788,79 @@ public:
 ```
 
 ```cpp
-// src/enkido_player.cpp
+// src/nkido_player.cpp
 
-#include "enkido_player.hpp"
-#include "enkido_engine.hpp"
-#include "enkido_audio_stream.hpp"
+#include "nkido_player.hpp"
+#include "nkido_engine.hpp"
+#include "nkido_audio_stream.hpp"
 
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/file_access.hpp>
 
 namespace godot {
 
-void EnkidoPlayer::_bind_methods() {
+void NkidoPlayer::_bind_methods() {
     // Source properties
     ClassDB::bind_method(D_METHOD("set_source", "code"),
-                         &EnkidoPlayer::set_source);
+                         &NkidoPlayer::set_source);
     ClassDB::bind_method(D_METHOD("get_source"),
-                         &EnkidoPlayer::get_source);
+                         &NkidoPlayer::get_source);
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "source",
                               PROPERTY_HINT_MULTILINE_TEXT),
                  "set_source", "get_source");
 
     ClassDB::bind_method(D_METHOD("set_source_file", "path"),
-                         &EnkidoPlayer::set_source_file);
+                         &NkidoPlayer::set_source_file);
     ClassDB::bind_method(D_METHOD("get_source_file"),
-                         &EnkidoPlayer::get_source_file);
+                         &NkidoPlayer::get_source_file);
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "source_file",
                               PROPERTY_HINT_FILE, "*.akk"),
                  "set_source_file", "get_source_file");
 
     // Compilation
-    ClassDB::bind_method(D_METHOD("compile"), &EnkidoPlayer::compile);
+    ClassDB::bind_method(D_METHOD("compile"), &NkidoPlayer::compile);
     ClassDB::bind_method(D_METHOD("get_compile_errors"),
-                         &EnkidoPlayer::get_compile_errors);
+                         &NkidoPlayer::get_compile_errors);
 
     // Playback
-    ClassDB::bind_method(D_METHOD("play"), &EnkidoPlayer::play);
-    ClassDB::bind_method(D_METHOD("stop"), &EnkidoPlayer::stop);
-    ClassDB::bind_method(D_METHOD("pause"), &EnkidoPlayer::pause);
-    ClassDB::bind_method(D_METHOD("is_playing"), &EnkidoPlayer::is_playing);
+    ClassDB::bind_method(D_METHOD("play"), &NkidoPlayer::play);
+    ClassDB::bind_method(D_METHOD("stop"), &NkidoPlayer::stop);
+    ClassDB::bind_method(D_METHOD("pause"), &NkidoPlayer::pause);
+    ClassDB::bind_method(D_METHOD("is_playing"), &NkidoPlayer::is_playing);
 
     // Parameters
     ClassDB::bind_method(D_METHOD("set_param", "name", "value", "slew_ms"),
-                         &EnkidoPlayer::set_param,
+                         &NkidoPlayer::set_param,
                          DEFVAL(20.0f));
     ClassDB::bind_method(D_METHOD("get_param", "name"),
-                         &EnkidoPlayer::get_param);
+                         &NkidoPlayer::get_param);
     ClassDB::bind_method(D_METHOD("trigger_button", "name"),
-                         &EnkidoPlayer::trigger_button);
-    ClassDB::bind_method(D_METHOD("get_params"), &EnkidoPlayer::get_params);
+                         &NkidoPlayer::trigger_button);
+    ClassDB::bind_method(D_METHOD("get_params"), &NkidoPlayer::get_params);
 
     // Timing
-    ClassDB::bind_method(D_METHOD("set_bpm", "bpm"), &EnkidoPlayer::set_bpm);
-    ClassDB::bind_method(D_METHOD("get_bpm"), &EnkidoPlayer::get_bpm);
+    ClassDB::bind_method(D_METHOD("set_bpm", "bpm"), &NkidoPlayer::set_bpm);
+    ClassDB::bind_method(D_METHOD("get_bpm"), &NkidoPlayer::get_bpm);
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bpm"), "set_bpm", "get_bpm");
 
     ClassDB::bind_method(D_METHOD("get_beat_position"),
-                         &EnkidoPlayer::get_beat_position);
+                         &NkidoPlayer::get_beat_position);
     ClassDB::bind_method(D_METHOD("get_cycle_position"),
-                         &EnkidoPlayer::get_cycle_position);
+                         &NkidoPlayer::get_cycle_position);
 
     // Advanced properties
     ClassDB::bind_method(D_METHOD("set_crossfade_blocks", "blocks"),
-                         &EnkidoPlayer::set_crossfade_blocks);
+                         &NkidoPlayer::set_crossfade_blocks);
     ClassDB::bind_method(D_METHOD("get_crossfade_blocks"),
-                         &EnkidoPlayer::get_crossfade_blocks);
+                         &NkidoPlayer::get_crossfade_blocks);
     ADD_PROPERTY(PropertyInfo(Variant::INT, "crossfade_blocks",
                               PROPERTY_HINT_RANGE, "1,10"),
                  "set_crossfade_blocks", "get_crossfade_blocks");
 
     ClassDB::bind_method(D_METHOD("set_autoplay", "autoplay"),
-                         &EnkidoPlayer::set_autoplay);
+                         &NkidoPlayer::set_autoplay);
     ClassDB::bind_method(D_METHOD("get_autoplay"),
-                         &EnkidoPlayer::get_autoplay);
+                         &NkidoPlayer::get_autoplay);
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "autoplay"),
                  "set_autoplay", "get_autoplay");
 
@@ -874,17 +874,17 @@ void EnkidoPlayer::_bind_methods() {
     ADD_SIGNAL(MethodInfo("playback_stopped"));
 }
 
-EnkidoPlayer::EnkidoPlayer() {
+NkidoPlayer::NkidoPlayer() {
     vm_ = std::make_unique<cedar::VM>();
 }
 
-EnkidoPlayer::~EnkidoPlayer() = default;
+NkidoPlayer::~NkidoPlayer() = default;
 
-void EnkidoPlayer::_ready() {
+void NkidoPlayer::_ready() {
     // Create internal AudioStreamPlayer
     stream_player_ = memnew(AudioStreamPlayer);
     add_child(stream_player_);
-    stream_player_->set_name("_EnkidoStreamPlayer");
+    stream_player_->set_name("_NkidoStreamPlayer");
 
     // Create audio stream
     audio_stream_.instantiate();
@@ -892,8 +892,8 @@ void EnkidoPlayer::_ready() {
     stream_player_->set_stream(audio_stream_);
 
     // Initialize VM with sample rate
-    auto* engine = Object::cast_to<EnkidoEngine>(
-        Engine::get_singleton()->get_singleton("EnkidoEngine")
+    auto* engine = Object::cast_to<NkidoEngine>(
+        Engine::get_singleton()->get_singleton("NkidoEngine")
     );
     if (engine) {
         vm_->set_sample_rate(engine->get_sample_rate());
@@ -907,12 +907,12 @@ void EnkidoPlayer::_ready() {
     }
 }
 
-void EnkidoPlayer::_process(double delta) {
+void NkidoPlayer::_process(double delta) {
     // Process button triggers
     process_button_triggers();
 }
 
-bool EnkidoPlayer::compile() {
+bool NkidoPlayer::compile() {
     // Get source code
     String code = source_;
     if (!source_file_.is_empty()) {
@@ -996,7 +996,7 @@ bool EnkidoPlayer::compile() {
     return true;
 }
 
-void EnkidoPlayer::play() {
+void NkidoPlayer::play() {
     if (!compiled_) return;
 
     playing_.store(true);
@@ -1004,34 +1004,34 @@ void EnkidoPlayer::play() {
     emit_signal("playback_started");
 }
 
-void EnkidoPlayer::stop() {
+void NkidoPlayer::stop() {
     playing_.store(false);
     stream_player_->stop();
     vm_->reset();
     emit_signal("playback_stopped");
 }
 
-void EnkidoPlayer::pause() {
+void NkidoPlayer::pause() {
     playing_.store(false);
     stream_player_->stop();
 }
 
-bool EnkidoPlayer::is_playing() const {
+bool NkidoPlayer::is_playing() const {
     return playing_.load();
 }
 
-void EnkidoPlayer::set_param(const String& name, float value, float slew_ms) {
+void NkidoPlayer::set_param(const String& name, float value, float slew_ms) {
     std::string name_str = name.utf8().get_data();
     env_map_.set_param(name_str.c_str(), value, slew_ms);
 }
 
-float EnkidoPlayer::get_param(const String& name) const {
+float NkidoPlayer::get_param(const String& name) const {
     std::string name_str = name.utf8().get_data();
     uint32_t hash = cedar::fnv1a_hash(name_str.c_str());
     return env_map_.get_target(hash);
 }
 
-void EnkidoPlayer::trigger_button(const String& name) {
+void NkidoPlayer::trigger_button(const String& name) {
     std::string name_str = name.utf8().get_data();
     uint32_t hash = cedar::fnv1a_hash(name_str.c_str());
 
@@ -1044,7 +1044,7 @@ void EnkidoPlayer::trigger_button(const String& name) {
     }
 }
 
-void EnkidoPlayer::process_button_triggers() {
+void NkidoPlayer::process_button_triggers() {
     // Release buttons that were triggered
     for (auto& trigger : button_triggers_) {
         if (trigger.active.load()) {
@@ -1061,7 +1061,7 @@ void EnkidoPlayer::process_button_triggers() {
     }
 }
 
-Array EnkidoPlayer::get_params() const {
+Array NkidoPlayer::get_params() const {
     Array result;
 
     for (const auto& param : param_decls_) {
@@ -1101,13 +1101,13 @@ Array EnkidoPlayer::get_params() const {
     return result;
 }
 
-float EnkidoPlayer::get_bpm() const {
+float NkidoPlayer::get_bpm() const {
     if (local_bpm_ > 0.0f) {
         return local_bpm_;
     }
 
-    auto* engine = Object::cast_to<EnkidoEngine>(
-        Engine::get_singleton()->get_singleton("EnkidoEngine")
+    auto* engine = Object::cast_to<NkidoEngine>(
+        Engine::get_singleton()->get_singleton("NkidoEngine")
     );
     return engine ? engine->get_bpm() : 120.0f;
 }
@@ -1118,17 +1118,17 @@ float EnkidoPlayer::get_bpm() const {
 ### 5.4 Custom AudioStream
 
 ```cpp
-// src/enkido_audio_stream_playback.cpp
+// src/nkido_audio_stream_playback.cpp
 
-#include "enkido_audio_stream_playback.hpp"
-#include "enkido_player.hpp"
-#include "enkido_engine.hpp"
+#include "nkido_audio_stream_playback.hpp"
+#include "nkido_player.hpp"
+#include "nkido_engine.hpp"
 
 #include <godot_cpp/classes/engine.hpp>
 
 namespace godot {
 
-int EnkidoAudioStreamPlayback::_mix(
+int NkidoAudioStreamPlayback::_mix(
     AudioFrame* p_buffer,
     float p_rate_scale,
     int p_frames
@@ -1145,8 +1145,8 @@ int EnkidoAudioStreamPlayback::_mix(
     auto* env_map = player_->get_env_map();
 
     // Get BPM from engine or player
-    auto* engine = Object::cast_to<EnkidoEngine>(
-        Engine::get_singleton()->get_singleton("EnkidoEngine")
+    auto* engine = Object::cast_to<NkidoEngine>(
+        Engine::get_singleton()->get_singleton("NkidoEngine")
     );
     float bpm = player_->get_bpm();
     vm->set_bpm(bpm);
@@ -1189,10 +1189,10 @@ import sys
 # Load godot-cpp build environment
 env = SConscript("godot-cpp/SConstruct")
 
-# Add enkido include paths
+# Add nkido include paths
 env.Append(CPPPATH=[
-    "enkido/cedar/include",
-    "enkido/akkado/include",
+    "nkido/cedar/include",
+    "nkido/akkado/include",
     "src"
 ])
 
@@ -1203,15 +1203,15 @@ env.Append(CXXFLAGS=["-std=c++20"])
 sources = []
 
 # Cedar sources
-for root, dirs, files in os.walk("enkido/cedar/src"):
+for root, dirs, files in os.walk("nkido/cedar/src"):
     for file in files:
         if file.endswith(".cpp"):
             sources.append(os.path.join(root, file))
 
 # Akkado sources
-for file in os.listdir("enkido/akkado/src"):
+for file in os.listdir("nkido/akkado/src"):
     if file.endswith(".cpp"):
-        sources.append(os.path.join("enkido/akkado/src", file))
+        sources.append(os.path.join("nkido/akkado/src", file))
 
 # Extension sources
 for file in os.listdir("src"):
@@ -1220,7 +1220,7 @@ for file in os.listdir("src"):
 
 # Build shared library
 library = env.SharedLibrary(
-    "bin/enkido.{}.{}.{}".format(
+    "bin/nkido.{}.{}.{}".format(
         env["platform"],
         env["target"],
         env["arch"]
@@ -1234,22 +1234,22 @@ Default(library)
 ### 5.6 Extension Configuration
 
 ```gdextension
-; addons/enkido/enkido.gdextension
+; addons/nkido/nkido.gdextension
 
 [configuration]
-entry_symbol = "enkido_library_init"
+entry_symbol = "nkido_library_init"
 compatibility_minimum = "4.2"
 
 [libraries]
-linux.debug.x86_64 = "res://bin/enkido.linux.template_debug.x86_64.so"
-linux.release.x86_64 = "res://bin/enkido.linux.template_release.x86_64.so"
-windows.debug.x86_64 = "res://bin/enkido.windows.template_debug.x86_64.dll"
-windows.release.x86_64 = "res://bin/enkido.windows.template_release.x86_64.dll"
-macos.debug = "res://bin/enkido.macos.template_debug.framework"
-macos.release = "res://bin/enkido.macos.template_release.framework"
+linux.debug.x86_64 = "res://bin/nkido.linux.template_debug.x86_64.so"
+linux.release.x86_64 = "res://bin/nkido.linux.template_release.x86_64.so"
+windows.debug.x86_64 = "res://bin/nkido.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/nkido.windows.template_release.x86_64.dll"
+macos.debug = "res://bin/nkido.macos.template_debug.framework"
+macos.release = "res://bin/nkido.macos.template_release.framework"
 
 [icons]
-EnkidoPlayer = "res://addons/enkido/icons/enkido_player.svg"
+NkidoPlayer = "res://addons/nkido/icons/nkido_player.svg"
 ```
 
 ---
@@ -1257,13 +1257,13 @@ EnkidoPlayer = "res://addons/enkido/icons/enkido_player.svg"
 ## 6. Inspector Plugin
 
 ```gdscript
-# addons/enkido/enkido_inspector.gd
+# addons/nkido/nkido_inspector.gd
 
 @tool
 extends EditorInspectorPlugin
 
 func _can_handle(object: Object) -> bool:
-    return object is EnkidoPlayer
+    return object is NkidoPlayer
 
 func _parse_property(object: Object, type: Variant.Type, name: String,
                      hint_type: PropertyHint, hint_string: String,
@@ -1271,7 +1271,7 @@ func _parse_property(object: Object, type: Variant.Type, name: String,
 
     if name == "source":
         # Add custom source editor with syntax highlighting
-        var editor = preload("res://addons/enkido/source_editor.tscn").instantiate()
+        var editor = preload("res://addons/nkido/source_editor.tscn").instantiate()
         editor.player = object
         add_custom_control(editor)
         return true
@@ -1279,7 +1279,7 @@ func _parse_property(object: Object, type: Variant.Type, name: String,
     return false
 
 func _parse_end(object: Object) -> void:
-    var player := object as EnkidoPlayer
+    var player := object as NkidoPlayer
     if player == null:
         return
 
@@ -1351,11 +1351,11 @@ func _parse_end(object: Object) -> void:
 ## 7. Implementation Phases
 
 ### Phase 1: Minimal Viable Extension
-1. Set up repository with submodules (godot-cpp, enkido)
+1. Set up repository with submodules (godot-cpp, nkido)
 2. Create build system (SConstruct)
-3. Implement `EnkidoEngine` singleton
-4. Implement basic `EnkidoPlayer` with compile/play/stop
-5. Implement `EnkidoAudioStream` with AudioStreamGenerator
+3. Implement `NkidoEngine` singleton
+4. Implement basic `NkidoPlayer` with compile/play/stop
+5. Implement `NkidoAudioStream` with AudioStreamGenerator
 6. Test with simple oscillator in demo project
 
 **Deliverable:** Play a sine wave from Akkado code in Godot
@@ -1370,7 +1370,7 @@ func _parse_end(object: Object) -> void:
 **Deliverable:** Change filter cutoff in real-time from game code
 
 ### Phase 3: Sample Loading
-12. Implement `EnkidoEngine.load_sample()` using Godot file system
+12. Implement `NkidoEngine.load_sample()` using Godot file system
 13. Add sample resolution during compilation
 14. Support WAV loading (OGG via conversion)
 15. Test sample playback
@@ -1423,14 +1423,14 @@ demo/
 ```gdscript
 extends Node2D
 
-@onready var music: EnkidoPlayer = $Music
+@onready var music: NkidoPlayer = $Music
 @onready var player: CharacterBody2D = $Player
 
 func _ready():
     # Load samples
-    EnkidoEngine.load_sample("kick", "res://samples/kick.wav")
-    EnkidoEngine.load_sample("snare", "res://samples/snare.wav")
-    EnkidoEngine.load_sample("hat", "res://samples/hat.wav")
+    NkidoEngine.load_sample("kick", "res://samples/kick.wav")
+    NkidoEngine.load_sample("snare", "res://samples/snare.wav")
+    NkidoEngine.load_sample("hat", "res://samples/hat.wav")
 
     # Start music
     music.source_file = "res://audio/theme.akk"
@@ -1489,10 +1489,10 @@ master |> out(%, %)
 ### Unit Tests (C++)
 
 ```cpp
-// tests/test_enkido_player.cpp
+// tests/test_nkido_player.cpp
 
-TEST_CASE("EnkidoPlayer compiles valid source") {
-    EnkidoPlayer player;
+TEST_CASE("NkidoPlayer compiles valid source") {
+    NkidoPlayer player;
     player.set_source("osc(\"saw\", 220) |> out(%, %)");
 
     bool success = player.compile();
@@ -1500,8 +1500,8 @@ TEST_CASE("EnkidoPlayer compiles valid source") {
     REQUIRE(player.is_compiled());
 }
 
-TEST_CASE("EnkidoPlayer extracts parameters") {
-    EnkidoPlayer player;
+TEST_CASE("NkidoPlayer extracts parameters") {
+    NkidoPlayer player;
     player.set_source(R"(
         vol = param("volume", 0.8, 0, 1)
         osc("saw", 220) * vol |> out(%, %)
@@ -1518,8 +1518,8 @@ TEST_CASE("EnkidoPlayer extracts parameters") {
     CHECK(float(p["default"]) == Approx(0.8f));
 }
 
-TEST_CASE("EnkidoPlayer set_param updates EnvMap") {
-    EnkidoPlayer player;
+TEST_CASE("NkidoPlayer set_param updates EnvMap") {
+    NkidoPlayer player;
     player.set_source(R"(
         vol = param("volume", 0.5)
         dc(1) * vol |> out(%, %)
@@ -1536,12 +1536,12 @@ TEST_CASE("EnkidoPlayer set_param updates EnvMap") {
 ### Integration Tests (GDScript)
 
 ```gdscript
-# tests/test_enkido.gd
+# tests/test_nkido.gd
 
 extends GutTest
 
 func test_compile_and_play():
-    var player = EnkidoPlayer.new()
+    var player = NkidoPlayer.new()
     add_child(player)
 
     player.source = "osc('saw', 220) |> out(%, %)"
@@ -1558,7 +1558,7 @@ func test_compile_and_play():
     player.queue_free()
 
 func test_parameter_binding():
-    var player = EnkidoPlayer.new()
+    var player = NkidoPlayer.new()
     add_child(player)
 
     player.source = """

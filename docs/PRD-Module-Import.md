@@ -200,7 +200,7 @@ Core work. Generalizes the stdlib-prepend pattern to N source files.
 | `akkado/include/akkado/akkado.hpp` | Add `FileResolver*` parameter to `compile()` |
 | `akkado/src/akkado.cpp` | Import resolution pre-pass; replace `adjust_diagnostics()` with SourceMap; concatenate stdlib + sorted modules + user source |
 | `tools/akkado-cli/main.cpp` | Create `FilesystemResolver`, pass to `compile()` |
-| `tools/enkido-cli/main.cpp` | Same |
+| `tools/nkido-cli/main.cpp` | Same |
 
 #### SourceMap Design
 
@@ -402,7 +402,7 @@ Separate from compiler work — UI + WASM glue.
 
 #### WASM API
 
-New C exports in `enkido_wasm.cpp`:
+New C exports in `nkido_wasm.cpp`:
 
 ```cpp
 WASM_EXPORT void akkado_register_module(const char* path, uint32_t path_len,
@@ -411,13 +411,13 @@ WASM_EXPORT void akkado_unregister_module(const char* path, uint32_t path_len);
 WASM_EXPORT void akkado_clear_modules();
 ```
 
-A global `VirtualResolver` instance is maintained in `enkido_wasm.cpp`. `akkado_compile()` passes it to `compile()`.
+A global `VirtualResolver` instance is maintained in `nkido_wasm.cpp`. `akkado_compile()` passes it to `compile()`.
 
 #### Web Integration
 
 | Component | Change |
 |-----------|--------|
-| `web/wasm/enkido_wasm.cpp` | Global `VirtualResolver`, register/unregister/clear exports |
+| `web/wasm/nkido_wasm.cpp` | Global `VirtualResolver`, register/unregister/clear exports |
 | `web/src/lib/stores/editor.svelte.ts` | Multi-file state, active file tracking |
 | `web/src/lib/components/Editor/` | Multi-tab editor UI (tab bar, file create/rename/delete) |
 | `web/src/lib/workers/cedar-processor.js` | Pass module map to WASM before compilation |

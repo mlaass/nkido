@@ -1,6 +1,6 @@
 # NKIDO
 
-[![Build and Deploy](https://github.com/mlaass/enkido/actions/workflows/deploy.yml/badge.svg)](https://github.com/mlaass/enkido/actions/workflows/deploy.yml)
+[![Build and Deploy](https://github.com/mlaass/nkido/actions/workflows/deploy.yml/badge.svg)](https://github.com/mlaass/nkido/actions/workflows/deploy.yml)
 
 A high-performance audio synthesis system for live coding, combining a domain-specific language with a real-time audio engine.
 
@@ -25,7 +25,7 @@ cmake --build build
 
 # Use CLI tools
 ./build/tools/akkado-cli/akkado-cli --help
-./build/tools/enkido-cli/enkido-cli --help
+./build/tools/nkido-cli/nkido-cli --help
 ```
 
 ### Web IDE

@@ -2,7 +2,7 @@
  * IndexedDB-based LRU file cache for audio samples
  */
 
-const DB_NAME = 'enkido-file-cache';
+const DB_NAME = 'nkido-file-cache';
 const STORE_NAME = 'files';
 const DB_VERSION = 1;
 const MAX_CACHE_SIZE = 500 * 1024 * 1024; // 500MB

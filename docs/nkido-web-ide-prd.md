@@ -299,7 +299,7 @@ Markdown files with embedded NKIDO widgets:
 
 The `sin()` function generates a sine wave oscillator.
 
-:::enkido
+:::nkido
 osc("sin", 440) |> out(%, %)
 :::
 
@@ -308,7 +308,7 @@ Parameters:
 
 Try modifying the frequency:
 
-:::enkido {interactive}
+:::nkido {interactive}
 freq = 440  // Try changing this!
 sin(freq) |> out(%, %)
 :::
@@ -364,7 +364,7 @@ sin(freq) |> out(%, %)
 ## Project Structure
 
 ```
-enkido/
+nkido/
 ├── web/                          # NEW: Web IDE (this project)
 │   ├── src/
 │   │   ├── app.html              # HTML shell

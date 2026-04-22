@@ -4,7 +4,7 @@
 #include <string>
 #include <span>
 
-namespace enkido {
+namespace nkido {
 
 // Get human-readable name for an opcode
 const char* opcode_name(cedar::Opcode op);
@@ -18,4 +18,4 @@ std::string format_program(std::span<const cedar::Instruction> program);
 // Format as JSON (for tooling integration)
 std::string format_program_json(std::span<const cedar::Instruction> program);
 
-}  // namespace enkido
+}  // namespace nkido

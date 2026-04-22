@@ -18,15 +18,15 @@ The workflow builds WASM from source using Emscripten, then builds the web app w
 1. Go to https://app.netlify.com
 2. Click "Add new site" → "Deploy manually"
 3. Create two sites:
-   - `enkido-dev` (for dev/preview deploys)
-   - `enkido` (for production releases)
+   - `nkido-dev` (for dev/preview deploys)
+   - `nkido` (for production releases)
 4. For each site, go to **Site Settings → General** and copy the **Site ID**
 
 ### 2. Generate Netlify Auth Token
 
 1. Go to https://app.netlify.com/user/applications
 2. Under "Personal access tokens", click "New access token"
-3. Give it a name (e.g., "enkido-github-actions")
+3. Give it a name (e.g., "nkido-github-actions")
 4. Copy the token (you won't see it again)
 
 ### 3. Add GitHub Secrets

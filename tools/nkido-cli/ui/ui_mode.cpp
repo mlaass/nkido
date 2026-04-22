@@ -4,7 +4,7 @@
 #include <cstring>
 #include <sstream>
 
-namespace enkido::ui {
+namespace nkido::ui {
 
 UIMode::~UIMode() {
     if (renderer_) {
@@ -25,7 +25,7 @@ bool UIMode::init(std::uint32_t sample_rate, std::uint32_t buffer_size) {
 
     // Create window
     window_ = SDL_CreateWindow(
-        "Enkido",
+        "Nkido",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         window_width_, window_height_,
         SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
@@ -469,4 +469,4 @@ void UIMode::render_status_bar() {
     font_.draw_string(display_status.c_str(), text_x, text_y, TEXT_COLOR);
 }
 
-}  // namespace enkido::ui
+}  // namespace nkido::ui

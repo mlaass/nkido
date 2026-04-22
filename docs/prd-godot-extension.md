@@ -1,6 +1,6 @@
 > **Status: NOT STARTED** — Separate project at `~/workspace/godot-nkido`, no implementation exists.
 
-# PRD: Godot Extension for Enkido (v1 MVP)
+# PRD: Godot Extension for Nkido (v1 MVP)
 
 **Date:** 2026-03-28
 
@@ -14,7 +14,7 @@ Game developers using Godot Engine need ways to create dynamic, reactive audio t
 
 ### 1.2 Proposed Solution
 
-Create a GDExtension that embeds Enkido (Akkado + Cedar) directly into Godot 4.6, allowing real-time audio synthesis from Akkado source code with parameter binding from game state.
+Create a GDExtension that embeds Nkido (Akkado + Cedar) directly into Godot 4.6, allowing real-time audio synthesis from Akkado source code with parameter binding from game state.
 
 ### 1.3 Goals (v1)
 
@@ -22,7 +22,7 @@ Create a GDExtension that embeds Enkido (Akkado + Cedar) directly into Godot 4.6
 - **Parameter binding**: Control `param()`, `button()`, `toggle()`, `dropdown()` from GDScript
 - **Hot-swap**: Recompile while playing, hear smooth crossfade to new program
 - **Inspector UI**: Multiline text editor, transport buttons, auto-generated parameter controls
-- **Global BPM**: Shared tempo via EnkidoEngine singleton
+- **Global BPM**: Shared tempo via NkidoEngine singleton
 
 ### 1.4 Non-Goals (v1)
 
@@ -44,7 +44,7 @@ Create a GDExtension that embeds Enkido (Akkado + Cedar) directly into Godot 4.6
 ```gdscript
 extends Node2D
 
-@onready var synth: EnkidoPlayer = $EnkidoPlayer
+@onready var synth: NkidoPlayer = $NkidoPlayer
 
 func _ready():
     synth.source = '''
@@ -63,11 +63,11 @@ func _process(delta):
 
 ### 2.2 Inspector Integration
 
-When an `EnkidoPlayer` node is selected in the scene tree:
+When an `NkidoPlayer` node is selected in the scene tree:
 
 ```
 +-----------------------------------------+
-| EnkidoPlayer                            |
+| NkidoPlayer                            |
 +-----------------------------------------+
 | Source                                  |
 | +-------------------------------------+ |
@@ -95,7 +95,7 @@ When an `EnkidoPlayer` node is selected in the scene tree:
 ```gdscript
 extends Node
 
-@onready var music: EnkidoPlayer = $Music
+@onready var music: NkidoPlayer = $Music
 
 var combat_intensity: float = 0.0
 
@@ -126,7 +126,7 @@ func _process(delta):
 ```gdscript
 extends CharacterBody2D
 
-@onready var sfx: EnkidoPlayer = $JumpSFX
+@onready var sfx: NkidoPlayer = $JumpSFX
 
 func _ready():
     sfx.source = '''
@@ -154,39 +154,39 @@ func jump():
 ~/workspace/godot-nkido/                    # Godot project root
     project.godot
     godot-cpp/                              # git submodule (godot-4.6-stable tag)
-    enkido/                                 # git submodule
+    nkido/                                 # git submodule
     addons/
-        enkido/
+        nkido/
             plugin.cfg                      # Editor plugin registration
-            enkido.gdextension              # GDExtension manifest
-            enkido_plugin.gd                # @tool EditorPlugin
-            enkido_inspector.gd             # @tool EditorInspectorPlugin
+            nkido.gdextension              # GDExtension manifest
+            nkido_plugin.gd                # @tool EditorPlugin
+            nkido_inspector.gd             # @tool EditorInspectorPlugin
             native_src/
                 SConstruct                  # SCons build file
                 src/
                     register_types.cpp
                     register_types.h
-                    enkido_engine.cpp
-                    enkido_engine.h
-                    enkido_player.cpp
-                    enkido_player.h
-                    enkido_audio_stream.cpp
-                    enkido_audio_stream.h
-                    enkido_audio_stream_playback.cpp
-                    enkido_audio_stream_playback.h
+                    nkido_engine.cpp
+                    nkido_engine.h
+                    nkido_player.cpp
+                    nkido_player.h
+                    nkido_audio_stream.cpp
+                    nkido_audio_stream.h
+                    nkido_audio_stream_playback.cpp
+                    nkido_audio_stream_playback.h
     Main.tscn                               # Demo scene
     Main.gd
 ```
 
 Submodules live at the project root for clean relative paths from `native_src/`:
-- `../../../godot-cpp` (3 levels up: native_src -> enkido -> addons -> root)
-- `../../../enkido` (same)
+- `../../../godot-cpp` (3 levels up: native_src -> nkido -> addons -> root)
+- `../../../nkido` (same)
 
 ### 3.2 Class Diagram
 
 ```
 +-------------------------------------------+
-|            EnkidoEngine                    |
+|            NkidoEngine                    |
 |            (Object singleton)              |
 +-------------------------------------------+
 | - global_bpm_: float = 120                |
@@ -200,7 +200,7 @@ Submodules live at the project root for clean relative paths from `native_src/`:
                     | referenced by
                     v
 +-------------------------------------------+
-|            EnkidoPlayer                    |
+|            NkidoPlayer                    |
 |            (Node)                          |
 +-------------------------------------------+
 | - vm_: unique_ptr<cedar::VM>              |
@@ -208,7 +208,7 @@ Submodules live at the project root for clean relative paths from `native_src/`:
 | - compiled_: bool                         |
 | - param_decls_: vector<ParamDecl>         |
 | - stream_player_: AudioStreamPlayer*      |
-| - audio_stream_: Ref<EnkidoAudioStream>   |
+| - audio_stream_: Ref<NkidoAudioStream>   |
 +-------------------------------------------+
 | + set_source(code: String)                |
 | + get_source() -> String                  |
@@ -231,10 +231,10 @@ Submodules live at the project root for clean relative paths from `native_src/`:
                     | creates
                     v
 +-------------------------------------------+
-|         EnkidoAudioStream                  |
+|         NkidoAudioStream                  |
 |         (AudioStream)                      |
 +-------------------------------------------+
-| - player_: EnkidoPlayer* (non-owning)     |
+| - player_: NkidoPlayer* (non-owning)     |
 +-------------------------------------------+
 | + _instantiate_playback()                 |
 | + _get_length() -> 0.0 (infinite)        |
@@ -244,10 +244,10 @@ Submodules live at the project root for clean relative paths from `native_src/`:
                     | creates
                     v
 +-------------------------------------------+
-|    EnkidoAudioStreamPlayback               |
+|    NkidoAudioStreamPlayback               |
 |    (AudioStreamPlayback)                   |
 +-------------------------------------------+
-| - player_: EnkidoPlayer*                  |
+| - player_: NkidoPlayer*                  |
 | - ring_buffer_: AudioFrame[4096]          |
 | - temp_left_/right_: float[128]           |
 +-------------------------------------------+
@@ -265,12 +265,12 @@ Submodules live at the project root for clean relative paths from `native_src/`:
 |            Main Thread                     |
 |  (GDScript, Inspector, Editor)            |
 +-------------------------------------------+
-|  EnkidoPlayer::compile()                  |
+|  NkidoPlayer::compile()                  |
 |    - akkado::compile() (typically < 1ms)  |
 |    - Apply state_inits to StatePool       |
 |    - vm.load_program() (queues swap)      |
 |                                           |
-|  EnkidoPlayer::set_param("vol", 0.5)     |
+|  NkidoPlayer::set_param("vol", 0.5)     |
 |    - vm.set_param() (lock-free atomic)    |
 +--------------------+----------------------+
                      | Lock-free (Cedar design)
@@ -279,7 +279,7 @@ Submodules live at the project root for clean relative paths from `native_src/`:
 |            Audio Thread                    |
 |  (Godot AudioServer callback)             |
 +-------------------------------------------+
-|  EnkidoAudioStreamPlayback::_mix()        |
+|  NkidoAudioStreamPlayback::_mix()        |
 |    while ring_buffer needs more data:     |
 |      vm.process_block(left, right)  [128] |
 |      interleave into ring buffer          |
@@ -316,22 +316,22 @@ In `_mix(AudioFrame* buffer, float rate_scale, int32_t frames)`:
 
 ## 4. API Reference
 
-### 4.1 EnkidoEngine (Singleton)
+### 4.1 NkidoEngine (Singleton)
 
 ```gdscript
 # Global BPM (affects all players unless overridden)
-EnkidoEngine.set_bpm(120.0)
-var bpm = EnkidoEngine.get_bpm()
+NkidoEngine.set_bpm(120.0)
+var bpm = NkidoEngine.get_bpm()
 
 # Audio sample rate (read-only, from AudioServer)
-var rate = EnkidoEngine.get_sample_rate()
+var rate = NkidoEngine.get_sample_rate()
 ```
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `bpm` | float | 120.0 | Global BPM for all players |
 
-### 4.2 EnkidoPlayer (Node)
+### 4.2 NkidoPlayer (Node)
 
 #### Properties
 
@@ -400,10 +400,10 @@ signal playback_stopped()
 // src/register_types.cpp
 
 #include "register_types.h"
-#include "enkido_engine.h"
-#include "enkido_player.h"
-#include "enkido_audio_stream.h"
-#include "enkido_audio_stream_playback.h"
+#include "nkido_engine.h"
+#include "nkido_player.h"
+#include "nkido_audio_stream.h"
+#include "nkido_audio_stream_playback.h"
 
 #include <gdextension_interface.h>
 #include <godot_cpp/core/class_db.hpp>
@@ -415,32 +415,32 @@ signal playback_stopped()
 
 using namespace godot;
 
-void initialize_enkido_native_module(ModuleInitializationLevel p_level) {
+void initialize_nkido_native_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
 
-    ClassDB::register_class<EnkidoEngine>();
-    ClassDB::register_class<EnkidoAudioStream>();
-    ClassDB::register_class<EnkidoAudioStreamPlayback>();
-    ClassDB::register_class<EnkidoPlayer>();
+    ClassDB::register_class<NkidoEngine>();
+    ClassDB::register_class<NkidoAudioStream>();
+    ClassDB::register_class<NkidoAudioStreamPlayback>();
+    ClassDB::register_class<NkidoPlayer>();
 
     // Create singleton (cedar::init called in constructor)
     Engine::get_singleton()->register_singleton(
-        "EnkidoEngine", memnew(EnkidoEngine));
+        "NkidoEngine", memnew(NkidoEngine));
 }
 
-void uninitialize_enkido_native_module(ModuleInitializationLevel p_level) {
+void uninitialize_nkido_native_module(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
 
-    auto* engine = Object::cast_to<EnkidoEngine>(
-        Engine::get_singleton()->get_singleton("EnkidoEngine"));
-    Engine::get_singleton()->unregister_singleton("EnkidoEngine");
+    auto* engine = Object::cast_to<NkidoEngine>(
+        Engine::get_singleton()->get_singleton("NkidoEngine"));
+    Engine::get_singleton()->unregister_singleton("NkidoEngine");
     memdelete(engine);
 
     cedar::shutdown();
 }
 
 extern "C" {
-    GDExtensionBool GDE_EXPORT enkido_native_init(
+    GDExtensionBool GDE_EXPORT nkido_native_init(
         GDExtensionInterfaceGetProcAddress p_get_proc_address,
         const GDExtensionClassLibraryPtr p_library,
         GDExtensionInitialization *r_initialization
@@ -448,8 +448,8 @@ extern "C" {
         godot::GDExtensionBinding::InitObject init_obj(
             p_get_proc_address, p_library, r_initialization);
 
-        init_obj.register_initializer(initialize_enkido_native_module);
-        init_obj.register_terminator(uninitialize_enkido_native_module);
+        init_obj.register_initializer(initialize_nkido_native_module);
+        init_obj.register_terminator(uninitialize_nkido_native_module);
         init_obj.set_minimum_library_initialization_level(
             MODULE_INITIALIZATION_LEVEL_SCENE);
 
@@ -460,14 +460,14 @@ extern "C" {
 
 ### 5.2 Build System (SConstruct)
 
-Located at `addons/enkido/native_src/SConstruct`. Follows the pattern from `godot_herringbone_wang` with C++20 and enkido source compilation.
+Located at `addons/nkido/native_src/SConstruct`. Follows the pattern from `godot_herringbone_wang` with C++20 and nkido source compilation.
 
 ```python
 # Key configuration:
-# - C++20 (enkido requirement)
+# - C++20 (nkido requirement)
 # - Include paths: godot-cpp, cedar, akkado, src
 # - Sources: cedar/*.cpp + akkado/*.cpp + src/*.cpp
-# - Output: ../libenkido_native.{arch}.{platform}.{target}.so
+# - Output: ../libnkido_native.{arch}.{platform}.{target}.so
 ```
 
 **Cedar sources** (~7 files from `cedar/src/`):
@@ -481,19 +481,19 @@ Located at `addons/enkido/native_src/SConstruct`. Follows the pattern from `godo
 
 ```ini
 [configuration]
-entry_symbol = "enkido_native_init"
+entry_symbol = "nkido_native_init"
 compatibility_minimum = 4.6
 
 [libraries]
-linux.debug.x86_64 = "res://addons/enkido/libenkido_native.x86_64.linux.debug.so"
-linux.release.x86_64 = "res://addons/enkido/libenkido_native.x86_64.linux.release.so"
+linux.debug.x86_64 = "res://addons/nkido/libnkido_native.x86_64.linux.debug.so"
+linux.release.x86_64 = "res://addons/nkido/libnkido_native.x86_64.linux.release.so"
 ```
 
-### 5.4 EnkidoPlayer Core Flow
+### 5.4 NkidoPlayer Core Flow
 
 **Compile:**
 ```cpp
-bool EnkidoPlayer::compile() {
+bool NkidoPlayer::compile() {
     std::string code_str = source_.utf8().get_data();
     auto result = akkado::compile(code_str);
 
@@ -526,7 +526,7 @@ bool EnkidoPlayer::compile() {
 
 **Play:**
 ```cpp
-void EnkidoPlayer::_ready() {
+void NkidoPlayer::_ready() {
     // Create internal AudioStreamPlayer child
     stream_player_ = memnew(AudioStreamPlayer);
     add_child(stream_player_);
@@ -535,15 +535,15 @@ void EnkidoPlayer::_ready() {
     audio_stream_->set_player(this);
     stream_player_->set_stream(audio_stream_);
 
-    // Set sample rate from EnkidoEngine
-    vm_->set_sample_rate(EnkidoEngine::get_sample_rate());
+    // Set sample rate from NkidoEngine
+    vm_->set_sample_rate(NkidoEngine::get_sample_rate());
 
     if (autoplay_ && !source_.is_empty()) {
         if (compile()) play();
     }
 }
 
-void EnkidoPlayer::play() {
+void NkidoPlayer::play() {
     if (!compiled_) return;
     stream_player_->play();
     emit_signal("playback_started");
@@ -553,7 +553,7 @@ void EnkidoPlayer::play() {
 ### 5.5 AudioStreamPlayback (_mix)
 
 ```cpp
-int EnkidoAudioStreamPlayback::_mix(
+int NkidoAudioStreamPlayback::_mix(
     AudioFrame* p_buffer, float p_rate_scale, int32_t p_frames
 ) {
     if (!player_ || !player_->is_playing()) {
@@ -595,14 +595,14 @@ GDScript-based `EditorInspectorPlugin`, registered via `plugin.cfg`.
 
 ```ini
 [plugin]
-name="Enkido Audio Engine"
+name="Nkido Audio Engine"
 description="Live-coding audio synthesis for Godot"
 author=""
 version="0.1.0"
-script="enkido_plugin.gd"
+script="nkido_plugin.gd"
 ```
 
-### enkido_plugin.gd
+### nkido_plugin.gd
 
 ```gdscript
 @tool
@@ -611,14 +611,14 @@ extends EditorPlugin
 var inspector_plugin: EditorInspectorPlugin
 
 func _enter_tree() -> void:
-    inspector_plugin = preload("enkido_inspector.gd").new()
+    inspector_plugin = preload("nkido_inspector.gd").new()
     add_inspector_plugin(inspector_plugin)
 
 func _exit_tree() -> void:
     remove_inspector_plugin(inspector_plugin)
 ```
 
-### enkido_inspector.gd
+### nkido_inspector.gd
 
 The inspector plugin provides:
 
@@ -642,35 +642,35 @@ Controls are rebuilt when `params_changed` signal fires after recompilation.
 **Goal:** Extension loads in Godot. Can compile Akkado source from GDScript.
 
 1. Create `~/workspace/godot-nkido` with `project.godot`
-2. Add git submodules: `godot-cpp` (4.6 tag), `enkido`
+2. Add git submodules: `godot-cpp` (4.6 tag), `nkido`
 3. Build `godot-cpp` for Linux (`scons platform=linux target=template_release`)
 4. Write `SConstruct` compiling all Cedar + Akkado + extension sources at C++20
-5. Implement `register_types.cpp`, `enkido_engine.cpp`, `enkido_player.cpp` (compile only, no audio)
+5. Implement `register_types.cpp`, `nkido_engine.cpp`, `nkido_player.cpp` (compile only, no audio)
 6. Write `.gdextension` and `plugin.cfg`
-7. Build and verify: `EnkidoEngine.get_sample_rate()` works from GDScript console
+7. Build and verify: `NkidoEngine.get_sample_rate()` works from GDScript console
 
 **Files:**
 | File | Change |
 |------|--------|
-| `addons/enkido/native_src/SConstruct` | New |
-| `addons/enkido/native_src/src/register_types.cpp` | New |
-| `addons/enkido/native_src/src/register_types.h` | New |
-| `addons/enkido/native_src/src/enkido_engine.cpp` | New |
-| `addons/enkido/native_src/src/enkido_engine.h` | New |
-| `addons/enkido/native_src/src/enkido_player.cpp` | New (compile only) |
-| `addons/enkido/native_src/src/enkido_player.h` | New |
-| `addons/enkido/enkido.gdextension` | New |
-| `addons/enkido/plugin.cfg` | New |
+| `addons/nkido/native_src/SConstruct` | New |
+| `addons/nkido/native_src/src/register_types.cpp` | New |
+| `addons/nkido/native_src/src/register_types.h` | New |
+| `addons/nkido/native_src/src/nkido_engine.cpp` | New |
+| `addons/nkido/native_src/src/nkido_engine.h` | New |
+| `addons/nkido/native_src/src/nkido_player.cpp` | New (compile only) |
+| `addons/nkido/native_src/src/nkido_player.h` | New |
+| `addons/nkido/nkido.gdextension` | New |
+| `addons/nkido/plugin.cfg` | New |
 | `project.godot` | New |
 
-**Verification:** Add EnkidoPlayer to scene, set `source = "osc(\"sin\", 440) |> out(%, %)"`, call `compile()`, confirm `compilation_finished` signal fires with `success = true`.
+**Verification:** Add NkidoPlayer to scene, set `source = "osc(\"sin\", 440) |> out(%, %)"`, call `compile()`, confirm `compilation_finished` signal fires with `success = true`.
 
 ### Phase 2: Audio Playback + Parameters + Hot-Swap
 
 **Goal:** Hear audio output. Control parameters from GDScript. Recompile while playing.
 
-1. Implement `EnkidoAudioStream` and `EnkidoAudioStreamPlayback` with ring buffer
-2. Wire up `EnkidoPlayer::play()` / `stop()` / `pause()` via internal AudioStreamPlayer
+1. Implement `NkidoAudioStream` and `NkidoAudioStreamPlayback` with ring buffer
+2. Wire up `NkidoPlayer::play()` / `stop()` / `pause()` via internal AudioStreamPlayer
 3. Implement `set_param()` / `get_param()` / `trigger_button()` / `get_param_decls()`
 4. Apply `state_inits` from compilation (sequences, poly, timelines)
 5. Verify hot-swap: recompile while playing, hear smooth crossfade
@@ -678,11 +678,11 @@ Controls are rebuilt when `params_changed` signal fires after recompilation.
 **Files:**
 | File | Change |
 |------|--------|
-| `addons/enkido/native_src/src/enkido_audio_stream.cpp` | New |
-| `addons/enkido/native_src/src/enkido_audio_stream.h` | New |
-| `addons/enkido/native_src/src/enkido_audio_stream_playback.cpp` | New |
-| `addons/enkido/native_src/src/enkido_audio_stream_playback.h` | New |
-| `addons/enkido/native_src/src/enkido_player.cpp` | Modified (add play/stop/params) |
+| `addons/nkido/native_src/src/nkido_audio_stream.cpp` | New |
+| `addons/nkido/native_src/src/nkido_audio_stream.h` | New |
+| `addons/nkido/native_src/src/nkido_audio_stream_playback.cpp` | New |
+| `addons/nkido/native_src/src/nkido_audio_stream_playback.h` | New |
+| `addons/nkido/native_src/src/nkido_player.cpp` | Modified (add play/stop/params) |
 
 **Verification:**
 - `osc("sin", 440) |> out(%, %)` -> hear 440 Hz sine
@@ -693,8 +693,8 @@ Controls are rebuilt when `params_changed` signal fires after recompilation.
 
 **Goal:** Full editor integration with source editing, transport, and parameter controls.
 
-1. Write `enkido_plugin.gd` (EditorPlugin)
-2. Write `enkido_inspector.gd` (EditorInspectorPlugin):
+1. Write `nkido_plugin.gd` (EditorPlugin)
+2. Write `nkido_inspector.gd` (EditorInspectorPlugin):
    - TextEdit for source property
    - Compile / Play / Stop buttons
    - Status label with compile result
@@ -704,10 +704,10 @@ Controls are rebuilt when `params_changed` signal fires after recompilation.
 **Files:**
 | File | Change |
 |------|--------|
-| `addons/enkido/enkido_plugin.gd` | New |
-| `addons/enkido/enkido_inspector.gd` | New |
+| `addons/nkido/nkido_plugin.gd` | New |
+| `addons/nkido/nkido_inspector.gd` | New |
 
-**Verification:** Select EnkidoPlayer in scene tree. See source editor, transport buttons, and parameter sliders in inspector. Edit source, press Compile, press Play -> hear audio. Adjust slider -> hear parameter change in real-time.
+**Verification:** Select NkidoPlayer in scene tree. See source editor, transport buttons, and parameter sliders in inspector. Edit source, press Compile, press Play -> hear audio. Adjust slider -> hear parameter change in real-time.
 
 ---
 
@@ -721,7 +721,7 @@ Controls are rebuilt when `params_changed` signal fires after recompilation.
 
 **Multiple rapid recompiles:** Each `compile()` call queues a new hot-swap. Cedar handles this by replacing the pending program — only the latest compiled program is swapped in.
 
-**EnkidoPlayer removed from tree:** `_exit_tree()` stops the internal AudioStreamPlayer, audio stops immediately.
+**NkidoPlayer removed from tree:** `_exit_tree()` stops the internal AudioStreamPlayer, audio stops immediately.
 
 **Large source code:** `akkado::compile()` runs synchronously on the main thread. For typical game audio code (< 100 lines), this is < 1ms. If compilation latency becomes an issue with very large programs, async compilation can be added in a future version.
 
@@ -743,13 +743,13 @@ Since the extension runs inside Godot, testing is primarily manual:
 ### Build Verification
 
 ```bash
-cd ~/workspace/godot-nkido/addons/enkido/native_src
+cd ~/workspace/godot-nkido/addons/nkido/native_src
 scons platform=linux target=template_release
-# Should produce: ../libenkido_native.x86_64.linux.release.so
+# Should produce: ../libnkido_native.x86_64.linux.release.so
 
 cd ~/workspace/godot-nkido
 godot46 --editor
-# Extension loads without errors, EnkidoPlayer appears in node list
+# Extension loads without errors, NkidoPlayer appears in node list
 ```
 
 ---
@@ -766,8 +766,8 @@ godot46 --editor
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| enkido/cedar | **Stays** | Used as-is via submodule, no modifications |
-| enkido/akkado | **Stays** | Used as-is via submodule, no modifications |
+| nkido/cedar | **Stays** | Used as-is via submodule, no modifications |
+| nkido/akkado | **Stays** | Used as-is via submodule, no modifications |
 | godot-cpp | **Stays** | Standard dependency, no modifications |
 | `~/workspace/godot-nkido` | **New** | Entire project is new |
 
@@ -775,11 +775,11 @@ godot46 --editor
 
 ## 12. Future Work (post-v1)
 
-- **Sample loading**: `EnkidoEngine.load_sample()` using Godot's file system, WAV/OGG support
+- **Sample loading**: `NkidoEngine.load_sample()` using Godot's file system, WAV/OGG support
 - **`.akk` file resource**: Custom importer so Akkado files appear as resources in the editor
 - **Bottom panel editor**: Larger code editing area with syntax highlighting
 - **Multi-platform**: Windows + macOS builds, CI/CD pipeline
-- **Custom node icon**: SVG icon for EnkidoPlayer in the scene tree
+- **Custom node icon**: SVG icon for NkidoPlayer in the scene tree
 - **Spatial audio**: 3D positioning via AudioStreamPlayer3D
 - **Volume/bus properties**: Forward to internal AudioStreamPlayer
 - **SoundFont support**: Load .sf2 files for instrument playback

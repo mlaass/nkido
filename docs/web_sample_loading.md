@@ -4,7 +4,7 @@
 
 ## Overview
 
-The Enkido web interface supports loading audio samples for use with the sampler system. Samples can be loaded from files, URLs, or programmatically generated.
+The Nkido web interface supports loading audio samples for use with the sampler system. Samples can be loaded from files, URLs, or programmatically generated.
 
 ## Sample Loading Architecture
 

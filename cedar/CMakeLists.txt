@@ -26,12 +26,12 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     option(CEDAR_BUILD_TESTS "Build Cedar tests" ON)
 
     # Standalone: create minimal compiler options
-    add_library(enkido_compiler_options INTERFACE)
+    add_library(nkido_compiler_options INTERFACE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(enkido_compiler_options INTERFACE -Wall -Wextra -Wpedantic)
+        target_compile_options(nkido_compiler_options INTERFACE -Wall -Wextra -Wpedantic)
     endif()
 else()
-    set(CEDAR_BUILD_TESTS ${ENKIDO_BUILD_TESTS})
+    set(CEDAR_BUILD_TESTS ${NKIDO_BUILD_TESTS})
 endif()
 
 # Feature toggles (all ON by default for full builds)
@@ -95,7 +95,7 @@ target_include_directories(cedar
 # Apply compiler options (use BUILD_INTERFACE to avoid export issues)
 target_link_libraries(cedar
     PRIVATE
-        $<BUILD_INTERFACE:enkido_compiler_options>
+        $<BUILD_INTERFACE:nkido_compiler_options>
 )
 
 # Inject version as compile definitions (read from VERSION file)
@@ -143,7 +143,7 @@ if(NOT EMSCRIPTEN)
 endif()
 
 # Alias for use in parent project
-add_library(enkido::cedar ALIAS cedar)
+add_library(nkido::cedar ALIAS cedar)
 
 # Tests
 if(CEDAR_BUILD_TESTS)

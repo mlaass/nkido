@@ -8,7 +8,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace enkido::ui {
+namespace nkido::ui {
 
 class UIMode {
 public:
@@ -82,4 +82,4 @@ private:
     static constexpr SDL_Color STATUS_PLAY    = {100, 180, 255, 255};
 };
 
-}  // namespace enkido::ui
+}  // namespace nkido::ui

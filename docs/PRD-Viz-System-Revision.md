@@ -225,7 +225,7 @@ Add `FFTProbeState` to the `DSPState` variant (after `ProbeState` in the Visuali
 
 ### 4. WASM Exports
 
-Three new exports in `web/wasm/enkido_wasm.cpp`:
+Three new exports in `web/wasm/nkido_wasm.cpp`:
 
 ```cpp
 // Static buffer for FFT magnitude copy
@@ -242,7 +242,7 @@ WASM_EXPORT const float* cedar_get_fft_magnitudes(uint32_t state_id);
 WASM_EXPORT uint32_t cedar_get_fft_frame_counter(uint32_t state_id);
 ```
 
-Add these three functions to `ENKIDO_EXPORTED_FUNCTIONS` in `web/wasm/CMakeLists.txt`.
+Add these three functions to `NKIDO_EXPORTED_FUNCTIONS` in `web/wasm/CMakeLists.txt`.
 
 ### 5. AudioWorklet Data Pathway
 
@@ -437,7 +437,7 @@ CompileResult                                    ▼
 - [ ] Reserve `IFFT = 182` opcode (implementation deferred to Revision 2+)
 
 ### Phase 3: WASM Exports + AudioWorklet
-- [ ] Add `cedar_get_fft_bin_count`, `cedar_get_fft_magnitudes`, `cedar_get_fft_frame_counter` to `web/wasm/enkido_wasm.cpp`
+- [ ] Add `cedar_get_fft_bin_count`, `cedar_get_fft_magnitudes`, `cedar_get_fft_frame_counter` to `web/wasm/nkido_wasm.cpp`
 - [ ] Add exports to `web/wasm/CMakeLists.txt` exported functions list
 - [ ] Add `getFFTProbeData` message handler to `web/static/worklet/cedar-processor.js`
 - [ ] Add `VizType.Waterfall`, `getFFTProbeData()` method to `web/src/lib/stores/audio.svelte.ts`
@@ -497,8 +497,8 @@ CompileResult                                    ▼
 | `akkado/include/akkado/codegen.hpp` | Add `Waterfall = 4` to enum, declare `handle_waterfall_call` |
 | `akkado/src/codegen_viz.cpp` | Add `handle_waterfall_call`, extend `extract_options_json` for strings, migrate spectrum to FFT_PROBE |
 | `akkado/src/codegen.cpp` | Register `waterfall` builtin |
-| `web/wasm/enkido_wasm.cpp` | Add 3 FFT probe WASM exports |
-| `web/wasm/CMakeLists.txt` | Add exports to `ENKIDO_EXPORTED_FUNCTIONS` |
+| `web/wasm/nkido_wasm.cpp` | Add 3 FFT probe WASM exports |
+| `web/wasm/CMakeLists.txt` | Add exports to `NKIDO_EXPORTED_FUNCTIONS` |
 | `web/static/worklet/cedar-processor.js` | Add `getFFTProbeData` message handler |
 | `web/src/lib/stores/audio.svelte.ts` | Add `VizType.Waterfall`, `getFFTProbeData()` |
 | `web/src/lib/visualizations/index.ts` | Import waterfall renderer |
@@ -607,7 +607,7 @@ Allow any visualization to be "popped out" into a draggable, resizable floating 
 1. **FloatingVizManager**: New Svelte component at app root level (sibling to editor). Renders detached viz in `position: fixed` overlays outside CodeMirror.
 2. **Drag/resize**: Extend PointerEvent-based resize pattern from `ResizeHandle.svelte` to support 4-corner resize + title bar drag.
 3. **Z-index**: Simple stack with "bring to front on click" (global z-counter).
-4. **Persistence**: Window positions/sizes stored in localStorage under `enkido-detached-viz`.
+4. **Persistence**: Window positions/sizes stored in localStorage under `nkido-detached-viz`.
 5. **Re-attach**: Double-click title bar or click dock button to snap back to inline position.
 6. **Data flow unchanged**: Renderer calls same `getFFTProbeData()`/`getProbeData()` regardless of where the DOM element lives.
 7. **Placeholder**: CodeMirror block decoration shows a "Detached" placeholder with click-to-reattach when viz is floating.

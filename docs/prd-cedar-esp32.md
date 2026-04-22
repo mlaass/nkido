@@ -6,11 +6,11 @@
 
 ## 1. Context
 
-Enkido's `cedar/` library is a zero-allocation, host-API-agnostic audio synthesis engine. Commit `c9701a4` added an `esp32` CMake preset and `minsize-stripped` variant that tighten memory limits (`ARENA_SIZE=262144`, `MAX_BUFFERS=64`, `MAX_STATES=128`, `MAX_VARS=512`, `MAX_PROGRAM_SIZE=1024`, `FLOAT_ONLY=ON`) and disable optional modules (audio decoders, SoundFont, FFT, file I/O, MinBLEP). Built with the host compiler, the stripped archive is ~146 KB (see `scripts/cedar-size-report.sh` and `docs/cedar-size-report.md`). This is a size-optimized *profile*, not yet a cross-compiled build: no xtensa toolchain is configured in this repo, so the profile demonstrates the memory/feature shape but has not actually been compiled for xtensa-esp32. Establishing that cross-compile is the first task of cedar-esp32.
+Nkido's `cedar/` library is a zero-allocation, host-API-agnostic audio synthesis engine. Commit `c9701a4` added an `esp32` CMake preset and `minsize-stripped` variant that tighten memory limits (`ARENA_SIZE=262144`, `MAX_BUFFERS=64`, `MAX_STATES=128`, `MAX_VARS=512`, `MAX_PROGRAM_SIZE=1024`, `FLOAT_ONLY=ON`) and disable optional modules (audio decoders, SoundFont, FFT, file I/O, MinBLEP). Built with the host compiler, the stripped archive is ~146 KB (see `scripts/cedar-size-report.sh` and `docs/cedar-size-report.md`). This is a size-optimized *profile*, not yet a cross-compiled build: no xtensa toolchain is configured in this repo, so the profile demonstrates the memory/feature shape but has not actually been compiled for xtensa-esp32. Establishing that cross-compile is the first task of cedar-esp32.
 
 **What is missing** to actually run on hardware: an ESP-IDF project skeleton. There is no `idf_component.yml`, no `main/`, no `sdkconfig.defaults`, no partition table, no audio I/O driver, no bytecode loader — and no xtensa toolchain integration.
 
-This PRD proposes a new sibling repository, **`cedar-esp32`**, that provides the ESP-IDF project glue, ESP-ADF integration, and board-support code needed to boot an AI-Thinker ESP32-A1S Audio Kit 2.2 and play Cedar bytecode out of the onboard ES8388 codec. The enkido repo is consumed as a git submodule so Cedar stays authoritative in one place.
+This PRD proposes a new sibling repository, **`cedar-esp32`**, that provides the ESP-IDF project glue, ESP-ADF integration, and board-support code needed to boot an AI-Thinker ESP32-A1S Audio Kit 2.2 and play Cedar bytecode out of the onboard ES8388 codec. The nkido repo is consumed as a git submodule so Cedar stays authoritative in one place.
 
 **Desired outcome:** `idf.py -p /dev/ttyUSB0 flash monitor` on a stock A1S board plays a hardcoded Cedar program out of the headphone jack. A host-side tool (`cedar-push`) uploads new bytecode over UART for hot-swap.
 
@@ -158,12 +158,12 @@ cedar-esp32/
 │   ├── cedar_host.cpp                # C++ glue to Cedar VM
 │   └── demo_bytecode.h               # embedded hardcoded program
 ├── components/
-│   ├── cedar/                        # IDF component wrapping enkido/cedar
+│   ├── cedar/                        # IDF component wrapping nkido/cedar
 │   │   ├── CMakeLists.txt
 │   │   └── idf_component.yml
 │   └── cedar-esp32-hal/              # board helpers (key debouncer, ADC)
 ├── third_party/
-│   ├── enkido/                       # git submodule → enkido repo, pinned SHA
+│   ├── nkido/                       # git submodule → nkido repo, pinned SHA
 │   └── esp-adf/                      # git submodule → donny681/esp-adf
 ├── tools/
 │   └── cedar-push/                   # Python host tool for UART upload
@@ -241,7 +241,7 @@ The UART task calls `VM::load_program(std::span<const Instruction>)` (see `cedar
 | `cedar/` library code | **Stays** | No API changes expected. Already builds for xtensa-esp32 via `esp32` preset. |
 | `cedar/CMakeLists.txt` | **Stays** | Existing `CEDAR_*` size options are used as-is. |
 | `scripts/cedar-size-report.sh` | **Stays** | Size report continues to validate the embedded config. |
-| enkido `cmake/` | **Stays** | `CompilerOptions.cmake` MinSizeRel flags work inside ESP-IDF. |
+| nkido `cmake/` | **Stays** | `CompilerOptions.cmake` MinSizeRel flags work inside ESP-IDF. |
 | `akkado/` compiler | **Stays** | Host-only; no changes. |
 | `tools/akkado-cli/` | **Stays** | Produces bytecode consumed verbatim by the device. |
 | New repo `cedar-esp32` | **New** | Contains ESP-IDF project, ADF integration, loader, hardware glue. |
@@ -266,10 +266,10 @@ All paths are under `cedar-esp32/` (the new sibling repo).
 | `main/adf_pipeline.c` | New — ADF pipeline factory for WAV/MP3/FLAC → raw PCM buffers. |
 | `main/cedar_host.cpp` | New — C++ glue (Cedar is C++; IDF is mostly C). |
 | `main/demo_bytecode.h` | New — `const uint8_t demo_bc[]` generated from a sample `.akk` file at build time. |
-| `components/cedar/CMakeLists.txt` | New — wraps enkido submodule as an IDF component; passes `-DCEDAR_*` size flags. |
+| `components/cedar/CMakeLists.txt` | New — wraps nkido submodule as an IDF component; passes `-DCEDAR_*` size flags. |
 | `components/cedar/idf_component.yml` | New — declares dependency on IDF ≥ 5.1. |
 | `components/cedar-esp32-hal/*` | New — thin helpers (GPIO debounce, optional ADC pot reader). |
-| `third_party/enkido/` | New — git submodule pointing at enkido at a known SHA. |
+| `third_party/nkido/` | New — git submodule pointing at nkido at a known SHA. |
 | `third_party/esp-adf/` | New — git submodule pointing at donny681/esp-adf tag. |
 | `tools/cedar-push/` | New — Python tool, `pyproject.toml`, published nowhere; `uv tool install .` locally. |
 | `docker/Dockerfile` | New — inherits `espressif/idf:release-v5.x`, adds Python deps for cedar-push. |
@@ -292,7 +292,7 @@ Each phase ends with a concrete verification step run on the actual hardware.
 **Goal:** Device boots, plays hardcoded Cedar bytecode out of headphone jack.
 
 - Scaffold repo layout (§5.2)
-- Cedar IDF component wrapping enkido submodule
+- Cedar IDF component wrapping nkido submodule
 - ADF pipeline: minimal I2S sink → ES8388 (no decoders yet)
 - Audio task on core 1 calling `cedar::VM::process_block`
 - Embedded demo bytecode compiled from `assets/demo.akk` at build time

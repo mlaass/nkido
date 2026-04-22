@@ -361,7 +361,7 @@ Source Code
 | `akkado/src/codegen.cpp` | Add handler dispatch entries |
 | `cedar/include/cedar/vm/instruction.hpp` | Add `PROBE` opcode |
 | `cedar/include/cedar/vm/vm.hpp` | Add `ProbePool` member |
-| `web/wasm/enkido_wasm.cpp` | Add visualization WASM exports |
+| `web/wasm/nkido_wasm.cpp` | Add visualization WASM exports |
 | `web/static/worklet/cedar-processor.js` | Add probe polling |
 | `web/src/lib/stores/audio.svelte.ts` | Add probe data API |
 | `web/src/lib/components/Editor/Editor.svelte` | Replace patternPreview extension |

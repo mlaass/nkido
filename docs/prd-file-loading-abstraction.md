@@ -11,7 +11,7 @@
 
 ### 1.1 Problem Statement
 
-Enkido needs to load various file types (SoundFonts, samples, MIDI files, code files) in two different environments:
+Nkido needs to load various file types (SoundFonts, samples, MIDI files, code files) in two different environments:
 
 | Context | File Access | Memory Model | Challenges |
 |---------|-------------|--------------|------------|
@@ -223,7 +223,7 @@ public:
 ### 4.3 WASM Interface Extensions
 
 ```cpp
-// web/wasm/enkido_wasm.cpp
+// web/wasm/nkido_wasm.cpp
 
 extern "C" {
 
@@ -370,7 +370,7 @@ interface SerializedPreset {
 ### 5.1 Native: Loading a SoundFont
 
 ```
-CLI: enkido-cli --soundfont gm.sf2 song.akkado
+CLI: nkido-cli --soundfont gm.sf2 song.akkado
          │
          ▼
 FileLoader::load("gm.sf2") → OwnedBuffer
@@ -455,7 +455,7 @@ Large files (>1MB) are cached in IndexedDB to avoid re-downloading:
 ```typescript
 // web/src/lib/io/file-cache.ts
 
-const DB_NAME = 'enkido-file-cache';
+const DB_NAME = 'nkido-file-cache';
 const STORE_NAME = 'files';
 const MAX_CACHE_SIZE = 500 * 1024 * 1024; // 500MB
 
@@ -655,7 +655,7 @@ web/src/lib/io/
 ```
 cedar/include/cedar/audio/wav_loader.hpp  # Use MemoryView
 cedar/include/cedar/vm/sample_bank.hpp    # Add load_audio_data()
-web/wasm/enkido_wasm.cpp                  # New WASM exports
+web/wasm/nkido_wasm.cpp                  # New WASM exports
 web/src/lib/stores/audio.svelte.ts        # Use new loaders
 web/src/lib/audio/bank-registry.ts        # Use FileLoader
 ```

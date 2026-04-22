@@ -144,7 +144,7 @@ cmake_flags_for() {
     build_type=$(config_field "$cfg" 2) || return 1
 
     local flags="-DCMAKE_BUILD_TYPE=$build_type"
-    flags+=" -DENKIDO_BUILD_TESTS=OFF -DENKIDO_BUILD_TOOLS=OFF -DENKIDO_BUILD_AKKADO=OFF"
+    flags+=" -DNKIDO_BUILD_TESTS=OFF -DNKIDO_BUILD_TOOLS=OFF -DNKIDO_BUILD_AKKADO=OFF"
 
     # Toggle features
     for f in "${FEATURES_TOGGLE[@]}"; do

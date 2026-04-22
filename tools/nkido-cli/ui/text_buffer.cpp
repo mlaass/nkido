@@ -1,7 +1,7 @@
 #include "text_buffer.hpp"
 #include <algorithm>
 
-namespace enkido::ui {
+namespace nkido::ui {
 
 void TextBuffer::mark_dirty() {
     lines_dirty_ = true;
@@ -245,4 +245,4 @@ void TextBuffer::set_text(std::string_view text) {
     mark_dirty();
 }
 
-}  // namespace enkido::ui
+}  // namespace nkido::ui
