@@ -1,6 +1,7 @@
 #include "cedar/dsp/fft.hpp"
 #include "cedar/opcodes/dsp_state.hpp"
 
+#include <bit>
 #include <cmath>
 #include <cstring>
 
@@ -37,8 +38,8 @@ static float* g_hanning_ptrs[NUM_SIZES] = {
 static bool g_initialized = false;
 
 static int log2_size(std::size_t nfft) {
-    // __builtin_ctz gives trailing zeros = log2 for power-of-2
-    return __builtin_ctz(static_cast<unsigned>(nfft));
+    // countr_zero gives trailing zeros = log2 for power-of-2
+    return std::countr_zero(static_cast<unsigned>(nfft));
 }
 
 static void ensure_initialized() {

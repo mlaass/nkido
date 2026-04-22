@@ -1,6 +1,7 @@
 #include "akkado/lexer.hpp"
 #include "akkado/music_theory.hpp"
-#include <charconv>
+#include <cstdlib>
+#include <string>
 #include <unordered_map>
 
 namespace akkado {
@@ -356,10 +357,10 @@ Token Lexer::lex_number() {
 
     // Parse the number
     std::string_view text = source_.substr(start_, current_ - start_);
-    double value = 0.0;
-
-    auto result = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (result.ec != std::errc{}) {
+    std::string buf(text);
+    char* end = nullptr;
+    double value = std::strtod(buf.c_str(), &end);
+    if (end == buf.c_str()) {
         return make_error_token("Invalid number");
     }
 

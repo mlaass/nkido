@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <cstdlib>
+#include <string>
 
 namespace akkado {
 
@@ -350,10 +352,10 @@ MiniToken MiniLexer::lex_number() {
 
     // Parse the number
     std::string_view text = pattern_.substr(start_, current_ - start_);
-    double value = 0.0;
-
-    auto result = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (result.ec != std::errc{}) {
+    std::string buf(text);
+    char* end = nullptr;
+    double value = std::strtod(buf.c_str(), &end);
+    if (end == buf.c_str()) {
         return make_error_token("Invalid number in pattern");
     }
 
@@ -490,8 +492,10 @@ std::optional<MiniToken> MiniLexer::try_lex_chord_symbol() {
             while (is_digit(peek())) advance();
         }
         std::string_view vel_text = pattern_.substr(vel_start, current_ - vel_start);
-        double vel_val = 0.0;
-        std::from_chars(vel_text.data(), vel_text.data() + vel_text.size(), vel_val);
+        std::string vel_buf(vel_text);
+        char* vel_end = nullptr;
+        double vel_val = std::strtod(vel_buf.c_str(), &vel_end);
+        if (vel_end == vel_buf.c_str()) vel_val = 0.0;
         velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
     }
 
@@ -551,8 +555,10 @@ MiniToken MiniLexer::lex_pitch() {
             while (is_digit(peek())) advance();
         }
         std::string_view vel_text = pattern_.substr(vel_start, current_ - vel_start);
-        double vel_val = 0.0;
-        std::from_chars(vel_text.data(), vel_text.data() + vel_text.size(), vel_val);
+        std::string vel_buf(vel_text);
+        char* vel_end = nullptr;
+        double vel_val = std::strtod(vel_buf.c_str(), &vel_end);
+        if (vel_end == vel_buf.c_str()) vel_val = 0.0;
         velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
     }
 
@@ -620,8 +626,10 @@ MiniToken MiniLexer::lex_pitch_or_sample() {
                     while (is_digit(peek())) advance();
                 }
                 std::string_view vel_text = pattern_.substr(vel_start, current_ - vel_start);
-                double vel_val = 0.0;
-                std::from_chars(vel_text.data(), vel_text.data() + vel_text.size(), vel_val);
+                std::string vel_buf(vel_text);
+                char* vel_end = nullptr;
+                double vel_val = std::strtod(vel_buf.c_str(), &vel_end);
+                if (vel_end == vel_buf.c_str()) vel_val = 0.0;
                 velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
             }
 

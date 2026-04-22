@@ -3,8 +3,13 @@
 #include "../dsp/constants.hpp"
 #include <cstdint>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
 
 namespace cedar {
 
@@ -35,7 +40,9 @@ public:
     {
         // size must be multiple of alignment for aligned_alloc
         std::size_t aligned_size = (size_ + ALIGNMENT - 1) & ~(ALIGNMENT - 1);
-#ifdef CEDAR_USE_POSIX_MEMALIGN
+#if defined(_MSC_VER)
+        memory_ = static_cast<float*>(_aligned_malloc(aligned_size, ALIGNMENT));
+#elif defined(CEDAR_USE_POSIX_MEMALIGN)
         void* raw = nullptr;
         if (posix_memalign(&raw, ALIGNMENT, aligned_size) != 0) {
             raw = nullptr;
@@ -54,7 +61,11 @@ public:
 
     ~AudioArena() {
         if (memory_) {
+#if defined(_MSC_VER)
+            _aligned_free(memory_);
+#else
             std::free(memory_);
+#endif
         }
     }
 
@@ -75,7 +86,11 @@ public:
     AudioArena& operator=(AudioArena&& other) noexcept {
         if (this != &other) {
             if (memory_) {
+#if defined(_MSC_VER)
+                _aligned_free(memory_);
+#else
                 std::free(memory_);
+#endif
             }
             memory_ = other.memory_;
             size_ = other.size_;

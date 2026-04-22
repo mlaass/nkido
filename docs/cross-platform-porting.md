@@ -1,6 +1,6 @@
 # Cross-platform porting requirements
 
-> **Status: DISCOVERED / PROPOSED** — Portability blockers surfaced in CI on 2026-04-22; fixes not yet implemented.
+> **Status: IMPLEMENTED (pending CI verification)** — Portability blockers surfaced in CI on 2026-04-22; source-level fixes applied the same day on `master`. Awaiting a godot-nkido-addon run against this commit to confirm Windows + macOS jobs go green.
 
 ## Context
 
@@ -89,7 +89,12 @@ If C++20 is not an option here, guard the call:
 
 ## 3. `std::from_chars<double>` — macOS libc++
 
-**File:** `akkado/src/lexer.cpp:361`
+**Files:**
+- `akkado/src/lexer.cpp:361`
+- `akkado/src/mini_lexer.cpp:355` (main number lexer)
+- `akkado/src/mini_lexer.cpp:494, 555, 624` (three `:velocity` suffix parsers)
+
+Integer `from_chars` overloads in `tuning.cpp` and the `var_val` sites in `mini_lexer.cpp` are unaffected — Apple libc++ only deletes the floating-point overloads.
 
 **Error (Apple Clang, macos-latest runner):**
 ```
