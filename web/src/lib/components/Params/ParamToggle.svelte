@@ -7,15 +7,14 @@
 
 	let { param }: Props = $props();
 
-	// Local state for immediate UI updates
-	let isOn = $state(param.defaultValue > 0.5);
+	// Local state for immediate UI updates. Hydrated synchronously from
+	// store-or-default before first paint; re-syncs on hot-swap.
+	let isOn = $state(false);
 
-	// Sync from store when param changes
-	$effect(() => {
+	$effect.pre(() => {
 		const storeValue = audioEngine.paramValues.get(param.name);
-		if (storeValue !== undefined) {
-			isOn = storeValue > 0.5;
-		}
+		const raw = storeValue !== undefined ? storeValue : param.defaultValue;
+		isOn = raw > 0.5;
 	});
 
 	function handleClick() {

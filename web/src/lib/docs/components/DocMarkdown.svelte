@@ -13,7 +13,7 @@
 
 	let { slug, anchor = null, fullPage = false }: Props = $props();
 
-	let contentElement: HTMLDivElement;
+	let contentElement = $state<HTMLDivElement | null>(null);
 	let htmlContent = $state('');
 	let codeBlocks = $state<Array<{ id: string; code: string }>>([]);
 	let isLoading = $state(true);

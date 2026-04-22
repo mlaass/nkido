@@ -7,15 +7,14 @@
 
 	let { param }: Props = $props();
 
-	// Local state for immediate UI updates
-	let selectedIndex = $state(Math.round(param.defaultValue));
+	// Local state for immediate UI updates. Hydrated synchronously from
+	// store-or-default before first paint; re-syncs on hot-swap.
+	let selectedIndex = $state(0);
 
-	// Sync from store when param changes
-	$effect(() => {
+	$effect.pre(() => {
 		const storeValue = audioEngine.paramValues.get(param.name);
-		if (storeValue !== undefined) {
-			selectedIndex = Math.round(storeValue);
-		}
+		const raw = storeValue !== undefined ? storeValue : param.defaultValue;
+		selectedIndex = Math.round(raw);
 	});
 
 	function handleChange(e: Event) {

@@ -7,15 +7,13 @@
 
 	let { param }: Props = $props();
 
-	// Local state for immediate UI updates
-	let currentValue = $state(param.defaultValue);
+	// Local state for immediate UI updates. Hydrated synchronously from
+	// store-or-default before first paint; re-syncs on hot-swap.
+	let currentValue = $state<number>(0);
 
-	// Sync from store when param changes (e.g., on hot-swap)
-	$effect(() => {
+	$effect.pre(() => {
 		const storeValue = audioEngine.paramValues.get(param.name);
-		if (storeValue !== undefined) {
-			currentValue = storeValue;
-		}
+		currentValue = storeValue !== undefined ? storeValue : param.defaultValue;
 	});
 
 	// Step size: ~1000 steps across any range
