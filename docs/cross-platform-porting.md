@@ -1,5 +1,7 @@
 # Cross-platform porting requirements
 
+> **Status: DISCOVERED / PROPOSED** — Portability blockers surfaced in CI on 2026-04-22; fixes not yet implemented.
+
 ## Context
 
 Discovered 2026-04-22 via CI in `godot-nkido-addon`
@@ -35,9 +37,16 @@ error C3861: 'aligned_alloc': identifier not found
 #endif
 ```
 
-The destructor (line 57) also needs a matching branch — `_aligned_malloc` **requires** `_aligned_free`; plain `std::free` is undefined behavior.
+Every free site must be updated — `_aligned_malloc` **requires** `_aligned_free`; plain `std::free` is undefined behavior. There are **two** such sites in `audio_arena.hpp`:
+
+- Line 57 — destructor `~AudioArena()`
+- Line 78 — move-assignment operator `AudioArena& operator=(AudioArena&&)`
+
+The move-constructor (line 65) only steals the raw pointer, so it needs no change.
 
 Alternative: drop the aligned-allocator entirely and use C++17's aligned `operator new` (`::operator new(size, std::align_val_t{ALIGNMENT})` / matching delete). Portable but slightly more verbose.
+
+**Recommendation:** platform-branched `_aligned_malloc` / `_aligned_free`. The branches are already established in the file (`CEDAR_USE_POSIX_MEMALIGN`), so adding a third is consistent with existing style. Update both free sites.
 
 ---
 
@@ -74,7 +83,7 @@ If C++20 is not an option here, guard the call:
 #endif
 ```
 
-`std::countr_zero` is the cleaner option.
+**Recommendation:** `std::countr_zero`. The project already mandates C++20 (all three `CMakeLists.txt` set `CMAKE_CXX_STANDARD 20`), so the MSVC `_BitScanForward` guard is unnecessary in practice.
 
 ---
 
@@ -91,25 +100,17 @@ error: call to deleted function 'from_chars'
 
 **Fix options (pick one):**
 
-- **A. Fallback for Apple libc++ only** — detect the broken shipping and route doubles through `std::strtod` (needs a null-terminated buffer):
+- **A. Unconditionally use `std::strtod`** for floats — less elegant but removes one `#ifdef` and avoids the whole category of libc++ FP-parsing bugs. Needs a null-terminated buffer:
   ```cpp
-  #if defined(_LIBCPP_VERSION) && _LIBCPP_VERSION < 170000
-      std::string buf(text);
-      char* end = nullptr;
-      double value = std::strtod(buf.c_str(), &end);
-      if (end == buf.c_str()) return make_error_token("Invalid number");
-  #else
-      double value = 0.0;
-      auto result = std::from_chars(text.data(), text.data() + text.size(), value);
-      if (result.ec != std::errc{}) return make_error_token("Invalid number");
-  #endif
+  std::string buf(text);
+  char* end = nullptr;
+  double value = std::strtod(buf.c_str(), &end);
+  if (end == buf.c_str()) return make_error_token("Invalid number");
   ```
 
-- **B. Unconditionally use `std::strtod`** for floats — less elegant but removes one `#ifdef` and avoids the whole category of libc++ FP-parsing bugs.
+- **B. Bump the CI toolchain** — pin `macos-14` (or the `xcode-select` toolchain that ships libc++ with working `from_chars<double>`) instead of `macos-latest`. Kicks the can; future runners will eventually be fine but users building locally on older machines still break.
 
-- **C. Bump the CI toolchain** — pin `macos-14` (or the `xcode-select` toolchain that ships libc++ with working `from_chars<double>`) instead of `macos-latest`. Kicks the can; future runners will eventually be fine but users building locally on older machines still break.
-
-**Recommendation: B.** `std::from_chars` here is not on a hot path (lexer runs once at compile, not every audio block), so `std::strtod` is cheap and eliminates the libc++ version dependency entirely.
+**Recommendation: A.** `std::from_chars` here is not on a hot path (lexer runs once at compile, not every audio block), so `std::strtod` is cheap and eliminates the libc++ version dependency entirely.
 
 ---
 
