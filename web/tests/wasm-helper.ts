@@ -12,8 +12,8 @@ let moduleInstance: NkidoModule | null = null;
 
 export interface NkidoModule {
 	// Memory access
-	ccall: (name: string, returnType: string, argTypes: string[], args: unknown[]) => unknown;
-	cwrap: (name: string, returnType: string, argTypes: string[]) => (...args: unknown[]) => unknown;
+	ccall: (name: string, returnType: string | null, argTypes: string[], args: unknown[]) => unknown;
+	cwrap: (name: string, returnType: string | null, argTypes: string[]) => (...args: unknown[]) => unknown;
 	getValue: (ptr: number, type: string) => number;
 	setValue: (ptr: number, value: number, type: string) => void;
 	UTF8ToString: (ptr: number) => string;
@@ -74,11 +74,12 @@ export async function loadNkido(): Promise<WrappedNkido> {
 	)({});
 
 	// Initialize the module with the WASM binary
-	moduleInstance = await createModule({
+	const instance: NkidoModule = await createModule({
 		wasmBinary: wasmBinary.buffer
 	});
+	moduleInstance = instance;
 
-	return wrapModule(moduleInstance);
+	return wrapModule(instance);
 }
 
 function wrapModule(module: NkidoModule): WrappedNkido {

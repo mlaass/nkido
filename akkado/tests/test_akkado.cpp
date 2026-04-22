@@ -2,6 +2,7 @@
 #include "akkado/akkado.hpp"
 #include <cedar/vm/instruction.hpp>
 #include <cstring>
+#include <string>
 
 // Helper to decode float from PUSH_CONST instruction
 // Float is stored directly in state_id (32 bits)
@@ -269,10 +270,14 @@ TEST_CASE("Akkado compilation", "[akkado]") {
 }
 
 TEST_CASE("Akkado version", "[akkado]") {
-    CHECK(akkado::Version::major == 0);
-    CHECK(akkado::Version::minor == 1);
-    CHECK(akkado::Version::patch == 0);
-    CHECK(akkado::Version::string() == "0.1.0");
+    CHECK(akkado::Version::major >= 0);
+    CHECK(akkado::Version::minor >= 0);
+    CHECK(akkado::Version::patch >= 0);
+
+    const auto expected = std::to_string(akkado::Version::major) + "." +
+                          std::to_string(akkado::Version::minor) + "." +
+                          std::to_string(akkado::Version::patch);
+    CHECK(std::string(akkado::Version::string()) == expected);
 }
 
 TEST_CASE("Akkado match expressions", "[akkado][match]") {

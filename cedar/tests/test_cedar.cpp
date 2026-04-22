@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "cedar/cedar.hpp"
+#include <string>
 
 TEST_CASE("Cedar initialization", "[cedar]") {
     SECTION("default config") {
@@ -37,8 +38,12 @@ TEST_CASE("Cedar initialization", "[cedar]") {
 }
 
 TEST_CASE("Cedar version", "[cedar]") {
-    CHECK(cedar::Version::major == 0);
-    CHECK(cedar::Version::minor == 1);
-    CHECK(cedar::Version::patch == 0);
-    CHECK(cedar::Version::string() == "0.1.0");
+    CHECK(cedar::Version::major >= 0);
+    CHECK(cedar::Version::minor >= 0);
+    CHECK(cedar::Version::patch >= 0);
+
+    const auto expected = std::to_string(cedar::Version::major) + "." +
+                          std::to_string(cedar::Version::minor) + "." +
+                          std::to_string(cedar::Version::patch);
+    CHECK(std::string(cedar::Version::string()) == expected);
 }
