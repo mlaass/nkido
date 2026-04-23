@@ -1,0 +1,17 @@
+[
+  {
+    "slug": "hello-sine",
+    "title": "Hello, Sine",
+    "description": "The simplest oscillator — a single sine wave at 440 Hz."
+  },
+  {
+    "slug": "kick-pattern",
+    "title": "Kick Pattern",
+    "description": "Four-on-the-floor kick driven by a mini-notation pattern."
+  },
+  {
+    "slug": "chord-stab",
+    "title": "Chord Stab",
+    "description": "Strudel-style chord expansion with a filter and envelope."
+  }
+]

@@ -1,0 +1,6 @@
+// Kick Pattern — four-on-the-floor with a hi-hat on the offbeat.
+// `pat()` drives sample playback via Akkado's mini-notation.
+
+bpm = 120
+
+pat("bd hh bd hh") |> out(%, %)

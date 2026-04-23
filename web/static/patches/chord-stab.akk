@@ -1,0 +1,9 @@
+// Chord Stab — a slow chord progression with a filter envelope.
+// `chord()` expands each chord symbol into multiple frequencies;
+// the closure `(f) -> ...` is applied to every voice.
+
+bpm = 110
+
+chord("C Em Am G") |> ((f) ->
+    osc("saw", f) |> lp(%, 1200) * ar(trigger(1), 0.05, 0.4)
+) |> out(%, %) * 0.3

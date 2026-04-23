@@ -1,0 +1,7 @@
+// Hello, Sine — the simplest Akkado patch.
+// A 440 Hz sine wave sent to the left and right outputs.
+// Press play (or Ctrl+Enter) to hear it.
+
+bpm = 120
+
+osc("sin", 440) * 0.3 |> out(%, %)

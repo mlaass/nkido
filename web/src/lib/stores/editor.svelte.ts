@@ -67,18 +67,38 @@ function createEditorStore() {
 		diagnostics: []
 	});
 
+	// When false, setCode and beforeunload do not touch localStorage.
+	// The embed route flips this off so it doesn't clobber the main app's saved code.
+	let persistenceEnabled = true;
+
 	// Save immediately on page unload
 	if (typeof window !== 'undefined') {
 		window.addEventListener('beforeunload', () => {
 			if (saveTimeout) clearTimeout(saveTimeout);
-			saveCode(state.code);
+			if (persistenceEnabled) saveCode(state.code);
 		});
 	}
 
 	function setCode(code: string) {
 		state.code = code;
 		state.hasUnsavedChanges = true;
-		debouncedSaveCode(code);
+		if (persistenceEnabled) debouncedSaveCode(code);
+	}
+
+	function setPersistenceEnabled(enabled: boolean) {
+		persistenceEnabled = enabled;
+		if (!enabled && saveTimeout) {
+			clearTimeout(saveTimeout);
+			saveTimeout = null;
+		}
+	}
+
+	function reloadFromPersistence() {
+		const loaded = loadCode();
+		state.code = loaded;
+		state.hasUnsavedChanges = false;
+		state.diagnostics = [];
+		state.lastCompileError = null;
 	}
 
 	function setCompileError(error: string | null) {
@@ -177,7 +197,9 @@ function createEditorStore() {
 		setDiagnostics,
 		markCompiled,
 		reset,
-		evaluate
+		evaluate,
+		setPersistenceEnabled,
+		reloadFromPersistence
 	};
 }
 
