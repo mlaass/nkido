@@ -1,9 +1,12 @@
 // Chord Stab — a slow chord progression with a filter envelope.
-// `chord()` expands each chord symbol into multiple frequencies;
-// the closure `(f) -> ...` is applied to every voice.
+// `chord()` emits a polyphonic event stream (one event per chord,
+// with up to 3 voices per event). `poly(%, N, instr)` allocates
+// N voices and runs the instrument `(freq, gate, vel) -> ...`
+// per active voice, summing the results.
 
 bpm = 110
 
-chord("C Em Am G") |> ((f) ->
-    osc("saw", f) |> lp(%, 1200) * ar(trigger(1), 0.05, 0.4)
-) |> out(%, %) * 0.3
+stab = (freq, gate, vel) ->
+    osc("saw", freq) |> lp(%, 1200) |> % * ar(gate, 0.05, 0.4) * vel
+
+chord("C Em Am G") |> poly(%, 3, stab) |> % * 0.3 |> out(%, %)
