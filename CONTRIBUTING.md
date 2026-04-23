@@ -246,6 +246,17 @@ cd web && bun run check
 
 If a test fails, investigate — don't adjust thresholds or expected values to make it pass. If you believe the test itself is wrong, explain why in your PR.
 
+## Releasing
+
+NKIDO follows [Semantic Versioning](https://semver.org/). The release flow is:
+
+1. **Update the changelog.** Run the `/update-changelog` Claude Code skill (or hand-edit `CHANGELOG.md`) to add a `## [X.Y.Z] - YYYY-MM-DD` section in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. The skill drafts entries from `git log` since the last tag.
+2. **Review and commit.** Inspect `git diff CHANGELOG.md`, then commit the entry on its own.
+3. **Bump the version.** Run `./scripts/bump-version.sh <major|minor|patch>`. This syncs `VERSION` and `web/package.json`, commits with `Release vX.Y.Z`, and creates the `vX.Y.Z` tag. The script aborts if `CHANGELOG.md` has no section for the new version.
+4. **Push.** `git push origin master --tags` triggers `.github/workflows/deploy.yml`, which deploys to production Netlify and creates a GitHub Release whose body is extracted from `CHANGELOG.md` by `scripts/extract-changelog.sh`.
+
+`CHANGELOG.md` is the single source of truth for release notes — anything you put there shows up on the GitHub Release page.
+
 ## Questions?
 
 Open a [discussion](https://github.com/mlaass/nkido/discussions) or ask in a GitHub issue. We're happy to help you find the right place to contribute.

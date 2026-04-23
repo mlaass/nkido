@@ -61,6 +61,16 @@ if git rev-parse "v$NEW_VERSION" >/dev/null 2>&1; then
     exit 1
 fi
 
+# --- Check CHANGELOG has an entry for the new version ---
+# The release workflow extracts release notes from CHANGELOG.md by version
+# heading; bumping without an entry would produce an empty GitHub Release.
+if ! grep -qE "^## \[$NEW_VERSION\]" CHANGELOG.md; then
+    echo "Error: CHANGELOG.md has no '## [$NEW_VERSION]' section."
+    echo "       Run the /update-changelog skill (or edit CHANGELOG.md by hand)"
+    echo "       to add release notes for $NEW_VERSION before bumping."
+    exit 1
+fi
+
 # --- Update version files ---
 echo ""
 echo "Updating VERSION..."
