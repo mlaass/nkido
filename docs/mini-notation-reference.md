@@ -147,6 +147,16 @@ Comma-separated elements play simultaneously, each subdividing independently.
 [c4 e4, g4 a4 b4]   // Layer 1: c4 e4, Layer 2: g4 a4 b4
 ```
 
+When every comma-separated member is a bare sample atom (or rest), the
+polyrhythm collapses to a single simultaneous trigger — i.e. a drum chord.
+`[bd, hh]` fires the kick and hi-hat together on the same beat; `[bd, sd, hh]`
+fires all three. Up to 4 voices per stack; extra voices fall back to the
+older per-child interleave so nothing is silently dropped.
+
+```
+pat("[[bd, hh] hh [sd, hh] hh]")    // Standard rock groove
+```
+
 ### Polymeter `{...}%n`
 
 Fixed step count that wraps around. The `%n` specifies how many steps constitute one cycle.

@@ -346,6 +346,7 @@ private:
                 sample_mappings_.push_back(SequenceSampleMapping{
                     seq_idx,
                     event_idx,
+                    /*value_slot=*/0,
                     atom_data.sample_name,
                     atom_data.sample_bank,
                     atom_data.sample_variant
@@ -472,12 +473,121 @@ private:
     // MiniPolyrhythm [a, b, c]: all elements simultaneously
     void compile_polyrhythm_events(const Node& n, std::uint16_t seq_idx,
                                     float time_offset, float time_span) {
-        // Each child occupies the same time span
+        // Fast-path: if all direct children are bare sample atoms (or rests),
+        // merge them into a single DATA event with num_values=N. This lets
+        // [bd, hh] behave like a chord — SAMPLE_PLAY can allocate one voice per
+        // value. Otherwise (groups, pitch atoms, nested polyrhythms, euclidean)
+        // fall back to per-child compile so differing-subdivision polyrhythms
+        // like [c4 e4, g4 a4 b4] keep their current interleave behavior.
+        if (can_merge_sample_polyrhythm(n)) {
+            emit_merged_sample_polyrhythm(n, seq_idx, time_offset, time_span);
+            return;
+        }
+
         NodeIndex child = n.first_child;
         while (child != NULL_NODE) {
             compile_into_sequence(child, seq_idx, time_offset, time_span);
             child = arena_[child].next_sibling;
         }
+    }
+
+    // Polyrhythm merges into a single chord-style event only when every direct
+    // child is a bare Sample or Rest atom. At least 2 non-rest children are
+    // required (otherwise there's nothing to merge).
+    bool can_merge_sample_polyrhythm(const Node& n) const {
+        int sample_count = 0;
+        int total_children = 0;
+        for (NodeIndex c = n.first_child; c != NULL_NODE;
+             c = arena_[c].next_sibling) {
+            const Node& cn = arena_[c];
+            if (cn.type != NodeType::MiniAtom) return false;
+            const auto& ad = cn.as_mini_atom();
+            if (ad.kind != Node::MiniAtomKind::Sample &&
+                ad.kind != Node::MiniAtomKind::Rest) {
+                return false;
+            }
+            if (ad.kind == Node::MiniAtomKind::Sample) ++sample_count;
+            ++total_children;
+            if (total_children > static_cast<int>(cedar::MAX_VALUES_PER_EVENT)) {
+                // Caps at the chord limit. Extra voices would be dropped — let
+                // the fallback interleave path handle it instead so the user at
+                // least gets something audible (first-wins becomes last-wins,
+                // same as before the fix, but for the >4-voice edge case only).
+                return false;
+            }
+        }
+        // Merge when at least one sample is present and there are ≥2 children;
+        // a lone [bd] is handled fine by either path, and all-rest polyrhythms
+        // would produce silence either way.
+        return sample_count >= 1 && total_children >= 2;
+    }
+
+    // Emit a single merged DATA event representing all simultaneous sample
+    // voices. values[slot] holds each voice's sample_id (0 for rests).
+    void emit_merged_sample_polyrhythm(const Node& n, std::uint16_t seq_idx,
+                                        float time_offset, float time_span) {
+        cedar::Event e;
+        e.type = cedar::EventType::DATA;
+        e.time = time_offset;
+        e.duration = time_span;
+        e.chance = 1.0f;
+        e.velocity = 1.0f;
+        e.num_values = 0;
+        // Highlight the whole [bd, hh] span in the UI, not just one child.
+        e.source_offset = static_cast<std::uint16_t>(
+            n.location.offset - pattern_base_offset_);
+        e.source_length = static_cast<std::uint16_t>(n.location.length);
+
+        is_sample_pattern_ = true;
+
+        std::uint16_t event_idx = static_cast<std::uint16_t>(
+            seq_idx < sequence_events_.size() ? sequence_events_[seq_idx].size() : 0);
+
+        std::uint8_t slot = 0;
+        bool first_sample_seen = false;
+        for (NodeIndex c = n.first_child;
+             c != NULL_NODE && slot < cedar::MAX_VALUES_PER_EVENT;
+             c = arena_[c].next_sibling) {
+            const auto& ad = arena_[c].as_mini_atom();
+
+            if (ad.kind == Node::MiniAtomKind::Rest) {
+                e.values[slot] = 0.0f;  // SAMPLE_PLAY skips sample_id == 0
+                ++slot;
+                continue;
+            }
+
+            // Sample atom
+            if (!first_sample_seen) {
+                // First real voice sets the event's velocity + type_id so
+                // match() routing still picks up the primary sample.
+                e.velocity = ad.velocity;
+                if (!ad.sample_name.empty()) {
+                    e.type_id = get_or_assign_type_id(ad.sample_name);
+                }
+                first_sample_seen = true;
+            }
+
+            std::uint32_t sample_id = 0;
+            if (!ad.sample_name.empty()) {
+                sample_names_.insert(ad.sample_name);
+                sample_mappings_.push_back(SequenceSampleMapping{
+                    seq_idx,
+                    event_idx,
+                    slot,
+                    ad.sample_name,
+                    ad.sample_bank,
+                    ad.sample_variant
+                });
+                if (sample_registry_) {
+                    sample_id = sample_registry_->get_id(ad.sample_name);
+                }
+            }
+            e.values[slot] = static_cast<float>(sample_id);
+            ++slot;
+        }
+        e.num_values = slot;
+
+        add_event_to_sequence(seq_idx, e);
     }
 
     // MiniEuclidean: Euclidean rhythm pattern
@@ -831,14 +941,19 @@ TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
         encode_const_value(pitch_inst, 1.0f);
         emit(pitch_inst);
 
-        // Wire up sample player
+        // Wire up sample player.
+        // inputs[3]/[4] carry the upstream SequenceState's state_id (split into
+        // low/high 16-bit halves) so the sampler can read polyphonic events
+        // (e.g. merged [bd, hh] polyrhythms) directly from evt.values[] on
+        // trigger, instead of being limited to the scalar sample_id buffer.
         cedar::Instruction sample_inst{};
         sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
         sample_inst.out_buffer = output_buf;
         sample_inst.inputs[0] = trigger_buf;   // trigger
         sample_inst.inputs[1] = pitch_buf;     // pitch
-        sample_inst.inputs[2] = value_buf;     // sample_id
-        sample_inst.inputs[3] = 0xFFFF;
+        sample_inst.inputs[2] = value_buf;     // sample_id (fallback / voice 0)
+        sample_inst.inputs[3] = static_cast<std::uint16_t>(state_id & 0xFFFFu);
+        sample_inst.inputs[4] = static_cast<std::uint16_t>((state_id >> 16) & 0xFFFFu);
         sample_inst.state_id = state_id + 1;
         emit(sample_inst);
 
@@ -1621,14 +1736,16 @@ static TypedValue emit_pattern_with_state(
         encode_const_value(pitch_inst, 1.0f);
         emit_fn(instructions, pitch_inst);
 
-        // Wire up sample player
+        // Wire up sample player (see handle_mini_literal for details on the
+        // in3/in4 encoding of the linked SequenceState's state_id).
         cedar::Instruction sample_inst{};
         sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
         sample_inst.out_buffer = output_buf;
         sample_inst.inputs[0] = trigger_buf;   // trigger
         sample_inst.inputs[1] = pitch_buf;     // pitch
-        sample_inst.inputs[2] = value_buf;     // sample_id
-        sample_inst.inputs[3] = 0xFFFF;
+        sample_inst.inputs[2] = value_buf;     // sample_id (fallback / voice 0)
+        sample_inst.inputs[3] = static_cast<std::uint16_t>(state_id & 0xFFFFu);
+        sample_inst.inputs[4] = static_cast<std::uint16_t>((state_id >> 16) & 0xFFFFu);
         sample_inst.state_id = state_id + 1;
         emit_fn(instructions, sample_inst);
 

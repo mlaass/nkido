@@ -589,7 +589,11 @@ WASM_EXPORT void akkado_resolve_sample_ids() {
                         lookup_name = mapping.bank + "_" + mapping.sample_name + "_" + std::to_string(mapping.variant);
                     }
                     auto id = g_vm->sample_bank().get_sample_id(lookup_name);
-                    events[mapping.event_idx].values[0] = static_cast<float>(id);
+                    auto& ev = events[mapping.event_idx];
+                    std::uint8_t slot = mapping.value_slot;
+                    if (slot < cedar::MAX_VALUES_PER_EVENT) {
+                        ev.values[slot] = static_cast<float>(id);
+                    }
                 }
             }
         }

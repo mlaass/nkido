@@ -5,6 +5,7 @@
 #include "../vm/sample_bank.hpp"
 #include "../dsp/constants.hpp"
 #include "dsp_state.hpp"
+#include "sequence.hpp"
 #include <cmath>
 #include <algorithm>
 
@@ -19,8 +20,16 @@ class SampleBank;
 // in0: trigger signal (rising edge triggers new voice)
 // in1: pitch/speed (1.0 = original pitch, 2.0 = octave up, 0.5 = octave down)
 // in2: sample ID (constant, which sample to play)
+// in3/in4: (optional) linked SequenceState state_id, split low/high 16 bits.
+//   When both are 0xFFFF (unused), the sampler uses the scalar sample_id from
+//   in2 (existing behavior). Otherwise the two halves are reassembled into a
+//   32-bit state_id, and on every trigger the sampler fetches the most-
+//   recently-crossed event from that SequenceState and spawns one voice per
+//   non-zero entry in event.values[]. This is how sample polyrhythms such as
+//   [bd, hh] play multiple simultaneous samples: codegen merges them into a
+//   single event with num_values > 1 and the sampler picks up each voice.
 //
-// Polyphonic sampler with up to 16 simultaneous voices.
+// Polyphonic sampler with up to 32 simultaneous voices.
 // Trigger detection on rising edge (0 -> positive).
 // Uses linear interpolation for pitch shifting.
 // Outputs stereo (mono samples are duplicated to both channels).
@@ -32,8 +41,35 @@ inline void op_sample_play(ExecutionContext& ctx, const Instruction& inst, Sampl
     const float* sample_id_buf = ctx.buffers->get(inst.inputs[2]);
     auto& state = ctx.states->get_or_create<SamplerState>(inst.state_id);
 
+    // Optional link to an upstream SequenceState for polyphonic trigger events.
+    // Both halves == BUFFER_UNUSED means no link → scalar mode below.
+    SequenceState* linked_seq = nullptr;
+    if (inst.inputs[3] != BUFFER_UNUSED || inst.inputs[4] != BUFFER_UNUSED) {
+        std::uint32_t seq_state_id =
+            static_cast<std::uint32_t>(inst.inputs[3]) |
+            (static_cast<std::uint32_t>(inst.inputs[4]) << 16);
+        linked_seq = ctx.states->get_if<SequenceState>(seq_state_id);
+    }
+
     // Anti-click envelope constants
     constexpr std::uint8_t ATTACK_SAMPLES = 5;  // ~0.1ms at 48kHz
+
+    // Spawn a single voice. Shared by the scalar and polyphonic trigger paths
+    // so both honor identical voice-allocation and micro-fade behavior.
+    auto spawn_voice = [&](std::uint32_t sample_id, float voice_pitch) {
+        if (sample_id == 0 || !sample_bank) return;
+        const SampleData* sample = sample_bank->get_sample(sample_id);
+        if (!sample || sample->frames == 0) return;
+        SamplerVoice* voice = state.allocate_voice();
+        if (!voice) return;
+        voice->position = 0.0f;
+        voice->speed = voice_pitch;
+        voice->sample_id = sample_id;
+        voice->active = true;
+        voice->fading_out = false;
+        float first_sample = sample->get_interpolated(0.0f, 0);
+        voice->attack_counter = (std::abs(first_sample) > 0.01f) ? 0 : ATTACK_SAMPLES;
+    };
 
     // Process block
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
@@ -47,22 +83,22 @@ inline void op_sample_play(ExecutionContext& ctx, const Instruction& inst, Sampl
         bool trigger_on = (current_trigger > 0.0f && state.prev_trigger <= 0.0f);
         state.prev_trigger = current_trigger;
 
-        // Trigger new voice (if available)
-        if (trigger_on && sample_bank && current_sample_id != 0) {
-            const SampleData* sample = sample_bank->get_sample(current_sample_id);
-            if (sample && sample->frames > 0) {
-                SamplerVoice* voice = state.allocate_voice();
-                if (voice) {
-                    voice->position = 0.0f;
-                    voice->speed = current_pitch;
-                    voice->sample_id = current_sample_id;
-                    voice->active = true;
-                    voice->fading_out = false;
-
-                    // Check if sample starts near zero - skip fade if so
-                    float first_sample = sample->get_interpolated(0.0f, 0);
-                    voice->attack_counter = (std::abs(first_sample) > 0.01f) ? 0 : ATTACK_SAMPLES;
+        // Trigger new voice(s) on rising edge.
+        if (trigger_on) {
+            if (linked_seq && linked_seq->output.num_events > 0) {
+                // Polyphonic path: spawn one voice per values[] entry of the
+                // event SEQPAT_STEP just crossed. A scalar event (num_values==1)
+                // behaves exactly like the old path.
+                std::uint32_t event_index = (linked_seq->current_index > 0)
+                    ? linked_seq->current_index - 1
+                    : linked_seq->output.num_events - 1;
+                const auto& evt = linked_seq->output.events[event_index];
+                for (std::uint8_t v = 0; v < evt.num_values; ++v) {
+                    spawn_voice(static_cast<std::uint32_t>(evt.values[v]), current_pitch);
                 }
+            } else {
+                // Scalar path (user-facing sample() builtin, or unlinked pat()).
+                spawn_voice(current_sample_id, current_pitch);
             }
         }
 

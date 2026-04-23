@@ -2961,6 +2961,161 @@ TEST_CASE("Codegen: Sample pattern event inspection", "[codegen][samples][debug]
     }
 }
 
+// =============================================================================
+// Sample polyrhythm merge — [bd, hh] plays kick and hat simultaneously.
+// Codegen collapses sibling sample atoms under a MiniPolyrhythm into a single
+// DATA event with num_values=N so SAMPLE_PLAY can spawn one voice per value.
+// =============================================================================
+TEST_CASE("Codegen: Sample polyrhythm merges into chord-like event",
+          "[codegen][samples][polyrhythm]") {
+    akkado::SampleRegistry registry;
+    registry.register_sample("bd", 1);
+    registry.register_sample("sd", 2);
+    registry.register_sample("hh", 3);
+
+    SECTION("[bd, hh] → single event with num_values=2") {
+        auto result = akkado::compile(R"(pat("[bd, hh]") |> out(%, %))",
+                                       "<input>", &registry);
+        REQUIRE(result.success);
+        REQUIRE(!result.state_inits.empty());
+
+        const auto& si = result.state_inits[0];
+        CHECK(si.is_sample_pattern == true);
+        REQUIRE(!si.sequence_events.empty());
+        const auto& events = si.sequence_events[0];
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].num_values == 2);
+        CHECK(events[0].values[0] == 1.0f);  // bd
+        CHECK(events[0].values[1] == 3.0f);  // hh
+        CHECK(events[0].time == Catch::Approx(0.0f));
+
+        // Sample mappings exist for both voices with distinct slots.
+        REQUIRE(si.sequence_sample_mappings.size() == 2);
+        CHECK(si.sequence_sample_mappings[0].value_slot == 0);
+        CHECK(si.sequence_sample_mappings[0].sample_name == "bd");
+        CHECK(si.sequence_sample_mappings[1].value_slot == 1);
+        CHECK(si.sequence_sample_mappings[1].sample_name == "hh");
+    }
+
+    SECTION("[bd, hh, sd] → three voices") {
+        auto result = akkado::compile(R"(pat("[bd, hh, sd]") |> out(%, %))",
+                                       "<input>", &registry);
+        REQUIRE(result.success);
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].num_values == 3);
+        CHECK(events[0].values[0] == 1.0f);
+        CHECK(events[0].values[1] == 3.0f);
+        CHECK(events[0].values[2] == 2.0f);
+    }
+
+    SECTION("[bd, bd] → two voices, same id (voice-doubling allowed)") {
+        auto result = akkado::compile(R"(pat("[bd, bd]") |> out(%, %))",
+                                       "<input>", &registry);
+        REQUIRE(result.success);
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].num_values == 2);
+        CHECK(events[0].values[0] == 1.0f);
+        CHECK(events[0].values[1] == 1.0f);
+    }
+
+    SECTION("[bd, ~] → rest becomes silent voice (values[1] = 0)") {
+        auto result = akkado::compile(R"(pat("[bd, ~]") |> out(%, %))",
+                                       "<input>", &registry);
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        const auto& events = si.sequence_events[0];
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].num_values == 2);
+        CHECK(events[0].values[0] == 1.0f);
+        CHECK(events[0].values[1] == 0.0f);
+        // Only the sample atom gets a mapping; the rest is silent.
+        REQUIRE(si.sequence_sample_mappings.size() == 1);
+        CHECK(si.sequence_sample_mappings[0].value_slot == 0);
+    }
+
+    SECTION("user's rock groove — half-cycle layout kicks/snares correctly") {
+        // Each half-cycle is [[bd, hh] hh [sd, hh] hh] = 4 beats,
+        // together 8 top-level beats. Beats 1 and 3 are polyrhythm stacks.
+        auto result = akkado::compile(
+            R"(pat("[[bd, hh] hh [sd, hh] hh]  [[bd, hh] [bd, hh] [sd, hh] hh]") |> out(%, %))",
+            "<input>", &registry);
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.is_sample_pattern == true);
+        CHECK(si.cycle_length == 2.0f);  // 2 top-level group halves
+        const auto& events = si.sequence_events[0];
+        REQUIRE(events.size() == 8);
+
+        // First half: [bd,hh], hh, [sd,hh], hh
+        CHECK(events[0].num_values == 2);  // bd + hh
+        CHECK(events[0].values[0] == 1.0f);
+        CHECK(events[0].values[1] == 3.0f);
+        CHECK(events[1].num_values == 1);  // hh
+        CHECK(events[1].values[0] == 3.0f);
+        CHECK(events[2].num_values == 2);  // sd + hh
+        CHECK(events[2].values[0] == 2.0f);
+        CHECK(events[2].values[1] == 3.0f);
+        CHECK(events[3].num_values == 1);  // hh
+
+        // Second half: [bd,hh], [bd,hh], [sd,hh], hh
+        CHECK(events[4].num_values == 2);
+        CHECK(events[5].num_values == 2);
+        CHECK(events[5].values[0] == 1.0f);  // bd
+        CHECK(events[6].num_values == 2);  // sd + hh
+        CHECK(events[6].values[0] == 2.0f);
+        CHECK(events[7].num_values == 1);  // hh only
+    }
+
+    SECTION("[[bd, sd], hh] → outer polyrhythm falls back to per-child compile") {
+        // When a polyrhythm's direct child is itself compound (nested
+        // polyrhythm, group, euclidean, pitch chord, …), the merge can't apply
+        // to the outer level because one of the voices would need to represent
+        // a multi-event sub-pattern. The outer polyrhythm therefore falls back
+        // to per-child compile, while the inner [bd, sd] still merges on its
+        // own level.
+        auto result = akkado::compile(R"(pat("[[bd, sd], hh]") |> out(%, %))",
+                                       "<input>", &registry);
+        REQUIRE(result.success);
+        const auto& events = result.state_inits[0].sequence_events[0];
+        // Outer produces 2 events both at time 0: the inner merged polyrhythm
+        // ([bd,sd] → num_values=2) plus the lone hh atom (num_values=1).
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].time == Catch::Approx(0.0f));
+        CHECK(events[1].time == Catch::Approx(0.0f));
+        // Inner merge produces a multi-value event; the sibling hh stays mono.
+        bool saw_merged = false, saw_mono = false;
+        for (const auto& e : events) {
+            if (e.num_values == 2) saw_merged = true;
+            if (e.num_values == 1) saw_mono = true;
+        }
+        CHECK(saw_merged);
+        CHECK(saw_mono);
+    }
+
+    SECTION("single SAMPLE_PLAY instruction; in3/in4 link to SEQPAT state") {
+        auto result = akkado::compile(R"(pat("[bd, hh]") |> out(%, %))",
+                                       "<input>", &registry);
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+
+        // Option B: one SAMPLE_PLAY that handles all voices internally.
+        CHECK(count_instructions(insts, cedar::Opcode::SAMPLE_PLAY) == 1);
+
+        const auto* sample_play = find_instruction(insts, cedar::Opcode::SAMPLE_PLAY);
+        REQUIRE(sample_play != nullptr);
+        const auto* query = find_instruction(insts, cedar::Opcode::SEQPAT_QUERY);
+        REQUIRE(query != nullptr);
+
+        // in3/in4 carry the SequenceState's state_id, split low/high 16 bits.
+        std::uint32_t linked_state =
+            static_cast<std::uint32_t>(sample_play->inputs[3]) |
+            (static_cast<std::uint32_t>(sample_play->inputs[4]) << 16);
+        CHECK(linked_state == query->state_id);
+    }
+}
+
 TEST_CASE("Codegen: Nested bracket subdivision", "[codegen][nested]") {
     SECTION("[] within [] — 2 levels: bd [sd [hh hh]]") {
         auto result = akkado::compile(R"(pat("bd [sd [hh hh]]") |> out(%))");

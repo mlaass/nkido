@@ -102,6 +102,9 @@ struct VisualizationDecl {
 struct SequenceSampleMapping {
     std::uint16_t seq_idx;    // Index into sequences vector
     std::uint16_t event_idx;  // Index into sequence's events array
+    std::uint8_t value_slot = 0;  // Which values[] slot to write the resolved ID into
+                                  // (for merged sample polyrhythms: [bd, hh] writes
+                                  // bd_id to values[0] and hh_id to values[1])
     std::string sample_name;  // Sample name to resolve
     std::string bank;         // Bank name (empty = default)
     std::uint8_t variant = 0; // Variant index (0 = first variant)
