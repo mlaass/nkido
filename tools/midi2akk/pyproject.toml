@@ -1,0 +1,27 @@
+[project]
+name = "midi2akk"
+version = "0.1.0"
+description = "Convert MIDI files to Akkado programs using the GM soundfont"
+requires-python = ">=3.12"
+dependencies = [
+    "mido>=1.3.0",
+]
+
+[project.scripts]
+midi2akk = "midi2akk.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/midi2akk"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
