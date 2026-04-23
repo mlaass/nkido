@@ -1444,11 +1444,13 @@ TypedValue CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     if (func_name == "mono") mode = 1;
     else if (func_name == "legato") mode = 2;
 
-    // Collect arguments
-    auto args = extract_call_args(ast_->arena, n.first_child, 1, 3);
+    // Collect arguments: poly requires exactly 3, mono/legato accept 1-2
+    auto args = extract_call_args(ast_->arena, n.first_child,
+                                  mode == 0 ? 3 : 1,
+                                  mode == 0 ? 3 : 2);
     if (!args.valid) {
         if (mode == 0) {
-            error("E400", "poly() requires 2-3 arguments: poly(voices, instrument) or poly(input, voices, instrument)", n.location);
+            error("E400", "poly() requires 3 arguments: poly(input, voices, instrument). Pipe a pattern in: pat(...) |> poly(%, N, instrument)", n.location);
         } else {
             error("E400", func_name + "() requires 1-2 arguments: " + func_name + "(instrument) or " + func_name + "(input, instrument)", n.location);
         }
@@ -1462,18 +1464,10 @@ TypedValue CodeGenerator::handle_poly_call(NodeIndex node, const Node& n) {
     std::uint8_t max_voices = (mode == 0) ? 8 : 1;
 
     if (mode == 0) {
-        // poly: 2 args = (voices, fn), 3 args = (input, voices, fn)
-        if (args.nodes.size() == 3) {
-            pattern_arg = args.nodes[0];
-            voices_arg = args.nodes[1];
-            instrument_arg = args.nodes[2];
-        } else if (args.nodes.size() == 2) {
-            voices_arg = args.nodes[0];
-            instrument_arg = args.nodes[1];
-        } else {
-            error("E400", "poly() requires 2-3 arguments", n.location);
-            return TypedValue::void_val();
-        }
+        // poly: (input, voices, fn)
+        pattern_arg = args.nodes[0];
+        voices_arg = args.nodes[1];
+        instrument_arg = args.nodes[2];
     } else {
         // mono/legato: 1 arg = (fn), 2 args = (input, fn)
         if (args.nodes.size() == 2) {

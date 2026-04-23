@@ -4217,7 +4217,7 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
     SECTION("basic poly with named function") {
         auto result = akkado::compile(R"(
             fn lead(freq, gate, vel) -> osc("sin", freq)
-            poly(4, lead) |> out(%, %)
+            pat("c4") |> poly(%, 4, lead) |> out(%, %)
         )");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
@@ -4315,7 +4315,7 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
 
     SECTION("poly with inline closure") {
         auto result = akkado::compile(R"(
-            poly(4, (f, g, v) -> osc("sin", f) * v) |> out(%, %)
+            pat("c4") |> poly(%, 4, (f, g, v) -> osc("sin", f) * v) |> out(%, %)
         )");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
@@ -4326,16 +4326,33 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
     SECTION("error: instrument function must have 3 params") {
         auto result = akkado::compile(R"(
             fn bad(x) -> osc("sin", x)
-            poly(4, bad) |> out(%, %)
+            pat("c4") |> poly(%, 4, bad) |> out(%, %)
         )");
         CHECK(!result.success);
     }
 
     SECTION("error: instrument must be a function") {
         auto result = akkado::compile(R"(
-            poly(4, 440) |> out(%, %)
+            pat("c4") |> poly(%, 4, 440) |> out(%, %)
         )");
         CHECK(!result.success);
+    }
+
+    SECTION("error: 2-arg form no longer supported") {
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq)
+            poly(4, lead) |> out(%, %)
+        )");
+        CHECK(!result.success);
+        bool found_arity_error = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.message.find("'poly'") != std::string::npos &&
+                d.message.find("at least 3") != std::string::npos) {
+                found_arity_error = true;
+                break;
+            }
+        }
+        CHECK(found_arity_error);
     }
 
     SECTION("mono with piped pattern") {

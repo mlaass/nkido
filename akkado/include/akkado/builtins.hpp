@@ -772,10 +772,10 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                    "Scale array to [lo, hi] range"}},
 
     // Polyphony control
-    {"poly",      {cedar::Opcode::NOP, 2, 1, false,
-                   {"voices", "instrument", "input", "", "", ""},
+    {"poly",      {cedar::Opcode::NOP, 3, 0, false,
+                   {"input", "voices", "instrument", "", "", ""},
                    {NAN, NAN, NAN, NAN, NAN},
-                   "Polyphonic voice manager"}},
+                   "Polyphonic voice manager: allocates N voices driven by a pattern input"}},
     // Dual-role builtin: mono(stereo_signal) downmixes stereo→mono via (L+R)*0.5,
     // while mono(instrument) is the monophonic voice manager. The codegen
     // dispatcher routes based on argument type (see handle_mono_call).
