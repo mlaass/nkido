@@ -1276,7 +1276,9 @@ using DSPState = std::variant<
     // Polyphony state
     PolyAllocState,
     // Visualization states
+#ifndef CEDAR_NO_PROBE
     ProbeState,
+#endif
 #ifndef CEDAR_NO_FFT
     FFTProbeState,
 #endif

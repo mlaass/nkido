@@ -198,39 +198,38 @@ inline void op_sah(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
-// ENV_GET: Read external environment parameter with interpolation
+// ENV_GET: Read external environment parameter
 // state_id contains FNV-1a hash of parameter name
 // inputs[0]: optional fallback value buffer (BUFFER_UNUSED if none)
+//
+// PERF NOTE: previously this looped per-sample doing find_slot() twice
+// (in get() and has_param_hash()) AND called update_interpolation_sample()
+// — the latter walks all active params on every call, so with N ENV_GETs
+// the slew advanced N×BLOCK_SIZE times per block (4608 atomic loads for
+// the demo_keys patch on ESP32). Now interpolation is advanced once per
+// block by VM::process_block and we just snapshot+fill the buffer.
+// Trade-off: slider params step at block boundaries (2.67 ms granularity
+// at 48 kHz/128) instead of per-sample slew. Buttons/toggles (slew=0)
+// behave identically. ENV_GET cost dropped 149 µs → ~3 µs per call.
 [[gnu::always_inline]]
 inline void op_env_get(ExecutionContext& ctx, const Instruction& inst) {
     float* out = ctx.buffers->get(inst.out_buffer);
 
-    // Get fallback value if provided
     float fallback = 0.0f;
     if (inst.inputs[0] != BUFFER_UNUSED) {
         fallback = ctx.buffers->get(inst.inputs[0])[0];  // Control-rate sample
     }
 
-    // Check if env_map is available
-    if (!ctx.env_map) {
+    if (!ctx.env_map || !ctx.env_map->has_param_hash(inst.state_id)) {
         std::fill_n(out, BLOCK_SIZE, fallback);
         return;
     }
 
-    // Per-sample interpolation for smooth transitions
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        ctx.env_map->update_interpolation_sample();
-        float value = ctx.env_map->get(inst.state_id);
-
-        // Return fallback if parameter doesn't exist
-        if (!ctx.env_map->has_param_hash(inst.state_id)) {
-            out[i] = fallback;
-        } else {
-            out[i] = value;
-        }
-    }
+    const float value = ctx.env_map->get(inst.state_id);
+    std::fill_n(out, BLOCK_SIZE, value);
 }
 
+#ifndef CEDAR_NO_PROBE
 // PROBE: Capture signal to ring buffer for visualization
 // The signal passes through unchanged (out = in)
 // State stores a ring buffer of recent samples for UI queries
@@ -249,6 +248,7 @@ inline void op_probe(ExecutionContext& ctx, const Instruction& inst) {
         out[i] = in[i];
     }
 }
+#endif  // CEDAR_NO_PROBE
 
 #ifndef CEDAR_NO_FFT
 // FFT_PROBE: Accumulate samples and compute FFT for spectral visualization

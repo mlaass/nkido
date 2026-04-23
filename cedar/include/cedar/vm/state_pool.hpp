@@ -540,12 +540,14 @@ public:
                 }
                 json << "]}";
             }
+#ifndef CEDAR_NO_PROBE
             else if constexpr (std::is_same_v<T, ProbeState>) {
                 json << R"({"type":"ProbeState")";
                 json << R"(,"write_pos":)" << state.write_pos;
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
+#endif
 #ifndef CEDAR_NO_FFT
             else if constexpr (std::is_same_v<T, FFTProbeState>) {
                 json << R"({"type":"FFTProbeState")";

@@ -5,6 +5,10 @@
 #include <cmath>
 #include <cstdio>
 
+#ifdef CEDAR_PROFILE
+#include "cedar_profile.h"
+#endif
+
 namespace cedar {
 
 VM::VM() {
@@ -64,6 +68,13 @@ void VM::process_block(float* output_left, float* output_right) {
     // Clear output buffers
     std::fill_n(output_left, BLOCK_SIZE, 0.0f);
     std::fill_n(output_right, BLOCK_SIZE, 0.0f);
+
+    // Advance EnvMap param slew once per block. ENV_GET reads snapshot
+    // values, so doing the full BLOCK_SIZE-step slew here at block
+    // boundary preserves slew behavior without per-sample work in every
+    // ENV_GET (previously each ENV_GET re-advanced ALL active params per
+    // sample — quadratic in the number of ENV_GETs in the program).
+    env_map_.update_interpolation_block();
 
     // Handle swap at block boundary
     handle_swap();
@@ -245,7 +256,14 @@ void VM::execute_program(const ProgramSlot* slot, float* out_left, float* out_ri
         if (program[ip].opcode == Opcode::POLY_BEGIN) {
             ip = execute_poly_block(program, ip);
         } else {
+#ifdef CEDAR_PROFILE
+            const std::uint32_t _pc0 = cedar::perf_now();
+#endif
             execute(program[ip]);
+#ifdef CEDAR_PROFILE
+            cedar::perf_record(static_cast<std::uint8_t>(program[ip].opcode),
+                               cedar::perf_now() - _pc0);
+#endif
             ++ip;
         }
     }
@@ -1012,9 +1030,11 @@ void VM::execute(const Instruction& inst) {
             break;
 
         // === Visualization ===
+#ifndef CEDAR_NO_PROBE
         case Opcode::PROBE:
             op_probe(ctx_, inst);
             break;
+#endif
 
 #ifndef CEDAR_NO_FFT
         case Opcode::FFT_PROBE:
