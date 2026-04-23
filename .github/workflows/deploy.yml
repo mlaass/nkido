@@ -3,7 +3,9 @@ name: Build and Deploy
 on:
   push:
     branches: [master]
-    tags: ['v*']
+    tags:
+      - 'v*'       # full release: deploys to prod AND creates a GitHub Release
+      - 'web-v*'   # web-only deploy: deploys to prod, no GitHub Release
 
 jobs:
   build-and-deploy:
@@ -17,6 +19,16 @@ jobs:
       - name: Extract release notes from CHANGELOG
         if: startsWith(github.ref, 'refs/tags/v')
         run: scripts/extract-changelog.sh "${GITHUB_REF_NAME#v}" > /tmp/release-notes.md
+
+      - name: Detect tag kind
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if [[ "$GITHUB_REF_NAME" == web-v* ]]; then
+            echo "kind=web" >> "$GITHUB_OUTPUT"
+          else
+            echo "kind=full" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
@@ -54,12 +66,12 @@ jobs:
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID_DEV }}
 
       - name: Deploy Production
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/web-v')
         uses: nwtgck/actions-netlify@v3
         with:
           publish-dir: './web/build'
           production-deploy: true
-          deploy-message: "Release: ${{ github.ref_name }}"
+          deploy-message: "${{ steps.tag.outputs.kind == 'web' && 'Web deploy' || 'Release' }}: ${{ github.ref_name }}"
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID_PROD }}
