@@ -2550,6 +2550,64 @@ TEST_CASE("Codegen: Record handling", "[codegen]") {
         auto result = akkado::compile("x = 10\nr = {val: x * 2}\nr.val");
         CHECK(result.success);
     }
+
+    SECTION("nested record field access returns correct inner value") {
+        auto result = akkado::compile(
+            "inner = {a: 11, b: 22}\n"
+            "outer = {x: inner, y: 99}\n"
+            "outer.x.a"
+        );
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        bool found_11 = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(inst) == 11.0f) {
+                found_11 = true;
+                break;
+            }
+        }
+        CHECK(found_11);
+    }
+
+    SECTION("nested record field access selects correct field (not first)") {
+        auto result = akkado::compile(
+            "inner = {a: 11, b: 22}\n"
+            "outer = {x: inner}\n"
+            "outer.x.b"
+        );
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        bool found_22 = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(inst) == 22.0f) {
+                found_22 = true;
+                break;
+            }
+        }
+        CHECK(found_22);
+    }
+
+    SECTION("triply nested record field access (a.b.c.d)") {
+        auto result = akkado::compile(
+            "deepest = {v: 42}\n"
+            "mid = {inner: deepest}\n"
+            "top = {m: mid}\n"
+            "top.m.inner.v"
+        );
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        bool found_42 = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(inst) == 42.0f) {
+                found_42 = true;
+                break;
+            }
+        }
+        CHECK(found_42);
+    }
 }
 
 TEST_CASE("Codegen: Lambda and function values", "[codegen]") {
@@ -3499,6 +3557,64 @@ TEST_CASE("Codegen: Array reductions", "[codegen][arrays]") {
 // =============================================================================
 // Array Transformation Tests
 // =============================================================================
+
+TEST_CASE("Codegen: Array indexing", "[codegen][arrays]") {
+    SECTION("constant index returns the indexed element, not first") {
+        auto result = akkado::compile("arr = [10, 20, 30]\narr[1]");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        bool found_20 = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(inst) == 20.0f) {
+                found_20 = true;
+                break;
+            }
+        }
+        CHECK(found_20);
+    }
+
+    SECTION("last element accessible via constant index") {
+        auto result = akkado::compile("arr = [10, 20, 30]\narr[2]");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        bool found_30 = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(inst) == 30.0f) {
+                found_30 = true;
+                break;
+            }
+        }
+        CHECK(found_30);
+    }
+
+    SECTION("index 0 returns first element") {
+        auto result = akkado::compile("arr = [10, 20, 30]\narr[0]");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        bool found_10 = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(inst) == 10.0f) {
+                found_10 = true;
+                break;
+            }
+        }
+        CHECK(found_10);
+    }
+
+    SECTION("dynamic index emits ARRAY_INDEX opcode") {
+        auto result = akkado::compile(
+            "freq = param(\"idx\", 0, 0, 2)\n"
+            "arr = [100, 200, 300]\n"
+            "arr[freq]"
+        );
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::ARRAY_INDEX) != nullptr);
+    }
+}
 
 TEST_CASE("Codegen: Array transformations", "[codegen][arrays]") {
     SECTION("rotate") {

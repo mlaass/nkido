@@ -1,8 +1,10 @@
-> **Status: TRACKING** — Active blockers for MVP completeness.
+> **Status: COMPLETE** — All concrete MVP blockers resolved. Remaining items are informational.
 
 # MVP Incomplete Implementations
 
-This document tracks all incomplete implementations in the akkado codebase that need to be fixed.
+This document tracks the incomplete implementations that were flagged as MVP blockers. Every concrete blocker has been resolved — either directly (Priority 1), or as a side effect of later refactors (TypedValue system enabling nested field access and UFCS, `ARRAY_INDEX` opcode added to Cedar VM). Remaining items (post statements, chord expansion stub) are either non-blocking or deliberately deferred.
+
+Audit trail: [`audits/MVP-INCOMPLETE-IMPLEMENTATIONS_audit_2026-04-24.md`](audits/MVP-INCOMPLETE-IMPLEMENTATIONS_audit_2026-04-24.md).
 
 ## Priority 1: Pattern Transformations (Partially Complete)
 
@@ -28,65 +30,65 @@ These features emit errors and are completely blocked.
 
 ### 2.1 Nested Field Access
 
-**Status:** BLOCKED (E134)
-**File:** `akkado/src/codegen.cpp:915-923`
+**Status:** RESOLVED (via TypedValue refactor, commit `c733f66`)
+**File:** `akkado/src/codegen.cpp:1860-1988` (`handle_field_access`)
 
 ```akkado
-// This FAILS:
-record.field1.field2
+// Now works:
+inner = {a: 11, b: 22}
+outer = {x: inner, y: 99}
+outer.x.a     // 11
+outer.x.b     // 22
 ```
 
-**Error:** "Nested field access not fully supported in MVP"
+`handle_field_access` dispatches on the `TypedValue::type` of the child expression. When the child is a `Record`, each field lookup returns another `TypedValue` — so `a.b.c` recurses naturally. The E134 error site has been removed entirely.
 
-**Solution:** Track intermediate record types during field resolution. When resolving `a.b.c`:
-1. Resolve `a.b` to get its type
-2. Use that type to resolve `.c`
+**Tests:** `akkado/tests/test_codegen.cpp:2553-2609` (SECTION "nested record field access returns correct inner value", "nested record field access selects correct field (not first)", "triply nested record field access").
 
 ### 2.2 Method Calls
 
-**Status:** DEFERRED BY DESIGN (E113)
-**File:** `akkado/src/codegen.cpp:648-650`
+**Status:** RESOLVED via UFCS
+**File:** `akkado/src/analyzer.cpp:1098` (`desugar_method_call`)
 
 ```akkado
-// This FAILS:
-pattern.slow(2)
+// All of these now compile to the same bytecode as their functional form:
+osc("saw", 440).lp(800).abs() |> out(%, %)          // == abs(lp(osc(...), 800))
+pat("c4 e4 g4").slow(2)                              // == slow(pat("c4 e4 g4"), 2)
+pat("c4 e4").fast(2).slow(4)                         // == slow(fast(pat("c4 e4"), 2), 4)
+osc("saw", 440) |> %.lp(800) |> out(%, %)            // dot-call on hole
+osc("saw", 440) as q |> q.lp(800) |> out(%, %)       // dot-call on as-binding
 ```
 
-**Error:** "Method calls not supported in MVP"
+The analyzer's `desugar_method_call()` rewrites `a.f(b)` → `f(a, b)` during the lowering pass. The codegen `E113` branch at `codegen.cpp:1511` now only functions as a defensive guard for un-rewritten `MethodCall` nodes — which shouldn't occur in practice.
 
-**Note:** This is intentionally deferred, not just blocked. Method chaining should be designed holistically as part of an object system revamp to work consistently across patterns, arrays, chords, and audio signals. See [prd-pattern-array-note-extensions.md Section 8](prd-pattern-array-note-extensions.md#8-deferred-to-object-system-revamp) for rationale. The functional style (`slow(pat(...), 2)`) is the current endorsed approach.
+**Tests:** `akkado/tests/test_codegen.cpp:1760-1898` (chained dot-calls, user fn dot-calls, dot-call on hole, dot-call on as-binding, pattern method via dot-call, chained pattern methods).
 
-**Solution Options (for future object system revamp):**
-- **UFCS (Uniform Function Call Syntax):** Rewrite `x.f(args)` to `f(x, args)` during parsing/analysis
-- **Full method dispatch:** Implement proper method resolution
-
-**Recommendation:** UFCS is simpler and sufficient for Akkado's use case.
+Known edge: dot-call on a variable-bound pattern (`p = pat(...); p.slow(2)`) currently errors with E130 inside the transform pipeline — the method call is rewritten, but the pattern-arg compiler doesn't follow the variable binding. Not an MVP blocker; track separately if needed.
 
 ### 2.3 Post Statements
 
-**Status:** BLOCKED (E115)
-**File:** `akkado/src/codegen.cpp:655-657`
+**Status:** BLOCKED (E115) — non-blocking for MVP
+**File:** `akkado/src/codegen.cpp:1518-1520`
+**Syntax:** `post(() -> ...)`
 
 **Error:** "Post statements not supported in MVP"
 
-**Investigation needed:** What is the intended semantics of post statements?
+**Investigation needed:** What is the intended semantics of post statements? Not used anywhere in shipping patches, so this remains a no-op error until the semantics are specified.
 
 ### 2.4 Field Access on Arbitrary Expressions
 
-**Status:** BLOCKED (E135)
-**File:** `akkado/src/codegen.cpp:924-928`
+**Status:** LARGELY RESOLVED (via TypedValue refactor); edge cases still error
+**File:** `akkado/src/codegen.cpp:1860-1988` (`handle_field_access`)
 
-```akkado
-// This FAILS:
-(some_expr).field
-```
+`handle_field_access` now type-dispatches the child expression and supports field access on:
+- `Record` (including nested records — see §2.1)
+- `Pattern` (fields `freq`, `vel`, `trig`, `gate`, `type`)
 
-**Error:** "Field access on expression type not supported"
+Remaining hard-errors (which are correct, not blockers):
+- `E135` on `Signal`, `Number`, `Array`, `Function`, `String`, `Void` — these don't have fields.
+- `E061` (analyzer) on direct scalar field access like `x.field` where `x = 42`.
 
-**Solution:**
-1. Evaluate the expression
-2. Determine its type (must be a record type)
-3. Resolve the field access on that type
+Both are intentional — you can't take `.field` of a scalar.
 
 ---
 
@@ -108,31 +110,32 @@ chord("Am") |> ...                                    // Also works
 
 ### 3.2 Array Indexing
 
-**Status:** LOW PRIORITY — stub returns first element
-**File:** `akkado/src/codegen.cpp:226-240`
+**Status:** RESOLVED
+**File:** `akkado/src/codegen.cpp:294-420` (index handling in `visit`)
 
 ```akkado
-arr = [1, 2, 3]
-arr[1]  // Should return 2, currently returns 1
+arr = [10, 20, 30]
+arr[0]  // 10
+arr[1]  // 20 (constant-folded to PUSH_CONST)
+arr[2]  // 30
+arr[freq]  // dynamic index: emits ARRAY_INDEX with ARRAY_PACK
 ```
 
-**Problem:** No runtime array indexing opcode in Cedar VM.
+Cedar gained an `ARRAY_INDEX` opcode. Codegen folds constant indices into a direct `PUSH_CONST` of the element (line 300-302); dynamic indices pack the array into a single buffer (`ARRAY_PACK` / `ARRAY_PUSH`) and emit `ARRAY_INDEX` with wrap mode (line 407-417).
 
-**Blocker:** Requires Cedar VM changes to add an `ARRAY_INDEX` opcode.
-
-**Note:** The multi-buffer approach for polyphony covers the primary use case for arrays. Pattern voices are accessed via field names (`%.freq`, `%.vel`), not array indices. This reduces the urgency of runtime array indexing.
+**Tests:** `akkado/tests/test_codegen.cpp:3503-3557` (SECTION "constant index returns the indexed element, not first", "last element accessible via constant index", "index 0 returns first element", "dynamic index emits ARRAY_INDEX opcode").
 
 ---
 
 ## Implementation Order
 
-1. ~~**Pattern transformation chaining**~~ - **FIXED**
-2. ~~**Direct string literal syntax**~~ - **FIXED**
-3. **Nested field access** - akkado-only, type tracking change
-4. **Field access on expressions** - akkado-only, type tracking change
-5. **Method calls (UFCS)** - deferred by design to object system revamp
-6. **Post statements** - needs semantics clarification first
-7. **Array indexing** - low priority, multi-buffer approach covers primary use case
+1. ~~**Pattern transformation chaining**~~ - **FIXED** (commit `9a61089`)
+2. ~~**Direct string literal syntax**~~ - **FIXED** (commit `9a61089`)
+3. ~~**Nested field access**~~ - **RESOLVED** via TypedValue refactor (commit `c733f66`)
+4. ~~**Field access on expressions**~~ - **RESOLVED** for Pattern/Record; E135 correctly fires for non-record types
+5. ~~**Method calls (UFCS)**~~ - **RESOLVED** via `desugar_method_call` in analyzer
+6. **Post statements** - still blocked, needs semantics clarification; not used anywhere
+7. ~~**Array indexing**~~ - **RESOLVED** via `ARRAY_INDEX` opcode in Cedar VM
 8. ~~**Chord expansion**~~ - **OBSOLETE** — `C4'` deprecated, chords in patterns work
 
 ---
@@ -152,14 +155,13 @@ cmake --build build --target akkado
 
 ---
 
-## Files to Modify
+## Files That Shipped The Fixes
 
-| Issue | Primary File | Secondary Files |
-|-------|--------------|-----------------|
-| Pattern chaining | `akkado/src/codegen_patterns.cpp` | - |
-| String literal patterns | `akkado/src/codegen_patterns.cpp` | - |
-| Nested field access | `akkado/src/codegen.cpp` | `akkado/include/akkado/codegen.hpp` |
-| Method calls (UFCS) | `akkado/src/parser.cpp` or `akkado/src/analyzer.cpp` | - |
-| Field access on expr | `akkado/src/codegen.cpp` | - |
-| Array indexing | `cedar/src/vm/` | `akkado/src/codegen.cpp` |
-| Chord expansion | `akkado/src/codegen.cpp` | Cedar multi-buffer support |
+| Issue | Primary File | Commit |
+|-------|--------------|--------|
+| Pattern chaining (velocity/bank/n) | `akkado/src/codegen_patterns.cpp` | `9a61089` |
+| String literal patterns | `akkado/src/codegen_patterns.cpp` | `9a61089` |
+| Nested field access | `akkado/src/codegen.cpp` (`handle_field_access`) | `c733f66` (TypedValue refactor) |
+| Method calls (UFCS) | `akkado/src/analyzer.cpp` (`desugar_method_call`) | — |
+| Field access on expr | `akkado/src/codegen.cpp` (type-dispatched) | `c733f66` |
+| Array indexing | `cedar/src/vm/` (`ARRAY_INDEX`), `akkado/src/codegen.cpp` | — |
