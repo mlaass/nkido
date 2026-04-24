@@ -1,6 +1,6 @@
 # PRD: cedar-esp32 — Cedar Audio Synthesis on ESP32 (AI-Thinker A1S)
 
-> **Status: NOT STARTED** — PRD draft, awaiting approval. New sibling repository to be created at `~/workspace/cedar-esp32`. PRD document will live at `cedar-esp32/docs/PRD.md` once the repo exists.
+> **Status: SHIPPED (external)** — Implemented in sibling repository `~/workspace/cedar-esp32`. This PRD is retained here as the original design doc; all further work and documentation lives in that repo.
 
 ---
 

@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — Separate project at `~/workspace/godot-nkido`, no implementation exists.
+> **Status: SHIPPED (external)** — Implemented in sibling repository `~/workspace/godot-nkido-addon`. This PRD is retained here as the original design doc; all further work and documentation lives in that repo.
 
 # PRD: Godot Extension for Nkido (v1 MVP)
 

@@ -1,6 +1,6 @@
 # PRD: nkido.cc Project Website
 
-> **Status: NOT STARTED** — Design & content plan for the public project website. Separate from the live-coding IDE (which moves to `live.nkido.cc`).
+> **Status: SHIPPED (external)** — Implemented in sibling repository `~/workspace/nkido.cc`. This PRD is retained here as the original design doc; all further work and documentation lives in that repo. The live-coding IDE in `web/` moves to `live.nkido.cc`.
 
 ---
 
