@@ -8,7 +8,7 @@
 
 **Tech Stack:** C++20, Catch2 (testing), CMake
 
-**PRD:** `docs/PRD-Timeline-Curve-Notation.md`
+**PRD:** `docs/prd-timeline-curve-notation.md`
 
 ---
 
@@ -1607,7 +1607,7 @@ cmake --build build
 ```
 
 ### Reference Files
-- **PRD:** `docs/PRD-Timeline-Curve-Notation.md` — full specification with edge cases
+- **PRD:** `docs/prd-timeline-curve-notation.md` — full specification with edge cases
 - **TimelineState:** `cedar/include/cedar/opcodes/dsp_state.hpp:211-224`
 - **op_timeline:** `cedar/include/cedar/opcodes/sequencing.hpp:248`
 - **StateInitData:** `akkado/include/akkado/codegen.hpp:98-134`

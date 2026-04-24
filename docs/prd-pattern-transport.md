@@ -4,7 +4,7 @@
 
 ## Prerequisite
 
-[Compiler Type System](PRD-Compiler-Type-System.md) — the compiler needs to know the first argument to `transport()` is a Pattern to compile the inner sequence and wire up clock override.
+[Compiler Type System](prd-compiler-type-system.md) — the compiler needs to know the first argument to `transport()` is a Pattern to compile the inner sequence and wire up clock override.
 
 ## Problem
 

@@ -373,7 +373,7 @@ fn my_chorus(sig, rate = 0.5, depth = 0.5) -> {
 
 > **Status: Implemented** — Phase 3A (`c733f66`), Phases 3B+3C (`57bf870`)
 
-**Status:** Already has a PRD (`docs/PRD-Compiler-Type-System.md`). The core proposal: `visit()` returns `TypedValue` instead of `uint16_t`, with 8 built-in types (Signal, Number, Pattern, Record, Array, String, Function, Void).
+**Status:** Already has a PRD (`docs/prd-compiler-type-system.md`). The core proposal: `visit()` returns `TypedValue` instead of `uint16_t`, with 8 built-in types (Signal, Number, Pattern, Record, Array, String, Function, Void).
 
 **What it unlocks for language evolution:**
 - **Typed builtin signatures** — catch type errors at compile time instead of silent garbage

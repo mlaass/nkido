@@ -912,7 +912,7 @@ Allow calling functions defined later in the source. Requires a two-pass approac
 
 ### 7.4 Type-Checked Parameters
 
-Integration with the planned type system (`PRD-Compiler-Type-System.md`) to validate parameter types at compile time.
+Integration with the planned type system (`prd-compiler-type-system.md`) to validate parameter types at compile time.
 
 ### 7.5 Pattern/Expression Defaults
 

@@ -490,7 +490,7 @@ Pattern events (`pat`, `seq`, `timeline`) are always mono control signals; they 
 `mono_sig + stereo_sig` (and symmetric `*`, `-`, `/`) is valid: the mono operand is broadcast to both channels at zero cost (dual read of the same buffer), result is `Stereo`. See §5.3 rule 4. Canonical use: `dry * 0.3 + stereo_wet * 0.7` for reverb wet/dry mixing where the dry path is mono and the wet path is stereo.
 
 ### 10.12 User-Defined Functions and Channel Type
-`my_fx = fn(sig) -> sig |> filter_lp(%, 500, 0.7) |> delay(%, 0.2, 0.5)` — the intended semantics is that `my_fx(mono_in)` produces `Mono` and `my_fx(stereo_in)` produces `Stereo`, with channel-type polymorphism inherited from the body's auto-lift behaviour. The exact inference rule (e.g. parametric channel-type variables, monomorphisation-per-callsite, or something simpler) is an **open question (OQ5)** to resolve jointly with [`PRD-Advanced-Functions`](PRD-Advanced-Functions.md). Until OQ5 is resolved, implementations may restrict user-defined functions to a single channel type per definition (error at call site on mismatch).
+`my_fx = fn(sig) -> sig |> filter_lp(%, 500, 0.7) |> delay(%, 0.2, 0.5)` — the intended semantics is that `my_fx(mono_in)` produces `Mono` and `my_fx(stereo_in)` produces `Stereo`, with channel-type polymorphism inherited from the body's auto-lift behaviour. The exact inference rule (e.g. parametric channel-type variables, monomorphisation-per-callsite, or something simpler) is an **open question (OQ5)** to resolve jointly with [`prd-advanced-functions`](prd-advanced-functions.md). Until OQ5 is resolved, implementations may restrict user-defined functions to a single channel type per definition (error at call site on mismatch).
 
 ---
 
@@ -570,7 +570,7 @@ cd experiments && uv run python test_op_mono_downmix.py
 - **OQ2**: ~~`mono()` gain choice~~ — **resolved**: `0.5` (standard sum-to-mono).
 - **OQ3**: Should `out()` emit a warning when receiving mono and silently duplicating? Default: no — current behaviour is conventional and expected. Reconsider if users report confusion.
 - **OQ4**: Should the companion "Stereo-Native VM Opcodes" PRD land before or after this one? This PRD does not require it; lifting to that architecture later is a codegen-only change (no language-surface impact). Default: this PRD ships first, companion PRD is an independent follow-up optimisation.
-- **OQ5**: Channel-type polymorphism through user-defined functions (see §10.12). The intended behaviour is that a user function inherits polymorphism from its body (mono-in ⇒ mono-out; stereo-in ⇒ stereo-out with per-channel independent state). The exact inference rule is deferred to joint resolution with [`PRD-Advanced-Functions`](PRD-Advanced-Functions.md). Until resolved, implementations may restrict user-defined functions to a single channel type per definition.
+- **OQ5**: Channel-type polymorphism through user-defined functions (see §10.12). The intended behaviour is that a user function inherits polymorphism from its body (mono-in ⇒ mono-out; stereo-in ⇒ stereo-out with per-channel independent state). The exact inference rule is deferred to joint resolution with [`prd-advanced-functions`](prd-advanced-functions.md). Until resolved, implementations may restrict user-defined functions to a single channel type per definition.
 
 ---
 
@@ -579,6 +579,6 @@ cd experiments && uv run python test_op_mono_downmix.py
 - **Companion PRD (separate, to-be-written)**: "Stereo-Native VM Opcodes" — makes every opcode output a stereo pair at the VM level, treating mono as a degraded-stereo optimisation and retiring dedicated stereo opcodes. Motivated by avoiding opcode duplication for stereo-aware variants. This PRD is designed to be forward-compatible: the language-level type system and auto-lift semantics described here are unchanged by the VM refactor; only the internal codegen path shifts.
 - **Dependent PRD**: [`prd-audio-input.md`](prd-audio-input.md) — adds `in()` as a stereo-native audio source. That PRD's signature declaration (`output_channels = Stereo`) relies on the type system and stereo-native generator category defined here (§5.2).
 - **Existing work referenced**:
-  - `PRD-Crossfade-Audio-Fixes.md` — crossfade machinery, relevant for hot-swap edge cases in §10.6
+  - `prd-crossfade-audio-fixes.md` — crossfade machinery, relevant for hot-swap edge cases in §10.6
   - `cedar/include/cedar/opcodes/stereo.hpp` — existing stereo opcode implementations we keep
   - `akkado/src/codegen_stereo.cpp` — existing codegen-side stereo tracking, simplified by this PRD

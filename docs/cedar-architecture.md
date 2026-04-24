@@ -78,7 +78,7 @@ Design notes:
 
 #### `STEREO_INPUT` flag
 
-When `flags & InstructionFlag::STEREO_INPUT` is set, the VM runs the opcode *twice* per invocation — once for the left channel, once for the right — with independent per-channel DSP state. This is how Akkado's auto-lift (PRD-Stereo-Support §6) turns any mono opcode into a stereo variant at zero opcode-table cost:
+When `flags & InstructionFlag::STEREO_INPUT` is set, the VM runs the opcode *twice* per invocation — once for the left channel, once for the right — with independent per-channel DSP state. This is how Akkado's auto-lift (prd-stereo-support §6) turns any mono opcode into a stereo variant at zero opcode-table cost:
 
 - **Left pass:** reads `inputs[i]`, writes `out_buffer`, uses `state_id`.
 - **Right pass:** reads `inputs[0] + 1` (the adjacent right buffer), writes `out_buffer + 1`, uses `state_id XOR STEREO_STATE_XOR_R` (a golden-ratio constant) so L and R have independent filter memory, delay lines, oscillator phase, etc.

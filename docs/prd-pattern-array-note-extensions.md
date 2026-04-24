@@ -152,7 +152,7 @@ drums.slow(2).rev() |> sampler(%) |> out(%, %)
 | Dot-call syntax | ✓ Complete | `pat("c4").slow(2)` desugars to `slow(pat("c4"), 2)` |
 | Pattern transforms | ✓ Partial | `slow`, `fast`, `rev`, `transpose`, `velocity`, `bank`, `variant` done. Time/structure modifiers (Phase 7) in progress |
 | Polymeter `{x}` | ✓ Complete | Tokens, lexer, parser, AST node, evaluator all implemented and tested |
-| TypedValue system | ✓ Complete | Full type tracking replaces ad-hoc maps (see PRD-Compiler-Type-System) |
+| TypedValue system | ✓ Complete | Full type tracking replaces ad-hoc maps (see prd-compiler-type-system) |
 | Voicing system | Deferred | Algorithms not yet implemented |
 | String-as-pattern | Deferred | Explicit `pat()` is the endorsed approach |
 | Algorithmic generators | Partial | `euclid(k, n, rot)` exists as Cedar opcode. `run()`, `binary()` not yet implemented |
@@ -462,7 +462,7 @@ pat("c4 e4").slow(2).rev()  // desugars to rev(slow(pat("c4 e4"), 2))
 
 ### Resolved: TypedValue System
 
-The `TypedValue` struct, `ValueType` enum, and `visit()` returning typed values are fully implemented (see PRD-Compiler-Type-System). This replaces the old ad-hoc maps and enables type-aware compilation. Pattern, Record, Array, Signal, Number, String, Function, and Void types are all tracked.
+The `TypedValue` struct, `ValueType` enum, and `visit()` returning typed values are fully implemented (see prd-compiler-type-system). This replaces the old ad-hoc maps and enables type-aware compilation. Pattern, Record, Array, Signal, Number, String, Function, and Void types are all tracked.
 
 ### Still Deferred
 

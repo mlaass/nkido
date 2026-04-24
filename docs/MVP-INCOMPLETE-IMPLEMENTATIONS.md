@@ -54,7 +54,7 @@ pattern.slow(2)
 
 **Error:** "Method calls not supported in MVP"
 
-**Note:** This is intentionally deferred, not just blocked. Method chaining should be designed holistically as part of an object system revamp to work consistently across patterns, arrays, chords, and audio signals. See [PRD-Pattern-Array-Note-Extensions.md Section 8](PRD-Pattern-Array-Note-Extensions.md#8-deferred-to-object-system-revamp) for rationale. The functional style (`slow(pat(...), 2)`) is the current endorsed approach.
+**Note:** This is intentionally deferred, not just blocked. Method chaining should be designed holistically as part of an object system revamp to work consistently across patterns, arrays, chords, and audio signals. See [prd-pattern-array-note-extensions.md Section 8](prd-pattern-array-note-extensions.md#8-deferred-to-object-system-revamp) for rationale. The functional style (`slow(pat(...), 2)`) is the current endorsed approach.
 
 **Solution Options (for future object system revamp):**
 - **UFCS (Uniform Function Call Syntax):** Rewrite `x.f(args)` to `f(x, args)` during parsing/analysis
@@ -104,7 +104,7 @@ pat("C4'") |> sine(%.freq) |> sum(%) |> out(%, %)  // Works correctly (multi-voi
 chord("Am") |> ...                                    // Also works
 ```
 
-**Resolution:** The PRD ([PRD-Pattern-Array-Note-Extensions.md](PRD-Pattern-Array-Note-Extensions.md)) explicitly deprecates standalone `C4'` syntax in favor of `chord("Am")` inside mini-notation. Chords in patterns already expand correctly to multi-voice via multi-buffer support. No fix needed for the standalone stub.
+**Resolution:** The PRD ([prd-pattern-array-note-extensions.md](prd-pattern-array-note-extensions.md)) explicitly deprecates standalone `C4'` syntax in favor of `chord("Am")` inside mini-notation. Chords in patterns already expand correctly to multi-voice via multi-buffer support. No fix needed for the standalone stub.
 
 ### 3.2 Array Indexing
 

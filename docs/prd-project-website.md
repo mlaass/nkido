@@ -559,7 +559,7 @@ nkido.cc/
 
 - `docs/prd-godot-extension.md` — Godot addon PRD (content source for `/godot` page).
 - `docs/prd-cedar-esp32.md` — ESP32 port PRD (content source for `/esp32` page).
-- `docs/nkido-web-ide-prd.md` — live IDE PRD (context for `live.nkido.cc`).
+- `docs/prd-nkido-web-ide.md` — live IDE PRD (context for `live.nkido.cc`).
 - `docs/netlify_deployment.md` — current live app deployment, reference for new Netlify site setup.
 - `CONTRIBUTING.md` (repo root) — rendered on `/community`.
 - `web/static/docs/DOCUMENTATION_GUIDE.md` — frontmatter / category conventions; website's fresh content reuses them.

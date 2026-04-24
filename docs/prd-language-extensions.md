@@ -315,7 +315,7 @@ const fn clamp01(x) -> match { x < 0: 0, x > 1: 1, _: x }
 
 ### Current State
 
-Not implemented. The existing type system PRD (`docs/PRD-Compiler-Type-System.md`) provides a thorough design. This section summarizes the three sub-phases and how they integrate with the other features in this PRD.
+Not implemented. The existing type system PRD (`docs/prd-compiler-type-system.md`) provides a thorough design. This section summarizes the three sub-phases and how they integrate with the other features in this PRD.
 
 Currently, `visit()` returns `uint16_t` (a buffer index) with no type information. Structural metadata is tracked in six ad-hoc maps on the `CodeGenerator`:
 
@@ -339,7 +339,7 @@ Core change:
 - Ad-hoc maps gradually subsumed by TypedValue payloads
 - Keep `stereo_outputs_` — stereo is orthogonal to type
 
-The `TypedValue` struct and `ValueType` enum are specified in the existing [Type System PRD](PRD-Compiler-Type-System.md). Key types: Signal, Number, Pattern, Record, Array, String, Function, Void.
+The `TypedValue` struct and `ValueType` enum are specified in the existing [Type System PRD](prd-compiler-type-system.md). Key types: Signal, Number, Pattern, Record, Array, String, Function, Void.
 
 **Mechanical transformation:** Every `visit()` call site either:
 - Uses `.buffer` to get the raw index (backward compat)
@@ -385,7 +385,7 @@ With TypedValue available:
 
 ### Files to Modify
 
-See [Type System PRD](PRD-Compiler-Type-System.md) Section "Key Files" for the complete file list. Primary changes:
+See [Type System PRD](prd-compiler-type-system.md) Section "Key Files" for the complete file list. Primary changes:
 
 | File | Change |
 |------|--------|

@@ -1,6 +1,6 @@
 // Channel-type (Mono / Stereo) semantics for the Akkado compiler.
 //
-// Covers PRD-Stereo-Support:
+// Covers prd-stereo-support:
 //   §4.4 Error cases — left(mono), right(mono), out(stereo, mono), stereo(stereo)
 //   §5.3 Type-checking rules (partial: out(L,R) validation, mono() dispatch)
 //   §5.2 Auto-lift for stateless opcodes (PRD §5.2 classifies fold/saturate/etc.

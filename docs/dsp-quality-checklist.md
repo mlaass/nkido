@@ -254,7 +254,7 @@ These opcodes are not yet implemented but may be added in the future.
 
 | Opcode | Notes |
 |--------|-------|
-| `SMOOCH` | Wavetable oscillator with mip-mapped anti-aliasing and Hermite interpolation. See [PRD](smooch_wavetable_synth_prd.md) |
+| `SMOOCH` | Wavetable oscillator with mip-mapped anti-aliasing and Hermite interpolation. See [PRD](prd-smooch-wavetable-synth.md) |
 
 ---
 

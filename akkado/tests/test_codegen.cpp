@@ -3745,7 +3745,7 @@ TEST_CASE("Codegen: out() with stereo signal", "[codegen][stereo]") {
 }
 
 TEST_CASE("Codegen: stereo propagation through mono effects", "[codegen][stereo]") {
-    // With auto-lift (PRD-Stereo-Support §4.2, §6.2), a stereo signal flowing
+    // With auto-lift (prd-stereo-support §4.2, §6.2), a stereo signal flowing
     // into a mono DSP op emits a SINGLE instruction carrying the
     // STEREO_INPUT flag. The VM runs the opcode twice at dispatch, once per
     // channel, with independent per-channel state — producing the same audio
@@ -3846,7 +3846,7 @@ TEST_CASE("Codegen: stereo pipeline examples", "[codegen][stereo]") {
 }
 
 // =============================================================================
-// PRD-Stereo-Support: mono() downmix and auto-lift behavior
+// prd-stereo-support: mono() downmix and auto-lift behavior
 // =============================================================================
 
 TEST_CASE("Codegen: mono() downmix", "[codegen][stereo][mono]") {

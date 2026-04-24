@@ -1,6 +1,6 @@
 """Split a polyphonic MIDI track into monophonic voice streams.
 
-Akkado patterns emit one event at a time (see docs/PRD-Polyphony-system.md).
+Akkado patterns emit one event at a time (see docs/prd-polyphony-system.md).
 For chords or overlapping notes we must spread them across multiple
 `pat(...) |> soundfont(...)` lines.
 

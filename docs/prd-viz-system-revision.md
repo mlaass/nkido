@@ -561,7 +561,7 @@ Verify:
 
 ### Scope
 
-Implement all originally-specified parameters from `visualization-system-prd.md` plus additional meaningful params for each viz type.
+Implement all originally-specified parameters from `prd-visualization-system.md` plus additional meaningful params for each viz type.
 
 ### Per-Type Parameters
 

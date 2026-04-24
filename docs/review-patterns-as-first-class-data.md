@@ -136,7 +136,7 @@ This is the gap that most limits Akkado's expressiveness for live performance an
 
 ## 3. What Existing Work Covers (and Doesn't)
 
-### PRD-Pattern-Array-Note-Extensions
+### prd-pattern-array-note-extensions
 - **Covers**: Array type, map(), chord system, dot-call, polymeter, time/structure modifiers
 - **Doesn't cover**: Runtime event mutation, programmatic event construction, event-level map/filter, user-defined event fields
 
@@ -144,11 +144,11 @@ This is the gap that most limits Akkado's expressiveness for live performance an
 - **Covers**: `state` keyword, delay lines, module system, type system, const fn
 - **Doesn't cover**: Pattern ↔ record/array bridging. The vision document classifies pattern transforms as "needs Pattern as first-class type" but defines "first-class" as "method chaining + type checking", not "constructible/decomposable/mutable"
 
-### PRD-Compiler-Type-System
+### prd-compiler-type-system
 - **Covers**: TypedValue with Pattern variant, field access, type checking
 - **Doesn't cover**: Pattern internals as structured data accessible to the language
 
-### PRD Records and Field Access
+### prd-records-and-field-access
 - **Covers**: Record literals, field access, pipe binding, pattern event fields via `%`
 - **Doesn't cover**: Events-as-records, constructing patterns from records, mutating event data at runtime
 
