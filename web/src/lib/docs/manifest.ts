@@ -10,6 +10,7 @@ export const slugToPath: Record<string, string> = {
 	"01-hello-sine": "tutorials/01-hello-sine.md",
 	"microtonal": "reference/mini-notation/microtonal.md",
 	"basics": "reference/mini-notation/basics.md",
+	"methods": "reference/language/methods.md",
 	"conditionals": "reference/language/conditionals.md",
 	"pipes": "reference/language/pipes.md",
 	"arrays": "reference/language/arrays.md",
@@ -26,6 +27,8 @@ export const slugToPath: Record<string, string> = {
 	"modulation": "reference/builtins/modulation.md",
 	"math": "reference/builtins/math.md",
 	"oscillators": "reference/builtins/oscillators.md",
+	"state": "reference/builtins/state.md",
+	"edge": "reference/builtins/edge.md",
 	"dynamics": "reference/builtins/dynamics.md",
 	"reverbs": "reference/builtins/reverbs.md",
 	"visualizations": "reference/builtins/visualizations.md",
@@ -97,8 +100,16 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 			"title": "Math Functions"
 		},
 		{
+			"slug": "state",
+			"title": "State Cells"
+		},
+		{
 			"slug": "utility",
 			"title": "Utility"
+		},
+		{
+			"slug": "edge",
+			"title": "Edge Primitives"
 		},
 		{
 			"slug": "stereo",
@@ -133,6 +144,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "arrays",
 			"title": "Arrays"
+		},
+		{
+			"slug": "methods",
+			"title": "Method Calls (UFCS)"
 		}
 	],
 	"mini-notation": [
@@ -383,7 +398,7 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"anchor": "slew"
 	},
 	"sah": {
-		"slug": "utility",
+		"slug": "edge",
 		"category": "builtins",
 		"title": "sah",
 		"anchor": "sah"
@@ -712,6 +727,36 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "basics",
 		"category": "mini-notation",
 		"title": "Mini-Notation Basics"
+	},
+	"method": {
+		"slug": "methods",
+		"category": "language",
+		"title": "Method Calls (UFCS)"
+	},
+	"dot": {
+		"slug": "methods",
+		"category": "language",
+		"title": "Method Calls (UFCS)"
+	},
+	"ufcs": {
+		"slug": "methods",
+		"category": "language",
+		"title": "Method Calls (UFCS)"
+	},
+	"call": {
+		"slug": "methods",
+		"category": "language",
+		"title": "Method Calls (UFCS)"
+	},
+	"syntax": {
+		"slug": "methods",
+		"category": "language",
+		"title": "Method Calls (UFCS)"
+	},
+	"chain": {
+		"slug": "methods",
+		"category": "language",
+		"title": "Method Calls (UFCS)"
 	},
 	"truth convention": {
 		"slug": "conditionals",
@@ -1711,6 +1756,103 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Oscillators"
 	},
+	"state": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "state",
+		"anchor": "state"
+	},
+	"get": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "get",
+		"anchor": "get"
+	},
+	"set": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "set",
+		"anchor": "set"
+	},
+	"example: writing a stepper in userspace": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "Example: writing a stepper in userspace",
+		"anchor": "example-writing-a-stepper-in-userspace"
+	},
+	"cell": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "State Cells"
+	},
+	"persistent": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "State Cells"
+	},
+	"register": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "State Cells"
+	},
+	"slot": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "State Cells"
+	},
+	"memory": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "State Cells"
+	},
+	"counter": {
+		"slug": "edge",
+		"category": "builtins",
+		"title": "counter",
+		"anchor": "counter"
+	},
+	"accumulator": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "State Cells"
+	},
+	"store": {
+		"slug": "state",
+		"category": "builtins",
+		"title": "State Cells"
+	},
+	"gateup": {
+		"slug": "edge",
+		"category": "builtins",
+		"title": "gateup",
+		"anchor": "gateup"
+	},
+	"gatedown": {
+		"slug": "edge",
+		"category": "builtins",
+		"title": "gatedown",
+		"anchor": "gatedown"
+	},
+	"edge": {
+		"slug": "edge",
+		"category": "builtins",
+		"title": "Edge Primitives"
+	},
+	"rising": {
+		"slug": "edge",
+		"category": "builtins",
+		"title": "Edge Primitives"
+	},
+	"falling": {
+		"slug": "edge",
+		"category": "builtins",
+		"title": "Edge Primitives"
+	},
+	"sample-and-hold": {
+		"slug": "edge",
+		"category": "builtins",
+		"title": "Edge Primitives"
+	},
 	"dynamics": {
 		"slug": "dynamics",
 		"category": "builtins",
@@ -1901,6 +2043,7 @@ export const previews: Record<string, string> = {
 	"01-hello-sine": "Welcome to Akkado! In this tutorial, you'll make your first sound and learn the basics of how the language works.",
 	"microtonal": "Akkado supports microtonal pitch notation through micro-step operators (, , ) and the  function, which selects how those operators map to frequency.",
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
+	"methods": "Akkado supports method-call syntax for any callable in scope — built-in or user-defined. The form",
 	"conditionals": "Signal-rate decision-making: compare signals, combine boolean signals with AND/OR/NOT, and pick between two signals based on a condition. Every...",
 	"pipes": "The pipe operator () and hole () are the foundation of Akkado's signal flow model.",
 	"arrays": "Arrays are ordered, fixed-size collections of values. They are the primary way to express parallel signal flows in Akkado: every element of an...",
@@ -1917,6 +2060,8 @@ export const previews: Record<string, string> = {
 	"modulation": "Modulation effects use time-varying delays to create movement and spatial interest in sounds.",
 	"math": "Mathematical operations for signal processing and control logic.",
 	"oscillators": "Oscillators are the fundamental sound sources in synthesis. The  function is the unified interface for all oscillator types.",
+	"state": "State cells let you persist a single floating-point value across audio blocks from inside a closure. They are the building block for writing your...",
+	"edge": "Edge primitives detect transitions in trigger / control signals and accumulate counts. All four variants share one backing opcode () for cache...",
 	"dynamics": "Dynamics processors control the volume envelope of signals, reducing dynamic range or removing unwanted quiet sections.",
 	"reverbs": "Reverbs simulate acoustic spaces by creating many delayed, filtered reflections. Different algorithms offer different sonic characteristics.",
 	"visualizations": "Inline visualizations that render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain — the audio...",

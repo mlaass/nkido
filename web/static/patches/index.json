@@ -13,5 +13,10 @@
     "slug": "chord-stab",
     "title": "Chord Stab",
     "description": "Strudel-style chord expansion with a filter and envelope."
+  },
+  {
+    "slug": "stepper-demo",
+    "title": "Stepper Demo",
+    "description": "Userspace `step` and `step_dir` operators built from `state`, `counter`, and method-call syntax — no C++ changes."
   }
 ]
