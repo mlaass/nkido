@@ -39,6 +39,7 @@ add_executable(akkado_tests
     test_file_resolver.cpp
     test_import_scanner.cpp
     test_import.cpp
+    test_methods.cpp
 )
 
 target_link_libraries(akkado_tests

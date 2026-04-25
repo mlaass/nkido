@@ -755,6 +755,14 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
             }
         }
 
+        case NodeType::MethodCall:
+            // UFCS desugar: x.foo(a, b) ≡ foo(x, a, b). The parser already
+            // shapes MethodCall identically to Call (method name in
+            // IdentifierData, receiver as the first child, args following),
+            // so falling through executes the call body unchanged. The
+            // "Method 'X' not found" error is produced naturally by the same
+            // E107 path that catches typos in regular calls.
+            [[fallthrough]];
         case NodeType::Call: {
             // Function name is stored in the node's data, not as a child
             const std::string& func_name = n.as_identifier();
@@ -1509,10 +1517,6 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
         case NodeType::Closure:
             return handle_closure(node, n);
-
-        case NodeType::MethodCall:
-            error("E113", "Method calls not supported in MVP", n.location);
-            return TypedValue::error_val();
 
         case NodeType::MiniLiteral:
             return handle_mini_literal(node, n);
