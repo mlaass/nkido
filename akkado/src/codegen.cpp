@@ -221,7 +221,10 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
             // Arrays: emit all elements as multi-buffer for polyphony support
             NodeIndex first_elem = n.first_child;
             if (first_elem == NULL_NODE) {
-                // Empty array - emit 0
+                // Empty array - emit a zero placeholder buffer (so .buffer is valid
+                // for any consumer that reads it directly), but tag the TypedValue
+                // as a zero-length Array so array operators can detect it and
+                // fire their empty-array branches (e.g. mean → 0, reduce → init).
                 std::uint16_t out = buffers_.allocate();
                 if (out == BufferAllocator::BUFFER_UNUSED) {
                     error("E101", "Buffer pool exhausted", n.location);
@@ -236,7 +239,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 inst.inputs[3] = 0xFFFF;
                 encode_const_value(inst, 0.0f);
                 emit(inst);
-                return cache_and_return(node, TypedValue::signal(out));
+                return cache_and_return(node, TypedValue::make_array({}, out));
             }
 
             // Visit all elements and collect TypedValues
@@ -777,7 +780,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"chord",   &CodeGenerator::handle_chord_call},
                 {"map",     &CodeGenerator::handle_map_call},
                 {"sum",     &CodeGenerator::handle_sum_call},
-                {"fold",    &CodeGenerator::handle_fold_call},
+                {"reduce",  &CodeGenerator::handle_reduce_call},
                 {"zipWith", &CodeGenerator::handle_zipWith_call},
                 {"zip",     &CodeGenerator::handle_zip_call},
                 {"take",    &CodeGenerator::handle_take_call},
@@ -804,7 +807,6 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"toggle",  &CodeGenerator::handle_toggle_call},
                 {"dropdown", &CodeGenerator::handle_select_call},
                 // Array reduction operations
-                {"product", &CodeGenerator::handle_product_call},
                 {"mean",    &CodeGenerator::handle_mean_call},
                 // Array transformation operations
                 {"rotate",    &CodeGenerator::handle_rotate_call},
@@ -1639,8 +1641,11 @@ bool CodeGenerator::is_fm_modulated(std::uint16_t freq_buffer) const {
 bool CodeGenerator::is_multi_buffer(NodeIndex node) const {
     auto it = node_types_.find(node);
     if (it != node_types_.end()) {
+        // Any array (empty or multi-element) goes through multi-buffer paths.
+        // Single-element arrays are unwrapped to Signal upstream, so they
+        // never reach this check as Array.
         if (it->second.type == ValueType::Array && it->second.array &&
-            it->second.array->elements.size() > 1) {
+            it->second.array->elements.size() != 1) {
             return true;
         }
     }

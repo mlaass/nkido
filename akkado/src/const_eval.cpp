@@ -404,14 +404,6 @@ std::optional<ConstValue> ConstEvaluator::eval_call(NodeIndex node, const Node& 
         return ConstValue{static_cast<double>(arr.size())};
     }
 
-    if (func_name == "product") {
-        if (args.size() != 1) return std::nullopt;
-        auto arr = as_array(args[0]);
-        double result = 1.0;
-        for (double v : arr) result *= v;
-        return ConstValue{result};
-    }
-
     if (func_name == "mean") {
         if (args.size() != 1) return std::nullopt;
         auto arr = as_array(args[0]);

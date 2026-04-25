@@ -571,19 +571,17 @@ TEST_CASE("Const: empty array", "[const]") {
     REQUIRE(result.success);
 }
 
-TEST_CASE("Const: sum/len/product/mean of array", "[const]") {
+TEST_CASE("Const: sum/len/mean of array", "[const]") {
     auto result = akkado::compile(R"(
         const a = [1, 2, 3, 4, 5]
         const s = sum(a)
         const l = len(a)
-        const p = product(a)
         const m = mean(a)
     )");
     REQUIRE(result.success);
     auto insts = get_instructions(result);
     CHECK(has_const_approx(insts, 15.0f));   // sum
     CHECK(has_const_approx(insts, 5.0f));    // len
-    CHECK(has_const_approx(insts, 120.0f));  // product
     CHECK(has_const_approx(insts, 3.0f));    // mean
 }
 

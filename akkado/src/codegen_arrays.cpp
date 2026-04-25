@@ -374,17 +374,17 @@ TypedValue CodeGenerator::handle_sum_call(NodeIndex node, const Node& n) {
     return cache_and_return(node, TypedValue::signal(result));
 }
 
-// fold(array, fn, init)
-TypedValue CodeGenerator::handle_fold_call(NodeIndex node, const Node& n) {
+// reduce(array, fn, init)
+TypedValue CodeGenerator::handle_reduce_call(NodeIndex node, const Node& n) {
     auto args = extract_call_args(ast_->arena, n.first_child, 3);
     if (!args.valid) {
-        error("E142", "fold() requires 3 arguments: fold(array, fn, init)", n.location);
+        error("E142", "reduce() requires 3 arguments: reduce(array, fn, init)", n.location);
         return TypedValue::void_val();
     }
 
     auto func_ref = resolve_function_arg(args.nodes[1]);
     if (!func_ref) {
-        error("E143", "fold() second argument must be a binary function", n.location);
+        error("E143", "reduce() second argument must be a binary function", n.location);
         return TypedValue::void_val();
     }
 
@@ -398,7 +398,7 @@ TypedValue CodeGenerator::handle_fold_call(NodeIndex node, const Node& n) {
         return cache_and_return(node, TypedValue::signal(init_buf));
     }
 
-    push_path("fold#" + std::to_string(call_counters_["fold"]++));
+    push_path("reduce#" + std::to_string(call_counters_["reduce"]++));
     std::uint16_t result = init_buf;
     for (std::size_t i = 0; i < elem_bufs.size(); ++i) {
         push_path("step" + std::to_string(i));
@@ -885,43 +885,6 @@ TypedValue CodeGenerator::handle_binary_op_call(NodeIndex node, const Node& n) {
 // ============================================================================
 // Array reduction operations
 // ============================================================================
-
-// product(array) - multiply all elements
-TypedValue CodeGenerator::handle_product_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 1);
-    if (!args.valid) {
-        error("E163", "product() requires 1 argument: product(array)", n.location);
-        return TypedValue::void_val();
-    }
-
-    std::uint16_t array_buf = visit(args.nodes[0]).buffer;
-
-    if (!is_multi_buffer(args.nodes[0])) {
-        // Single element - return as-is
-        return cache_and_return(node, TypedValue::signal(array_buf));
-    }
-
-    auto elem_bufs = get_multi_buffers(args.nodes[0]);
-    if (elem_bufs.empty()) {
-        // Product of empty array is 1.0 (multiplicative identity)
-        std::uint16_t one = emit_push_const(buffers_, instructions_, 1.0f);
-        return cache_and_return(node, TypedValue::signal(one));
-    }
-    if (elem_bufs.size() == 1) {
-        return cache_and_return(node, TypedValue::signal(elem_bufs[0]));
-    }
-
-    std::uint16_t result = elem_bufs[0];
-    for (std::size_t i = 1; i < elem_bufs.size(); ++i) {
-        result = emit_binary_op(buffers_, instructions_, cedar::Opcode::MUL, result, elem_bufs[i]);
-        if (result == BufferAllocator::BUFFER_UNUSED) {
-            error("E101", "Buffer pool exhausted", n.location);
-            return TypedValue::void_val();
-        }
-    }
-
-    return cache_and_return(node, TypedValue::signal(result));
-}
 
 // mean(array) - average of elements
 TypedValue CodeGenerator::handle_mean_call(NodeIndex node, const Node& n) {

@@ -34,6 +34,7 @@ add_executable(akkado_tests
     test_sample_registry.cpp
     test_symbol_table.cpp
     test_chord.cpp
+    test_arrays.cpp
     test_source_map.cpp
     test_file_resolver.cpp
     test_import_scanner.cpp

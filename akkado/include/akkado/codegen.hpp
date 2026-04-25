@@ -592,8 +592,8 @@ private:
     /// Handle sum(array) call - reduce array by addition
     TypedValue handle_sum_call(NodeIndex node, const Node& n);
 
-    /// Handle fold(array, fn, init) call - reduce array with binary function
-    TypedValue handle_fold_call(NodeIndex node, const Node& n);
+    /// Handle reduce(array, fn, init) call - reduce array with binary function
+    TypedValue handle_reduce_call(NodeIndex node, const Node& n);
 
     /// Handle zipWith(a, b, fn) call - combine arrays element-wise with function
     TypedValue handle_zipWith_call(NodeIndex node, const Node& n);
@@ -622,9 +622,6 @@ private:
     // ============================================================================
     // Array reduction operations
     // ============================================================================
-
-    /// Handle product(array) call - multiply all elements
-    TypedValue handle_product_call(NodeIndex node, const Node& n);
 
     /// Handle mean(array) call - average of elements
     TypedValue handle_mean_call(NodeIndex node, const Node& n);

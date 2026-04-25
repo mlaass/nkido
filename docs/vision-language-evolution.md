@@ -121,13 +121,17 @@ fn mtof(note) -> 440.0 * pow(2.0, (note - 69.0) / 12.0)
 fn dc(x) -> x
 ```
 
-#### Array Reductions (2 builtins)
-`product` and `mean` are decomposable into existing `fold`/`sum`/`len`:
+#### Array Reductions (1 builtin)
+
+> **Status: Realized for `product`** — removed in favour of `reduce(arr, (a, b) -> a * b, 1)`.
+
+`mean` is still a builtin but is decomposable via `sum`/`len`:
 
 ```akkado
-fn product(arr) -> fold(arr, (a, b) -> a * b, 1.0)
 fn mean(arr) -> sum(arr) / len(arr)
 ```
+
+The higher-order reducer is `reduce(arr, fn, init)` — named `reduce` because `fold` is the wavefolding distortion builtin.
 
 #### Compile-Time Array Generators (5 builtins)
 `linspace`, `random`, `harmonics`, `normalize`, `scale` — these execute at compile time and produce constant arrays. They work today as codegen special-cases but could be stdlib functions if the language had `const fn` (see Phase 1).
@@ -190,7 +194,7 @@ The array HOFs are currently codegen special-cases because they need to:
 2. Unroll loops over multi-buffer arrays
 3. Accept functions of varying arity
 
-- **`map`**, **`fold`**, **`sum`**, **`zipWith`**, **`zip`** — need typed array parameters
+- **`map`**, **`reduce`**, **`sum`**, **`zipWith`**, **`zip`** — need typed array parameters
 - **`take`**, **`drop`**, **`reverse`** — need compile-time length tracking
 - **`rotate`**, **`shuffle`**, **`sort`** — need compile-time array manipulation
 
@@ -378,7 +382,7 @@ fn my_chorus(sig, rate = 0.5, depth = 0.5) -> {
 **What it unlocks for language evolution:**
 - **Typed builtin signatures** — catch type errors at compile time instead of silent garbage
 - **Overloaded functions** — dispatch on argument type, not just string matching
-- **Array HOFs as typed stdlib** — `map`, `fold`, `sum` become regular typed functions instead of codegen special-cases
+- **Array HOFs as typed stdlib** — `map`, `reduce`, `sum` become regular typed functions instead of codegen special-cases
 - **Pattern methods** — `.slow()`, `.transpose()` become typed method calls on Pattern values
 - **Better error messages** — "expected Signal, got Pattern" instead of silent buffer misuse
 
@@ -477,7 +481,7 @@ template fn feedback_delay(sig, time, fb, process) -> {
 | Iterator/Generator protocol | Compile-time arrays cover the use cases. Runtime iteration conflicts with block processing. |
 | Extensible mini-notation | The mini-notation parser is complex enough. User extensions should be userspace functions, not syntax. |
 | Mutable variables | Fundamentally conflicts with the hot-swap model. All state goes through `state` keyword with semantic ID tracking. |
-| Recursive functions | The full-inlining model makes recursion impossible without a call stack. Array HOFs (`fold`, `map`) cover recursive patterns. |
+| Recursive functions | The full-inlining model makes recursion impossible without a call stack. Array HOFs (`reduce`, `map`) cover recursive patterns. |
 | Runtime polymorphism | Zero-allocation constraint. All dispatch is compile-time. |
 
 ---

@@ -12,6 +12,7 @@ export const slugToPath: Record<string, string> = {
 	"basics": "reference/mini-notation/basics.md",
 	"conditionals": "reference/language/conditionals.md",
 	"pipes": "reference/language/pipes.md",
+	"arrays": "reference/language/arrays.md",
 	"variables": "reference/language/variables.md",
 	"closures": "reference/language/closures.md",
 	"operators": "reference/language/operators.md",
@@ -128,6 +129,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "conditionals",
 			"title": "Conditionals & Logic"
+		},
+		{
+			"slug": "arrays",
+			"title": "Arrays"
 		}
 	],
 	"mini-notation": [
@@ -693,9 +698,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Mini-Notation Basics"
 	},
 	"repeat": {
-		"slug": "basics",
-		"category": "mini-notation",
-		"title": "Mini-Notation Basics"
+		"slug": "arrays",
+		"category": "language",
+		"title": "repeat",
+		"anchor": "repeat"
 	},
 	"chance": {
 		"slug": "basics",
@@ -867,6 +873,195 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "pipes",
 		"category": "language",
 		"title": "Pipes & Holes"
+	},
+	"array literals": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Array Literals",
+		"anchor": "array-literals"
+	},
+	"indexing": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Indexing",
+		"anchor": "indexing"
+	},
+	"auto-expansion via map and sum": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Auto-Expansion via map and sum",
+		"anchor": "auto-expansion-via-map-and-sum"
+	},
+	"len": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "len",
+		"anchor": "len"
+	},
+	"map": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "map",
+		"anchor": "map"
+	},
+	"reduce": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "reduce",
+		"anchor": "reduce"
+	},
+	"zipwith": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "zipWith",
+		"anchor": "zipwith"
+	},
+	"zip": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "zip",
+		"anchor": "zip"
+	},
+	"take": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "take",
+		"anchor": "take"
+	},
+	"drop": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "drop",
+		"anchor": "drop"
+	},
+	"reverse": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "reverse",
+		"anchor": "reverse"
+	},
+	"sum": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "sum",
+		"anchor": "sum"
+	},
+	"mean": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "mean",
+		"anchor": "mean"
+	},
+	"rotate": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "rotate",
+		"anchor": "rotate"
+	},
+	"shuffle": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "shuffle",
+		"anchor": "shuffle"
+	},
+	"sort": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "sort",
+		"anchor": "sort"
+	},
+	"normalize": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "normalize",
+		"anchor": "normalize"
+	},
+	"scale": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "scale",
+		"anchor": "scale"
+	},
+	"range": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "range",
+		"anchor": "range"
+	},
+	"linspace": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "linspace",
+		"anchor": "linspace"
+	},
+	"random": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "random",
+		"anchor": "random"
+	},
+	"harmonics": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "harmonics",
+		"anchor": "harmonics"
+	},
+	"polyphony builtins": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Polyphony Builtins",
+		"anchor": "polyphony-builtins"
+	},
+	"common patterns": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Common Patterns",
+		"anchor": "common-patterns"
+	},
+	"array": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"list": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"arrays": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"length": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"average": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"polyphony": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"voices": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"multi-buffer": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
+	},
+	"comprehension": {
+		"slug": "arrays",
+		"category": "language",
+		"title": "Arrays"
 	},
 	"variables": {
 		"slug": "variables",
@@ -1170,11 +1365,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Distortion"
 	},
 	"exciter": {
-		"slug": "distortion",
-		"category": "builtins",
-		"title": "Distortion"
-	},
-	"harmonics": {
 		"slug": "distortion",
 		"category": "builtins",
 		"title": "Distortion"
@@ -1685,6 +1875,7 @@ export const previews: Record<string, string> = {
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
 	"conditionals": "Signal-rate decision-making: compare signals, combine boolean signals with AND/OR/NOT, and pick between two signals based on a condition. Every...",
 	"pipes": "The pipe operator () and hole () are the foundation of Akkado's signal flow model.",
+	"arrays": "Arrays are ordered, fixed-size collections of values. They are the primary way to express parallel signal flows in Akkado: every element of an...",
 	"variables": "Variables store values for reuse throughout your patch.",
 	"closures": "Closures are anonymous functions that capture their environment. They're the bridge between patterns and synthesis.",
 	"operators": "Akkado uses operators for arithmetic, comparison, logic, and signal flow.",

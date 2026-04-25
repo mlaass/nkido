@@ -706,7 +706,7 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {"array", "", "", "", "", ""},
                  {NAN, NAN, NAN},
                  "Sum all elements of array"}},
-    {"fold",    {cedar::Opcode::NOP, 3, 0, false,
+    {"reduce",  {cedar::Opcode::NOP, 3, 0, false,
                  {"array", "fn", "init", "", "", ""},
                  {NAN, NAN, NAN},
                  "Reduce array with binary function and initial value"}},
@@ -740,10 +740,6 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  "Repeat value n times: [v, v, ..., v]"}},
 
     // Array reduction operations
-    {"product", {cedar::Opcode::NOP, 1, 0, false,
-                 {"array", "", "", "", "", ""},
-                 {NAN, NAN, NAN},
-                 "Multiply all elements of array"}},
     {"mean",    {cedar::Opcode::NOP, 1, 0, false,
                  {"array", "", "", "", "", ""},
                  {NAN, NAN, NAN},

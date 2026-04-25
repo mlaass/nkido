@@ -326,13 +326,23 @@ TEST_CASE("Codegen: sum()", "[codegen][hof]") {
         auto result = akkado::compile("sum([])");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
-        REQUIRE(insts.size() == 1);
-        CHECK(decode_const_float(insts[0]) == 0.0f);
+        // No additions for an empty array.
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) == 0);
+        // A zero is emitted somewhere.
+        bool found_zero = false;
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::PUSH_CONST &&
+                decode_const_float(inst) == 0.0f) {
+                found_zero = true;
+                break;
+            }
+        }
+        CHECK(found_zero);
     }
 }
 
-// NOTE: fold() tests skipped - 'fold' name conflicts with wavefolding builtin
-// Consider renaming higher-order fold to 'reduce' in future
+// Higher-order reducer is named reduce() since 'fold' is taken by the wavefolding
+// distortion builtin. See test_arrays.cpp for full reduce() coverage.
 
 TEST_CASE("Codegen: zipWith()", "[codegen][hof]") {
     SECTION("zipWith add") {
@@ -2335,12 +2345,13 @@ TEST_CASE("Codegen: HOF error paths", "[codegen][errors]") {
         CHECK(found);
     }
 
-    SECTION("fold() wrong argument count - E142") {
-        auto result = akkado::compile("fold([1, 2, 3], (a, b) -> a + b)");
+    SECTION("reduce() wrong argument count") {
+        auto result = akkado::compile("reduce([1, 2, 3], (a, b) -> a + b)");
         REQUIRE_FALSE(result.success);
         bool found = false;
         for (const auto& d : result.diagnostics) {
-            if (d.code == "E142") found = true;  // Codegen: fold needs 3 args
+            // Analyzer rejects too-few args (E006) before codegen runs.
+            if (d.code == "E006" || d.code == "E142") found = true;
         }
         CHECK(found);
     }
@@ -3516,12 +3527,12 @@ TEST_CASE("Codegen: Array broadcasting", "[codegen][arrays]") {
 // =============================================================================
 
 TEST_CASE("Codegen: Array reductions", "[codegen][arrays]") {
-    SECTION("product of array") {
-        auto result = akkado::compile("product([2, 3, 4])");
+    SECTION("product via reduce(*, 1)") {
+        auto result = akkado::compile("reduce([2, 3, 4], (a, b) -> a * b, 1)");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
-        // 2 multiplications to compute 2*3*4
-        CHECK(count_instructions(insts, cedar::Opcode::MUL) == 2);
+        // 1 * 2 * 3 * 4 — three MULs (one per array element)
+        CHECK(count_instructions(insts, cedar::Opcode::MUL) == 3);
     }
 
     SECTION("mean of array") {
