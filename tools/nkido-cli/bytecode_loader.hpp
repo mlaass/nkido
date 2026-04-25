@@ -16,7 +16,8 @@ enum class Mode {
     Dump,      // Display bytecode in human-readable format
     Compile,   // Compile source to bytecode file
     Check,     // Syntax check only
-    UI         // Interactive editor mode
+    UI,        // Interactive editor mode
+    Render     // Offline render to WAV (with optional voice trace)
 };
 
 // Input type
@@ -43,6 +44,11 @@ struct Options {
     bool dump_bytecode = false;  // Show bytecode before playing
     bool json_output = false;    // JSON format for errors
     bool verbose = false;        // Show compilation stats
+
+    // Render mode options
+    float render_seconds = 4.0f;                  // Duration for render mode
+    float render_bpm = 120.0f;                    // BPM for render mode
+    std::optional<std::string> trace_poly_file;   // Optional path for poly state JSONL trace
 
     // Check if input needs compilation
     [[nodiscard]] bool needs_compilation() const {

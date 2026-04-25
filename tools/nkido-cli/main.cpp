@@ -3,10 +3,15 @@
 #include "audio_engine.hpp"
 #include "ui/ui_mode.hpp"
 #include "akkado/akkado.hpp"
+#include "cedar/vm/vm.hpp"
+#include "cedar/opcodes/dsp_state.hpp"
 #include <iostream>
 #include <fstream>
 #include <cstring>
 #include <cstdlib>
+#include <cstdint>
+#include <sstream>
+#include <vector>
 
 namespace {
 
@@ -17,7 +22,8 @@ void print_usage(const char* program) {
               << "  dump      Display bytecode in human-readable format\n"
               << "  compile   Compile source to bytecode file\n"
               << "  check     Syntax check only\n"
-              << "  ui        Interactive editor mode\n\n"
+              << "  ui        Interactive editor mode\n"
+              << "  render    Compile + render to WAV (offline)\n\n"
               << "Input:\n"
               << "  <file.akkado>   Akkado source file\n"
               << "  <file.cedar>    Cedar bytecode file\n"
@@ -29,7 +35,10 @@ void print_usage(const char* program) {
               << "  --dump-bytecode    Show bytecode before playing\n"
               << "  --json             JSON output for errors/dump\n"
               << "  -v, --verbose      Show compilation stats\n"
-              << "  -o, --output <f>   Output file (for compile mode)\n"
+              << "  -o, --output <f>   Output file (for compile/render mode)\n"
+              << "  --seconds <f>      Render duration in seconds (default: 4)\n"
+              << "  --bpm <f>          BPM for render mode (default: 120)\n"
+              << "  --trace-poly <f>   Write per-block poly voice state to JSONL\n"
               << "  -h, --help         Show this help\n\n"
               << "Examples:\n"
               << "  " << program << " play song.akkado\n"
@@ -64,6 +73,9 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
         } else if (arg == "ui" && !has_mode) {
             opts.mode = nkido::Mode::UI;
             has_mode = true;
+        } else if (arg == "render" && !has_mode) {
+            opts.mode = nkido::Mode::Render;
+            has_mode = true;
         }
         // Options
         else if (arg == "-h" || arg == "--help") {
@@ -95,6 +107,24 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
                 return std::nullopt;
             }
             opts.output_file = argv[i];
+        } else if (arg == "--seconds") {
+            if (++i >= argc) {
+                std::cerr << "error: --seconds requires a value\n";
+                return std::nullopt;
+            }
+            opts.render_seconds = std::stof(argv[i]);
+        } else if (arg == "--bpm") {
+            if (++i >= argc) {
+                std::cerr << "error: --bpm requires a value\n";
+                return std::nullopt;
+            }
+            opts.render_bpm = std::stof(argv[i]);
+        } else if (arg == "--trace-poly") {
+            if (++i >= argc) {
+                std::cerr << "error: --trace-poly requires a value\n";
+                return std::nullopt;
+            }
+            opts.trace_poly_file = argv[i];
         } else if (arg == "--dump-bytecode") {
             opts.dump_bytecode = true;
         } else if (arg == "--json") {
@@ -190,6 +220,222 @@ int handle_check_mode(const nkido::Options& opts) {
     return EXIT_FAILURE;
 }
 
+// ----------------------------------------------------------------------------
+// Render mode: compile + apply state inits + run VM offline + write WAV
+// ----------------------------------------------------------------------------
+
+// Minimal WAV writer (16-bit PCM stereo)
+bool write_wav_16(const std::string& path, const std::vector<float>& interleaved,
+                  std::uint32_t sample_rate, std::uint16_t channels) {
+    std::ofstream out(path, std::ios::binary);
+    if (!out) return false;
+
+    auto write_u32 = [&](std::uint32_t v) { out.write(reinterpret_cast<const char*>(&v), 4); };
+    auto write_u16 = [&](std::uint16_t v) { out.write(reinterpret_cast<const char*>(&v), 2); };
+    auto write_str = [&](const char* s) { out.write(s, 4); };
+
+    const std::uint32_t num_samples = static_cast<std::uint32_t>(interleaved.size());
+    const std::uint32_t data_size = num_samples * 2;  // 16-bit = 2 bytes per sample
+    const std::uint32_t fmt_size = 16;
+    const std::uint32_t riff_size = 36 + data_size;
+    const std::uint32_t byte_rate = sample_rate * channels * 2;
+    const std::uint16_t block_align = static_cast<std::uint16_t>(channels * 2);
+
+    write_str("RIFF"); write_u32(riff_size); write_str("WAVE");
+    write_str("fmt "); write_u32(fmt_size);
+    write_u16(1);                   // PCM format
+    write_u16(channels);
+    write_u32(sample_rate);
+    write_u32(byte_rate);
+    write_u16(block_align);
+    write_u16(16);                  // bits per sample
+    write_str("data"); write_u32(data_size);
+
+    for (float f : interleaved) {
+        // Clamp and convert to int16
+        if (f > 1.0f) f = 1.0f;
+        if (f < -1.0f) f = -1.0f;
+        std::int16_t s = static_cast<std::int16_t>(f * 32767.0f);
+        out.write(reinterpret_cast<const char*>(&s), 2);
+    }
+
+    return out.good();
+}
+
+// Apply state_inits from a CompileResult to the VM (mirrors web/wasm)
+void apply_state_inits(cedar::VM& vm, const akkado::CompileResult& result,
+                       std::vector<std::vector<cedar::Sequence>>& seq_storage) {
+    seq_storage.reserve(result.state_inits.size());
+    for (const auto& init : result.state_inits) {
+        if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+            std::vector<cedar::Sequence> seq_copy = init.sequences;
+            for (std::size_t i = 0; i < seq_copy.size() && i < init.sequence_events.size(); ++i) {
+                if (!init.sequence_events[i].empty()) {
+                    seq_copy[i].events = const_cast<cedar::Event*>(init.sequence_events[i].data());
+                    seq_copy[i].num_events = static_cast<std::uint32_t>(init.sequence_events[i].size());
+                    seq_copy[i].capacity = static_cast<std::uint32_t>(init.sequence_events[i].size());
+                }
+            }
+            seq_storage.push_back(std::move(seq_copy));
+            auto& stored = seq_storage.back();
+            vm.init_sequence_program_state(
+                init.state_id, stored.data(), stored.size(),
+                init.cycle_length, init.is_sample_pattern, init.total_events);
+        } else if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+            vm.init_poly_state(init.state_id, init.poly_seq_state_id,
+                               init.poly_max_voices, init.poly_mode,
+                               init.poly_steal_strategy);
+        } else if (init.type == akkado::StateInitData::Type::Timeline) {
+            auto& state = vm.states().get_or_create<cedar::TimelineState>(init.state_id);
+            state.num_points = std::min(
+                static_cast<std::uint32_t>(init.timeline_breakpoints.size()),
+                static_cast<std::uint32_t>(cedar::TimelineState::MAX_BREAKPOINTS));
+            for (std::uint32_t i = 0; i < state.num_points; ++i) {
+                state.points[i] = init.timeline_breakpoints[i];
+            }
+            state.loop = init.timeline_loop;
+            state.loop_length = init.timeline_loop_length;
+        }
+    }
+}
+
+int handle_render_mode(const nkido::Options& opts) {
+    // Read source
+    std::string source, filename;
+    if (opts.input_type == nkido::InputType::InlineSource) {
+        source = opts.input;
+        filename = "<inline>";
+    } else if (opts.input_type == nkido::InputType::Stdin) {
+        std::string line;
+        while (std::getline(std::cin, line)) source += line + "\n";
+        filename = "<stdin>";
+    } else if (opts.input_type == nkido::InputType::SourceFile) {
+        std::ifstream file(opts.input);
+        if (!file) {
+            std::cerr << "error: cannot open file: " << opts.input << "\n";
+            return EXIT_FAILURE;
+        }
+        source.assign((std::istreambuf_iterator<char>(file)),
+                      std::istreambuf_iterator<char>());
+        filename = opts.input;
+    } else {
+        std::cerr << "error: render mode needs source input (.akkado / inline / stdin)\n";
+        return EXIT_FAILURE;
+    }
+
+    // Compile
+    auto cr = akkado::compile(source, filename);
+    if (!cr.success) {
+        for (const auto& diag : cr.diagnostics) {
+            std::cerr << akkado::format_diagnostic(diag, source) << "\n";
+        }
+        return EXIT_FAILURE;
+    }
+
+    // Build instruction vector
+    std::vector<cedar::Instruction> instructions;
+    std::size_t num_instructions = cr.bytecode.size() / sizeof(cedar::Instruction);
+    instructions.resize(num_instructions);
+    std::memcpy(instructions.data(), cr.bytecode.data(), cr.bytecode.size());
+
+    // VM setup (heap-allocate — VM is large)
+    auto vm = std::make_unique<cedar::VM>();
+    vm->set_sample_rate(static_cast<float>(opts.sample_rate));
+    vm->set_bpm(opts.render_bpm);
+    if (!vm->load_program_immediate(std::span<const cedar::Instruction>(instructions))) {
+        std::cerr << "error: failed to load program into VM\n";
+        return EXIT_FAILURE;
+    }
+
+    std::vector<std::vector<cedar::Sequence>> seq_storage;
+    apply_state_inits(*vm, cr, seq_storage);
+
+    // Find PolyAllocState IDs (for tracing)
+    std::vector<std::uint32_t> poly_state_ids;
+    for (const auto& init : cr.state_inits) {
+        if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+            poly_state_ids.push_back(init.state_id);
+        }
+    }
+
+    // Determine output WAV path
+    std::string wav_path = opts.output_file.value_or("out.wav");
+
+    // Optional poly trace
+    std::ofstream trace;
+    if (opts.trace_poly_file) {
+        trace.open(*opts.trace_poly_file);
+        if (!trace) {
+            std::cerr << "error: cannot open trace file: " << *opts.trace_poly_file << "\n";
+            return EXIT_FAILURE;
+        }
+    }
+
+    // Render loop
+    const std::uint32_t total_blocks = static_cast<std::uint32_t>(
+        opts.render_seconds * static_cast<float>(opts.sample_rate) / cedar::BLOCK_SIZE);
+    std::vector<float> interleaved;
+    interleaved.reserve(total_blocks * cedar::BLOCK_SIZE * 2);
+
+    std::array<float, cedar::BLOCK_SIZE> left{}, right{};
+
+    for (std::uint32_t b = 0; b < total_blocks; ++b) {
+        vm->process_block(left.data(), right.data());
+
+        for (std::size_t i = 0; i < cedar::BLOCK_SIZE; ++i) {
+            interleaved.push_back(left[i]);
+            interleaved.push_back(right[i]);
+        }
+
+        // Write per-block voice state for each PolyAllocState
+        if (trace.is_open()) {
+            for (std::uint32_t state_id : poly_state_ids) {
+                auto* poly = vm->states().get_if<cedar::PolyAllocState>(state_id);
+                if (!poly || !poly->voices) continue;
+                trace << "{\"block\":" << b
+                      << ",\"state_id\":" << state_id
+                      << ",\"max_voices\":" << static_cast<int>(poly->max_voices)
+                      << ",\"voices\":[";
+                bool first = true;
+                for (std::uint16_t v = 0; v < poly->max_voices; ++v) {
+                    const auto& voice = poly->voices[v];
+                    if (!voice.active) continue;
+                    if (!first) trace << ",";
+                    first = false;
+                    trace << "{\"i\":" << v
+                          << ",\"freq\":" << voice.freq
+                          << ",\"vel\":" << voice.vel
+                          << ",\"gate\":" << voice.gate
+                          << ",\"releasing\":" << (voice.releasing ? "true" : "false")
+                          << ",\"age\":" << voice.age
+                          << ",\"event\":" << voice.event_index
+                          << ",\"cycle\":" << voice.cycle
+                          << "}";
+                }
+                trace << "]}\n";
+            }
+        }
+    }
+
+    // Write WAV
+    if (!write_wav_16(wav_path, interleaved, opts.sample_rate, 2)) {
+        std::cerr << "error: failed to write WAV: " << wav_path << "\n";
+        return EXIT_FAILURE;
+    }
+
+    if (opts.verbose) {
+        std::cerr << "Rendered " << opts.render_seconds << "s "
+                  << "(" << total_blocks << " blocks, "
+                  << total_blocks * cedar::BLOCK_SIZE << " samples) to "
+                  << wav_path << "\n";
+        if (opts.trace_poly_file) {
+            std::cerr << "Poly trace: " << *opts.trace_poly_file << "\n";
+        }
+    }
+
+    return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -202,6 +448,11 @@ int main(int argc, char* argv[]) {
     // Handle check mode separately
     if (opts->mode == nkido::Mode::Check) {
         return handle_check_mode(*opts);
+    }
+
+    // Handle render mode (offline WAV)
+    if (opts->mode == nkido::Mode::Render) {
+        return handle_render_mode(*opts);
     }
 
     // Handle UI mode
