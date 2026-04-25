@@ -111,7 +111,7 @@ def voice_is_firing(voice: dict) -> bool:
 # Test 1: chord("C Em Am G") -- voice grid sanity
 # =============================================================================
 
-RENDER_SECONDS = 40.0   # long enough to surface "every few bars" — ~18 cycles at 110 BPM
+RENDER_SECONDS = 300.0  # ≥300s simulated audio per CLAUDE.md sequenced-opcode rule
 RENDER_BPM = 110.0
 
 # Frequencies the chord("C Em Am G") parser produces (validated by the
@@ -155,6 +155,7 @@ def test_chord_stab_voice_grid():
     firing_counts = []
     active_counts = []
     over_3_firing_blocks = []
+    under_3_firing_blocks = []
     for rec in trace:
         voices = rec["voices"]
         firing = sum(1 for v in voices if voice_is_firing(v))
@@ -163,6 +164,12 @@ def test_chord_stab_voice_grid():
         active_counts.append(active)
         if firing > 3:
             over_3_firing_blocks.append({
+                "block": rec["block"],
+                "firing": firing,
+                "voices": voices,
+            })
+        if firing < 3:
+            under_3_firing_blocks.append({
                 "block": rec["block"],
                 "firing": firing,
                 "voices": voices,
@@ -188,6 +195,25 @@ def test_chord_stab_voice_grid():
         )
     else:
         print(f"  ✓ Never more than 3 firing voices simultaneously")
+
+    # Every chord("C Em Am G") event has exactly 3 notes, and the events tile
+    # the cycle with no gaps — so once the patch starts running, there should
+    # ALWAYS be exactly 3 firing voices, every block. A drop to <3 means a
+    # voice gap at a chord transition (e.g. the cycle-boundary alignment bug
+    # at BPM 110 where every 11 cycles == 9000 blocks exactly).
+    if under_3_firing_blocks:
+        print(f"  ✗ FAIL: {len(under_3_firing_blocks)} blocks with <3 firing voices")
+        for v in under_3_firing_blocks[:5]:
+            print(f"    block={v['block']} firing={v['firing']}: "
+                  f"voices={[(round(x['freq'], 1), x.get('gate'), x.get('releasing')) for x in v['voices']]}")
+        first_bad = under_3_firing_blocks[0]
+        assert False, (
+            f"Voice gap at block {first_bad['block']}: only "
+            f"{first_bad['firing']} voices firing (expected 3). "
+            f"This indicates a chord-transition gap."
+        )
+    else:
+        print(f"  ✓ Always exactly 3 firing voices (no transition gaps)")
 
     # Save WAV for human listening
     print(f"  Saved {wav_path} - Listen for hiccups, missing notes, level spikes")
@@ -280,6 +306,52 @@ def test_chord_stab_audio_quality():
         print(f"  ⚠ DC offset {dc:.4f} is non-trivial")
     else:
         print("  ✓ DC offset within tolerance")
+
+    # Per-chord RMS stability: every chord in chord("C Em Am G") repeats every
+    # cycle and should sound the same each time. A drop on certain cycles
+    # (e.g., when chord transitions land on exact block boundaries) means an
+    # envelope failed to retrigger. Flag any chord whose min cycle-RMS drops
+    # below 70% of its mean — that's the symptom of the
+    # "shared-frequency retrigger at exact alignment" bug.
+    spb = 60.0 / 110.0 * sr
+    n_cycles = int(len(mono) / (4 * spb))
+    chord_names = ["C", "Em", "Am", "G"]
+    rms_per = [[0.0] * 4 for _ in range(n_cycles)]
+    skip = int(0.05 * sr)
+    for c in range(n_cycles):
+        for ch in range(4):
+            start = int((c * 4 + ch) * spb)
+            end = int((c * 4 + ch + 1) * spb)
+            if end > len(mono):
+                continue
+            seg = mono[start + skip:end - skip]
+            if len(seg) > 0:
+                rms_per[c][ch] = float(np.sqrt(np.mean(seg ** 2)))
+    rms_arr = np.array(rms_per)
+    print(f"  Per-chord RMS over {n_cycles} cycles "
+          f"(checking for retrigger drop-outs):")
+    bad_chords = []
+    for ch_idx, ch_name in enumerate(chord_names):
+        col = rms_arr[:, ch_idx]
+        col = col[col > 0]
+        if len(col) < 4:
+            continue
+        mean = float(col.mean())
+        mn = float(col.min())
+        ratio = mn / mean if mean > 0 else 1.0
+        marker = "✓" if ratio >= 0.7 else "✗"
+        print(f"    {marker} {ch_name}: mean={mean:.4f} min={mn:.4f} "
+              f"ratio={ratio:.3f}")
+        if ratio < 0.7:
+            bad_chords.append((ch_name, mean, mn, ratio))
+    if bad_chords:
+        first = bad_chords[0]
+        assert False, (
+            f"Chord {first[0]} dropped to {first[2]:.4f} RMS (ratio "
+            f"{first[3]:.2f} of mean {first[1]:.4f}) — envelope failed "
+            f"to retrigger on at least one cycle. Reproduces the "
+            f"shared-frequency retrigger-at-alignment bug."
+        )
 
 
 # =============================================================================

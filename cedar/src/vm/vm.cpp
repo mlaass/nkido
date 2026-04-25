@@ -278,14 +278,29 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
 
     if (seq_state && seq_state->output.num_events > 0) {
         const float cycle_length = seq_state->cycle_length;
+        // Cycle-position snap tolerance, in beats. IEEE-754 division of large
+        // sample counters by spb produces tiny non-zero fmod residues at exact
+        // cycle boundaries (e.g., 5.7e-14 at block 99000 / cycle 121 with
+        // BPM 110). Those residues are far below 1-sample resolution
+        // (1 sample ≈ 3.8e-5 beats at 110 BPM / 48 kHz) but break strict
+        // `evt_start >= cycle_pos` comparisons against zero-time events.
+        // Snap cycle_pos to 0 (and block_end to cycle_length) within an
+        // epsilon well below sample resolution but well above fp noise.
+        constexpr double CYCLE_BOUNDARY_EPSILON = 1e-9;
 #ifdef CEDAR_FLOAT_ONLY
         // Float-only beat timing (precision degrades after ~6 min at 48kHz)
         const float spb = (60.0f / ctx_.bpm) * ctx_.sample_rate;
         const float beat_start = static_cast<float>(ctx_.global_sample_counter) / spb;
-        const float cycle_pos = std::fmod(beat_start, cycle_length);
+        float cycle_pos_raw = std::fmod(beat_start, cycle_length);
+        if (cycle_pos_raw < static_cast<float>(CYCLE_BOUNDARY_EPSILON)) cycle_pos_raw = 0.0f;
+        const float cycle_pos = cycle_pos_raw;
         const std::uint32_t current_cycle =
             static_cast<std::uint32_t>(std::floor(beat_start / cycle_length));
-        const float block_end_pos = cycle_pos + static_cast<float>(BLOCK_SIZE) / spb;
+        float block_end_pos_raw = cycle_pos + static_cast<float>(BLOCK_SIZE) / spb;
+        if (std::abs(block_end_pos_raw - cycle_length) < static_cast<float>(CYCLE_BOUNDARY_EPSILON)) {
+            block_end_pos_raw = cycle_length;
+        }
+        const float block_end_pos = block_end_pos_raw;
 #else
         // Use double precision for beat timing to avoid float32 precision loss
         // after ~6 minutes (global_sample_counter > 2^24)
@@ -293,12 +308,19 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
                            * static_cast<double>(ctx_.sample_rate);
         const double beat_start_d =
             static_cast<double>(ctx_.global_sample_counter) / spb_d;
-        const double cycle_pos_d =
+        double cycle_pos_d_raw =
             std::fmod(beat_start_d, static_cast<double>(cycle_length));
+        if (cycle_pos_d_raw < CYCLE_BOUNDARY_EPSILON) cycle_pos_d_raw = 0.0;
+        const double cycle_pos_d = cycle_pos_d_raw;
         const std::uint32_t current_cycle =
             static_cast<std::uint32_t>(std::floor(beat_start_d / cycle_length));
         const double block_beats_d = static_cast<double>(BLOCK_SIZE) / spb_d;
-        const double block_end_pos_d = cycle_pos_d + block_beats_d;
+        double block_end_pos_d_raw = cycle_pos_d + block_beats_d;
+        if (std::abs(block_end_pos_d_raw - static_cast<double>(cycle_length))
+                < CYCLE_BOUNDARY_EPSILON) {
+            block_end_pos_d_raw = static_cast<double>(cycle_length);
+        }
+        const double block_end_pos_d = block_end_pos_d_raw;
         // Narrow to float for comparisons against float-precision event times
         const float spb = static_cast<float>(spb_d);
         const float cycle_pos = static_cast<float>(cycle_pos_d);
@@ -357,25 +379,25 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
             float off_beat_offset = 0.0f;
             std::uint32_t off_cycle = current_cycle;
 
-            // At the cycle boundary, extend the upper bound slightly to catch
-            // evt_end == cycle_length when block_end_pos == cycle_length exactly
-            // (happens at BPMs where cycle_length_in_samples % BLOCK_SIZE == 0)
-            const float off_upper = (std::abs(block_end_pos - cycle_length) < 1e-4f)
-                ? block_end_pos + 1e-4f
-                : block_end_pos;
-
-            if (evt_end >= cycle_pos && evt_end < off_upper) {
+            if (evt_end >= cycle_pos && evt_end < block_end_pos) {
                 gate_off_this_block = true;
                 off_beat_offset = evt_end - cycle_pos;
-            } else if (evt_end > cycle_length) {
-                // Event wraps around cycle boundary
+            } else if (evt_end >= cycle_length && current_cycle > 0) {
+                // Event ends at or past the cycle boundary, releasing a voice
+                // allocated in the previous cycle. The `>=` covers the
+                // exact-alignment edge case (BPMs where cycle_length_in_samples
+                // is a multiple of BLOCK_SIZE): at those tempos the cycle
+                // boundary lands exactly on a block boundary, and we want the
+                // gate-off to fire in the new cycle's first block (sample 0)
+                // alongside the new cycle's gate-ons, not in the previous
+                // block's last sample. The `current_cycle > 0` guard prevents
+                // releasing a just-allocated voice in the very first cycle —
+                // there is no previous cycle whose voice needs releasing.
                 float wrapped_end = evt_end - cycle_length;
                 if (wrapped_end >= cycle_pos && wrapped_end < block_end_pos) {
-                    // Wrapped off in a normal block of the next cycle —
-                    // the voice was allocated in the previous cycle
                     gate_off_this_block = true;
                     off_beat_offset = wrapped_end - cycle_pos;
-                    off_cycle = current_cycle > 0 ? current_cycle - 1 : current_cycle;
+                    off_cycle = current_cycle - 1;
                 } else if (block_end_pos > cycle_length) {
                     float block_wrapped = block_end_pos - cycle_length;
                     if (wrapped_end < block_wrapped) {
@@ -424,6 +446,18 @@ std::size_t VM::execute_poly_block(std::span<const Instruction> program, std::si
             std::fill_n(gate_buf + voice.pending_gate_on,
                         BLOCK_SIZE - voice.pending_gate_on, 1.0f);
             trig_buf[voice.pending_gate_on] = 1.0f;
+            // When the note-on lands at sample 0 (chord transition coincides
+            // with a block boundary, e.g. at BPMs where cycle_length_in_samples
+            // is a multiple of BLOCK_SIZE), the gate buffer would be all 1s
+            // with no 0->1 edge. For voices retriggered from the previous
+            // chord (shared frequencies), the previous block ended with gate=1
+            // too, so envelope opcodes (e.g. ENV_AR) never see a rising edge
+            // and fail to retrigger. Force a one-sample drop at the boundary
+            // so the rising edge appears at sample 1; the new envelope attack
+            // is delayed by one sample (~21µs) but actually fires.
+            if (voice.pending_gate_on == 0) {
+                gate_buf[0] = 0.0f;
+            }
         } else if (voice.pending_gate_off < BLOCK_SIZE) {
             // Note-off happened this block
             std::fill_n(gate_buf, voice.pending_gate_off, 1.0f);
