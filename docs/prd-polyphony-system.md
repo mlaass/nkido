@@ -1,4 +1,4 @@
-**Status: REFACTOR** — Old compile-time expansion system (Phases 1-5) complete. This PRD replaces it with a unified runtime POLY opcode. Phase 6 (MIDI) absorbed into the new design.
+**Status: IMPLEMENTED** — Phases 0–4 shipped. Future-work sections (SF_PLAY, SAMPLE_VOICE, configurable release, MIDI input) remain open.
 
 # Polyphony System PRD — Runtime POLY Opcode
 
@@ -16,7 +16,7 @@ The current system has three separate, incompatible polyphony mechanisms:
 | **SoundFont internal voice allocator** | 32 voices baked into SOUNDFONT_VOICE opcode | Isolated — can't share voice management with other instruments |
 | **Sampler internal voice allocator** | 32 voices baked into SAMPLE_PLAY opcode | Same isolation problem |
 
-**Goal**: Users explicitly choose `poly(n, instrument)` or `mono(instrument)`. One voice allocator handles everything — oscillators, SoundFonts, samplers, FM synths, future instruments.
+**Goal**: Users explicitly choose `poly(%, n, instrument)` or `mono(%, instrument)`. One voice allocator handles everything — oscillators, SoundFonts, samplers, FM synths, future instruments.
 
 **Key design decisions:**
 - SoundFont and Sampler **keep their internal polyphony** for now — SF_PLAY/SAMPLE_VOICE single-voice opcodes are future work
@@ -380,9 +380,9 @@ This follows the pattern of existing `inspect_state_json()` in `StatePool` (see 
 
 ## 4. Compiler Integration
 
-### 4.1 Compiling `poly(8, lead)`
+### 4.1 Compiling `poly(%, 8, lead)`
 
-When the compiler encounters `poly(8, instrument_fn)`:
+When the compiler encounters `poly(input, 8, instrument_fn)`:
 
 1. **Emit SEQPAT_QUERY** for the upstream pattern (already exists)
 2. **Allocate 5 scratch buffers**: voice_freq, voice_gate, voice_vel, voice_trig, voice_out
@@ -414,9 +414,11 @@ Additional parameters use closure capture (see section 1.6).
 ### 4.3 `mono()` and `legato()` as Sugar
 
 ```akkado
-mono(lead)   -> poly(1, lead)  with mode=1 (mono)
-legato(lead) -> poly(1, lead)  with mode=2 (legato)
+mono(%, lead)   -> poly(%, 1, lead)  with mode=1 (mono)
+legato(%, lead) -> poly(%, 1, lead)  with mode=2 (legato)
 ```
+
+> **Note**: The 1-arg forms `mono(lead)` / `legato(lead)` (without input) are accepted by the compiler today but produce a silent graph — the pipe form is required for audible output and will be enforced in a future compiler pass (same reasoning as the 2-arg `poly()` form that was removed in commit `d54db35`).
 
 ### 4.4 `soundfont()` and `sample()` as Instrument Factories (Future)
 
@@ -424,10 +426,10 @@ These will compile to special single-voice opcodes (SF_PLAY, SAMPLE_VOICE) wrapp
 
 ```akkado
 // This:
-poly(32, soundfont("piano.sf2"))
+poly(%, 32, soundfont("piano.sf2"))
 
 // Will compile as if it were:
-poly(32, fn(freq, gate, vel) = sf_play("piano.sf2", freq, gate, vel))
+poly(%, 32, fn(freq, gate, vel) = sf_play("piano.sf2", freq, gate, vel))
 ```
 
 > **Note**: Until SF_PLAY and SAMPLE_VOICE opcodes are implemented, SoundFont and Sampler continue using their existing internal voice allocators. The `soundfont` builtin is registered in `builtins.hpp` as `Opcode::NOP` (handled specially by codegen).
@@ -465,6 +467,7 @@ File: `cedar/include/cedar/vm/state_pool.hpp` — `MAX_STATES` constant.
 ## 7. Implementation Phases
 
 ### Phase 0: Velocity in Events (Prerequisite)
+**Status**: SHIPPED.
 **Goal**: Event and OutputEvent structs carry velocity data for POLY consumption
 
 Files to modify:
@@ -476,6 +479,7 @@ Files to modify:
 **Test**: Verify existing patterns still compile and produce velocity=1.0 by default. Verify explicit velocity syntax outputs correct values.
 
 ### Phase 1: Cedar POLY Infrastructure
+**Status**: SHIPPED.
 **Goal**: VM can execute POLY_BEGIN/POLY_END with hardcoded voice data
 
 Files to modify:
@@ -489,6 +493,7 @@ Files to modify:
 **Test**: Python experiment with hardcoded bytecode — 3 oscillators at different frequencies via POLY.
 
 ### Phase 2: Akkado Compiler — `poly()` and `mono()`
+**Status**: SHIPPED. Commit `d54db35` tightened `poly()` to require exactly 3 args `(input, voices, instrument)`; the old 2-arg form was removed because it produced a silent graph.
 **Goal**: `pat("C4'") |> poly(%, 8, synth_fn) |> out(%, %)` compiles and plays
 
 Files to modify:
@@ -503,6 +508,7 @@ Key logic:
 - Compute body_length, emit POLY_BEGIN/body/POLY_END
 
 ### Phase 3: Voice Allocation Logic
+**Status**: SHIPPED.
 **Goal**: Proper event-driven voice allocation, stealing, mono, legato
 
 Files to modify:
@@ -518,6 +524,7 @@ Features:
 - Per-sample gate accuracy (trigger pulse at exact event time via NoteEvent.gate_on_sample)
 
 ### Phase 4: Deprecation — Remove Compile-Time Expansion
+**Status**: SHIPPED.
 **Goal**: Clean up old implicit polyphony system
 
 Files to modify:
@@ -589,7 +596,7 @@ Files to modify:
 |-------|------|--------|
 | 0 | Event velocity field populated correctly, default 1.0 | Unit test + Python experiment |
 | 1 | 3 oscillators at different frequencies mix correctly | Python experiment — build POLY bytecode manually |
-| 2 | `poly(8, fn(f,g,v) = osc("sin",f)*adsr(g))` produces correct instruction count | Akkado compiler test |
+| 2 | `poly(%, 8, fn(f,g,v) = osc("sin",f)*adsr(g))` produces correct instruction count | Akkado compiler test |
 | 3 | Voice stealing works when exceeding max_voices; mono plays only last note | Audio integration test |
 | 4 | Old `pat("C4'") \|> osc(...)` gives error with migration hint; `pat("c4 e4") \|> osc(...)` still works | Regression test suite |
 
@@ -627,18 +634,18 @@ pat("C4' Am7'") |> poly(%, 8, filtered) |> out(%, %) * 0.3
 | NoteEvent abstraction | (internal) | Phase 1 |
 | POLY_BEGIN/POLY_END opcodes | (bytecode) | Phase 1 |
 | State ID XOR isolation | (transparent) | Phase 1 |
-| `poly(n, instrument)` | `pat(...) \|> poly(%, 8, lead)` | Phase 2 |
-| `mono(instrument)` | `pat(...) \|> mono(%, lead)` | Phase 2 |
+| `poly(%, n, instrument)` | `pat(...) \|> poly(%, 8, lead)` | Phase 2 |
+| `mono(%, instrument)` | `pat(...) \|> mono(%, lead)` | Phase 2 |
 | Voice allocation & stealing | (runtime) | Phase 3 |
 | Mono/legato modes | `mono(lead)`, `legato(lead)` | Phase 3 |
 | Event-index-based release | (runtime) | Phase 3 |
 | Deprecate compile-time expansion | Migration errors | Phase 4 |
-| SoundFont single-voice | `poly(32, soundfont("piano.sf2"))` | Future |
-| Sampler single-voice | `poly(4, sample("kick.wav"))` | Future |
-| Configurable voice release | `poly(8, pad, release: 0.5)` | Future |
+| SoundFont single-voice | `poly(%, 32, soundfont("piano.sf2"))` | Future |
+| Sampler single-voice | `poly(%, 4, sample("kick.wav"))` | Future |
+| Configurable voice release | `poly(%, 8, pad, release: 0.5)` | Future |
 
 **Key design principles**:
-1. **Explicit over implicit** — user chooses `poly(n, ...)` or `mono(...)`, never auto-expanded
+1. **Explicit over implicit** — user chooses `poly(%, n, ...)` or `mono(%, ...)`, never auto-expanded
 2. **One allocator for everything** — oscillators, SoundFonts, samplers all use PolyAllocState
 3. **Zero-cost abstraction** — XOR state isolation adds no overhead outside POLY blocks
 4. **Hot-swap safe** — deterministic state IDs per voice index
