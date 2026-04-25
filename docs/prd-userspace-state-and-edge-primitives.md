@@ -14,7 +14,7 @@ The three additions are:
    - mode 1: `gateup` — output 1.0 on rising edge of input
    - mode 2: `gatedown` — output 1.0 on falling edge of input
    - mode 3: `counter` — output increments on rising edge, with optional reset/start
-3. **UFCS method-call codegen** — fill in the `MethodCall` codegen stub at `akkado/src/codegen.cpp:1512` so `x.foo(a, b)` lowers to `foo(x, a, b)` for any callable `foo` in scope (builtins and closures alike). The parser already accepts this syntax.
+3. **UFCS method-call codegen** — fill in the `MethodCall` codegen stub at `akkado/src/codegen.cpp:1513` so `x.foo(a, b)` lowers to `foo(x, a, b)` for any callable `foo` in scope (builtins and closures alike). The parser already accepts this syntax.
 
 ### Why?
 
@@ -23,7 +23,8 @@ Today, every stateful operator must be implemented as a C++ opcode in `cedar/inc
 ### Major design decisions
 
 - **State cells are the persistence primitive**, not language-level `static` declarations or mutable records. State cells are explicit, composable, and add a single new value type without altering the immutability of records or introducing a new keyword.
-- **No new opcodes are added.** EDGE_OP is the renamed SAH opcode; state cell load/store reuse existing scalar instructions plus a small extension to the codegen pipeline that emits state-pool sync points around closure bodies. Mode dispatch on EDGE_OP follows the established `inst.rate` field convention from CLAUDE.md §Extended Parameter Patterns.
+- **One new mode-dispatched opcode (`STATE_OP`)** is added for cell I/O (init / load / store via `inst.rate`), alongside the `SAH` → `EDGE_OP` rename. Both opcodes use the established `inst.rate` field convention from CLAUDE.md §Extended Parameter Patterns. No DSP-level opcodes are added.
+- **`state` / `get` / `set` are regular builtins**, not a separate "intrinsic" category. Their codegen is special-cased by name in the same way `len` is special-cased today (it's a builtin that lowers to `PUSH_CONST` with the array length resolved at compile time). The names are reserved — user closures cannot shadow them.
 - **Method calls desugar universally** — no type-dispatch table, no method tables on records. `x.foo(a)` ≡ `foo(x, a)` if `foo` is callable. Same model as Rust UFCS.
 
 ---
@@ -35,19 +36,21 @@ Today, every stateful operator must be implemented as a C++ opcode in `cedar/inc
 | Capability | Status | Reference |
 |---|---|---|
 | Array literals `[1,2,3,4]` | ✅ Works | `akkado/src/parser.cpp:609`, `codegen.cpp:222` |
-| Dynamic indexing `arr[i]` | ✅ Works | `ARRAY_INDEX` opcode, `instruction.hpp:161` |
+| Dynamic indexing `arr[i]` | ✅ Works (auto-wraps when `inst.rate == 0`) | `ARRAY_INDEX = 161`, `cedar/include/cedar/opcodes/arrays.hpp:37` |
 | Multi-statement closure bodies | ✅ Works | `parser.cpp:882`, `codegen.cpp:893` |
 | Reassignment within a block | ✅ Works (silent upsert) | `codegen.cpp:568` |
 | Method-call **parsing** | ✅ Works | `parser.cpp:990` |
-| Method-call **codegen** | ❌ Throws E113 | `codegen.cpp:1512` |
-| Sample-and-hold opcode | ✅ Works | `cedar/include/cedar/opcodes/utility.hpp:185` |
-| `select`, `wrap`, `clamp`, `len`, `mod` | ✅ Work | `instruction.hpp:46-47, 140`; builtin table |
+| Method-call **codegen** | ❌ Throws `E113 Method calls not supported in MVP` | `codegen.cpp:1513` |
+| Sample-and-hold opcode | ✅ Works | `cedar/include/cedar/opcodes/utility.hpp:185` (handler), `instruction.hpp:63` (`SAH = 55`) |
+| `clamp`, `wrap`, `select` opcodes | ✅ Work | `CLAMP = 46` (line 52), `WRAP = 47` (line 53), `SELECT = 140`; builtin table at `builtins.hpp:530, 534, 540` |
+| `len` builtin | ✅ Works (compile-time, lowers to `PUSH_CONST`) | `builtins.hpp:694` |
+| `%` modulo binary operator | ❌ Doesn't exist (the `%` token is `Hole`, used for pipe placeholders) | `lexer.cpp:205`, `BinOp` enum has no `Mod` |
 | Cross-block persistence in closures | ❌ No mechanism | — |
 | Standalone edge-detection builtins | ❌ Don't exist | — |
 
 ### What's missing
 
-To write `step` as a userspace closure, a user must be able to (1) detect rising edges of a trigger signal, (2) hold a piece of state across audio blocks, and (3) call the operator with method-style syntax. None of those three are currently available. The compiler accepts `arr.step(trig)` as a parse but the codegen explicitly errors with `E113: Method calls not supported in MVP`. The state-pool / `state_id` mechanism that backs every stateful built-in is not exposed to user code in any form.
+To write `step` as a userspace closure, a user must be able to (1) detect rising edges of a trigger signal, (2) hold a piece of state across audio blocks, and (3) call the operator with method-style syntax. None of those three are currently available. The compiler accepts `arr.step(trig)` as a parse but the codegen explicitly errors with `E113 Method calls not supported in MVP` at `akkado/src/codegen.cpp:1513`. The state-pool / `state_id` mechanism that backs every stateful built-in is not exposed to user code in any form.
 
 ### Current vs proposed
 
@@ -69,8 +72,9 @@ To write `step` as a userspace closure, a user must be able to (1) detect rising
 2. **Add `state(init)` cells** as a first-class value type with `.get()` and `.set(v)` operations. State cells use the existing state-pool / semantic-ID-path mechanism for cross-block persistence. Each `state(...)` call site gets its own slot.
 3. **Rename `SAH` opcode to `EDGE_OP`** and add three modes via `inst.rate`: classic hold (rate 0, current behavior), `gateup` (rate 1), `gatedown` (rate 2), `counter` (rate 3). The existing `sah` builtin keeps working unchanged (lowers to `EDGE_OP rate=0`).
 4. **Add new builtins**: `gateup(sig)`, `gatedown(sig)`, `counter(trig, reset, start)` (with reset/start optional via the default-constants pattern).
-5. **Implement method-call codegen** as universal UFCS desugaring at `akkado/src/codegen.cpp:1512`. Works for any callable in scope — builtins and closures.
-6. **Zero regressions** in existing patches and tests. Existing `sah(in, trig)` calls continue to compile and produce identical bytecode (modulo opcode renaming).
+5. **Implement method-call codegen** as universal UFCS desugaring at the stub in `akkado/src/codegen.cpp:1513`. Works for any callable in scope — builtins and closures.
+6. **Reserve `state`, `get`, `set` as built-in identifiers.** Users cannot define closures with these names — they always resolve to the cell-I/O builtins. This avoids the surprising case where `s.get()` could lex-resolve to a user closure that doesn't understand StateCell args.
+7. **Zero regressions** in existing patches and tests. Existing `sah(in, trig)` calls continue to compile and produce identical bytecode (modulo opcode renaming).
 
 ### Non-Goals
 
@@ -80,7 +84,7 @@ To write `step` as a userspace closure, a user must be able to (1) detect rising
 - **No type checking on `set()` value.** The state cell holds a single float; passing a non-float is undefined for now (matches existing builtin laxness).
 - **No multi-element state cells.** Cells hold one float. Cells of arrays / records are out of scope.
 - **No reactive / change-tracking semantics.** `set()` is immediate; there are no observers, no diff propagation. A state cell is a slot, not a stream.
-- **No new opcodes.** EDGE_OP is a rename of an existing opcode. State cell `.get()` / `.set()` reuse scalar move infrastructure plus state-pool sync (see §6).
+- **No new DSP opcodes.** `EDGE_OP` is a rename of an existing opcode. `STATE_OP` is one new mode-dispatched opcode for cell I/O (init / load / store) — not a DSP operation, just slot access. The "no new opcodes" goal was about not multiplying DSP-level opcodes, not banning all instruction additions.
 - **No PHP-style late binding for method calls.** UFCS resolves `foo` lexically at the call site.
 
 ---
@@ -129,25 +133,27 @@ make_counter = () -> {
 
 ### 4.4 The `step` family in userspace
 
-The simplest form (no reset, no start) using the new `counter` builtin:
+The simplest form (no reset, no start) using the new `counter` builtin and the existing `wrap(value, min, max)` builtin (`builtins.hpp:534`) to keep the index in range:
 
 ```akkado
-step = (arr, trig) -> arr[counter(trig) % len(arr)]
+step = (arr, trig) -> arr[wrap(counter(trig), 0, len(arr))]
 
 // Usage
 [60, 64, 67, 72].step(trigger(4)) |> note(%) |> osc("sin", %) |> out(%, %)
 ```
 
+> **Note:** `ARRAY_INDEX` already wraps by default (`cedar/include/cedar/opcodes/arrays.hpp:55`, `((j % length) + length) % length` when `inst.rate == 0`), so `arr[counter(trig)]` would also work without `wrap()`. The explicit `wrap(..., 0, len(arr))` is used here for clarity and to mirror the bounds semantics of `step_dir` below.
+
 With reset:
 
 ```akkado
-step = (arr, trig, reset) -> arr[counter(trig, reset) % len(arr)]
+step = (arr, trig, reset) -> arr[wrap(counter(trig, reset), 0, len(arr))]
 ```
 
 With reset and start (the full form):
 
 ```akkado
-step = (arr, trig, reset, start) -> arr[counter(trig, reset, start) % len(arr)]
+step = (arr, trig, reset, start) -> arr[wrap(counter(trig, reset, start), 0, len(arr))]
 ```
 
 A directional variant using a state cell directly:
@@ -192,54 +198,69 @@ sig.lp(1200)          // new equivalent
 
 ### 5.1 State cells
 
-A state cell is a new `TypedValue` kind that carries a 32-bit `state_id` (computed from the AST position of the `state(...)` call site, same hashing scheme as builtins). The cell value is a compile-time handle; at runtime it corresponds to a single `float` slot in the state pool.
+A state cell is a new `ValueType` enum entry that carries a 32-bit `state_id` (computed from the AST position of the `state(...)` call site, same hashing scheme as builtins). The cell value is a compile-time handle; at runtime it corresponds to a single `float` slot in the state pool.
 
 **Compile-time representation:**
 
 ```cpp
 // in akkado/include/akkado/typed_value.hpp (extended)
+enum class ValueType : std::uint8_t {
+    Signal, Number, Pattern, Record, Array, String, Function, Void,
+    StateCell,   // new: handle to a state-pool cell slot
+};
+
 struct TypedValue {
-  enum class Kind { Scalar, Array, Record, Pattern, Closure, StateCell };  // StateCell added
-  // ...
-  std::uint32_t cell_state_id;  // populated when Kind == StateCell
+    ValueType type = ValueType::Void;
+    std::uint16_t buffer = 0xFFFF;
+    bool error = false;
+    // ...existing fields...
+    std::uint32_t cell_state_id = 0;  // populated when type == StateCell
 };
 ```
 
 **Runtime state:**
 
 ```cpp
-// in cedar/include/cedar/dsp_state.hpp
+// in cedar/include/cedar/opcodes/dsp_state.hpp (alongside OscState, SAHState, etc.)
 struct CellState {
-  float value;
-  bool initialized;
+    float value = 0.0f;
+    bool initialized = false;   // STATE_OP rate=0 (init) checks this; first touch sets to true
 };
 ```
 
-`CellState` is added to the state-pool variant alongside `OscState`, `EdgeState` (renamed `SAHState`), etc. (Internal name keeps the `FooState` convention used throughout the pool — `CellState` means "state pool entry for a state cell".)
+`CellState` is added to the state-pool variant alongside `OscState`, `EdgeState` (renamed `SAHState`), etc. The internal name keeps the `FooState` convention used throughout the pool.
 
-**`state(init)` codegen:**
+**One new opcode: `STATE_OP`** (mirrors the EDGE_OP mode-dispatch pattern):
+
+| `inst.rate` | Mode | Behavior |
+|---|---|---|
+| 0 | `init` | If `!state.initialized`, write `inst.inputs[0]` (init buffer, sample 0) into `state.value` and set `initialized = true`. Otherwise no-op. Output is a buffer broadcast of `state.value`. |
+| 1 | `load` | Output is a buffer broadcast of `state.value`. No reads from inputs. |
+| 2 | `store` | Write the **last sample** of `inst.inputs[0]` into `state.value`. Output is a buffer broadcast of the new `state.value` (so `set()` can be used in expression position). Per-sample writes would be wasteful and not the semantic we want — state cells are scalar registers, not streams. |
+
+**`state(init)` codegen** (named-builtin special case in `codegen.cpp`, in the same family as `len`):
 
 1. Compute `state_id` from the AST node of the `state` call (semantic-ID path hash, same as existing builtins).
-2. Emit a `CELL_INIT` instruction (see §5.2 for why this isn't a "new opcode") that, on first execution per state slot, writes `init` into the slot. On subsequent invocations it's a no-op.
-3. Return a `TypedValue { Kind::StateCell, cell_state_id = <hash> }`.
+2. Emit a `STATE_OP rate=0` instruction with `inst.state_id = <hash>` and `inst.inputs[0]` = the init buffer.
+3. Return a `TypedValue { type = ValueType::StateCell, cell_state_id = <hash>, buffer = <unused, 0xFFFF> }`.
 
 **`s.get()` codegen:**
 
 1. UFCS desugar: `s.get()` → `get(s)`.
-2. The `get` builtin is intrinsic — it receives the cell's `state_id` at compile time and emits a `CELL_LOAD` instruction that copies the slot's `float` into a fresh per-sample buffer (broadcast as a constant across the block).
+2. `get` is a builtin whose codegen requires its argument to be a `StateCell` TypedValue. It extracts `cell_state_id` and emits `STATE_OP rate=1` with `inst.state_id = cell_state_id`.
 3. Type error if the argument isn't a state cell.
 
 **`s.set(v)` codegen:**
 
 1. UFCS desugar: `s.set(v)` → `set(s, v)`.
-2. The `set` builtin is intrinsic — emits a `CELL_STORE` instruction that takes the **last sample** of `v`'s buffer and writes it to the cell's slot (per-sample writes would be wasteful and is not the semantic we want — state cells are scalar registers, not streams).
-3. Returns the new value as a (constant-broadcast) buffer so `set()` can be used in expression position.
+2. `set` is a builtin whose codegen requires its first argument to be a `StateCell`. It extracts `cell_state_id` and emits `STATE_OP rate=2` with `inst.state_id = cell_state_id` and `inst.inputs[0]` = the value's buffer.
+3. Returns a `Signal` TypedValue whose buffer is the STATE_OP output, so `set()` can be used in expression position.
 
-> **Note on "no new opcodes":** `CELL_INIT`, `CELL_LOAD`, `CELL_STORE` are presented as logical operations. Implementation-wise they are folded into existing opcode infrastructure: each is a thin variant of MOV / SCALAR opcodes that touches the state pool. **[OPEN QUESTION — see §10]** If folding proves impossible without a true new opcode, we add the minimal one needed (one or two opcodes), and document why the no-new-opcodes goal slipped.
+> **Why named builtins instead of a new "intrinsic" category?** This follows an existing pattern: `len(arr)` is a builtin (`builtins.hpp:694`) that lowers to `PUSH_CONST` because the codegen special-cases the name to read the array length at compile time. `state`/`get`/`set` use the same mechanism — they're entries in `builtins.hpp` whose codegen is dispatched by name in `codegen.cpp`'s call handler. No new conceptual category, no `is_intrinsic` flag.
 
 ### 5.2 EDGE_OP (renamed from SAH)
 
-The existing `SAH` opcode handler at `cedar/include/cedar/opcodes/utility.hpp:185-199` is renamed to `op_edge` (file → `edge_op.hpp`). The `Opcode::SAH` enum entry in `instruction.hpp:106` is renamed to `Opcode::EDGE_OP`. Since opcode metadata is auto-generated (`web/scripts/build-opcodes.ts` per CLAUDE.md), the rename propagates everywhere with one regeneration.
+The existing `SAH` opcode handler `op_sah` at `cedar/include/cedar/opcodes/utility.hpp:185` is renamed to `op_edge` and moved to a new file `cedar/include/cedar/opcodes/edge_op.hpp`. The `Opcode::SAH = 55` enum entry at `cedar/include/cedar/vm/instruction.hpp:63` is renamed to `Opcode::EDGE_OP` (value unchanged). Opcode metadata is auto-generated by `web/scripts/generate-opcode-metadata.ts` (run via `bun run build:opcodes`), so the rename propagates everywhere with one regeneration. The dispatch switch in `cedar/src/vm/vm.cpp:484` gets its `case Opcode::SAH:` updated to `case Opcode::EDGE_OP:`.
 
 The handler dispatches on `inst.rate`:
 
@@ -253,25 +274,25 @@ inline void op_edge(ExecutionContext& ctx, const Instruction& inst) {
       const float* input = ctx.buffers->get(inst.inputs[0]);
       const float* trig = ctx.buffers->get(inst.inputs[1]);
       for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        if (state.prev_trig <= 0.0f && trig[i] > 0.0f) state.held = input[i];
-        state.prev_trig = trig[i];
-        out[i] = state.held;
+        if (state.prev_trigger <= 0.0f && trig[i] > 0.0f) state.held_value = input[i];
+        state.prev_trigger = trig[i];
+        out[i] = state.held_value;
       }
       break;
     }
     case 1: { // gateup(sig) — output 1.0 on rising edge of inputs[0]
       const float* sig = ctx.buffers->get(inst.inputs[0]);
       for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        out[i] = (state.prev_trig <= 0.0f && sig[i] > 0.0f) ? 1.0f : 0.0f;
-        state.prev_trig = sig[i];
+        out[i] = (state.prev_trigger <= 0.0f && sig[i] > 0.0f) ? 1.0f : 0.0f;
+        state.prev_trigger = sig[i];
       }
       break;
     }
     case 2: { // gatedown(sig) — output 1.0 on falling edge
       const float* sig = ctx.buffers->get(inst.inputs[0]);
       for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        out[i] = (state.prev_trig > 0.0f && sig[i] <= 0.0f) ? 1.0f : 0.0f;
-        state.prev_trig = sig[i];
+        out[i] = (state.prev_trigger > 0.0f && sig[i] <= 0.0f) ? 1.0f : 0.0f;
+        state.prev_trigger = sig[i];
       }
       break;
     }
@@ -281,14 +302,14 @@ inline void op_edge(ExecutionContext& ctx, const Instruction& inst) {
       const float* start = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
       for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         // reset wins if both fire on the same sample
-        if (reset && state.prev_reset <= 0.0f && reset[i] > 0.0f) {
-          state.held = start ? start[i] : 0.0f;
-        } else if (state.prev_trig <= 0.0f && trig[i] > 0.0f) {
-          state.held = state.held + 1.0f;
+        if (reset && state.prev_reset_trigger <= 0.0f && reset[i] > 0.0f) {
+          state.held_value = start ? start[i] : 0.0f;
+        } else if (state.prev_trigger <= 0.0f && trig[i] > 0.0f) {
+          state.held_value = state.held_value + 1.0f;
         }
-        state.prev_trig = trig[i];
-        if (reset) state.prev_reset = reset[i];
-        out[i] = state.held;
+        state.prev_trigger = trig[i];
+        if (reset) state.prev_reset_trigger = reset[i];
+        out[i] = state.held_value;
       }
       break;
     }
@@ -296,29 +317,29 @@ inline void op_edge(ExecutionContext& ctx, const Instruction& inst) {
 }
 ```
 
-`SAHState` is renamed to `EdgeState` and gains a `prev_reset` field (used only in counter mode):
+`SAHState` (in `cedar/include/cedar/opcodes/dsp_state.hpp:102`) is renamed to `EdgeState` and gains a `prev_reset_trigger` field (used only in counter mode). Field names match the existing `held_value` / `prev_trigger` convention to minimize the rename sweep:
 
 ```cpp
 struct EdgeState {
-  float held = 0.0f;
-  float prev_trig = 0.0f;
-  float prev_reset = 0.0f;  // new — counter mode only
+  float held_value = 0.0f;
+  float prev_trigger = 0.0f;
+  float prev_reset_trigger = 0.0f;  // new — counter mode only
 };
 ```
 
 ### 5.3 UFCS method-call codegen
 
-Replace the stub at `akkado/src/codegen.cpp:1511-1513` with a desugaring pass:
+Replace the `E113` stub at `akkado/src/codegen.cpp:1513-1515` with a desugaring pass:
 
 ```cpp
 case NodeType::MethodCall: {
-  // Children: [receiver, arg1, arg2, ...] (per parser.cpp:1008-1017)
-  // Method name is in n.name_index (string-interned)
+  // Children: [receiver, arg1, arg2, ...] (per parser.cpp:1004-1022)
+  // Method name is stored in node data as IdentifierData (parser.cpp:1005)
   // Desugar to: name(receiver, arg1, arg2, ...)
   //
   // Implementation: rewrite as if the user had written a Call node
   // with the method name as the callee and receiver prepended to args.
-  return visit_call(ast_, node, /*callee_name=*/n.name_index, /*prepend_receiver=*/true);
+  return visit_call(ast_, node, /*callee_name=*/n.identifier_data(), /*prepend_receiver=*/true);
 }
 ```
 
@@ -331,21 +352,22 @@ If the named callable doesn't exist in scope, raise a clear error: `"E113: Metho
 User code:
 
 ```akkado
-step = (arr, trig) -> arr[counter(trig) % len(arr)]
+step = (arr, trig) -> arr[wrap(counter(trig), 0, len(arr))]
 [60, 64, 67, 72].step(trigger(4))
 ```
 
 Compile flow:
 
-1. `step = (arr, trig) -> arr[counter(trig) % len(arr)]` defines a closure in the symbol table.
+1. `step = (arr, trig) -> arr[wrap(counter(trig), 0, len(arr))]` defines a closure in the symbol table.
 2. `[60, 64, 67, 72].step(trigger(4))` parses as a MethodCall on an ArrayLit.
-3. UFCS desugar: `step([60,64,67,72], trigger(4))`.
+3. UFCS desugar (§5.3): `step([60,64,67,72], trigger(4))`.
 4. Closure expansion: codegen visits the closure body with `arr` bound to the array buffer and `trig` bound to the trigger buffer.
 5. `counter(trig)` resolves to `EDGE_OP rate=3 inputs=[trig, ∅, ∅]`. Its `state_id` is hashed from the AST path of the `counter` call inside this specific call site of `step` — so a second `step(...)` invocation with a different array gets a different counter slot.
-6. `% len(arr)` lowers to MOD with `len([60,64,67,72]) = 4` (compile-time known for literal arrays).
-7. `arr[...]` lowers to `ARRAY_INDEX` with wrap mode.
+6. `len(arr)` lowers to `PUSH_CONST` with the compile-time array length (existing builtin behavior).
+7. `wrap(counter, 0, len)` lowers to `WRAP` (`Opcode::WRAP = 47`).
+8. `arr[...]` lowers to `ARRAY_INDEX` (`inst.rate = 0`, the default wrap mode — but at this point the index is already in `[0, len)`, so the wrap is a no-op).
 
-No language-level state-tracking is needed for the closure body — the `counter` builtin (via EDGE_OP) carries the persistent state. For the `step_dir` variant, the state cell created via `state(0)` is what carries the index across blocks.
+No language-level state-tracking is needed for the closure body — the `counter` builtin (via EDGE_OP) carries the persistent state. For the `step_dir` variant, the state cell created via `state(0)` is what carries the index across blocks via `STATE_OP`.
 
 ---
 
@@ -353,20 +375,21 @@ No language-level state-tracking is needed for the closure body — the `counter
 
 | Component | Status | Notes |
 |---|---|---|
-| `cedar` opcode list (`instruction.hpp`) | **Modified** | `SAH` → `EDGE_OP` rename. No additions. |
-| `SAH` opcode handler | **Modified → Renamed** | File rename + multi-mode dispatch on `inst.rate` |
-| `SAHState` | **Renamed** | → `EdgeState`, gains `prev_reset` field |
-| Existing `sah` builtin | **Stays** | Lowers to `EDGE_OP rate=0` — bytecode-compatible |
-| `gateup`, `gatedown`, `counter` builtins | **New** | Entries in `akkado/include/akkado/builtins.hpp` |
-| `state` builtin | **New** | Returns a StateCell typed value |
-| `get`, `set` intrinsics | **New** | Recognized by codegen for StateCell args |
-| `TypedValue` | **Modified** | Adds `Kind::StateCell` and `cell_state_id` |
-| `CellState` | **New** | Added to state-pool variant |
-| MethodCall codegen (`codegen.cpp:1511`) | **Modified** | Stub → UFCS desugar |
-| Auto-generated opcode metadata | **Regenerated** | `bun run build:opcodes` after rename |
+| `cedar` opcode list (`cedar/include/cedar/vm/instruction.hpp`) | **Modified** | `SAH` → `EDGE_OP` rename (value 55, line 63). New `STATE_OP` entry. |
+| `SAH` opcode handler (`cedar/include/cedar/opcodes/utility.hpp:185`) | **Moved + extended** | Moved to new `edge_op.hpp` as `op_edge` with multi-mode dispatch on `inst.rate` |
+| `STATE_OP` handler | **New** | New file `cedar/include/cedar/opcodes/state_op.hpp` with mode dispatch on `inst.rate` |
+| Opcode dispatch switch (`cedar/src/vm/vm.cpp:484`) | **Modified** | Update `case Opcode::SAH` → `case Opcode::EDGE_OP`; add `case Opcode::STATE_OP` |
+| `SAHState` (`cedar/include/cedar/opcodes/dsp_state.hpp:102`) | **Renamed** | → `EdgeState`, gains `prev_reset_trigger` field. Existing fields keep names: `held_value`, `prev_trigger` |
+| `CellState` (in same `dsp_state.hpp`) | **New** | Added to state-pool variant |
+| Existing `sah` builtin (`builtins.hpp:603`) | **Stays** | Lowers to `EDGE_OP rate=0` — bytecode-compatible |
+| `gateup`, `gatedown`, `counter` builtins | **New** | New entries in `akkado/include/akkado/builtins.hpp` |
+| `state`, `get`, `set` builtins | **New** | New entries in `builtins.hpp`, codegen special-cased by name in `codegen.cpp` (same pattern as `len`). Names reserved — cannot be shadowed. |
+| `TypedValue` / `ValueType` (`akkado/include/akkado/typed_value.hpp:13`) | **Modified** | Add `ValueType::StateCell` and `cell_state_id` field |
+| MethodCall codegen (`akkado/src/codegen.cpp:1513`) | **Modified** | E113 stub → UFCS desugar |
+| Auto-generated opcode metadata | **Regenerated** | Run `cd web && bun run build:opcodes` after rename + STATE_OP addition. Script: `web/scripts/generate-opcode-metadata.ts` |
 | `web/wasm/nkido_wasm.cpp` | **Stays** | Uses generated opcode metadata; rebuild only |
 | `tools/nkido-cli/bytecode_dump.cpp` | **Stays** | Same |
-| Existing tests | **Stays** | Should pass with no changes; SAH→EDGE_OP propagates via metadata |
+| Existing tests | **Modified (mechanical)** | Any test referencing `Opcode::SAH` or `SAHState` by name needs the rename. Behavior tests pass unchanged. |
 | Existing patches (`web/static/patches/*.akk`) | **Stays** | `sah(in, trig)` still works |
 | Documentation (`web/static/docs/`) | **Modified** | New entries for state cells, gateup, gatedown, counter, methods |
 
@@ -378,13 +401,14 @@ No language-level state-tracking is needed for the closure body — the `counter
 
 | File | Change |
 |---|---|
-| `cedar/include/cedar/vm/instruction.hpp` | Rename `Opcode::SAH` → `Opcode::EDGE_OP` |
-| `cedar/include/cedar/opcodes/utility.hpp` | Move `op_sah` to a new file (next row), leave a forwarding include if needed |
-| `cedar/include/cedar/dsp_state.hpp` | Rename `SAHState` → `EdgeState`; add `prev_reset` |
-| `cedar/src/vm/dispatch.cpp` (or wherever opcode switch lives) | Update to reference `EDGE_OP` |
-| `akkado/include/akkado/builtins.hpp` | Update `sah` entry to use `EDGE_OP rate=0`; add `gateup`, `gatedown`, `counter`, `state`, `get`, `set` entries |
-| `akkado/include/akkado/typed_value.hpp` | Add `Kind::StateCell`, `cell_state_id` field |
-| `akkado/src/codegen.cpp` | Replace MethodCall stub at line 1511 with UFCS desugar; add StateCell-aware codegen for `state`/`get`/`set` |
+| `cedar/include/cedar/vm/instruction.hpp` | Rename `SAH = 55` → `EDGE_OP = 55` (line 63). Add new `STATE_OP` enum entry (next free slot). |
+| `cedar/include/cedar/opcodes/utility.hpp` | Remove `op_sah` (line 185), move into new `edge_op.hpp` |
+| `cedar/include/cedar/opcodes/dsp_state.hpp` | Rename `SAHState` → `EdgeState` (line 102); add `prev_reset_trigger`. Add `CellState` struct. Register both in state-pool variant. |
+| `cedar/src/vm/vm.cpp` | Main switch at line 484: `case Opcode::SAH` → `case Opcode::EDGE_OP`; add `case Opcode::STATE_OP` |
+| `akkado/include/akkado/builtins.hpp` | Update `sah` entry (line 603) to use `EDGE_OP rate=0`; add `gateup` (rate=1), `gatedown` (rate=2), `counter` (rate=3), `state`, `get`, `set` entries |
+| `akkado/include/akkado/typed_value.hpp` | Add `ValueType::StateCell` to enum (line 13-22); add `cell_state_id` field to `TypedValue` struct |
+| `akkado/src/codegen.cpp` | Replace MethodCall E113 stub (lines 1513-1515) with UFCS desugar; add StateCell-aware codegen branches for `state`/`get`/`set` (same dispatch pattern as the existing `len` special case) |
+| `akkado/src/parser.cpp` | Reserve `state`/`get`/`set` as identifiers — error if user tries to bind them as closure names |
 | `web/static/docs/reference/builtins/` | New docs pages for state cells, edge primitives, counter |
 
 ### Create
@@ -392,6 +416,7 @@ No language-level state-tracking is needed for the closure body — the `counter
 | File | Purpose |
 |---|---|
 | `cedar/include/cedar/opcodes/edge_op.hpp` | New home for `op_edge` (the renamed/extended SAH handler) |
+| `cedar/include/cedar/opcodes/state_op.hpp` | New home for `op_state` (init/load/store via `inst.rate`) |
 | `web/static/docs/reference/builtins/state.md` | Reference for `state`, `get`, `set` |
 | `web/static/docs/reference/builtins/edge.md` | Reference for `gateup`, `gatedown`, `counter` |
 | `web/static/docs/reference/language/methods.md` | Reference for UFCS method calls |
@@ -399,7 +424,9 @@ No language-level state-tracking is needed for the closure body — the `counter
 | `akkado/tests/test_methods.cpp` | UFCS regression tests |
 | `akkado/tests/test_state.cpp` | State cell semantics tests |
 | `cedar/tests/test_edge_op.cpp` | Multi-mode EDGE_OP tests (replacing or augmenting `test_op_sah`) |
+| `cedar/tests/test_state_op.cpp` | STATE_OP init/load/store tests |
 | `experiments/test_op_edge.py` | Python opcode test for all four EDGE_OP modes |
+| `experiments/test_op_state.py` | Python opcode test for STATE_OP modes |
 
 ### Stays — explicitly no change
 
@@ -419,12 +446,13 @@ No language-level state-tracking is needed for the closure body — the `counter
 **Goal**: Land the opcode rename and three new modes with no other language changes. Existing `sah` continues to work.
 
 Files to modify:
-- `cedar/include/cedar/vm/instruction.hpp` — rename enum
-- `cedar/include/cedar/opcodes/utility.hpp` — remove `op_sah`
+- `cedar/include/cedar/vm/instruction.hpp` — rename enum (line 63: `SAH = 55` → `EDGE_OP = 55`)
+- `cedar/include/cedar/opcodes/utility.hpp` — remove `op_sah` (line 185)
 - `cedar/include/cedar/opcodes/edge_op.hpp` — new, contains `op_edge` with mode dispatch
-- `cedar/include/cedar/dsp_state.hpp` — `SAHState` → `EdgeState`
-- `cedar/src/vm/dispatch.cpp` — update opcode-to-handler mapping
-- `akkado/include/akkado/builtins.hpp` — keep `sah` (rate=0); add `gateup` (rate=1, 1 input), `gatedown` (rate=2, 1 input), `counter` (rate=3, 1+2 optional inputs)
+- `cedar/include/cedar/opcodes/dsp_state.hpp` — `SAHState` → `EdgeState` (line 102), add `prev_reset_trigger`, register in state-pool variant
+- `cedar/src/vm/vm.cpp` — main switch (line 484): `case Opcode::SAH` → `case Opcode::EDGE_OP`
+- `akkado/include/akkado/builtins.hpp` — keep `sah` (rate=0, line 603); add `gateup` (rate=1, 1 input), `gatedown` (rate=2, 1 input), `counter` (rate=3, 1+2 optional inputs)
+- Any cedar test referencing `Opcode::SAH` or `SAHState` directly — mechanical rename
 
 - [ ] Rename opcode enum and state struct
 - [ ] Implement multi-mode handler with the four cases
@@ -437,7 +465,7 @@ Files to modify:
 ### Phase 2 — UFCS method-call codegen
 
 **Status**: TODO
-**Goal**: Replace the E113 stub at `codegen.cpp:1512` with a working UFCS desugar.
+**Goal**: Replace the E113 stub at `codegen.cpp:1513` with a working UFCS desugar.
 
 Files to modify:
 - `akkado/src/codegen.cpp` — MethodCall case
@@ -449,26 +477,32 @@ Files to modify:
 - [ ] Mixed pipe + method tests: `sig.lp(1200) |> hp(%, 200)` — verify both lower correctly
 - [ ] Update `web/static/docs/reference/language/methods.md`
 
-### Phase 3 — State cells (`state`, `get`, `set`)
+### Phase 3 — State cells (`state`, `get`, `set`) + STATE_OP
 
 **Status**: TODO
-**Goal**: Add the StateCell typed value and the three intrinsics.
+**Goal**: Add the `StateCell` value type, the new `STATE_OP` opcode (init/load/store via mode dispatch), and the three name-reserved builtins.
 
 Files to modify:
-- `akkado/include/akkado/typed_value.hpp` — `Kind::StateCell` + `cell_state_id`
-- `akkado/include/akkado/builtins.hpp` — `state`, `get`, `set` entries (intrinsic flag)
-- `akkado/src/codegen.cpp` — StateCell-aware codegen
-- `cedar/include/cedar/dsp_state.hpp` — `CellState` struct, register in state-pool variant
-- `cedar/src/vm/...` — handlers for cell load/init/store (or extension of existing scalar move opcodes — see §10 open question)
+- `cedar/include/cedar/vm/instruction.hpp` — add `STATE_OP` enum entry
+- `cedar/include/cedar/opcodes/state_op.hpp` — new file with `op_state` mode dispatch (init/load/store)
+- `cedar/include/cedar/opcodes/dsp_state.hpp` — add `CellState { float value; bool initialized; }`, register in state-pool variant
+- `cedar/src/vm/vm.cpp` — add `case Opcode::STATE_OP` to main switch
+- `akkado/include/akkado/typed_value.hpp` — `ValueType::StateCell` + `cell_state_id` field
+- `akkado/include/akkado/builtins.hpp` — `state`, `get`, `set` entries (codegen dispatched by name)
+- `akkado/src/codegen.cpp` — name-dispatched branches for `state`/`get`/`set` in the call handler (same pattern as existing `len` special case)
+- `akkado/src/parser.cpp` — reserve `state`/`get`/`set` as identifiers (cannot be bound by user closures)
 
+- [ ] `STATE_OP` opcode added; auto-generated metadata regenerated (`bun run build:opcodes`)
 - [ ] `CellState` registered in state-pool
-- [ ] `state(init)` returns a StateCell value with hashed state_id
-- [ ] `s.get()` reads the slot (UFCS desugars to `get(s)`)
-- [ ] `s.set(v)` writes the slot (UFCS desugars to `set(s, v)`)
+- [ ] `state(init)` emits `STATE_OP rate=0` and returns a `StateCell` TypedValue with hashed `cell_state_id`
+- [ ] `s.get()` desugars (via Phase 2 UFCS) to `get(s)` and emits `STATE_OP rate=1`
+- [ ] `s.set(v)` desugars to `set(s, v)` and emits `STATE_OP rate=2`
 - [ ] Multiple `state(...)` call sites get distinct slots
 - [ ] Closure invocations at different AST positions get distinct slots
 - [ ] Type errors on `get`/`set` of non-StateCell args
-- [ ] Tests in `akkado/tests/test_state.cpp`
+- [ ] Reserved-name error: defining a closure named `state` / `get` / `set` produces a clear parse error
+- [ ] Hot-swap: cell value preserved when AST position unchanged, even if the `init` literal changed (see §9)
+- [ ] Tests in `akkado/tests/test_state.cpp` and `cedar/tests/test_state_op.cpp`
 - [ ] Update docs
 
 ### Phase 4 — Userspace `step` family + demo patch
@@ -500,13 +534,15 @@ Files to create:
 |---|---|---|
 | `counter` reset and trig fire on the same sample | Reset wins — held value becomes `start`, increment skipped that sample | Predictable; matches typical hardware-counter behavior |
 | `gateup(constant)` where constant is non-zero | Outputs 1.0 only on the very first sample after compile (rising edge from initial 0) | Matches the established `prev <= 0 && curr > 0` convention; not a special case |
-| Empty array: `[].step(trig)` | Compile error from `% len(arr) = % 0`, surfaced as `E???: division by zero` or similar | `len = 0` is degenerate; user must provide a non-empty array |
+| Empty array: `[].step(trig)` | `wrap(x, 0, 0)` — runtime divides by zero internally; `ARRAY_INDEX` falls back to `out = 0.0` (`arrays.hpp:44-47`) | `len = 0` is degenerate; user gets silence rather than a crash |
 | `state(init)` called inside a closure called twice in a patch | Each call site gets its own slot (different semantic-ID paths) | Matches existing builtin state_id behavior; multiple steppers don't share state |
 | Same `state(...)` AST position re-visited via recursion | Same slot — recursion shares state | Matches state-pool semantics; if user wants distinct state, they call `state()` from a closure factory |
 | `s.set(stream)` where `stream` varies sample-by-sample | Last sample of the block is written to the slot | State cells are scalar registers; per-sample writes would create a contention model that doesn't match the storage semantic |
-| `s.get()` before any `set()` | Returns the `init` value passed to `state(...)` | `CellState.initialized` ensures this |
+| `s.get()` before any `set()` | Returns the `init` value passed to `state(...)` | `CellState.initialized` is `false` on first `STATE_OP rate=0`, which writes `init` and flips the flag |
 | Hot-swap: code reloaded with same closure structure | Cell slots preserved by semantic-ID hashing | Same as builtin state preservation |
 | Hot-swap: `step` closure body changes (e.g., new operations) | Existing slot value preserved if the `state(...)` AST position is still the same | Matches existing hot-swap semantics |
+| Hot-swap: `state(0)` edited to `state(5)` at the same AST position | Existing slot value preserved; the new init literal is **ignored** because `CellState.initialized` is already `true`. To force re-init, the user must move the `state(...)` to a different AST position. | Matches builtin hot-swap semantics — state survives code edits as long as the binding slot is structurally unchanged. |
+| User defines a closure named `state` / `get` / `set` | Parse error: `E???: '<name>' is a reserved built-in identifier and cannot be redefined` | Avoids the trap where `s.get()` could lex-resolve to a user closure that doesn't understand StateCell args. |
 | `arr.foo(args)` where `foo` is not in scope | Error: `E113: Method 'foo' not found — must be a builtin or closure in scope` | UFCS only resolves lexically |
 | `arr.foo(args)` where `foo` is in scope but not callable (e.g., `foo` is a number) | Error: `E???: 'foo' is not callable` | Same error as `foo(arr, args)` would produce |
 | Negative count from `counter` (impossible in mode 3 as written, but worth noting) | N/A — counter only increments. For ping-pong / decrement use `step_dir` with state cells directly | Keeps `counter` simple |
@@ -517,13 +553,13 @@ Files to create:
 
 ## 10. Open Questions
 
-- **Q1: Is `CELL_LOAD` / `CELL_STORE` truly a "no new opcode" change?** The current scalar / MOV instructions don't read or write the state pool. Implementing state cell load/store may require either (a) extending one existing opcode to optionally touch the state pool via a flag, (b) accepting that 1–2 small new opcodes are warranted for cell I/O, or (c) folding cell ops into EDGE_OP itself with a dedicated mode. Option (c) is appealing but conflates EDGE_OP's edge-driven semantic with non-edge-driven slot I/O. **Decision needed before Phase 3.** Recommendation: accept that cell I/O is a thin instruction-level addition (CELL_LOAD / CELL_STORE) — they're trivial mechanically and the "no new opcodes" spirit was about not multiplying DSP-level opcodes, not about banning all instruction additions.
+- **Q1: ~~Is `CELL_LOAD` / `CELL_STORE` truly a "no new opcode" change?~~** **Resolved.** Cell I/O ships as a single new mode-dispatched opcode `STATE_OP` (rate 0 = init, rate 1 = load, rate 2 = store). See §5.1. The PRD's "no new opcodes" goal was scoped to DSP-level opcodes; one slot-I/O opcode is the minimum and follows the existing `inst.rate` mode-dispatch pattern.
 
 - **Q2: Should `state` accept a non-constant init?** E.g. `state(some_signal)`. The init is sampled once per slot lifetime; using a signal is meaningless for non-trivial signals (only the value at compile-evaluation time matters). Recommend: warn if `init` is not a literal or compile-time-constant expression.
 
-- **Q3: Should `set()` return the new value or unit?** Returning the value enables expression-position use (`arr[s.set(s.get()+1)]`). Returning unit is more "command-like". Recommendation: return the new value.
+- **Q3: Should `set()` return the new value or unit?** **Resolved.** Returning the value enables expression-position use (`arr[s.set(s.get()+1)]`). `set()` returns the new value broadcast as a buffer (Signal TypedValue).
 
-- **Q4: Method-call resolution order — local closure vs builtin of the same name.** If a user defines a closure `lp` shadowing the builtin, `sig.lp(1200)` should hit the closure. Confirm this is fine and document it as a feature, not a bug.
+- **Q4: ~~Method-call resolution order — local closure vs builtin of the same name.~~** **Resolved.** Lexical shadowing wins for normal builtins (a user closure `lp` shadows the `lp` builtin at `sig.lp(1200)`). The three cell-I/O names (`state`, `get`, `set`) are special — they are **reserved** at parse time and cannot be redefined by user closures. See Goal 6 and §9 edge cases. Rationale: silent shadowing of cell I/O would let `s.get()` route to a user closure that doesn't understand `StateCell` args, producing a confusing type error far from the cause.
 
 ---
 
@@ -570,7 +606,25 @@ Akkado tests in `akkado/tests/test_methods.cpp`:
 - error: shadowing builtin with non-callable produces "not callable" error
 ```
 
-### Phase 3 — State cells
+### Phase 3 — State cells + STATE_OP
+
+Cedar tests in `cedar/tests/test_state_op.cpp` (Catch2):
+
+```
+STATE_OP rate=0 (init)
+  - first execution writes inst.inputs[0][0] to slot, sets initialized=true
+  - subsequent executions are no-ops (slot value preserved)
+  - output buffer is broadcast of slot value
+
+STATE_OP rate=1 (load)
+  - output is broadcast of slot value
+  - no input reads
+
+STATE_OP rate=2 (store)
+  - last sample of inst.inputs[0] is written to slot
+  - output buffer is broadcast of new slot value
+  - per-block stability: store in block N is visible to load in block N+1
+```
 
 Akkado tests in `akkado/tests/test_state.cpp`:
 
@@ -582,7 +636,10 @@ Akkado tests in `akkado/tests/test_state.cpp`:
 - state() inside a closure invoked at different sites has independent storage per site
 - get(non_state_cell) raises type error
 - set(non_state_cell, v) raises type error
+- defining `state = (...) -> ...` raises a "reserved identifier" parse error
+- defining `get = ...` and `set = ...` raises the same error
 - hot-swap: state cell value preserved if AST position unchanged
+- hot-swap: editing `state(0)` to `state(5)` at same AST position keeps existing slot value
 ```
 
 ### Phase 4 — Userspace `step` end-to-end
@@ -600,13 +657,15 @@ Akkado tests in `akkado/tests/test_state.cpp`:
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
 ./build/cedar/tests/cedar_tests "[edge_op]"
+./build/cedar/tests/cedar_tests "[state_op]"
 ./build/akkado/tests/akkado_tests "[methods]"
 ./build/akkado/tests/akkado_tests "[state]"
 
 cd experiments && uv run python test_op_edge.py
+cd experiments && uv run python test_op_state.py
 
 cd web
-bun run build:opcodes      # regenerate opcode metadata after EDGE_OP rename
+bun run build:opcodes      # regenerate opcode metadata after EDGE_OP rename + STATE_OP addition
 bun run build:docs         # rebuild docs index after new reference pages
 bun run dev                # audition stepper-demo.akk
 bun run check              # type-check
@@ -614,8 +673,9 @@ bun run check              # type-check
 
 ### Acceptance criteria
 
-- All existing tests pass with no test code changes (other than `SAH` → `EDGE_OP` rename in any direct opcode-name references in tests).
+- All existing behavioral tests pass. Mechanical churn allowed: any test referencing `Opcode::SAH` or `SAHState` by name needs the rename — but no test logic changes.
 - Existing patches (any `.akk` using `sah(in, trig)`) compile and produce bit-identical output.
 - All four `step` variants and `step_dir` are implementable and correct in `web/static/patches/stepper-demo.akk`.
 - New reference docs link from the F1 lookup index (run `bun run build:docs`).
-- No new C++ opcodes added, OR if Q1 forces 1–2 minimal cell-I/O opcodes, that decision is documented in the PRD before merge.
+- Exactly one new DSP-level opcode (`STATE_OP`) is added, alongside the `SAH` → `EDGE_OP` rename. The decision and rationale are captured in §1 Major Design Decisions and §10 Q1.
+- The `web/wasm/nkido_wasm.cpp` and `tools/nkido-cli/bytecode_dump.cpp` builds pass after `bun run build:opcodes` regenerates `cedar/include/cedar/generated/opcode_metadata.hpp` (no source changes needed in those files).
