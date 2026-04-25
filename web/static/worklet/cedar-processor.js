@@ -16,6 +16,8 @@ class CedarProcessor extends AudioWorkletProcessor {
 		this.outputRightPtr = 0;
 		this.blockSize = 128;
 		this.pendingProgram = null; // Pre-extracted compile result for loadCompiledProgram()
+		this.pendingLoadRetry = false; // Set when load hit SlotBusy; retried from process() each block
+		this.pendingLoadRefreshId = 0; // ID of the latest refresh request awaiting load
 
 		// Queue messages until module is ready
 		this.messageQueue = [];
@@ -136,7 +138,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 				break;
 
 			case 'loadCompiledProgram':
-				this.loadCompiledProgram();
+				this.loadCompiledProgram(msg.refreshId);
 				break;
 
 			case 'loadProgram':
@@ -660,14 +662,18 @@ class CedarProcessor extends AudioWorkletProcessor {
 	 * Load the compiled program after samples are ready.
 	 * Uses pre-extracted data from compile() - no WASM compile result access needed.
 	 */
-	loadCompiledProgram() {
+	loadCompiledProgram(refreshId) {
 		if (!this.module) {
-			this.port.postMessage({ type: 'error', message: 'Module not initialized' });
+			this.port.postMessage({ type: 'error', message: 'Module not initialized', refreshId });
 			return;
 		}
 
+		if (refreshId !== undefined) {
+			this.pendingLoadRefreshId = refreshId;
+		}
+
 		if (!this.pendingProgram) {
-			this.port.postMessage({ type: 'error', message: 'No pending program to load' });
+			this.port.postMessage({ type: 'error', message: 'No pending program to load', refreshId: this.pendingLoadRefreshId });
 			return;
 		}
 
@@ -679,7 +685,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 		// Allocate and copy bytecode to WASM memory
 		let bytecodePtr = this.module._nkido_malloc(bytecode.length);
 		if (bytecodePtr === 0) {
-			this.port.postMessage({ type: 'error', message: 'Failed to allocate bytecode' });
+			this.port.postMessage({ type: 'error', message: 'Failed to allocate bytecode', refreshId: this.pendingLoadRefreshId });
 			return;
 		}
 
@@ -690,19 +696,20 @@ class CedarProcessor extends AudioWorkletProcessor {
 			const result = this.module._cedar_load_program(bytecodePtr, bytecode.length);
 
 			if (result === 1) {
-				// SlotBusy - all slots occupied (crossfade in progress)
-				// Keep pendingProgram for retry - DO NOT clear it here
-				console.warn('[CedarProcessor] Slot busy - VM is crossfading');
+				// SlotBusy - all slots are occupied (crossfade in progress).
+				// Keep pendingProgram and arm a retry from process(); the audio
+				// thread is the only thing that can free a slot.
 				this.module._nkido_free(bytecodePtr);
 				bytecodePtr = 0; // Prevent double-free in finally
-				this.port.postMessage({ type: 'error', message: 'VM busy - crossfade in progress, try again' });
+				this.pendingLoadRetry = true;
 				return;
 			}
 
 			if (result !== 0) {
 				console.error('[CedarProcessor] Load failed with code:', result);
 				this.pendingProgram = null; // Clear on permanent error
-				this.port.postMessage({ type: 'error', message: `Load failed with code ${result}` });
+				this.pendingLoadRetry = false;
+				this.port.postMessage({ type: 'error', message: `Load failed with code ${result}`, refreshId: this.pendingLoadRefreshId });
 				return;
 			}
 
@@ -721,7 +728,8 @@ class CedarProcessor extends AudioWorkletProcessor {
 			const currentInst = this.module._cedar_debug_current_slot_instruction_count?.() ?? 'N/A';
 			console.log(`[CedarProcessor] Program loaded successfully: pendingSwap=${hasPendingSwap} swapCount=${swapCount} instructions=${currentInst}`);
 			this.pendingProgram = null; // Clear only on success
-			this.port.postMessage({ type: 'programLoaded' });
+			this.pendingLoadRetry = false;
+			this.port.postMessage({ type: 'programLoaded', refreshId: this.pendingLoadRefreshId });
 
 		} finally {
 			// Guard against double-free (bytecodePtr set to 0 on SlotBusy)
@@ -1401,6 +1409,14 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 		if (!this.isInitialized || !this.module) {
 			return true;
+		}
+
+		// Retry a SlotBusy load. The audio thread is the only thing that can
+		// free a slot (by advancing the crossfade), so retry from here every
+		// block until the load succeeds. Crossfades complete in 3-5 blocks.
+		if (this.pendingLoadRetry && this.pendingProgram) {
+			this.pendingLoadRetry = false;
+			this.loadCompiledProgram();
 		}
 
 		// Initialize diagnostic counters

@@ -27,6 +27,7 @@ add_executable(cedar_tests
     test_state_pool.cpp
     test_env_map.cpp
     test_crossfade.cpp
+    test_hot_swap.cpp
     test_sample_bank.cpp
     test_memory_stress.cpp
     test_sequence.cpp

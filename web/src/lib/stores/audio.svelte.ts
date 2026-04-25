@@ -290,6 +290,10 @@ function createAudioEngine() {
 	// Compile result callback (resolved when worklet responds)
 	let compileResolve: ((result: CompileResult) => void) | null = null;
 
+	// Monotonic ID for load requests; lets the worklet tag responses so
+	// overlapping refreshes resolve their own promises.
+	let loadRefreshCounter = 0;
+
 	// Builtins metadata cache
 	let builtinsCache: BuiltinsData | null = null;
 	let builtinsResolve: ((data: BuiltinsData | null) => void) | null = null;
@@ -1007,56 +1011,42 @@ function createAudioEngine() {
 			state.isLoadingSamples = false;
 		}
 
-		// Step 3: Load the compiled program with retry on SlotBusy
-		const maxRetries = 5;
-		const retryDelayMs = 20; // ~7.5 blocks (crossfade is typically 3-4 blocks)
+		// Step 3: Load the compiled program. The worklet retries SlotBusy from
+		// process() each block, so we just wait for the tagged response.
 		const node = workletNode; // Capture for closure (TypeScript null-check)
+		const refreshId = ++loadRefreshCounter;
 
-		for (let attempt = 0; attempt < maxRetries; attempt++) {
-			const loadResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-				const timeout = setTimeout(() => resolve({ success: false, error: 'Load timeout' }), 1000);
-
-				const handler = (event: MessageEvent) => {
-					if (event.data.type === 'programLoaded') {
-						clearTimeout(timeout);
-						node.port.removeEventListener('message', handler);
-						resolve({ success: true });
-					} else if (event.data.type === 'error' && event.data.message?.includes('busy')) {
-						clearTimeout(timeout);
-						node.port.removeEventListener('message', handler);
-						resolve({ success: false, error: 'SlotBusy' });
-					} else if (event.data.type === 'error') {
-						clearTimeout(timeout);
-						node.port.removeEventListener('message', handler);
-						resolve({ success: false, error: event.data.message });
-					}
-				};
-				node.port.addEventListener('message', handler);
-				node.port.postMessage({ type: 'loadCompiledProgram' });
-			});
-
-			if (loadResult.success) {
-				return compileResult;
-			}
-
-			if (loadResult.error === 'SlotBusy' && attempt < maxRetries - 1) {
-				console.log(`[AudioEngine] Slot busy, retrying load (attempt ${attempt + 2}/${maxRetries})...`);
-				await new Promise((r) => setTimeout(r, retryDelayMs));
-				continue;
-			}
-
-			// Non-retryable error or exhausted retries
-			console.error('[AudioEngine] Load failed:', loadResult.error);
-			return {
-				success: false,
-				diagnostics: [{ severity: 2, message: loadResult.error || 'Load failed', line: 1, column: 1 }]
+		const loadResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+			let timeout: ReturnType<typeof setTimeout>;
+			const handler = (event: MessageEvent) => {
+				const data = event.data;
+				if (data.refreshId !== refreshId) return;
+				if (data.type === 'programLoaded') {
+					clearTimeout(timeout);
+					node.port.removeEventListener('message', handler);
+					resolve({ success: true });
+				} else if (data.type === 'error') {
+					clearTimeout(timeout);
+					node.port.removeEventListener('message', handler);
+					resolve({ success: false, error: data.message });
+				}
 			};
+			timeout = setTimeout(() => {
+				node.port.removeEventListener('message', handler);
+				resolve({ success: false, error: 'Audio engine unresponsive (timeout)' });
+			}, 5000);
+			node.port.addEventListener('message', handler);
+			node.port.postMessage({ type: 'loadCompiledProgram', refreshId });
+		});
+
+		if (loadResult.success) {
+			return compileResult;
 		}
 
-		// Should not reach here, but just in case
+		console.error('[AudioEngine] Load failed:', loadResult.error);
 		return {
 			success: false,
-			diagnostics: [{ severity: 2, message: 'Load failed after retries', line: 1, column: 1 }]
+			diagnostics: [{ severity: 2, message: loadResult.error || 'Load failed', line: 1, column: 1 }]
 		};
 	}
 

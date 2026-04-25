@@ -20,6 +20,7 @@
 
 	let editorContainer: HTMLDivElement;
 	let view: EditorView | null = null;
+	let pulseKey = $state(0);
 
 	// Map superscript Unicode to ASCII ^N (fixes macOS text substitution)
 	const superscriptMap: Record<string, string> = {
@@ -226,6 +227,16 @@
 		}
 	});
 
+	// Bump pulseKey on every successful evaluate so the status indicator
+	// flashes — confirms Ctrl+Enter ran even when the audio output is
+	// identical (e.g. unchanged code or stylistic edits).
+	$effect(() => {
+		const compileTime = editorStore.lastCompileTime;
+		if (compileTime) {
+			pulseKey = compileTime;
+		}
+	});
+
 	// Listen for instruction highlight events from DebugPanel
 	function handleInstructionHighlight(event: CustomEvent<{ source: SourceLocation | null }>) {
 		if (view) {
@@ -275,7 +286,9 @@
 			{#if editorStore.hasUnsavedChanges}
 				<span class="status-indicator modified" title="Unsaved changes">Modified</span>
 			{:else if editorStore.lastCompileTime}
-				<span class="status-indicator compiled" title="Code evaluated">Ready</span>
+				{#key pulseKey}
+					<span class="status-indicator compiled pulse" title="Code evaluated">Ready</span>
+				{/key}
 			{/if}
 		</div>
 		<div class="status-center">
@@ -351,6 +364,21 @@
 	.status-indicator.compiled {
 		background-color: rgba(63, 185, 80, 0.2);
 		color: var(--accent-secondary);
+	}
+
+	.status-indicator.pulse {
+		animation: refresh-pulse 600ms ease-out;
+	}
+
+	@keyframes refresh-pulse {
+		0% {
+			background-color: rgba(63, 185, 80, 0.7);
+			box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5);
+		}
+		100% {
+			background-color: rgba(63, 185, 80, 0.2);
+			box-shadow: 0 0 0 6px rgba(63, 185, 80, 0);
+		}
 	}
 
 	.status-error {
