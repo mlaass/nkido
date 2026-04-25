@@ -330,35 +330,37 @@ TEST_CASE("Signal-rate conditionals", "[conditionals]") {
 ## Implementation Checklist
 
 ### Phase 1: Function Syntax Tests (verify existing implementation)
-- [ ] Add test cases for `gt`, `lt`, `gte`, `lte`, `eq`, `neq`
-- [ ] Add test cases for `band`, `bor`, `bnot`
-- [ ] Add test cases for `select`
-- [ ] Verify all tests pass
+- [x] Add test cases for `gt`, `lt`, `gte`, `lte`, `eq`, `neq`
+- [x] Add test cases for `band`, `bor`, `bnot`
+- [x] Add test cases for `select`
+- [x] Verify all tests pass
 
 ### Phase 2: Lexer Changes
-- [ ] Add tokens: `TOKEN_GT`, `TOKEN_LT`, `TOKEN_GTE`, `TOKEN_LTE`
-- [ ] Add tokens: `TOKEN_EQ_EQ`, `TOKEN_NEQ`
-- [ ] Add tokens: `TOKEN_AND_AND`, `TOKEN_OR_OR`, `TOKEN_BANG`
-- [ ] Handle `>` vs `>=`, `<` vs `<=`, `=` vs `==`, `!` vs `!=`
-- [ ] Handle `|` vs `||` vs `|>`, `&` vs `&&`
+- [x] Add tokens: `TOKEN_GT`, `TOKEN_LT`, `TOKEN_GTE`, `TOKEN_LTE`
+- [x] Add tokens: `TOKEN_EQ_EQ`, `TOKEN_NEQ`
+- [x] Add tokens: `TOKEN_AND_AND`, `TOKEN_OR_OR`, `TOKEN_BANG`
+- [x] Handle `>` vs `>=`, `<` vs `<=`, `=` vs `==`, `!` vs `!=`
+- [x] Handle `|` vs `||` vs `|>`, `&` vs `&&`
 
 ### Phase 3: Parser Changes
-- [ ] Add precedence for comparison operators
-- [ ] Add precedence for logic operators
-- [ ] Add infix parsing rules
-- [ ] Add prefix parsing for `!`
-- [ ] Desugar to function call AST nodes
+- [x] Add precedence for comparison operators
+- [x] Add precedence for logic operators
+- [x] Add infix parsing rules
+- [x] Add prefix parsing for `!`
+- [x] Desugar to function call AST nodes
 
 ### Phase 4: Integration Tests
-- [ ] Add infix syntax tests
-- [ ] Add precedence tests
-- [ ] Add signal-rate tests
-- [ ] Run full test suite
+- [x] Add infix syntax tests
+- [x] Add precedence tests
+- [x] Add runtime value tests (akkado source → VM execution → buffer assertions, including epsilon equality and negative-falsy `select`; see `akkado/tests/test_codegen.cpp` `[conditionals][runtime]`)
+- [x] Add direct opcode unit tests (`cedar/tests/test_vm.cpp` `[opcodes][logic]`)
+- [x] Run full test suite
 
 ### Phase 5: Documentation
-- [ ] Update language reference
-- [ ] Add examples to web docs
-- [ ] Update builtin help (F1)
+- [x] Update language reference (`web/static/docs/reference/language/operators.md`: precedence table, comparison/logic sections, desugaring map)
+- [x] Add reference page (`web/static/docs/reference/language/conditionals.md` covering all 10 conditional/logic primitives — categorised under the language section since these are control-flow primitives, not audio builtins)
+- [x] Add tutorial section (`web/static/docs/tutorials/04-rhythm.md` § Conditional Triggers)
+- [x] Update builtin help (F1) — keywords/H2 anchors regenerated via `bun run build:docs`
 
 ## Risks & Mitigations
 

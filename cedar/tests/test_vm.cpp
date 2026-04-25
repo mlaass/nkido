@@ -4,6 +4,7 @@
 #include "cedar/vm/instruction.hpp"
 #include "cedar/opcodes/utility.hpp"
 #include "cedar/opcodes/sequencing.hpp"
+#include "cedar/opcodes/logic.hpp"
 #include <array>
 #include <cmath>
 #include <vector>
@@ -1746,4 +1747,203 @@ TEST_CASE("SEQPAT deferred sample resolution: resolve after compile, before stat
     }
 
     CHECK(total_triggers == 4);
+}
+
+// =============================================================================
+// Conditionals & Logic — Direct Opcode Tests
+//
+// These tests exercise the SELECT / CMP_* / LOGIC_* opcodes at the VM level,
+// independently of the akkado parser/codegen. A regression in opcode
+// implementation will fail these even if the compiler still emits the right
+// bytecode. Includes the epsilon equality test the audit flagged as missing.
+// =============================================================================
+
+TEST_CASE("VM SELECT picks branch sample-by-sample", "[opcodes][logic]") {
+    VM vm;
+
+    SECTION("truthy condition selects a") {
+        std::array<Instruction, 4> program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, 1.0f),    // cond > 0
+            make_const_instruction(Opcode::PUSH_CONST, 1, 100.0f),  // a
+            make_const_instruction(Opcode::PUSH_CONST, 2, 50.0f),   // b
+            Instruction::make_ternary(Opcode::SELECT, 3, 0, 1, 2),
+        };
+        vm.load_program(program);
+
+        std::array<float, BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+
+        const float* result = vm.buffers().get(3);
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            CHECK_THAT(result[i], WithinAbs(100.0f, 1e-6f));
+        }
+    }
+
+    SECTION("zero condition selects b") {
+        std::array<Instruction, 4> program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, 0.0f),
+            make_const_instruction(Opcode::PUSH_CONST, 1, 100.0f),
+            make_const_instruction(Opcode::PUSH_CONST, 2, 50.0f),
+            Instruction::make_ternary(Opcode::SELECT, 3, 0, 1, 2),
+        };
+        vm.load_program(program);
+
+        std::array<float, BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+
+        const float* result = vm.buffers().get(3);
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            CHECK_THAT(result[i], WithinAbs(50.0f, 1e-6f));
+        }
+    }
+
+    SECTION("negative condition selects b (cond > 0 not >= 0)") {
+        std::array<Instruction, 4> program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, -1.0f),
+            make_const_instruction(Opcode::PUSH_CONST, 1, 100.0f),
+            make_const_instruction(Opcode::PUSH_CONST, 2, 50.0f),
+            Instruction::make_ternary(Opcode::SELECT, 3, 0, 1, 2),
+        };
+        vm.load_program(program);
+
+        std::array<float, BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+
+        const float* result = vm.buffers().get(3);
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            CHECK_THAT(result[i], WithinAbs(50.0f, 1e-6f));
+        }
+    }
+}
+
+TEST_CASE("VM CMP_* opcodes produce 0.0 or 1.0", "[opcodes][logic]") {
+    VM vm;
+
+    auto run_cmp = [&](Opcode op, float a, float b) -> float {
+        std::array<Instruction, 3> program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, a),
+            make_const_instruction(Opcode::PUSH_CONST, 1, b),
+            Instruction::make_binary(op, 2, 0, 1),
+        };
+        vm.load_program_immediate(program);
+        std::array<float, BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+        return vm.buffers().get(2)[0];
+    };
+
+    SECTION("CMP_GT") {
+        CHECK_THAT(run_cmp(Opcode::CMP_GT, 10.0f, 5.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_GT, 5.0f, 10.0f), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_GT, 5.0f, 5.0f),  WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("CMP_LT") {
+        CHECK_THAT(run_cmp(Opcode::CMP_LT, 5.0f, 10.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_LT, 10.0f, 5.0f), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_LT, 5.0f, 5.0f),  WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("CMP_GTE") {
+        CHECK_THAT(run_cmp(Opcode::CMP_GTE, 10.0f, 5.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_GTE, 5.0f, 5.0f),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_GTE, 5.0f, 10.0f), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("CMP_LTE") {
+        CHECK_THAT(run_cmp(Opcode::CMP_LTE, 5.0f, 10.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_LTE, 5.0f, 5.0f),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_LTE, 10.0f, 5.0f), WithinAbs(0.0f, 1e-6f));
+    }
+}
+
+TEST_CASE("VM CMP_EQ uses LOGIC_EPSILON", "[opcodes][logic]") {
+    VM vm;
+
+    auto run_cmp = [&](Opcode op, float a, float b) -> float {
+        std::array<Instruction, 3> program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, a),
+            make_const_instruction(Opcode::PUSH_CONST, 1, b),
+            Instruction::make_binary(op, 2, 0, 1),
+        };
+        vm.load_program_immediate(program);
+        std::array<float, BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+        return vm.buffers().get(2)[0];
+    };
+
+    // Reference the constant directly so a change to the epsilon constant
+    // forces this test author to revisit the expected outcomes.
+    static_assert(LOGIC_EPSILON == 1e-6f,
+                  "Update VM CMP_EQ tests if LOGIC_EPSILON changes");
+
+    SECTION("exact equality") {
+        CHECK_THAT(run_cmp(Opcode::CMP_EQ, 5.0f, 5.0f),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_NEQ, 5.0f, 5.0f), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("difference smaller than epsilon -> equal") {
+        // 5e-7 < 1e-6, so |a-b| < epsilon, so CMP_EQ outputs 1.0
+        CHECK_THAT(run_cmp(Opcode::CMP_EQ, 1.0f, 1.0f + 5e-7f),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_NEQ, 1.0f, 1.0f + 5e-7f), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("difference larger than epsilon -> not equal") {
+        // 1e-3 > 1e-6, so CMP_EQ outputs 0.0
+        CHECK_THAT(run_cmp(Opcode::CMP_EQ, 1.0f, 1.001f),  WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_cmp(Opcode::CMP_NEQ, 1.0f, 1.001f), WithinAbs(1.0f, 1e-6f));
+    }
+}
+
+TEST_CASE("VM LOGIC_AND/OR/NOT truth tables", "[opcodes][logic]") {
+    VM vm;
+
+    auto run_binary = [&](Opcode op, float a, float b) -> float {
+        std::array<Instruction, 3> program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, a),
+            make_const_instruction(Opcode::PUSH_CONST, 1, b),
+            Instruction::make_binary(op, 2, 0, 1),
+        };
+        vm.load_program_immediate(program);
+        std::array<float, BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+        return vm.buffers().get(2)[0];
+    };
+
+    auto run_unary = [&](Opcode op, float a) -> float {
+        std::array<Instruction, 2> program = {
+            make_const_instruction(Opcode::PUSH_CONST, 0, a),
+            Instruction::make_unary(op, 1, 0),
+        };
+        vm.load_program_immediate(program);
+        std::array<float, BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+        return vm.buffers().get(1)[0];
+    };
+
+    SECTION("LOGIC_AND") {
+        CHECK_THAT(run_binary(Opcode::LOGIC_AND, 1.0f, 1.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_binary(Opcode::LOGIC_AND, 1.0f, 0.0f), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_binary(Opcode::LOGIC_AND, 0.0f, 1.0f), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_binary(Opcode::LOGIC_AND, 0.0f, 0.0f), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("LOGIC_OR") {
+        CHECK_THAT(run_binary(Opcode::LOGIC_OR, 1.0f, 1.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_binary(Opcode::LOGIC_OR, 1.0f, 0.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_binary(Opcode::LOGIC_OR, 0.0f, 1.0f), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_binary(Opcode::LOGIC_OR, 0.0f, 0.0f), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("LOGIC_NOT") {
+        CHECK_THAT(run_unary(Opcode::LOGIC_NOT, 1.0f),  WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_unary(Opcode::LOGIC_NOT, 0.0f),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_unary(Opcode::LOGIC_NOT, 0.5f),  WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("negative inputs are falsy") {
+        // The opcodes test "x > 0", so negatives must read as false.
+        CHECK_THAT(run_binary(Opcode::LOGIC_AND, -1.0f, 1.0f), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_binary(Opcode::LOGIC_OR, -1.0f, -2.0f), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_unary(Opcode::LOGIC_NOT, -1.0f),        WithinAbs(1.0f, 1e-6f));
+    }
 }

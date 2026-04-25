@@ -10,6 +10,7 @@ export const slugToPath: Record<string, string> = {
 	"01-hello-sine": "tutorials/01-hello-sine.md",
 	"microtonal": "reference/mini-notation/microtonal.md",
 	"basics": "reference/mini-notation/basics.md",
+	"conditionals": "reference/language/conditionals.md",
 	"pipes": "reference/language/pipes.md",
 	"variables": "reference/language/variables.md",
 	"closures": "reference/language/closures.md",
@@ -123,6 +124,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "closures",
 			"title": "Closures"
+		},
+		{
+			"slug": "conditionals",
+			"title": "Conditionals & Logic"
 		}
 	],
 	"mini-notation": [
@@ -500,6 +505,37 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "clock",
 		"anchor": "clock"
 	},
+	"select": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "select",
+		"anchor": "select"
+	},
+	"conditional": {
+		"slug": "04-rhythm",
+		"category": "tutorials",
+		"title": "Rhythm & Patterns"
+	},
+	"threshold": {
+		"slug": "04-rhythm",
+		"category": "tutorials",
+		"title": "Rhythm & Patterns"
+	},
+	"and": {
+		"slug": "04-rhythm",
+		"category": "tutorials",
+		"title": "Rhythm & Patterns"
+	},
+	"or": {
+		"slug": "04-rhythm",
+		"category": "tutorials",
+		"title": "Rhythm & Patterns"
+	},
+	"not": {
+		"slug": "04-rhythm",
+		"category": "tutorials",
+		"title": "Rhythm & Patterns"
+	},
 	"getting started": {
 		"slug": "01-hello-sine",
 		"category": "tutorials",
@@ -670,6 +706,127 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "basics",
 		"category": "mini-notation",
 		"title": "Mini-Notation Basics"
+	},
+	"truth convention": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Truth Convention",
+		"anchor": "truth-convention"
+	},
+	"gt": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "gt",
+		"anchor": "gt"
+	},
+	"lt": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "lt",
+		"anchor": "lt"
+	},
+	"gte": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "gte",
+		"anchor": "gte"
+	},
+	"lte": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "lte",
+		"anchor": "lte"
+	},
+	"eq": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "eq",
+		"anchor": "eq"
+	},
+	"neq": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "neq",
+		"anchor": "neq"
+	},
+	"band": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "band",
+		"anchor": "band"
+	},
+	"bor": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "bor",
+		"anchor": "bor"
+	},
+	"bnot": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "bnot",
+		"anchor": "bnot"
+	},
+	"see also": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "See Also",
+		"anchor": "see-also"
+	},
+	"conditionals": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"logic": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"comparison": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"ternary": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"if": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"else": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"boolean": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"equal": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"equality": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"greater": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
+	},
+	"less": {
+		"slug": "conditionals",
+		"category": "language",
+		"title": "Conditionals & Logic"
 	},
 	"pipe": {
 		"slug": "pipes",
@@ -1351,11 +1508,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Dynamics"
 	},
-	"threshold": {
-		"slug": "dynamics",
-		"category": "builtins",
-		"title": "Dynamics"
-	},
 	"ratio": {
 		"slug": "dynamics",
 		"category": "builtins",
@@ -1531,10 +1683,11 @@ export const previews: Record<string, string> = {
 	"01-hello-sine": "Welcome to Akkado! In this tutorial, you'll make your first sound and learn the basics of how the language works.",
 	"microtonal": "Akkado supports microtonal pitch notation through micro-step operators (, , ) and the  function, which selects how those operators map to frequency.",
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
+	"conditionals": "Signal-rate decision-making: compare signals, combine boolean signals with AND/OR/NOT, and pick between two signals based on a condition. Every...",
 	"pipes": "The pipe operator () and hole () are the foundation of Akkado's signal flow model.",
 	"variables": "Variables store values for reuse throughout your patch.",
 	"closures": "Closures are anonymous functions that capture their environment. They're the bridge between patterns and synthesis.",
-	"operators": "Akkado uses operators for arithmetic, signal flow, and more.",
+	"operators": "Akkado uses operators for arithmetic, comparison, logic, and signal flow.",
 	"stereo": "Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every signal; mono DSP ops applied to a stereo signal auto-lift — a...",
 	"sequencing": "Timing and sequencing functions create rhythmic patterns, triggers, and automation curves synchronized to the global clock.",
 	"delays": "Delay effects create copies of a signal offset in time, enabling echoes, rhythmic effects, and spatial depth.",

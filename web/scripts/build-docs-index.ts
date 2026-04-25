@@ -125,8 +125,14 @@ async function buildManifest() {
 			preview
 		});
 
-		// For builtins, index h2 headings (function names with anchors)
-		if (frontmatter.category === 'builtins') {
+		// Index h2 headings as anchored F1 entries. Default behaviour: builtins
+		// docs (one H2 = one function). Other docs can opt in via
+		// `index_headings: true` in frontmatter — e.g. language/conditionals.md,
+		// which is a function reference even though it lives in the language
+		// section.
+		const indexHeadings =
+			frontmatter.category === 'builtins' || frontmatter.index_headings === true;
+		if (indexHeadings) {
 			const headings = extractHeadings(content);
 			for (const heading of headings) {
 				if (heading.level === 2) {

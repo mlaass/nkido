@@ -1,11 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "akkado/akkado.hpp"
 #include "akkado/pattern_eval.hpp"
 #include "akkado/mini_parser.hpp"
 #include "akkado/sample_registry.hpp"
 #include <cedar/vm/instruction.hpp>
+#include <cedar/vm/vm.hpp>
 #include <cedar/vm/state_pool.hpp>  // For fnv1a_hash_runtime
+#include <cedar/dsp/constants.hpp>
+#include <array>
 #include <cstring>
 #include <vector>
 
@@ -5185,4 +5189,188 @@ TEST_CASE("Codegen: multiple bpm assignments both stored", "[codegen][builtins]"
     REQUIRE(result.builtin_var_overrides.size() == 2);
     CHECK(result.builtin_var_overrides[0].value == Catch::Approx(100.0f));
     CHECK(result.builtin_var_overrides[1].value == Catch::Approx(140.0f));
+}
+
+// =============================================================================
+// Conditionals & Logic — Runtime Value Tests
+//
+// These tests compile akkado source, load the bytecode into a Cedar VM,
+// process one block, and assert the actual runtime value of the destination
+// buffer of the last instruction. This verifies that the conditionals/logic
+// operators produce the documented 0.0/1.0 outputs (and not, say, an inverted
+// truth polarity that codegen-presence tests above cannot catch).
+// =============================================================================
+
+namespace {
+
+// Compile akkado source, run one block, and return the first sample of the
+// destination buffer of the program's last instruction.
+float run_first_sample(std::string_view source) {
+    auto result = akkado::compile(source);
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    REQUIRE_FALSE(insts.empty());
+
+    cedar::VM vm;
+    std::span<const cedar::Instruction> bc(insts.data(), insts.size());
+    REQUIRE(vm.load_program_immediate(bc));
+
+    std::array<float, cedar::BLOCK_SIZE> left{};
+    std::array<float, cedar::BLOCK_SIZE> right{};
+    vm.process_block(left.data(), right.data());
+
+    const std::uint16_t out_idx = insts.back().out_buffer;
+    const float* buf = vm.buffers().get(out_idx);
+    REQUIRE(buf != nullptr);
+    return buf[0];
+}
+
+}  // namespace
+
+TEST_CASE("Runtime: gt/lt/gte/lte produce 0.0 or 1.0", "[conditionals][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    SECTION("gt true / false / equal") {
+        CHECK_THAT(run_first_sample("gt(10, 5)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("gt(5, 10)"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("gt(5, 5)"),  WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("lt true / false / equal") {
+        CHECK_THAT(run_first_sample("lt(5, 10)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("lt(10, 5)"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("lt(5, 5)"),  WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("gte includes equality") {
+        CHECK_THAT(run_first_sample("gte(10, 5)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("gte(5, 5)"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("gte(5, 10)"), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("lte includes equality") {
+        CHECK_THAT(run_first_sample("lte(5, 10)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("lte(5, 5)"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("lte(10, 5)"), WithinAbs(0.0f, 1e-6f));
+    }
+}
+
+TEST_CASE("Runtime: eq/neq with epsilon", "[conditionals][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    SECTION("exact equality") {
+        CHECK_THAT(run_first_sample("eq(5, 5)"),    WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("eq(5, 10)"),   WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("neq(5, 5)"),   WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("neq(5, 10)"),  WithinAbs(1.0f, 1e-6f));
+    }
+
+    SECTION("eq treats near-equal floats as equal") {
+        // Floating-point round-off: 0.1 + 0.2 != 0.3 in strict IEEE,
+        // but the documented epsilon (1e-6) must collapse them to true.
+        CHECK_THAT(run_first_sample("eq(0.1 + 0.2, 0.3)"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("neq(0.1 + 0.2, 0.3)"), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("eq separates values farther apart than epsilon") {
+        // 1e-3 is well above the 1e-6 epsilon, must compare not-equal.
+        CHECK_THAT(run_first_sample("eq(1.0, 1.001)"),  WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("neq(1.0, 1.001)"), WithinAbs(1.0f, 1e-6f));
+    }
+}
+
+TEST_CASE("Runtime: band/bor/bnot truth tables", "[conditionals][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    SECTION("band truth table") {
+        CHECK_THAT(run_first_sample("band(1, 1)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("band(1, 0)"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("band(0, 1)"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("band(0, 0)"), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("bor truth table") {
+        CHECK_THAT(run_first_sample("bor(1, 1)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("bor(1, 0)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("bor(0, 1)"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("bor(0, 0)"), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("bnot inverts truthiness") {
+        CHECK_THAT(run_first_sample("bnot(1)"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("bnot(0)"), WithinAbs(1.0f, 1e-6f));
+    }
+
+    SECTION("negative values are falsy") {
+        // band/bor/bnot all treat values <= 0 as false, including negatives.
+        CHECK_THAT(run_first_sample("band(-1, 1)"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("bor(-1, -2)"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("bnot(-1)"),    WithinAbs(1.0f, 1e-6f));
+    }
+}
+
+TEST_CASE("Runtime: select picks the right branch", "[conditionals][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    SECTION("truthy condition") {
+        CHECK_THAT(run_first_sample("select(1, 100, 50)"), WithinAbs(100.0f, 1e-6f));
+    }
+
+    SECTION("zero is falsy") {
+        CHECK_THAT(run_first_sample("select(0, 100, 50)"), WithinAbs(50.0f, 1e-6f));
+    }
+
+    SECTION("negative is falsy") {
+        // Documented in PRD: select uses cond > 0, so negatives go to b.
+        CHECK_THAT(run_first_sample("select(-1, 100, 50)"), WithinAbs(50.0f, 1e-6f));
+    }
+}
+
+TEST_CASE("Runtime: infix syntax matches function-call syntax", "[conditionals][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    SECTION("comparison infix") {
+        CHECK_THAT(run_first_sample("10 > 5"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("5 < 10"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("5 >= 5"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("5 <= 5"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("5 == 5"),  WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("5 != 10"), WithinAbs(1.0f, 1e-6f));
+    }
+
+    SECTION("logic infix") {
+        CHECK_THAT(run_first_sample("1 && 1"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("1 || 0"), WithinAbs(1.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("0 && 1"), WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("!1"),     WithinAbs(0.0f, 1e-6f));
+        CHECK_THAT(run_first_sample("!0"),     WithinAbs(1.0f, 1e-6f));
+    }
+}
+
+TEST_CASE("Runtime: operator precedence", "[conditionals][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    SECTION("&& binds tighter than ||") {
+        // 1 || 0 && 0 must parse as 1 || (0 && 0) = 1
+        CHECK_THAT(run_first_sample("1 || 0 && 0"), WithinAbs(1.0f, 1e-6f));
+        // 0 && 1 || 0 must parse as (0 && 1) || 0 = 0
+        CHECK_THAT(run_first_sample("0 && 1 || 0"), WithinAbs(0.0f, 1e-6f));
+    }
+
+    SECTION("comparison binds tighter than logic") {
+        // (5 > 3) && (2 < 4) = 1
+        CHECK_THAT(run_first_sample("5 > 3 && 2 < 4"), WithinAbs(1.0f, 1e-6f));
+    }
+
+    SECTION("arithmetic binds tighter than comparison") {
+        // (2 + 3) > 4 = 5 > 4 = 1
+        CHECK_THAT(run_first_sample("2 + 3 > 4"), WithinAbs(1.0f, 1e-6f));
+        // (2 * 3) == 6 = 1
+        CHECK_THAT(run_first_sample("2 * 3 == 6"), WithinAbs(1.0f, 1e-6f));
+    }
+
+    SECTION("equality binds looser than comparison") {
+        // (5 > 3) == 1 — comparison evaluated first, equality compares 1.0 to 1
+        CHECK_THAT(run_first_sample("5 > 3 == 1"), WithinAbs(1.0f, 1e-6f));
+    }
 }
