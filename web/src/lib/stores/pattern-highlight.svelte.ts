@@ -26,6 +26,11 @@ function createPatternHighlightStore() {
 	// Incremented when patterns change (triggers decoration rebuild)
 	let patternsVersion = $state(0);
 
+	// Document offset (current-doc coordinates) at/after which step
+	// highlighting is suppressed. Set on docChange in step-highlight.ts;
+	// reset on successful compile via updatePreviews().
+	let frozenOffset = $state<number | null>(null);
+
 	// Polling state
 	let pollRafId = 0;
 	let isPolling = false;
@@ -47,6 +52,7 @@ function createPatternHighlightStore() {
 
 		patterns = newPatterns;
 		patternsVersion++;
+		frozenOffset = null;
 	}
 
 	/**
@@ -56,6 +62,7 @@ function createPatternHighlightStore() {
 		patterns = new Map();
 		activeSteps = new Map();
 		patternsVersion++;
+		frozenOffset = null;
 	}
 
 	/**
@@ -162,6 +169,24 @@ function createPatternHighlightStore() {
 			patterns = newPatterns;
 			patternsVersion++;
 		}
+
+		// Remap the freeze threshold so it stays anchored to the same source
+		// content across subsequent edits. assoc=-1 keeps the freeze before
+		// text inserted exactly at the line-start offset.
+		if (frozenOffset !== null) {
+			frozenOffset = mapPos(frozenOffset, -1);
+		}
+	}
+
+	/**
+	 * Mark all step highlighting at or after the given document offset as
+	 * frozen until the next successful compile. Lowering only — repeated
+	 * edits extend the freeze upward, never shrink it.
+	 */
+	function freezeFrom(lineStartOffset: number) {
+		frozenOffset = frozenOffset === null
+			? lineStartOffset
+			: Math.min(frozenOffset, lineStartOffset);
 	}
 
 	return {
@@ -174,6 +199,9 @@ function createPatternHighlightStore() {
 		get patternsVersion() {
 			return patternsVersion;
 		},
+		get frozenOffset() {
+			return frozenOffset;
+		},
 		updatePreviews,
 		clear,
 		startPolling,
@@ -181,7 +209,8 @@ function createPatternHighlightStore() {
 		getPattern,
 		getAllPatterns,
 		getActiveStep,
-		mapThroughChanges
+		mapThroughChanges,
+		freezeFrom
 	};
 }
 

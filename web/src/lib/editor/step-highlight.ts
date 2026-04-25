@@ -96,13 +96,21 @@ class StepHighlightPlugin {
 	update(update: ViewUpdate) {
 		if (update.docChanged) {
 			const changedRanges: Array<[number, number]> = [];
-			update.changes.iterChangedRanges((fromA: number, toA: number) => {
-				changedRanges.push([fromA, toA]);
-			});
+			let firstChangeStartB = Infinity;
+			update.changes.iterChangedRanges(
+				(fromA: number, toA: number, fromB: number) => {
+					changedRanges.push([fromA, toA]);
+					if (fromB < firstChangeStartB) firstChangeStartB = fromB;
+				}
+			);
 			patternHighlightStore.mapThroughChanges(
 				(pos, assoc) => update.changes.mapPos(pos, assoc),
 				changedRanges
 			);
+			if (firstChangeStartB !== Infinity) {
+				const lineStart = update.state.doc.lineAt(firstChangeStartB).from;
+				patternHighlightStore.freezeFrom(lineStart);
+			}
 		}
 	}
 
@@ -139,9 +147,11 @@ class StepHighlightPlugin {
 			if (isPlaying) {
 				// Get active steps from store and build decorations
 				const patterns = patternHighlightStore.getAllPatterns();
+				const frozenOffset = patternHighlightStore.frozenOffset;
 				const activeSteps = new Map<number, { docOffset: number; sourceOffset: number; sourceLength: number }>();
 
 				for (const patternData of patterns) {
+					if (frozenOffset !== null && patternData.info.docOffset >= frozenOffset) continue;
 					const step = patternHighlightStore.getActiveStep(patternData.info.stateId);
 					if (step && step.length > 0) {
 						activeSteps.set(patternData.info.stateId, {
