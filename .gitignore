@@ -48,3 +48,4 @@ web/static/wasm/nkido.wasm
 web/static/soundfonts/
 
 docs/*proposal.md
+.claude/*.lock
