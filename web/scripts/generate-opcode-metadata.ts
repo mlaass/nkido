@@ -88,6 +88,11 @@ function parseStatefulOpcodes(source: string): Set<string> {
     const opcodeName = match[1];
     const requiresState = match[2] === "true";
     if (requiresState) {
+      // Skip NOP-mapped builtins (e.g., poly, legato, spread) — they desugar
+      // to specialized opcodes (POLY_BEGIN, etc.) which are listed explicitly
+      // below. Marking NOP itself as stateful would incorrectly include every
+      // compile-time-elided no-op.
+      if (opcodeName === "NOP") continue;
       stateful.add(opcodeName);
     }
   }
@@ -119,15 +124,16 @@ function inferStatefulOpcodes(opcodes: Map<string, number>, fromBuiltins: Set<st
 
   // Individual opcodes that are stateful but might not match patterns
   const explicitStateful = [
-    "NOISE",     // RNG state
-    "SLEW",      // Tracks current value
-    "SAH",       // Sample and hold
-    "LFO",       // Phase state
-    "EUCLID",    // Pattern state
-    "TRIGGER",   // Trigger tracking
-    "TIMELINE",  // Breakpoint automation
-    "PROBE",     // Visualization ring buffer
-    "FFT_PROBE", // FFT visualization state
+    "NOISE",       // RNG state
+    "SLEW",        // Tracks current value
+    "SAH",         // Sample and hold
+    "LFO",         // Phase state
+    "EUCLID",      // Pattern state
+    "TRIGGER",     // Trigger tracking
+    "TIMELINE",    // Breakpoint automation
+    "PROBE",       // Visualization ring buffer
+    "FFT_PROBE",   // FFT visualization state
+    "POLY_BEGIN",  // PolyAllocState — voice allocation
   ];
 
   for (const [name, _] of opcodes) {

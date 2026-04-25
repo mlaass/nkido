@@ -1,4 +1,4 @@
-**Status: IMPLEMENTED** — Phases 0–4 shipped. Future-work sections (SF_PLAY, SAMPLE_VOICE, configurable release, MIDI input) remain open.
+**Status: IMPLEMENTED** — Phases 0–5 shipped. Phase 5 added the polish layer (signature reorder, debugger integration, syntax highlighting, F1 docs). Phase 6 (chord-completeness investigation) ran experiments but did not reproduce the reported bug at the VM level; the regression test is in place. Future-work sections (SF_PLAY, SAMPLE_VOICE, configurable release, MIDI input) remain open.
 
 # Polyphony System PRD — Runtime POLY Opcode
 
@@ -16,7 +16,7 @@ The current system has three separate, incompatible polyphony mechanisms:
 | **SoundFont internal voice allocator** | 32 voices baked into SOUNDFONT_VOICE opcode | Isolated — can't share voice management with other instruments |
 | **Sampler internal voice allocator** | 32 voices baked into SAMPLE_PLAY opcode | Same isolation problem |
 
-**Goal**: Users explicitly choose `poly(%, n, instrument)` or `mono(%, instrument)`. One voice allocator handles everything — oscillators, SoundFonts, samplers, FM synths, future instruments.
+**Goal**: Users explicitly choose `poly(input, instrument, voices=64)` or `mono(input, instrument)`. One voice allocator handles everything — oscillators, SoundFonts, samplers, FM synths, future instruments.
 
 **Key design decisions:**
 - SoundFont and Sampler **keep their internal polyphony** for now — SF_PLAY/SAMPLE_VOICE single-voice opcodes are future work
@@ -35,8 +35,11 @@ The current system has three separate, incompatible polyphony mechanisms:
 fn lead(freq, gate, vel) =
     osc("saw", freq) |> lp(%, 2000 * adsr(gate)) |> % * vel
 
-// Explicit polyphonic (8-voice)
-pat("C4' Am7' G4'") |> poly(%, 8, lead) |> out(%, %)
+// Explicit polyphonic (default 64 voices)
+pat("C4' Am7' G4'") |> poly(%, lead) |> out(%, %)
+
+// Explicit polyphonic with custom voice count
+pat("C4' Am7' G4'") |> poly(%, lead, 8) |> out(%, %)
 
 // Explicit monophonic (last-note priority, retrigger)
 pat("c4 e4 g4 b4") |> mono(%, lead) |> out(%, %)
@@ -46,10 +49,10 @@ pat("c4 e4 g4 b4") |> mono(%, lead) |> out(%, %)
 
 ```akkado
 // SoundFont as instrument (requires SF_PLAY opcode — future work)
-pat("C4' Am7'") |> poly(%, 32, soundfont("piano.sf2")) |> out(%, %)
+pat("C4' Am7'") |> poly(%, soundfont("piano.sf2"), 32) |> out(%, %)
 
 // Sampler as instrument (requires SAMPLE_VOICE opcode — future work)
-pat("x _ x _") |> poly(%, 4, sample("kick.wav")) |> out(%, %)
+pat("x _ x _") |> poly(%, sample("kick.wav"), 4) |> out(%, %)
 ```
 
 > **Note**: `soundfont` exists in `builtins.hpp` as `Opcode::NOP` (handled specially by codegen). SF_PLAY and SAMPLE_VOICE single-voice opcodes are future phases — SoundFont and Sampler keep their internal voice allocators until then.
@@ -57,7 +60,7 @@ pat("x _ x _") |> poly(%, 4, sample("kick.wav")) |> out(%, %)
 ### 1.3 MIDI Input (Future)
 
 ```akkado
-midi_in() |> poly(%, 16, lead) |> out(%, %)
+midi_in() |> poly(%, lead, 16) |> out(%, %)
 ```
 
 ### 1.4 Mono and Legato
@@ -70,7 +73,7 @@ pat("c4 e4 g4 b4") |> mono(%, lead) |> out(%, %)
 pat("c4 e4 g4 b4") |> legato(%, lead) |> out(%, %)
 ```
 
-**Mono voice count**: `mono()` compiles to `poly(1, ...)` — envelope release tail is cut when a new note arrives. This matches hardware mono synths. Users who want release overlap can use `poly(2, ...)` with `mode=mono`.
+**Mono voice count**: `mono()` compiles to `poly` with one voice and `mode=1` — envelope release tail is cut when a new note arrives. This matches hardware mono synths. Users who want release overlap can use `poly(input, instrument, 2)` and rely on natural voice stealing.
 
 ### 1.5 Effects After Polyphony
 
@@ -81,7 +84,7 @@ fn pad(freq, gate, vel) =
     osc("saw", freq) |> lp(%, 1000) |> % * adsr(gate, 0.1, 0.2, 0.6, 0.5) * vel
 
 pat("C4' Am7' G7' F4'")
-|> poly(%, 8, pad)    // 8 voices, mixed to mono
+|> poly(%, pad, 8)    // 8 voices, mixed to mono
 |> reverb(%)          // shared reverb on the mix
 |> out(%, %) * 0.3
 ```
@@ -95,7 +98,7 @@ cutoff = param("cutoff", 2000)
 fn lead(freq, gate, vel) =
     osc("saw", freq) |> lp(%, cutoff * adsr(gate)) |> % * vel
 
-pat("C4'") |> poly(%, 8, lead) |> out(%, %)
+pat("C4'") |> poly(%, lead, 8) |> out(%, %)
 ```
 
 ---
@@ -269,7 +272,7 @@ Because gate-off immediately zeros the output, `RELEASE_TIMEOUT` is set to 1 blo
 
 ```cpp
 struct PolyAllocState {
-    static constexpr uint16_t MAX_VOICES = 32;
+    static constexpr uint16_t MAX_VOICES = 128;
 
     // Config (set by compiler via init_poly_state)
     uint32_t seq_state_id = 0;    // Linked SequenceState for events
@@ -380,9 +383,9 @@ This follows the pattern of existing `inspect_state_json()` in `StatePool` (see 
 
 ## 4. Compiler Integration
 
-### 4.1 Compiling `poly(%, 8, lead)`
+### 4.1 Compiling `poly(%, lead, 8)`
 
-When the compiler encounters `poly(input, 8, instrument_fn)`:
+When the compiler encounters `poly(input, instrument_fn, 8)`:
 
 1. **Emit SEQPAT_QUERY** for the upstream pattern (already exists)
 2. **Allocate 5 scratch buffers**: voice_freq, voice_gate, voice_vel, voice_trig, voice_out
@@ -414,11 +417,11 @@ Additional parameters use closure capture (see section 1.6).
 ### 4.3 `mono()` and `legato()` as Sugar
 
 ```akkado
-mono(%, lead)   -> poly(%, 1, lead)  with mode=1 (mono)
-legato(%, lead) -> poly(%, 1, lead)  with mode=2 (legato)
+mono(%, lead)   -> poly(%, lead, 1)  with mode=1 (mono)
+legato(%, lead) -> poly(%, lead, 1)  with mode=2 (legato)
 ```
 
-> **Note**: The 1-arg forms `mono(lead)` / `legato(lead)` (without input) are accepted by the compiler today but produce a silent graph — the pipe form is required for audible output and will be enforced in a future compiler pass (same reasoning as the 2-arg `poly()` form that was removed in commit `d54db35`).
+> **Note**: The 1-arg forms `mono(lead)` / `legato(lead)` (without input) are accepted by the compiler today but produce a silent graph — the pipe form is required for audible output and will be enforced in a future compiler pass.
 
 ### 4.4 `soundfont()` and `sample()` as Instrument Factories (Future)
 
@@ -426,10 +429,10 @@ These will compile to special single-voice opcodes (SF_PLAY, SAMPLE_VOICE) wrapp
 
 ```akkado
 // This:
-poly(%, 32, soundfont("piano.sf2"))
+poly(%, soundfont("piano.sf2"), 32)
 
 // Will compile as if it were:
-poly(%, 32, fn(freq, gate, vel) = sf_play("piano.sf2", freq, gate, vel))
+poly(%, fn(freq, gate, vel) = sf_play("piano.sf2", freq, gate, vel), 32)
 ```
 
 > **Note**: Until SF_PLAY and SAMPLE_VOICE opcodes are implemented, SoundFont and Sampler continue using their existing internal voice allocators. The `soundfont` builtin is registered in `builtins.hpp` as `Opcode::NOP` (handled specially by codegen).
@@ -493,8 +496,8 @@ Files to modify:
 **Test**: Python experiment with hardcoded bytecode — 3 oscillators at different frequencies via POLY.
 
 ### Phase 2: Akkado Compiler — `poly()` and `mono()`
-**Status**: SHIPPED. Commit `d54db35` tightened `poly()` to require exactly 3 args `(input, voices, instrument)`; the old 2-arg form was removed because it produced a silent graph.
-**Goal**: `pat("C4'") |> poly(%, 8, synth_fn) |> out(%, %)` compiles and plays
+**Status**: SHIPPED. Commit `d54db35` initially set `poly(input, voices, instrument)`; Phase 5 reordered to `poly(input, instrument, voices=64)` with voices optional.
+**Goal**: `pat("C4'") |> poly(%, synth_fn) |> out(%, %)` compiles and plays
 
 Files to modify:
 - `akkado/include/akkado/builtins.hpp` — add `poly` and `mono` builtin entries
@@ -538,6 +541,58 @@ Behavior changes:
 - Old monophonic patterns still work via SEQPAT_STEP (`pat("c4 e4 g4") |> osc(...)`)
 - Implicit chord expansion (`pat("C4'") |> osc(...)` without `poly()`) -> error with migration message suggesting `poly()`
 
+### Phase 5: Polish & Debugger Integration
+**Status**: SHIPPED.
+**Goal**: Make `poly()` first-class in the editor and runtime debugger.
+
+Changes:
+
+- **Signature reorder**: `poly(input, voices, instrument)` → `poly(input, instrument, voices=64)`. The instrument is now adjacent to the pipe input (which reads more naturally), and the voice count is optional with a generous default. Voice count is still required to be a literal int at compile time so the body can be lowered. Range bumped to 1–128.
+- **`MAX_VOICES` bump**: 32 → 128 (~5 KB per poly block from the audio arena, allocated once).
+- **Stateful flag**: `poly` builtin now has `requires_state=true` in `akkado/include/akkado/builtins.hpp`. The opcode-metadata generator (`web/scripts/generate-opcode-metadata.ts`) was updated to skip NOP-mapped builtins (which would otherwise pollute the NOP opcode) and explicitly mark `POLY_BEGIN` as stateful so the disassembly inspector lights up.
+- **Custom inspector panel**: `web/src/lib/components/Panel/PolyStateInspector.svelte` renders a live voice grid (note name, freq, velocity bar, gate dot, age) for `PolyAllocState`. `StateInspector.svelte` dispatches by `stateData.type`.
+- **Editor highlighting**: Regenerating `web/src/lib/editor/generated/syntax-builtins.ts` (via `bun run build:syntax`) picks up `poly`, `mono`, `legato`, `spread` from the builtins table — the script already worked, the builtins just needed the regen.
+- **F1 documentation**: Added `## poly`, `## mono`, `## legato`, `## spread` sections to `web/static/docs/reference/builtins/sequencing.md` with signatures, param tables, and runnable examples. Frontmatter keywords extended.
+
+#### Migration
+
+The signature reorder is breaking. Old patches that used `poly(input, voices, instrument)` need to swap the last two arguments:
+
+```akkado
+// Before (Phase 2-4)
+chord("C Em Am G") |> poly(@, 21, stab) |> out(@)
+
+// After (Phase 5)
+chord("C Em Am G") |> poly(@, stab, 21) |> out(@)
+
+// Or use the default 64 voices
+chord("C Em Am G") |> poly(@, stab) |> out(@)
+```
+
+No compatibility shim is provided — Akkado is pre-1.0 and live-coding-first; patches are rewritten cheaply, and a shim would entrench the awkward order. The compiler's error message hints at the new shape.
+
+### Phase 6: Chord-Completeness Investigation
+**Status**: INCONCLUSIVE — bug not reproducible at the VM level.
+**Goal**: Investigate the user-reported "every few bars a chord plays incompletely" symptom seen with `chord("C Em Am G") |> poly(@, stab, 21)`.
+
+What was tried:
+
+- Added a regression test in `akkado/tests/test_codegen.cpp` ([chord-completeness] tag) that compiles the user's exact source and runs it for 32 cycles (127 chord onsets), snapshotting the voice grid every block and asserting that each chord's three notes have a voice with `gate>0` and matching freq within 0.5 Hz.
+- All 127 onsets across 32 cycles passed — no incomplete chord was observed at the VM level.
+- Code review of `allocate_voice` (`dsp_state.hpp:958-1054`), `release_voice_by_event` (`dsp_state.hpp:1057-1084`), and `execute_poly_block` (`vm.cpp:254-459`) found no race or omission that could drop a chord note. The same-block reuse-then-release case correctly prefers the new gate-on (which is the desired retrigger semantic).
+
+Hypothesis on what the user heard:
+
+- **Most likely**: gate-multiplied accumulation (section 2.7) silences a voice's release tail at gate-off, including the AR envelope's release and the in-body delay's echo. With the user's `0.4s release + 0.3s delay tail` stab, the audible decay between chord changes is much shorter than expected, which can read as "missing notes" mid-chord even when all three voices are sounding.
+- **Possible**: WASM/AudioWorklet timing differs from the direct-VM test — buffer ramps or worklet message ordering could expose a different ordering than the VM tests cover.
+
+Action items:
+
+- The chord-completeness regression test is in place and will catch any future drift in voice allocation.
+- A future Phase 7 ("configurable voice release") — already noted in the future-work section — would let the user keep the AR/delay tails alive across chord boundaries, which would address the perceptual "missing note" symptom even if it's not a true voice-loss bug.
+
+---
+
 ### Future: SF_PLAY Single-Voice SoundFont Opcode
 
 Files to create/modify:
@@ -566,10 +621,10 @@ Files to create/modify:
 
 ```akkado
 // Voice stays alive 500ms after gate-off for envelope release
-pat("C4' Am7'") |> poly(%, 8, pad, release: 0.5) |> out(%, %)
+pat("C4' Am7'") |> poly(%, pad, 8, release: 0.5) |> out(%, %)
 
 // Default (no release param) = current behavior: immediate gate-off silence
-pat("c4 e4") |> poly(%, 4, lead) |> out(%, %)
+pat("c4 e4") |> poly(%, lead, 4) |> out(%, %)
 ```
 
 Implementation options (choose one):
@@ -596,16 +651,18 @@ Files to modify:
 |-------|------|--------|
 | 0 | Event velocity field populated correctly, default 1.0 | Unit test + Python experiment |
 | 1 | 3 oscillators at different frequencies mix correctly | Python experiment — build POLY bytecode manually |
-| 2 | `poly(%, 8, fn(f,g,v) = osc("sin",f)*adsr(g))` produces correct instruction count | Akkado compiler test |
+| 2 | `poly(%, fn(f,g,v) = osc("sin",f)*adsr(g), 8)` produces correct instruction count | Akkado compiler test |
 | 3 | Voice stealing works when exceeding max_voices; mono plays only last note | Audio integration test |
 | 4 | Old `pat("C4'") \|> osc(...)` gives error with migration hint; `pat("c4 e4") \|> osc(...)` still works | Regression test suite |
+| 5 | `poly(@, stab)` defaults to 64 voices; `poly(@, stab, 21)` accepts explicit count; `poly` opens custom inspector and is highlighted in editor; F1 on `poly` opens docs | Manual smoke test in dev server + akkado_tests `[poly]` |
+| 6 | `chord("C Em Am G") \|> poly(@, stab, 21)` plays all chord notes for 32 cycles | `[chord-completeness]` regression test |
 
 ### 8.2 Manual Testing
 
 ```akkado
 // Basic polyphonic chord (verify 3 voices mix)
 fn pad(f, g, v) = osc("saw", f) |> lp(%, 1000) |> % * adsr(g, 0.1, 0.2, 0.6, 0.5) * v
-pat("C4' Am7' G7' F4'") |> poly(%, 8, pad) |> out(%, %) * 0.3
+pat("C4' Am7' G7' F4'") |> poly(%, pad, 8) |> out(%, %) * 0.3
 
 // Mono lead (verify only 1 voice at a time)
 fn lead(f, g, v) = osc("saw", f) |> lp(%, 3000) |> % * adsr(g, 0.01, 0.1, 0.8, 0.2)
@@ -616,12 +673,12 @@ pat("c4 e4 g4") |> osc("sin", %.freq) |> out(%, %)
 
 // Voice stealing — exceed 4 voices with 7th chord
 fn simple(f, g, v) = osc("sin", f) * adsr(g) * v
-pat("Am7' CM9'") |> poly(%, 4, simple) |> out(%, %) * 0.3
+pat("Am7' CM9'") |> poly(%, simple, 4) |> out(%, %) * 0.3
 
 // Closure capture for extra params
 cutoff = param("cutoff", 2000)
 fn filtered(f, g, v) = osc("saw", f) |> lp(%, cutoff * adsr(g)) |> % * v
-pat("C4' Am7'") |> poly(%, 8, filtered) |> out(%, %) * 0.3
+pat("C4' Am7'") |> poly(%, filtered, 8) |> out(%, %) * 0.3
 ```
 
 ---
@@ -634,7 +691,7 @@ pat("C4' Am7'") |> poly(%, 8, filtered) |> out(%, %) * 0.3
 | NoteEvent abstraction | (internal) | Phase 1 |
 | POLY_BEGIN/POLY_END opcodes | (bytecode) | Phase 1 |
 | State ID XOR isolation | (transparent) | Phase 1 |
-| `poly(%, n, instrument)` | `pat(...) \|> poly(%, 8, lead)` | Phase 2 |
+| `poly(input, instrument, voices=64)` | `pat(...) \|> poly(%, lead, 8)` or `poly(%, lead)` | Phase 2 (revised in Phase 5) |
 | `mono(%, instrument)` | `pat(...) \|> mono(%, lead)` | Phase 2 |
 | Voice allocation & stealing | (runtime) | Phase 3 |
 | Mono/legato modes | `mono(lead)`, `legato(lead)` | Phase 3 |

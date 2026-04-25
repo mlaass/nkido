@@ -10,6 +10,7 @@
 #include <cedar/vm/state_pool.hpp>  // For fnv1a_hash_runtime
 #include <cedar/dsp/constants.hpp>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -4348,7 +4349,7 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
     SECTION("basic poly with named function") {
         auto result = akkado::compile(R"(
             fn lead(freq, gate, vel) -> osc("sin", freq)
-            pat("c4") |> poly(%, 4, lead) |> out(%, %)
+            pat("c4") |> poly(%, lead, 4) |> out(%, %)
         )");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
@@ -4424,7 +4425,7 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
     SECTION("poly with piped pattern input") {
         auto result = akkado::compile(R"(
             fn lead(freq, gate, vel) -> osc("sin", freq)
-            pat("c4 e4 g4") |> poly(%, 8, lead) |> out(%, %)
+            pat("c4 e4 g4") |> poly(%, lead, 8) |> out(%, %)
         )");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
@@ -4446,7 +4447,7 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
 
     SECTION("poly with inline closure") {
         auto result = akkado::compile(R"(
-            pat("c4") |> poly(%, 4, (f, g, v) -> osc("sin", f) * v) |> out(%, %)
+            pat("c4") |> poly(%, (f, g, v) -> osc("sin", f) * v, 4) |> out(%, %)
         )");
         REQUIRE(result.success);
         auto insts = get_instructions(result);
@@ -4457,28 +4458,45 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
     SECTION("error: instrument function must have 3 params") {
         auto result = akkado::compile(R"(
             fn bad(x) -> osc("sin", x)
-            pat("c4") |> poly(%, 4, bad) |> out(%, %)
+            pat("c4") |> poly(%, bad, 4) |> out(%, %)
         )");
         CHECK(!result.success);
     }
 
     SECTION("error: instrument must be a function") {
         auto result = akkado::compile(R"(
-            pat("c4") |> poly(%, 4, 440) |> out(%, %)
+            pat("c4") |> poly(%, 440, 4) |> out(%, %)
         )");
         CHECK(!result.success);
     }
 
-    SECTION("error: 2-arg form no longer supported") {
+    SECTION("poly with default voice count (no voices arg)") {
         auto result = akkado::compile(R"(
             fn lead(freq, gate, vel) -> osc("sin", freq)
-            poly(4, lead) |> out(%, %)
+            pat("c4 e4 g4") |> poly(%, lead) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        // Voices should default to 64
+        bool found_default = false;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+                CHECK(init.poly_max_voices == 64);
+                found_default = true;
+            }
+        }
+        CHECK(found_default);
+    }
+
+    SECTION("error: 1-arg form not supported") {
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq)
+            poly(lead) |> out(%, %)
         )");
         CHECK(!result.success);
         bool found_arity_error = false;
         for (const auto& d : result.diagnostics) {
             if (d.message.find("'poly'") != std::string::npos &&
-                d.message.find("at least 3") != std::string::npos) {
+                d.message.find("at least 2") != std::string::npos) {
                 found_arity_error = true;
                 break;
             }
@@ -5385,3 +5403,176 @@ TEST_CASE("Runtime: operator precedence", "[conditionals][runtime]") {
         CHECK_THAT(run_first_sample("5 > 3 == 1"), WithinAbs(1.0f, 1e-6f));
     }
 }
+
+// =============================================================================
+// Bug repro: chord("C Em Am G") |> poly() — incomplete chord onsets
+// =============================================================================
+//
+// User report: with `chord("C Em Am G") |> poly(@, stab, 21) * 0.33 |> out(@)`
+// where stab has a 0.4s release + 0.3s delay tail, every few bars a chord
+// plays with a missing note. This test compiles the user's exact source,
+// runs it for many cycles, snapshots the voice grid each block, and detects
+// chord onsets where fewer than 3 voices are firing the expected freqs.
+
+namespace {
+
+// Apply state_inits from a CompileResult to the given VM.
+// Mirrors the logic in web/wasm/nkido_wasm.cpp:apply_state_inits.
+void apply_state_inits(cedar::VM& vm, const akkado::CompileResult& result,
+                       std::vector<std::vector<cedar::Sequence>>& seq_storage) {
+    // We need to keep Sequence storage alive for the duration of the test.
+    seq_storage.reserve(result.state_inits.size());
+    for (const auto& init : result.state_inits) {
+        if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+            std::vector<cedar::Sequence> seq_copy = init.sequences;
+            for (std::size_t i = 0; i < seq_copy.size() && i < init.sequence_events.size(); ++i) {
+                if (!init.sequence_events[i].empty()) {
+                    seq_copy[i].events = const_cast<cedar::Event*>(init.sequence_events[i].data());
+                    seq_copy[i].num_events = static_cast<std::uint32_t>(init.sequence_events[i].size());
+                    seq_copy[i].capacity = static_cast<std::uint32_t>(init.sequence_events[i].size());
+                }
+            }
+            seq_storage.push_back(std::move(seq_copy));
+            auto& stored = seq_storage.back();
+            vm.init_sequence_program_state(
+                init.state_id,
+                stored.data(), stored.size(),
+                init.cycle_length,
+                init.is_sample_pattern,
+                init.total_events
+            );
+        } else if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+            vm.init_poly_state(
+                init.state_id,
+                init.poly_seq_state_id,
+                init.poly_max_voices,
+                init.poly_mode,
+                init.poly_steal_strategy
+            );
+        }
+    }
+}
+
+}  // namespace
+
+TEST_CASE("Runtime: chord(...) |> poly fires every chord note completely",
+          "[poly][regression][chord-completeness]") {
+    // The user's exact patch
+    const char* src = R"(
+        stab = (freq, gate, vel) ->
+            saw(freq) * ar(gate, 0.05, 0.4) * vel
+            |> lp(@, 1100)
+            |> @ + delay(@, 0.3, 0)
+
+        chord("C Em Am G")
+            |> poly(@, stab, 21) * 0.33
+            |> out(@)
+    )";
+
+    auto result = akkado::compile(src);
+    REQUIRE(result.success);
+
+    auto insts = get_instructions(result);
+    cedar::VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+    REQUIRE(vm.load_program_immediate(std::span<const cedar::Instruction>(insts)));
+
+    std::vector<std::vector<cedar::Sequence>> seq_storage;
+    apply_state_inits(vm, result, seq_storage);
+
+    // Find the PolyAllocState ID
+    std::uint32_t poly_state_id = 0;
+    for (const auto& init : result.state_inits) {
+        if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+            poly_state_id = init.state_id;
+            break;
+        }
+    }
+    REQUIRE(poly_state_id != 0);
+
+    // Chord parser uses default octave 4 for the root, then adds intervals
+    // C major = [0, 4, 7] from C4 → C4, E4, G4 = MIDI 60, 64, 67
+    // E minor = [0, 3, 7] from E4 → E4, G4, B4 = MIDI 64, 67, 71
+    // A minor = [0, 3, 7] from A4 → A4, C5, E5 = MIDI 69, 72, 76
+    // G major = [0, 4, 7] from G4 → G4, B4, D5 = MIDI 67, 71, 74
+    auto midi_to_hz = [](int midi) {
+        return 440.0f * std::pow(2.0f, (midi - 69) / 12.0f);
+    };
+    const std::array<std::array<float, 3>, 4> CHORDS = {{
+        {midi_to_hz(60), midi_to_hz(64), midi_to_hz(67)},   // C
+        {midi_to_hz(64), midi_to_hz(67), midi_to_hz(71)},   // Em
+        {midi_to_hz(69), midi_to_hz(72), midi_to_hz(76)},   // Am
+        {midi_to_hz(67), midi_to_hz(71), midi_to_hz(74)},   // G
+    }};
+
+    // 120 BPM, 48 kHz, BLOCK_SIZE 128:
+    // samples per beat = 48000 * 60 / 120 = 24000
+    // 1 cycle (4 beats) = 96000 samples = 750 blocks exactly
+    // Each chord lasts 1 beat = 24000 samples = 187.5 blocks
+    constexpr int BLOCKS_PER_CYCLE = 750;
+    constexpr int CYCLES = 32;  // long enough to surface "every few bars" bug
+    constexpr int TOTAL_BLOCKS = CYCLES * BLOCKS_PER_CYCLE;
+
+    std::array<float, cedar::BLOCK_SIZE> left{}, right{};
+    auto& poly = vm.states().get_or_create<cedar::PolyAllocState>(poly_state_id);
+
+    int incomplete_count = 0;
+    int onsets_inspected = 0;
+    int last_chord_idx = -1;
+    int first_failure_block = -1;
+    int first_failure_chord = -1;
+    int first_failure_matched = -1;
+
+    for (int b = 0; b < TOTAL_BLOCKS; ++b) {
+        const float block_beats = (b * static_cast<float>(cedar::BLOCK_SIZE)) /
+                                  (48000.0f * 60.0f / 120.0f);
+        const float cycle_pos = std::fmod(block_beats, 4.0f);
+        const int chord_idx = static_cast<int>(std::floor(cycle_pos));
+
+        vm.process_block(left.data(), right.data());
+
+        // Inspect 30 blocks into each new chord (gives time for attack to settle)
+        const int blocks_into_chord = static_cast<int>((cycle_pos - chord_idx) * 187.5f);
+        if (chord_idx != last_chord_idx && blocks_into_chord >= 30) {
+            // Skip the very first chord at b=0 (no settle time)
+            if (b > 100) {
+                onsets_inspected++;
+                const auto& chord = CHORDS[chord_idx];
+                int matched = 0;
+                for (float target : chord) {
+                    bool found = false;
+                    for (std::uint8_t i = 0; i < poly.max_voices; ++i) {
+                        const auto& v = poly.voices[i];
+                        if (v.active && !v.releasing && v.gate > 0.5f &&
+                            std::abs(v.freq - target) < 0.5f) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) ++matched;
+                }
+                if (matched < 3) {
+                    if (first_failure_block < 0) {
+                        first_failure_block = b;
+                        first_failure_chord = chord_idx;
+                        first_failure_matched = matched;
+                    }
+                    ++incomplete_count;
+                }
+            }
+            last_chord_idx = chord_idx;
+        }
+    }
+
+    INFO("Inspected " << onsets_inspected << " chord onsets, "
+         << incomplete_count << " incomplete");
+    if (first_failure_block >= 0) {
+        INFO("First failure: block=" << first_failure_block
+             << " chord_idx=" << first_failure_chord
+             << " matched=" << first_failure_matched << "/3");
+    }
+    CHECK(onsets_inspected >= 30);
+    CHECK(incomplete_count == 0);
+}
+

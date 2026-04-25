@@ -208,6 +208,7 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::OSC_TRI_4X:
         case Opcode::OSC_SQR_PWM_4X:
         case Opcode::OSC_SAW_PWM_4X:
+        case Opcode::POLY_BEGIN:
         case Opcode::SEQPAT_QUERY:
         case Opcode::SEQPAT_STEP:
         case Opcode::SEQPAT_TYPE:

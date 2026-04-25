@@ -708,3 +708,151 @@ TEST_CASE("POLY long-running stability: no voice accumulation over 10 cycles", "
     // Voice count should stay bounded (never exceed 6: 3 active + 3 releasing)
     CHECK(max_active_seen <= 6);
 }
+
+// ============================================================================
+// Bug repro: chord("C Em Am G") |> poly(...) — incomplete chord onsets
+// User report: every few bars, a chord plays with a missing note.
+// Reproduces the user's "C Em Am G" loop with shared notes between adjacent
+// chords and a release tail that overlaps the next chord onset.
+// ============================================================================
+
+// Set up 4-chord sequence (C, Em, Am, G), each 1 beat of a 4-beat cycle.
+// Adjacent chords share notes (drives the freq-match reuse path):
+//   C  = [C4, E4, G4]   shared with Em on E4 and G4
+//   Em = [E4, G4, B4]   shared with Am on E4 (octave: see below)
+//   Am = [A3, C4, E4]   shared with G on D4-via-G4? no — but C transition shares C4
+//   G  = [G3, B3, D4]   shares B3 with Em? no — different octaves
+// Use closer voicings to maximize reuse:
+//   C  = [261.63 (C4), 329.63 (E4), 392.00 (G4)]
+//   Em = [329.63 (E4), 392.00 (G4), 493.88 (B4)]
+//   Am = [261.63 (C4), 329.63 (E4), 440.00 (A4)]
+//   G  = [246.94 (B3), 392.00 (G4), 493.88 (B4)]
+static void setup_c_em_am_g_sequence(VM& vm) {
+    static constexpr float CYCLE_LENGTH = 4.0f;
+    static Event events[4];
+
+    auto fill = [&](Event& e, float t, float f0, float f1, float f2) {
+        e.type = EventType::DATA;
+        e.time = t;
+        e.duration = 0.25f;  // 0.25 * 4.0 = 1 beat
+        e.chance = 1.0f;
+        e.velocity = 1.0f;
+        e.num_values = 3;
+        e.values[0] = f0;
+        e.values[1] = f1;
+        e.values[2] = f2;
+    };
+
+    fill(events[0], 0.0f, 261.63f, 329.63f, 392.00f);  // C
+    fill(events[1], 1.0f, 329.63f, 392.00f, 493.88f);  // Em
+    fill(events[2], 2.0f, 261.63f, 329.63f, 440.00f);  // Am
+    fill(events[3], 3.0f, 246.94f, 392.00f, 493.88f);  // G
+
+    Sequence seq;
+    seq.events = events;
+    seq.num_events = 4;
+    seq.capacity = 4;
+    seq.duration = CYCLE_LENGTH;
+    seq.mode = SequenceMode::NORMAL;
+
+    vm.init_sequence_program_state(SEQ_STATE_ID, &seq, 1, CYCLE_LENGTH, false, 4);
+}
+
+TEST_CASE("POLY chord completeness: every chord onset allocates all notes",
+          "[poly][regression][chord]") {
+    // Regression test: drive a 4-chord loop with shared notes between adjacent
+    // chords. After every chord onset, verify that the expected number of
+    // voices have a freq matching one of the chord's notes (within 0.5 Hz)
+    // AND have gate > 0.5 OR a pending gate-on this block.
+    //
+    // The bug under test: in some cycles, a voice that was reused for a new
+    // chord note still has the previous event's pending gate-off scheduled,
+    // or the same-block reuse-then-release race leaves a chord note silent.
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    auto program = build_seq_poly_program();
+    vm.load_program_immediate(std::span<const Instruction>(program));
+
+    setup_c_em_am_g_sequence(vm);
+
+    // Use plenty of voices so we never hit the steal path
+    vm.init_poly_state(POLY_STATE_ID, SEQ_STATE_ID, 21, 0, 0);
+
+    // Chord frequency table for verification
+    const std::array<std::array<float, 3>, 4> CHORDS = {{
+        {261.63f, 329.63f, 392.00f},  // C
+        {329.63f, 392.00f, 493.88f},  // Em
+        {261.63f, 329.63f, 440.00f},  // Am
+        {246.94f, 392.00f, 493.88f},  // G
+    }};
+
+    // 120 BPM, 48 kHz, BLOCK_SIZE 128 → 1 beat = 187.5 blocks.
+    // 4 beats per cycle × 4 chord changes per cycle = chord onsets every ~187 blocks.
+    // Run 16 cycles (= 64 chord onsets) — bug should manifest within this.
+    constexpr int CYCLES = 16;
+    constexpr int BLOCKS_PER_CYCLE = 750;  // 96000 samples / 128
+    constexpr int TOTAL_BLOCKS = CYCLES * BLOCKS_PER_CYCLE;
+
+    std::array<float, BLOCK_SIZE> left{}, right{};
+
+    auto& poly = vm.states().get_or_create<PolyAllocState>(POLY_STATE_ID);
+
+    int incomplete_chord_count = 0;
+    int chord_onsets_inspected = 0;
+
+    int last_chord_idx = -1;
+
+    for (int b = 0; b < TOTAL_BLOCKS; ++b) {
+        // Determine which chord *should* be active at the start of this block
+        // 1 beat = 187.5 blocks; chord_idx changes at boundaries
+        const float block_beats = (b * BLOCK_SIZE) / (48000.0f * 60.0f / 120.0f);
+        const float cycle_pos = std::fmod(block_beats, 4.0f);
+        const int chord_idx = static_cast<int>(std::floor(cycle_pos));
+
+        vm.process_block(left.data(), right.data());
+
+        // Detect a chord change: this block contains the gate-on of a new chord
+        if (chord_idx != last_chord_idx && last_chord_idx != -1) {
+            // Inspect 2 blocks after the change to let voices settle
+            // (allocation happens in the block where the event starts)
+        }
+
+        // Every block, just AFTER the chord onset settles (a few blocks in),
+        // count active voices matching the current chord's notes.
+        // Pick a sample point well inside the chord's beat: 50 blocks after onset.
+        const int blocks_into_chord = static_cast<int>((cycle_pos - chord_idx) * 187.5f);
+        if (blocks_into_chord == 50) {
+            chord_onsets_inspected++;
+
+            const auto& chord = CHORDS[chord_idx];
+            int matched = 0;
+            for (float target : chord) {
+                bool found = false;
+                for (std::uint8_t i = 0; i < poly.max_voices; ++i) {
+                    const auto& v = poly.voices[i];
+                    if (v.active && !v.releasing && v.gate > 0.5f &&
+                        std::abs(v.freq - target) < 0.5f) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (found) ++matched;
+            }
+
+            if (matched < 3) {
+                ++incomplete_chord_count;
+                INFO("Chord " << chord_idx << " at block " << b
+                     << " matched " << matched << "/3 notes");
+            }
+        }
+
+        last_chord_idx = chord_idx;
+    }
+
+    INFO("Inspected " << chord_onsets_inspected << " chord onsets, "
+         << incomplete_chord_count << " were incomplete");
+    CHECK(chord_onsets_inspected >= 60);  // sanity: we sampled enough
+    CHECK(incomplete_chord_count == 0);
+}

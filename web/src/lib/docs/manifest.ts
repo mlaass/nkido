@@ -159,7 +159,7 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 
 export const lookup: Record<string, { slug: string; category: string; title: string; anchor?: string }> = {
 	"mono": {
-		"slug": "stereo",
+		"slug": "sequencing",
 		"category": "builtins",
 		"title": "mono",
 		"anchor": "mono"
@@ -1226,12 +1226,40 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "timeline",
 		"anchor": "timeline"
 	},
+	"poly": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "poly",
+		"anchor": "poly"
+	},
+	"legato": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "legato",
+		"anchor": "legato"
+	},
+	"spread": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "spread",
+		"anchor": "spread"
+	},
 	"sequencing": {
 		"slug": "sequencing",
 		"category": "builtins",
 		"title": "Sequencing & Timing"
 	},
 	"timing": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"polyphonic": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"instrument": {
 		"slug": "sequencing",
 		"category": "builtins",
 		"title": "Sequencing & Timing"

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { audioEngine } from '$lib/stores/audio.svelte';
 	import type { StateInspection } from '$lib/stores/audio.svelte';
+	import PolyStateInspector from './PolyStateInspector.svelte';
 
 	interface Props {
 		stateId: number | null;
@@ -91,14 +92,18 @@
 		</div>
 
 		{#if stateData}
-			<div class="inspector-fields">
-				{#each getFields(stateData) as [key, value] (key)}
-					<div class="field-row">
-						<span class="field-name">{key}</span>
-						<span class="field-value">{formatValue(value)}</span>
-					</div>
-				{/each}
-			</div>
+			{#if stateData.type === 'PolyAllocState'}
+				<PolyStateInspector stateData={stateData} />
+			{:else}
+				<div class="inspector-fields">
+					{#each getFields(stateData) as [key, value] (key)}
+						<div class="field-row">
+							<span class="field-name">{key}</span>
+							<span class="field-value">{formatValue(value)}</span>
+						</div>
+					{/each}
+				</div>
+			{/if}
 			{#if !audioEngine.isPlaying}
 				<div class="paused-hint">Play to see live updates</div>
 			{/if}

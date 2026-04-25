@@ -924,7 +924,7 @@ struct PolyVoice {
 
 // PolyAllocState — arena-allocated voices (same pattern as SoundFontVoiceState)
 struct PolyAllocState {
-    static constexpr std::uint16_t MAX_VOICES = 32;
+    static constexpr std::uint16_t MAX_VOICES = 128;
 
     PolyVoice* voices = nullptr;          // Arena-allocated array
     std::uint32_t seq_state_id = 0;       // Linked SequenceState for events

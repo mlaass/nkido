@@ -1,17 +1,17 @@
 // Chord Stab — a slow chord progression with a filter envelope.
 // `chord()` emits a polyphonic event stream (one event per chord,
-// with up to 3 voices per event). `poly(@, N, instr)` allocates
-// N voices and runs the instrument `(freq, gate, vel) -> ...`
+// with up to 3 voices per event). `poly(input, instr, voices=64)`
+// allocates voices and runs the instrument `(freq, gate, vel) -> ...`
 // per active voice, summing the results.
 
 bpm = 110
 
-stab = (freq, gate, vel) ->  
+stab = (freq, gate, vel) ->
     saw(freq) * ar(gate, 0.05, 0.4) * vel
-    |> lp(@, 1200) 
+    |> lp(@, 1200)
     |> @ + delay(@ , 0.3, 0)
 
 
-chord("C Em Am G") 
-    |> poly(@, 24, stab) * 0.3
+chord("C Em Am G")
+    |> poly(@, stab) * 0.3
     |> out(@)
