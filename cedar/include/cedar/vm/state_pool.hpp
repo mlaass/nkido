@@ -303,10 +303,17 @@ public:
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
-            else if constexpr (std::is_same_v<T, SAHState>) {
-                json << R"({"type":"SAHState")";
+            else if constexpr (std::is_same_v<T, EdgeState>) {
+                json << R"({"type":"EdgeState")";
                 json << R"(,"held_value":)" << state.held_value;
                 json << R"(,"prev_trigger":)" << state.prev_trigger;
+                json << R"(,"prev_reset_trigger":)" << state.prev_reset_trigger;
+                json << "}";
+            }
+            else if constexpr (std::is_same_v<T, CellState>) {
+                json << R"({"type":"CellState")";
+                json << R"(,"value":)" << state.value;
+                json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
             else if constexpr (std::is_same_v<T, DelayState>) {

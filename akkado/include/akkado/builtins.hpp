@@ -95,6 +95,11 @@ struct BuiltinInfo {
     // which enforce their own signatures.
     bool auto_lift = false;
 
+    // Static value to assign to inst.rate when this builtin lowers to its opcode.
+    // Used by mode-dispatched opcodes (EDGE_OP modes 0-3, etc.) so multiple
+    // builtin names share one opcode. Defaults to 0 — most opcodes ignore rate.
+    std::uint8_t inst_rate = 0;
+
     /// Get total parameter count (required + optional)
     [[nodiscard]] std::uint8_t total_params() const {
         return input_count + optional_count;
@@ -600,11 +605,27 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {NAN, NAN, NAN},
                  "Slew rate limiter (portamento)",
                  0, {}, {}, ChannelCount::Mono, true}},
-    {"sah",     {cedar::Opcode::SAH,   2, 0, true,
+    // Edge primitives — share Opcode::EDGE_OP, dispatched by inst_rate (0..3).
+    {"sah",      {cedar::Opcode::EDGE_OP, 2, 0, true,
                  {"in", "trig", "", "", "", ""},
                  {NAN, NAN, NAN},
                  "Sample and hold",
-                 0, {}, {}, ChannelCount::Mono, true}},
+                 0, {}, {}, ChannelCount::Mono, true, /*inst_rate=*/0}},
+    {"gateup",   {cedar::Opcode::EDGE_OP, 1, 0, true,
+                 {"sig", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "1.0 on rising edge of sig",
+                 0, {}, {}, ChannelCount::Mono, true, /*inst_rate=*/1}},
+    {"gatedown", {cedar::Opcode::EDGE_OP, 1, 0, true,
+                 {"sig", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "1.0 on falling edge of sig",
+                 0, {}, {}, ChannelCount::Mono, true, /*inst_rate=*/2}},
+    {"counter",  {cedar::Opcode::EDGE_OP, 1, 2, true,
+                 {"trig", "reset", "start", "", "", ""},
+                 {NAN, NAN},
+                 "Increment on rising edge of trig; reset to start (or 0) on rising edge of reset",
+                 0, {}, {}, ChannelCount::Mono, true, /*inst_rate=*/3}},
 
     // Output (1 required for mono, 2 for stereo)
     {"out",     {cedar::Opcode::OUTPUT, 1, 1, false,

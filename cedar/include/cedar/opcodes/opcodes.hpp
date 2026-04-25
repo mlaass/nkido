@@ -9,6 +9,8 @@
 #include "arrays.hpp"
 #include "math.hpp"
 #include "utility.hpp"
+#include "edge_op.hpp"
+#include "state_op.hpp"
 #include "oscillators.hpp"
 #include "filters.hpp"
 #include "envelopes.hpp"

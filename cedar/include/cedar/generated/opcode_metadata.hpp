@@ -54,8 +54,9 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::MTOF: return "MTOF";
         case Opcode::DC: return "DC";
         case Opcode::SLEW: return "SLEW";
-        case Opcode::SAH: return "SAH";
+        case Opcode::EDGE_OP: return "EDGE_OP";
         case Opcode::ENV_GET: return "ENV_GET";
+        case Opcode::STATE_OP: return "STATE_OP";
         case Opcode::ENV_ADSR: return "ENV_ADSR";
         case Opcode::ENV_AR: return "ENV_AR";
         case Opcode::ENV_FOLLOWER: return "ENV_FOLLOWER";
@@ -173,7 +174,8 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::FILTER_SALLENKEY:
         case Opcode::NOISE:
         case Opcode::SLEW:
-        case Opcode::SAH:
+        case Opcode::EDGE_OP:
+        case Opcode::STATE_OP:
         case Opcode::ENV_ADSR:
         case Opcode::ENV_AR:
         case Opcode::ENV_FOLLOWER:

@@ -1218,7 +1218,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 inst.inputs[2] = expanded_args.size() > 2 ? expanded_args[2] : 0xFFFF;
                 inst.inputs[3] = expanded_args.size() > 3 ? expanded_args[3] : 0xFFFF;
                 inst.inputs[4] = expanded_args.size() > 4 ? expanded_args[4] : 0xFFFF;
-                inst.rate = 0;
+                inst.rate = builtin->inst_rate;
                 inst.flags = cedar::InstructionFlag::STEREO_INPUT;
 
                 // FM detection operates on the L pass's frequency input; the R
@@ -1301,7 +1301,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                         inst.inputs[2] = expanded_args.size() > 2 ? expanded_args[2] : 0xFFFF;
                         inst.inputs[3] = expanded_args.size() > 3 ? expanded_args[3] : 0xFFFF;
                         inst.inputs[4] = expanded_args.size() > 4 ? expanded_args[4] : 0xFFFF;
-                        inst.rate = 0;
+                        inst.rate = builtin->inst_rate;
 
                         // FM detection for this instance
                         if (is_upgradeable_oscillator(inst.opcode) && !expanded_args.empty()) {
@@ -1379,7 +1379,7 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
             inst.inputs[2] = arg_buffers.size() > 2 ? arg_buffers[2] : 0xFFFF;
             inst.inputs[3] = arg_buffers.size() > 3 ? arg_buffers[3] : 0xFFFF;
             inst.inputs[4] = arg_buffers.size() > 4 ? arg_buffers[4] : 0xFFFF;
-            inst.rate = 0;
+            inst.rate = builtin->inst_rate;
 
             // Special handling for ADSR: pack release time (arg 4) into rate field
             // Release time in tenths of seconds (0-255 -> 0-25.5s)

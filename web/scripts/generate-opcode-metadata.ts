@@ -126,7 +126,8 @@ function inferStatefulOpcodes(opcodes: Map<string, number>, fromBuiltins: Set<st
   const explicitStateful = [
     "NOISE",       // RNG state
     "SLEW",        // Tracks current value
-    "SAH",         // Sample and hold
+    "EDGE_OP",     // Edge primitives: SAH/gateup/gatedown/counter all stateful
+    "STATE_OP",    // User state cells (state/get/set)
     "LFO",         // Phase state
     "EUCLID",      // Pattern state
     "TRIGGER",     // Trigger tracking

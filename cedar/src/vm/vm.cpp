@@ -757,12 +757,16 @@ void VM::execute(const Instruction& inst) {
             op_slew(ctx_, inst);
             break;
 
-        case Opcode::SAH:
-            op_sah(ctx_, inst);
+        case Opcode::EDGE_OP:
+            op_edge(ctx_, inst);
             break;
 
         case Opcode::ENV_GET:
             op_env_get(ctx_, inst);
+            break;
+
+        case Opcode::STATE_OP:
+            op_state(ctx_, inst);
             break;
 
         // === Sequencing & Timing ===

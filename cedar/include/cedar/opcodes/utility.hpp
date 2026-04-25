@@ -179,25 +179,6 @@ inline void op_slew(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
-// SAH: Sample and hold
-// Samples input when trigger (in1) crosses zero upward
-[[gnu::always_inline]]
-inline void op_sah(ExecutionContext& ctx, const Instruction& inst) {
-    float* out = ctx.buffers->get(inst.out_buffer);
-    const float* input = ctx.buffers->get(inst.inputs[0]);
-    const float* trigger = ctx.buffers->get(inst.inputs[1]);
-    auto& state = ctx.states->get_or_create<SAHState>(inst.state_id);
-
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        // Detect rising edge (previous <= 0, current > 0)
-        if (state.prev_trigger <= 0.0f && trigger[i] > 0.0f) {
-            state.held_value = input[i];
-        }
-        state.prev_trigger = trigger[i];
-        out[i] = state.held_value;
-    }
-}
-
 // ENV_GET: Read external environment parameter with interpolation
 // state_id contains FNV-1a hash of parameter name
 // inputs[0]: optional fallback value buffer (BUFFER_UNUSED if none)

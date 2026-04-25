@@ -60,8 +60,9 @@ enum class Opcode : std::uint8_t {
     MTOF = 52,        // MIDI to frequency
     DC = 53,          // DC offset
     SLEW = 54,        // Slew rate limiter
-    SAH = 55,         // Sample and hold
+    EDGE_OP = 55,     // Edge primitives: rate=0 SAH, 1 gateup, 2 gatedown, 3 counter
     ENV_GET = 56,     // Read external parameter from EnvMap
+    STATE_OP = 57,    // User state cell I/O: rate=0 init, 1 load, 2 store
 
     // Envelopes (60-69) - reserved
     ENV_ADSR = 60,

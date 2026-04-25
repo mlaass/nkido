@@ -35,6 +35,7 @@ add_executable(cedar_tests
     test_file_loader.cpp
     test_audio_decoder.cpp
     test_fft.cpp
+    test_edge_op.cpp
 )
 
 # Add concurrency tests if enabled

@@ -70,8 +70,12 @@ PYBIND11_MODULE(cedar_core, m) {
         .value("MTOF", cedar::Opcode::MTOF)
         .value("DC", cedar::Opcode::DC)
         .value("SLEW", cedar::Opcode::SLEW)
-        .value("SAH", cedar::Opcode::SAH)
+        .value("EDGE_OP", cedar::Opcode::EDGE_OP)
+        // Backwards-compat alias for the SAH→EDGE_OP rename: same numeric value (55).
+        // Python tests can still write `cedar.Opcode.SAH` and get rate=0 SAH behavior.
+        .value("SAH", cedar::Opcode::EDGE_OP)
         .value("ENV_GET", cedar::Opcode::ENV_GET)
+        .value("STATE_OP", cedar::Opcode::STATE_OP)
         // Envelopes (60-62)
         .value("ENV_ADSR", cedar::Opcode::ENV_ADSR)
         .value("ENV_AR", cedar::Opcode::ENV_AR)

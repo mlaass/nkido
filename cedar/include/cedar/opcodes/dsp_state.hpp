@@ -98,10 +98,18 @@ struct SlewState {
     bool initialized = false;
 };
 
-// Sample and hold state
-struct SAHState {
+// Edge-detection / sample-and-hold / counter state (EDGE_OP, all modes)
+//   prev_reset_trigger is only used in counter mode (rate=3)
+struct EdgeState {
     float held_value = 0.0f;
     float prev_trigger = 0.0f;
+    float prev_reset_trigger = 0.0f;
+};
+
+// User-cell state (STATE_OP) — single float slot for state(init)/.get()/.set()
+struct CellState {
+    float value = 0.0f;
+    bool initialized = false;
 };
 
 // Delay state with arena-allocated ring buffer
@@ -1230,7 +1238,8 @@ using DSPState = std::variant<
     SVFState,
     NoiseState,
     SlewState,
-    SAHState,
+    EdgeState,
+    CellState,
     DelayState,
     EnvState,
     // Sequencing states
