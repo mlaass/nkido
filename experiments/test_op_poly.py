@@ -29,7 +29,9 @@ import sys
 import wave
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
+from scipy import signal as scipy_signal
 
 # Locate repo root and binaries
 THIS_DIR = Path(__file__).resolve().parent
@@ -109,6 +111,21 @@ def voice_is_firing(voice: dict) -> bool:
 # Test 1: chord("C Em Am G") -- voice grid sanity
 # =============================================================================
 
+RENDER_SECONDS = 40.0   # long enough to surface "every few bars" — ~18 cycles at 110 BPM
+RENDER_BPM = 110.0
+
+# Frequencies the chord("C Em Am G") parser produces (validated by the
+# matching C++ test in akkado/tests/test_codegen.cpp [chord-completeness]).
+# Default octave is 4; quality intervals are added on top.
+CHORD_NAMES = ["C", "Em", "Am", "G"]
+CHORD_FREQS = [
+    (261.626, 329.628, 391.995),  # C  = C4 E4 G4
+    (329.628, 391.995, 493.883),  # Em = E4 G4 B4
+    (440.000, 523.251, 659.255),  # Am = A4 C5 E5
+    (391.995, 493.883, 587.330),  # G  = G4 B4 D5
+]
+
+
 def test_chord_stab_voice_grid():
     """
     Run the user's chord-stab patch and check that:
@@ -127,7 +144,8 @@ def test_chord_stab_voice_grid():
     wav_path = OUT_DIR / "chord_stab.wav"
     trace_path = OUT_DIR / "chord_stab_voices.jsonl"
 
-    render(str(src_copy), str(wav_path), str(trace_path), seconds=16.0, bpm=110.0)
+    render(str(src_copy), str(wav_path), str(trace_path),
+           seconds=RENDER_SECONDS, bpm=RENDER_BPM)
 
     trace = load_voice_trace(str(trace_path))
     print(f"  Loaded {len(trace)} block records from trace")

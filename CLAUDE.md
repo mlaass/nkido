@@ -304,6 +304,7 @@ uv run python test_op_chorus.py
    ```
 4. **Report pass/fail clearly** - Use ✓/✗/⚠ symbols and explain what the expected vs actual behavior is
 5. **Document acceptance criteria** - Each test should have clear, measurable criteria in the docstring
+6. **Run for ≥ 300 seconds of simulated audio** - Bugs that show up "every few bars" need a long window to surface. Any opcode test that drives a sequence/pattern/poly/sampler over time MUST simulate at least 300 seconds of audio (per the `--seconds` flag for `nkido-cli render`, or per the block count in `CedarTestHost`). Trace-only checks (no WAV write) are fine for the long part — render a shorter WAV separately for human listening if file size matters. If a test fails: report the failure block/time, do NOT shorten the duration to make it pass.
 
 **Test Structure**:
 ```python
