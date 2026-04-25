@@ -66,6 +66,14 @@ void Parser::error(std::string_view message) {
     error_at(current(), message);
 }
 
+// Names reserved for state-cell built-ins (Phase 3 of userspace-state PRD).
+// Users cannot bind these — silent shadowing would let `s.get()` resolve to
+// a user closure that doesn't understand StateCell args, producing a
+// confusing error far from the cause.
+static bool is_reserved_state_name(std::string_view name) {
+    return name == "state" || name == "get" || name == "set";
+}
+
 void Parser::error_at(const Token& token, std::string_view message) {
     if (panic_mode_) return;  // Suppress cascading errors
     panic_mode_ = true;
@@ -286,6 +294,11 @@ NodeIndex Parser::parse_statement() {
 }
 
 NodeIndex Parser::parse_assignment(const Token& name_token) {
+    if (is_reserved_state_name(name_token.lexeme)) {
+        error_at(name_token,
+                 "'" + std::string(name_token.lexeme) +
+                 "' is a reserved built-in identifier and cannot be redefined");
+    }
     consume(TokenType::Equals, "Expected '=' after identifier");
 
     NodeIndex node = make_node(NodeType::Assignment, name_token);
@@ -1372,6 +1385,11 @@ NodeIndex Parser::parse_match_expr() {
 
 // Const variable declaration: const x = expr
 NodeIndex Parser::parse_const_decl(const Token& name_token) {
+    if (is_reserved_state_name(name_token.lexeme)) {
+        error_at(name_token,
+                 "'" + std::string(name_token.lexeme) +
+                 "' is a reserved built-in identifier and cannot be redefined");
+    }
     consume(TokenType::Equals, "Expected '=' after const identifier");
 
     NodeIndex node = make_node(NodeType::ConstDecl, name_token);
@@ -1401,6 +1419,12 @@ NodeIndex Parser::parse_fn_def(bool is_const) {
     }
 
     Token name_tok = advance();
+
+    if (is_reserved_state_name(name_tok.lexeme)) {
+        error_at(name_tok,
+                 "'" + std::string(name_tok.lexeme) +
+                 "' is a reserved built-in identifier and cannot be redefined");
+    }
 
     consume(TokenType::LParen, "Expected '(' after function name");
 

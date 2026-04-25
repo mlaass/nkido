@@ -295,6 +295,19 @@ private:
     /// Handle len() function calls - compile-time array length
     TypedValue handle_len_call(NodeIndex node, const Node& n);
 
+    /// Handle state(init) calls - allocate a CellState slot, return a StateCell
+    /// TypedValue carrying the slot's state_id (per-call-site path-hash).
+    TypedValue handle_state_call(NodeIndex node, const Node& n);
+
+    /// Handle get(s) - emit STATE_OP rate=1 broadcasting cell value to a buffer.
+    /// First arg must be a StateCell.
+    TypedValue handle_get_call(NodeIndex node, const Node& n);
+
+    /// Handle set(s, v) - emit STATE_OP rate=2 storing the last sample of v
+    /// into the cell. First arg must be a StateCell. Returns the new value
+    /// broadcast as a Signal so set() can be used in expression position.
+    TypedValue handle_set_call(NodeIndex node, const Node& n);
+
     /// Handle user-defined function calls - inline expansion
     TypedValue handle_user_function_call(NodeIndex node, const Node& n,
                                          const UserFunctionInfo& func);

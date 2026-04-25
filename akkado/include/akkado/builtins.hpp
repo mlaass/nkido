@@ -717,6 +717,23 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {NAN, NAN, NAN},
                  "Array length (compile-time)"}},
 
+    // User state cells (Phase 3 of userspace-state PRD). All three are
+    // dispatched by name in codegen.cpp's special_handlers map; the opcode
+    // here is just a placeholder so the analyzer accepts the call. Names
+    // are reserved at the parser level — users cannot rebind them.
+    {"state",   {cedar::Opcode::STATE_OP, 1, 0, true,
+                 {"init", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Allocate a persistent state cell with the given initial value"}},
+    {"get",     {cedar::Opcode::STATE_OP, 1, 0, false,
+                 {"cell", "", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Read the current value of a state cell"}},
+    {"set",     {cedar::Opcode::STATE_OP, 2, 0, false,
+                 {"cell", "value", "", "", "", ""},
+                 {NAN, NAN, NAN},
+                 "Write a value to a state cell, returns the new value"}},
+
     // Multi-buffer array primitives for polyphony (handled specially by codegen)
     // These enable user-defined polyphony: fn poly(c, f) = sum(map(c, f)) / len(c)
     {"map",     {cedar::Opcode::NOP, 2, 0, false,

@@ -56,6 +56,7 @@ add_library(akkado STATIC
     src/codegen.cpp
     src/codegen_arrays.cpp
     src/codegen_functions.cpp
+    src/codegen_state.cpp
     src/codegen_params.cpp
     src/codegen_patterns.cpp
     src/codegen_stereo.cpp

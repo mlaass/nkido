@@ -18,6 +18,7 @@ enum class ValueType : std::uint8_t {
     Array,     // Multi-element collection (compile-time unrolled)
     String,    // Compile-time string (no runtime buffer)
     Function,  // Function reference (no runtime buffer)
+    StateCell, // Handle to a CellState slot (state(init) in userspace)
     Void       // No value (statements, directives)
 };
 
@@ -93,6 +94,11 @@ struct TypedValue {
     // String ID (FNV-1a hash) for ValueType::String
     std::uint32_t string_id = 0;
 
+    // State pool slot ID for ValueType::StateCell — populated by state(init),
+    // consumed by get(s) / set(s, v). Same FNV-1a path-hash scheme as every
+    // other stateful builtin.
+    std::uint32_t cell_state_id = 0;
+
     /// True when this value represents a stereo signal.
     [[nodiscard]] bool is_stereo() const { return channels == ChannelCount::Stereo; }
 
@@ -144,6 +150,14 @@ struct TypedValue {
         return tv;
     }
 
+    static TypedValue state_cell(std::uint32_t state_id, std::uint16_t buf) {
+        TypedValue tv;
+        tv.type = ValueType::StateCell;
+        tv.cell_state_id = state_id;
+        tv.buffer = buf;
+        return tv;
+    }
+
     static TypedValue make_pattern(std::shared_ptr<PatternPayload> p, std::uint16_t primary_buf) {
         TypedValue tv;
         tv.type = ValueType::Pattern;
@@ -182,6 +196,7 @@ constexpr const char* value_type_name(ValueType type) {
         case ValueType::Array:    return "Array";
         case ValueType::String:   return "String";
         case ValueType::Function: return "Function";
+        case ValueType::StateCell:return "StateCell";
         case ValueType::Void:     return "Void";
     }
     return "Unknown";

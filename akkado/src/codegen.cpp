@@ -650,8 +650,12 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                     new_sym.multi_buffers = buffers_of(value_tv);
                     new_sym.typed_value = value_tv;
                     symbols_->define(new_sym);
-                } else if (value_tv.type == ValueType::Record || value_tv.type == ValueType::Pattern) {
-                    // Preserve rich type info through symbol table
+                } else if (value_tv.type == ValueType::Record ||
+                           value_tv.type == ValueType::Pattern ||
+                           value_tv.type == ValueType::StateCell) {
+                    // Preserve rich type info through symbol table.
+                    // StateCell carries cell_state_id which get/set need to
+                    // route the STATE_OP instruction to the right slot.
                     Symbol new_sym;
                     new_sym.kind = SymbolKind::Variable;
                     new_sym.name = var_name;
@@ -785,6 +789,11 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
             using Handler = TypedValue (CodeGenerator::*)(NodeIndex, const Node&);
             static const std::unordered_map<std::string_view, Handler> special_handlers = {
                 {"len",     &CodeGenerator::handle_len_call},
+                // User state cells (Phase 3 of userspace-state PRD). state/get/set
+                // are reserved at parser level — no user closure can shadow them.
+                {"state",   &CodeGenerator::handle_state_call},
+                {"get",     &CodeGenerator::handle_get_call},
+                {"set",     &CodeGenerator::handle_set_call},
                 {"chord",   &CodeGenerator::handle_chord_call},
                 {"map",     &CodeGenerator::handle_map_call},
                 {"sum",     &CodeGenerator::handle_sum_call},
