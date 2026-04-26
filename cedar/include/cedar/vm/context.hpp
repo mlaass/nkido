@@ -31,6 +31,12 @@ struct ExecutionContext {
     float* output_left = nullptr;
     float* output_right = nullptr;
 
+    // Input buffers (stereo, populated by host before each block).
+    // Null pointers cause INPUT opcode to write silence — fallback when no
+    // capture device is available, permission not yet granted, etc.
+    float* input_left = nullptr;
+    float* input_right = nullptr;
+
     // Audio parameters
     float sample_rate = DEFAULT_SAMPLE_RATE;
     float inv_sample_rate = 1.0f / DEFAULT_SAMPLE_RATE;

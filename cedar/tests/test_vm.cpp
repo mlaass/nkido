@@ -224,6 +224,111 @@ TEST_CASE("VM output", "[vm][output]") {
     }
 }
 
+TEST_CASE("VM INPUT opcode", "[vm][input]") {
+    VM vm;
+
+    // Build a test program: INPUT into adjacent buffer pair (0,1), then
+    // OUTPUT(0, 1). This validates that ctx.input_left/right flows through
+    // the INPUT opcode and reaches the stereo output unchanged.
+    Instruction in_inst{};
+    in_inst.opcode = Opcode::INPUT;
+    in_inst.out_buffer = 0;  // L=0, R=1 (adjacent)
+    in_inst.inputs[0] = BUFFER_UNUSED;
+    in_inst.inputs[1] = BUFFER_UNUSED;
+    in_inst.inputs[2] = BUFFER_UNUSED;
+    in_inst.inputs[3] = BUFFER_UNUSED;
+    in_inst.inputs[4] = BUFFER_UNUSED;
+
+    Instruction out_inst{};
+    out_inst.opcode = Opcode::OUTPUT;
+    out_inst.out_buffer = 0;
+    out_inst.inputs[0] = 0;  // left
+    out_inst.inputs[1] = 1;  // right
+    out_inst.inputs[2] = BUFFER_UNUSED;
+    out_inst.inputs[3] = BUFFER_UNUSED;
+    out_inst.inputs[4] = BUFFER_UNUSED;
+
+    std::array<Instruction, 2> program = {in_inst, out_inst};
+    vm.load_program(program);
+
+    SECTION("INPUT copies input_left/right to output buffers when set") {
+        // Fill with distinguishable test patterns
+        std::array<float, BLOCK_SIZE> in_l{}, in_r{};
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            in_l[i] = 0.1f + static_cast<float>(i) * 0.001f;
+            in_r[i] = -0.2f - static_cast<float>(i) * 0.001f;
+        }
+
+        vm.set_input_buffers(in_l.data(), in_r.data());
+
+        std::array<float, BLOCK_SIZE> out_l{}, out_r{};
+        vm.process_block(out_l.data(), out_r.data());
+
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            CHECK_THAT(out_l[i], WithinAbs(in_l[i], 1e-6f));
+            CHECK_THAT(out_r[i], WithinAbs(in_r[i], 1e-6f));
+        }
+    }
+
+    SECTION("INPUT writes silence when input pointers are null") {
+        vm.set_input_buffers(nullptr, nullptr);
+
+        std::array<float, BLOCK_SIZE> out_l{}, out_r{};
+        // Pre-fill outputs with nonzero values to make sure INPUT actually
+        // writes zeros (the buffers it writes are register slots, not the
+        // OUTPUT pointers — but the OUTPUT instruction relays those zeros).
+        out_l.fill(0.42f);
+        out_r.fill(-0.42f);
+        // VM zeros output pointers at the start of process_block, so the
+        // pre-fill above is overwritten regardless. The point of the test is
+        // that the registers get zeroed and OUTPUT sees zeros.
+        vm.process_block(out_l.data(), out_r.data());
+
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            CHECK(out_l[i] == 0.0f);
+            CHECK(out_r[i] == 0.0f);
+        }
+    }
+
+    SECTION("INPUT is stateless: same inputs -> same outputs every block") {
+        std::array<float, BLOCK_SIZE> in_l{}, in_r{};
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            in_l[i] = std::sin(static_cast<float>(i) * 0.05f);
+            in_r[i] = std::cos(static_cast<float>(i) * 0.05f);
+        }
+        vm.set_input_buffers(in_l.data(), in_r.data());
+
+        std::array<float, BLOCK_SIZE> out_l_a{}, out_r_a{};
+        std::array<float, BLOCK_SIZE> out_l_b{}, out_r_b{};
+        vm.process_block(out_l_a.data(), out_r_a.data());
+        vm.process_block(out_l_b.data(), out_r_b.data());
+
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            CHECK(out_l_a[i] == out_l_b[i]);
+            CHECK(out_r_a[i] == out_r_b[i]);
+        }
+    }
+
+    SECTION("INPUT writes to adjacent (out, out+1) buffer slots") {
+        // Verify the right slot is written at out_buffer + 1 by reading the
+        // raw register pool after a block.
+        std::array<float, BLOCK_SIZE> in_l{}, in_r{};
+        in_l.fill(0.7f);
+        in_r.fill(-0.3f);
+        vm.set_input_buffers(in_l.data(), in_r.data());
+
+        std::array<float, BLOCK_SIZE> out_l{}, out_r{};
+        vm.process_block(out_l.data(), out_r.data());
+
+        const float* reg_l = vm.buffers().get(0);
+        const float* reg_r = vm.buffers().get(1);
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            CHECK_THAT(reg_l[i], WithinAbs(0.7f, 1e-6f));
+            CHECK_THAT(reg_r[i], WithinAbs(-0.3f, 1e-6f));
+        }
+    }
+}
+
 TEST_CASE("VM state management", "[vm][state]") {
     VM vm;
 

@@ -5,6 +5,7 @@
 	import ThemeSelector from '$lib/components/Theme/ThemeSelector.svelte';
 	import { ParamsPanel } from '$lib/components/Params';
 	import DebugPanel from './DebugPanel.svelte';
+	import AudioInputPanel from './AudioInputPanel.svelte';
 	import SampleBrowser from '$lib/components/Samples/SampleBrowser.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { audioEngine } from '$lib/stores/audio.svelte';
@@ -221,6 +222,11 @@
 								</button>
 							</div>
 						{/if}
+					</div>
+
+					<!-- Audio Input (audio-input PRD) -->
+					<div class="setting-group">
+						<AudioInputPanel />
 					</div>
 
 					<!-- Developer -->

@@ -3188,4 +3188,81 @@ TypedValue CodeGenerator::handle_soundfont_call(NodeIndex node, const Node& n) {
     return cache_and_return(node, TypedValue::signal(out_buf));
 }
 
+TypedValue CodeGenerator::handle_input_call(NodeIndex node, const Node& n) {
+    // in() — defaults to host UI source.
+    // in("mic" | "tab" | "file:NAME") — overrides the source for this compile.
+    //
+    // Emits a single INPUT instruction that copies ctx.input_left/right into
+    // an adjacent buffer pair. Result is a Stereo signal so downstream mono
+    // DSP auto-lifts via the universal stereo signal semantics.
+
+    // Validate argument count: 0 or 1.
+    std::size_t arg_count = 0;
+    NodeIndex arg = n.first_child;
+    while (arg != NULL_NODE) {
+        ++arg_count;
+        arg = ast_->arena[arg].next_sibling;
+    }
+    if (arg_count > 1) {
+        error("E190", "in() takes 0 or 1 arguments (got " +
+              std::to_string(arg_count) + ")", n.location);
+        return TypedValue::error_val();
+    }
+
+    // Optional source string literal (e.g. "mic", "tab", "file:voice.wav").
+    std::string source_str;
+    if (arg_count == 1) {
+        auto src = get_string_arg(*ast_, n, 0);
+        if (!src.has_value()) {
+            error("E191", "in() argument must be a string literal "
+                  "(\"mic\", \"tab\", or \"file:NAME\")", n.location);
+            return TypedValue::error_val();
+        }
+        const std::string& s = *src;
+        // Validate the source grammar — fail loud on typos so the user gets a
+        // clear diagnostic rather than silent fallback to default.
+        bool ok = (s == "mic" || s == "tab")
+               || (s.rfind("file:", 0) == 0 && s.size() > 5);
+        if (!ok) {
+            error("E192", "in() unknown source \"" + s +
+                  "\". Expected \"mic\", \"tab\", or \"file:NAME\".",
+                  n.location);
+            return TypedValue::error_val();
+        }
+        source_str = s;
+    }
+    required_input_sources_.push_back(source_str);
+
+    // Allocate adjacent L/R buffer pair (linear allocator guarantees right=left+1).
+    std::uint16_t left_buf  = buffers_.allocate();
+    std::uint16_t right_buf = buffers_.allocate();
+    if (left_buf == BufferAllocator::BUFFER_UNUSED ||
+        right_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::error_val();
+    }
+
+    // Sanity-check the adjacent-buffer invariant — every other stereo opcode
+    // depends on it (PAN, WIDTH, INPUT all read out_buffer+1 for the right slot).
+    if (right_buf != left_buf + 1) {
+        error("E101", "Internal: input() failed to allocate adjacent stereo "
+              "buffer pair", n.location);
+        return TypedValue::error_val();
+    }
+
+    cedar::Instruction inst{};
+    inst.opcode = cedar::Opcode::INPUT;
+    inst.out_buffer = left_buf;
+    inst.inputs[0] = BufferAllocator::BUFFER_UNUSED;
+    inst.inputs[1] = BufferAllocator::BUFFER_UNUSED;
+    inst.inputs[2] = BufferAllocator::BUFFER_UNUSED;
+    inst.inputs[3] = BufferAllocator::BUFFER_UNUSED;
+    inst.inputs[4] = BufferAllocator::BUFFER_UNUSED;
+    inst.state_id = 0;  // Stateless
+    emit(inst);
+
+    register_stereo(node, left_buf, right_buf);
+    return cache_and_return(node, TypedValue::stereo_signal(left_buf, right_buf));
+}
+
 } // namespace akkado

@@ -5866,3 +5866,98 @@ TEST_CASE("Runtime: chord(...) |> poly fires every chord note completely",
     CHECK(incomplete_count == 0);
 }
 
+// =============================================================================
+// Audio Input Tests (in() builtin)
+// =============================================================================
+
+TEST_CASE("Codegen: in() emits INPUT and produces stereo signal", "[codegen][input]") {
+    SECTION("in() compiles and emits exactly one INPUT instruction") {
+        auto result = akkado::compile("in() |> out(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::INPUT) == 1);
+
+        auto* in = find_instruction(insts, cedar::Opcode::INPUT);
+        REQUIRE(in != nullptr);
+        // INPUT is stateless: state_id should be 0
+        CHECK(in->state_id == 0);
+    }
+
+    SECTION("in() default has empty source string in required_input_sources") {
+        auto result = akkado::compile("in() |> out(%)");
+        REQUIRE(result.success);
+        REQUIRE(result.required_input_sources.size() == 1);
+        CHECK(result.required_input_sources[0] == "");
+    }
+
+    SECTION("in() output reaches OUTPUT (full pipeline compiles)") {
+        auto result = akkado::compile("in() |> out(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* out = find_instruction(insts, cedar::Opcode::OUTPUT);
+        REQUIRE(out != nullptr);
+    }
+}
+
+TEST_CASE("Codegen: in() with explicit source string", "[codegen][input]") {
+    SECTION("in('mic') compiles") {
+        auto result = akkado::compile(R"(in("mic") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(result.required_input_sources.size() == 1);
+        CHECK(result.required_input_sources[0] == "mic");
+    }
+
+    SECTION("in('tab') compiles") {
+        auto result = akkado::compile(R"(in("tab") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(result.required_input_sources.size() == 1);
+        CHECK(result.required_input_sources[0] == "tab");
+    }
+
+    SECTION("in('file:NAME') compiles") {
+        auto result = akkado::compile(R"(in("file:voice.wav") |> out(%))");
+        REQUIRE(result.success);
+        REQUIRE(result.required_input_sources.size() == 1);
+        CHECK(result.required_input_sources[0] == "file:voice.wav");
+    }
+
+    SECTION("in() with unknown source string is a compile error") {
+        auto result = akkado::compile(R"(in("garbage_source") |> out(%))");
+        CHECK_FALSE(result.success);
+    }
+
+    SECTION("in('file:') (no name after colon) is a compile error") {
+        auto result = akkado::compile(R"(in("file:") |> out(%))");
+        CHECK_FALSE(result.success);
+    }
+}
+
+TEST_CASE("Codegen: in() into mono DSP auto-lifts to stereo", "[codegen][input][stereo]") {
+    SECTION("in() |> lp(%, 2000) emits a STEREO_INPUT-flagged filter") {
+        auto result = akkado::compile("in() |> lp(%, 2000) |> out(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+
+        auto* in = find_instruction(insts, cedar::Opcode::INPUT);
+        REQUIRE(in != nullptr);
+
+        auto* lp = find_instruction(insts, cedar::Opcode::FILTER_SVF_LP);
+        REQUIRE(lp != nullptr);
+        // Auto-lift fires when the input is Stereo: filter runs both channels.
+        CHECK((lp->flags & cedar::InstructionFlag::STEREO_INPUT) != 0);
+    }
+
+    SECTION("in()'s output buffers are an adjacent (left, left+1) pair") {
+        auto result = akkado::compile("in() |> out(%)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        auto* in = find_instruction(insts, cedar::Opcode::INPUT);
+        REQUIRE(in != nullptr);
+
+        // Find the OUTPUT, which should consume the L and R buffer of INPUT.
+        auto* out = find_instruction(insts, cedar::Opcode::OUTPUT);
+        REQUIRE(out != nullptr);
+        CHECK(out->inputs[0] == in->out_buffer);
+        CHECK(out->inputs[1] == static_cast<std::uint16_t>(in->out_buffer + 1));
+    }
+}

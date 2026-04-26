@@ -769,6 +769,10 @@ void VM::execute(const Instruction& inst) {
             op_state(ctx_, inst);
             break;
 
+        case Opcode::INPUT:
+            op_input(ctx_, inst);
+            break;
+
         // === Sequencing & Timing ===
         case Opcode::CLOCK:
             op_clock(ctx_, inst);
@@ -1108,6 +1112,11 @@ void VM::set_sample_rate(float rate) {
 
 void VM::set_bpm(float bpm) {
     ctx_.bpm = bpm;
+}
+
+void VM::set_input_buffers(float* input_left, float* input_right) {
+    ctx_.input_left = input_left;
+    ctx_.input_right = input_right;
 }
 
 // ============================================================================

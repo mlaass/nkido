@@ -193,6 +193,10 @@ struct CodeGenResult {
     std::vector<std::string> required_samples;  // Unique sample names used - legacy
     std::vector<RequiredSample> required_samples_extended;  // Sample refs with bank/variant info
     std::vector<RequiredSoundFont> required_soundfonts;  // SoundFont files needed at runtime
+    // Input source strings collected from in('...') calls (per-call, not deduplicated).
+    // Empty means in() was called with no argument (host uses UI default).
+    // Hosts use this metadata to switch input source on compile.
+    std::vector<std::string> required_input_sources;
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
     std::vector<BuiltinVarOverride> builtin_var_overrides;  // Builtin variable overrides (bpm, sr)
@@ -397,6 +401,11 @@ private:
     /// Special-cased: extracts filename/preset at compile time, emits SOUNDFONT_VOICE
     TypedValue handle_soundfont_call(NodeIndex node, const Node& n);
 
+    /// Handle in() / in(source) - live audio input
+    /// Allocates an adjacent buffer pair and emits INPUT. Optional source string
+    /// literal is recorded in required_input_sources_ for host metadata routing.
+    TypedValue handle_input_call(NodeIndex node, const Node& n);
+
     /// Handle poly(voices, instrument) / mono(instrument) / legato(instrument)
     /// Emits POLY_BEGIN, inlines instrument body, emits POLY_END
     TypedValue handle_poly_call(NodeIndex node, const Node& n);
@@ -512,6 +521,8 @@ private:
     std::vector<RequiredSample> required_samples_extended_;
     // Track required SoundFont files
     std::vector<RequiredSoundFont> required_soundfonts_;
+    // Track input source strings from in('...') calls (per-call order; not deduplicated)
+    std::vector<std::string> required_input_sources_;
 
     // Map from AST node index to typed result (replaces node_buffers_, record_fields_,
     // multi_buffers_, array_lengths_, pattern_state_ids_)

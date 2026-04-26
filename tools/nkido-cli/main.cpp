@@ -39,6 +39,8 @@ void print_usage(const char* program) {
               << "  --seconds <f>      Render duration in seconds (default: 4)\n"
               << "  --bpm <f>          BPM for render mode (default: 120)\n"
               << "  --trace-poly <f>   Write per-block poly voice state to JSONL\n"
+              << "  --list-devices     List audio capture devices and exit\n"
+              << "  --input-device <n> Capture device name for in() (default: system default)\n"
               << "  -h, --help         Show this help\n\n"
               << "Examples:\n"
               << "  " << program << " play song.akkado\n"
@@ -125,6 +127,14 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
                 return std::nullopt;
             }
             opts.trace_poly_file = argv[i];
+        } else if (arg == "--list-devices") {
+            opts.list_devices = true;
+        } else if (arg == "--input-device") {
+            if (++i >= argc) {
+                std::cerr << "error: --input-device requires a value\n";
+                return std::nullopt;
+            }
+            opts.input_device = argv[i];
         } else if (arg == "--dump-bytecode") {
             opts.dump_bytecode = true;
         } else if (arg == "--json") {
@@ -145,9 +155,9 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
         }
     }
 
-    // Validate (UI mode doesn't need input)
+    // Validate (UI mode and --list-devices don't need input)
     if (!has_input && opts.input_type != nkido::InputType::InlineSource &&
-        opts.mode != nkido::Mode::UI) {
+        opts.mode != nkido::Mode::UI && !opts.list_devices) {
         std::cerr << "error: no input specified\n";
         print_usage(argv[0]);
         return std::nullopt;
@@ -445,6 +455,12 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
+    // --list-devices stands on its own; no input required.
+    if (opts->list_devices) {
+        nkido::AudioEngine::list_capture_devices(std::cout);
+        return EXIT_SUCCESS;
+    }
+
     // Handle check mode separately
     if (opts->mode == nkido::Mode::Check) {
         return handle_check_mode(*opts);
@@ -523,6 +539,21 @@ int main(int argc, char* argv[]) {
     if (!engine.init(audio_config)) {
         std::cerr << "error: failed to initialize audio\n";
         return EXIT_FAILURE;
+    }
+
+    // Open capture device if the program contains an INPUT instruction (i.e.
+    // uses in()) or if --input-device was explicitly requested. Failure is
+    // non-fatal — in() returns silence per the audio-input PRD contract.
+    bool program_uses_input = false;
+    for (const auto& inst : result.instructions) {
+        if (inst.opcode == cedar::Opcode::INPUT) {
+            program_uses_input = true;
+            break;
+        }
+    }
+    if (opts->input_device.has_value() || program_uses_input) {
+        const char* dev = opts->input_device ? opts->input_device->c_str() : nullptr;
+        engine.init_capture(dev);
     }
 
     // Load program into VM

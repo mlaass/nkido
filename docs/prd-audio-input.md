@@ -1,6 +1,6 @@
 # Audio Input PRD — Live Signal Processing
 
-> **Status: NOT STARTED** — Draft for review.
+> **Status: IMPLEMENTED** — All five phases shipped 2026-04-26. Cedar VM, Akkado builtin, CLI capture, WASM bridge, and web UI are wired end-to-end. Python experiment harness deferred (CedarTestHost would need an extension to set ctx.input_left/right; existing C++ unit tests in `cedar/tests/test_vm.cpp` under `[input]` cover the same behavior).
 
 ## Executive Summary
 

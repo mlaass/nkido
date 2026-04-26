@@ -65,6 +65,12 @@ public:
     // Handles swap and crossfade automatically at block boundaries
     void process_block(float* output_left, float* output_right);
 
+    // Set input buffer pointers used by the INPUT opcode.
+    // The host populates these buffers each block before calling process_block.
+    // Pass nullptr to indicate "no input available" — INPUT then writes silence.
+    // The pointers persist across blocks until changed.
+    void set_input_buffers(float* input_left, float* input_right);
+
     // =========================================================================
     // State Management
     // =========================================================================

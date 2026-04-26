@@ -50,6 +50,10 @@ struct Options {
     float render_bpm = 120.0f;                    // BPM for render mode
     std::optional<std::string> trace_poly_file;   // Optional path for poly state JSONL trace
 
+    // Audio input options (Play/UI modes)
+    bool list_devices = false;                    // Print capture devices and exit
+    std::optional<std::string> input_device;      // Capture device name (nullopt = default)
+
     // Check if input needs compilation
     [[nodiscard]] bool needs_compilation() const {
         return input_type == InputType::SourceFile ||

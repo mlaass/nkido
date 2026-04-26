@@ -65,6 +65,12 @@ if(EMSCRIPTEN)
         _cedar_process_block
         _cedar_get_output_left
         _cedar_get_output_right
+        # Audio input (audio-input PRD §4.5)
+        _cedar_get_input_left
+        _cedar_get_input_right
+        _cedar_set_input_active
+        _cedar_set_input_source
+        _cedar_get_input_source
         _cedar_reset
         _cedar_is_crossfading
         _cedar_crossfade_position
@@ -99,6 +105,9 @@ if(EMSCRIPTEN)
         _akkado_get_required_soundfonts_count
         _akkado_get_required_soundfont_filename
         _akkado_get_required_soundfont_preset
+        # Required input sources (audio-input PRD §4.4)
+        _akkado_get_required_input_sources_count
+        _akkado_get_required_input_source
         # State init accessors
         _akkado_get_state_init_count
         _akkado_get_state_init_id

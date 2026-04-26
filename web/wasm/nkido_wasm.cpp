@@ -37,6 +37,18 @@ static std::unique_ptr<cedar::VM> g_vm;
 static float g_output_left[128];
 static float g_output_right[128];
 
+// Shared buffers for audio input — populated by the AudioWorklet each block
+// before cedar_process_block(). When `g_input_active` is false, the VM is
+// fed null pointers and the INPUT opcode emits silence.
+static float g_input_left[128];
+static float g_input_right[128];
+static bool g_input_active = false;
+
+// Source string requested by the most recent compile (e.g. "mic", "tab",
+// "file:NAME"). Empty string means "use UI default". The host reads this
+// after compile to switch input source.
+static std::string g_input_source;
+
 // Compilation result storage
 static akkado::CompileResult g_compile_result;
 
@@ -127,6 +139,13 @@ WASM_EXPORT int cedar_load_program(const uint8_t* bytecode, uint32_t byte_count)
  */
 WASM_EXPORT void cedar_process_block() {
     if (g_vm) {
+        // Wire input pointers based on whether the host has marked input
+        // active. set_input_buffers(nullptr, nullptr) makes INPUT emit silence.
+        if (g_input_active) {
+            g_vm->set_input_buffers(g_input_left, g_input_right);
+        } else {
+            g_vm->set_input_buffers(nullptr, nullptr);
+        }
         g_vm->process_block(g_output_left, g_output_right);
     } else {
         // No VM - output silence
@@ -147,6 +166,47 @@ WASM_EXPORT float* cedar_get_output_left() {
  */
 WASM_EXPORT float* cedar_get_output_right() {
     return g_output_right;
+}
+
+/**
+ * Get pointer to left channel input buffer (128 floats).
+ * The AudioWorklet writes captured samples directly into this buffer each
+ * block before calling cedar_process_block().
+ */
+WASM_EXPORT float* cedar_get_input_left() {
+    return g_input_left;
+}
+
+/**
+ * Get pointer to right channel input buffer (128 floats).
+ */
+WASM_EXPORT float* cedar_get_input_right() {
+    return g_input_right;
+}
+
+/**
+ * Mark input buffers as active (1) or inactive (0). When inactive, the
+ * INPUT opcode reads null pointers and produces silence.
+ */
+WASM_EXPORT void cedar_set_input_active(int active) {
+    g_input_active = (active != 0);
+}
+
+/**
+ * Set the input source string requested by the most recent compile.
+ * The host reads this on compile completion to switch its capture pipeline
+ * (microphone, tab audio, uploaded file). Empty string means "use UI default".
+ */
+WASM_EXPORT void cedar_set_input_source(const char* source) {
+    g_input_source = source ? source : "";
+}
+
+/**
+ * Get the most recently requested input source string. Returns an empty
+ * string when no override was specified.
+ */
+WASM_EXPORT const char* cedar_get_input_source() {
+    return g_input_source.c_str();
 }
 
 /**
@@ -557,6 +617,24 @@ WASM_EXPORT const char* akkado_get_required_soundfont_filename(uint32_t index) {
 WASM_EXPORT int32_t akkado_get_required_soundfont_preset(uint32_t index) {
     if (index >= g_compile_result.required_soundfonts.size()) return -1;
     return g_compile_result.required_soundfonts[index].preset_index;
+}
+
+/**
+ * Get number of in() calls in the most recent compile (each entry corresponds
+ * to one in() call in source order). Returns 0 if the program does not use in().
+ */
+WASM_EXPORT uint32_t akkado_get_required_input_sources_count() {
+    return static_cast<uint32_t>(g_compile_result.required_input_sources.size());
+}
+
+/**
+ * Get the source string for the in() call at `index`. Empty string means
+ * the call had no argument (host should fall back to its UI default).
+ * Returns nullptr if index is out of range.
+ */
+WASM_EXPORT const char* akkado_get_required_input_source(uint32_t index) {
+    if (index >= g_compile_result.required_input_sources.size()) return nullptr;
+    return g_compile_result.required_input_sources[index].c_str();
 }
 
 /**

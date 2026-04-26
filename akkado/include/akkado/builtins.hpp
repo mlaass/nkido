@@ -587,6 +587,19 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {NAN, NAN, NAN},
                  "Logical NOT: (a > 0) ? 0 : 1"}},
 
+    // Live audio input — produces a stereo signal sourced from the host
+    // (microphone, tab/system audio, uploaded file, etc.). The optional source
+    // string is a compile-time literal: "mic" | "tab" | "file:NAME". Codegen
+    // emits an INPUT instruction and forwards the source string to the host
+    // via the required-input-source table. Output is always Stereo.
+    {"in",      {cedar::Opcode::INPUT, 0, 1, false,
+                 {"source", "", "", "", "", ""},
+                 {NAN, NAN, NAN, NAN, NAN},
+                 "Live audio input. Optional source: 'mic' (default), 'tab', 'file:NAME'.",
+                 0,
+                 {ParamValueType::String, {}, {}, {}, {}, {}},
+                 {}, ChannelCount::Stereo, false}},
+
     // Utility
     {"noise",   {cedar::Opcode::NOISE, 0, 3, true,
                  {"freq", "trig", "seed", "", "", ""},

@@ -45,6 +45,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     required_samples_extended_keys_.clear();
     required_samples_extended_.clear();
     required_soundfonts_.clear();
+    required_input_sources_.clear();
     param_decls_.clear();
     viz_decls_.clear();
     builtin_var_overrides_.clear();
@@ -63,7 +64,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     if (!ast.valid()) {
         error("E100", "Invalid AST", {});
-        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, {}, false};
+        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, {}, {}, false};
     }
 
     // Visit root (Program node)
@@ -86,7 +87,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     return {std::move(instructions_), std::move(source_locations_), std::move(diagnostics_),
             std::move(state_inits_), std::move(required_samples_vec), std::move(required_samples_extended_),
-            std::move(required_soundfonts_),
+            std::move(required_soundfonts_), std::move(required_input_sources_),
             std::move(param_decls_), std::move(viz_decls_), std::move(builtin_var_overrides_), success};
 }
 
@@ -867,6 +868,8 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"compose", &CodeGenerator::handle_compose_call},
                 // SoundFont playback
                 {"soundfont", &CodeGenerator::handle_soundfont_call},
+                // Live audio input (microphone / tab / file)
+                {"in", &CodeGenerator::handle_input_call},
                 // Polyphony
                 {"poly",   &CodeGenerator::handle_poly_call},
                 {"mono",   &CodeGenerator::handle_mono_call},

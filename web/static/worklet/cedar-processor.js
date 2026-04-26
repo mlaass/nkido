@@ -14,6 +14,11 @@ class CedarProcessor extends AudioWorkletProcessor {
 		this.isInitialized = false;
 		this.outputLeftPtr = 0;
 		this.outputRightPtr = 0;
+		// Input buffer pointers, populated after init. The audio-input PRD
+		// keeps the WASM heap as the source of truth: the worklet writes
+		// captured frames directly into these byte offsets each block.
+		this.inputLeftPtr = 0;
+		this.inputRightPtr = 0;
 		this.blockSize = 128;
 		this.pendingProgram = null; // Pre-extracted compile result for loadCompiledProgram()
 		this.pendingLoadRetry = false; // Set when load hit SlotBusy; retried from process() each block
@@ -112,6 +117,11 @@ class CedarProcessor extends AudioWorkletProcessor {
 			// Get output buffer pointers
 			this.outputLeftPtr = this.module._cedar_get_output_left();
 			this.outputRightPtr = this.module._cedar_get_output_right();
+			// Get input buffer pointers (audio-input PRD §4.5).
+			if (this.module._cedar_get_input_left && this.module._cedar_get_input_right) {
+				this.inputLeftPtr = this.module._cedar_get_input_left();
+				this.inputRightPtr = this.module._cedar_get_input_right();
+			}
 			this.blockSize = this.module._nkido_get_block_size();
 
 			this.isInitialized = true;
@@ -216,6 +226,25 @@ class CedarProcessor extends AudioWorkletProcessor {
 			case 'getFFTProbeData':
 				this.getFFTProbeData(msg.stateId);
 				break;
+
+			case 'setInputSource':
+				// Forward the host-resolved source string into the WASM module
+				// so anything compile-time that wants it (logging, debugging)
+				// can read it back via cedar_get_input_source().
+				if (this.module && this.module._cedar_set_input_source) {
+					const src = msg.source || '';
+					const len = this.module.lengthBytesUTF8(src) + 1;
+					const ptr = this.module._nkido_malloc(len);
+					if (ptr !== 0) {
+						try {
+							this.module.stringToUTF8(src, ptr, len);
+							this.module._cedar_set_input_source(ptr);
+						} finally {
+							this.module._nkido_free(ptr);
+						}
+					}
+				}
+				break;
 		}
 	}
 
@@ -266,6 +295,25 @@ class CedarProcessor extends AudioWorkletProcessor {
 			samples.push({ bank, name, variant, qualifiedName });
 		}
 		return samples;
+	}
+
+	/**
+	 * Get required input source strings (one per in() call) from the compile
+	 * result. Empty string means the call had no argument; the host should
+	 * fall back to its UI default. Returns [] when the program does not use in().
+	 * @returns {string[]}
+	 */
+	getRequiredInputSources() {
+		if (!this.module._akkado_get_required_input_sources_count) {
+			return [];
+		}
+		const count = this.module._akkado_get_required_input_sources_count();
+		const sources = [];
+		for (let i = 0; i < count; i++) {
+			const ptr = this.module._akkado_get_required_input_source(i);
+			sources.push(ptr ? this.module.UTF8ToString(ptr) : '');
+		}
+		return sources;
 	}
 
 	/**
@@ -568,6 +616,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 					const requiredSamples = this.getRequiredSamples();
 					const requiredSamplesExtended = this.getRequiredSamplesExtended();
 					const requiredSoundfonts = this.getRequiredSoundFonts();
+					const requiredInputSources = this.getRequiredInputSources();
 
 					// Extract all state initialization data
 					const stateInits = this.extractStateInits();
@@ -626,6 +675,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 						requiredSamples,
 						requiredSamplesExtended,
 						requiredSoundfonts,
+						requiredInputSources,
 						paramDecls,
 						vizDecls,
 						builtinVarOverrides,
@@ -1437,6 +1487,51 @@ class CedarProcessor extends AudioWorkletProcessor {
 			const swapCount = this.module._cedar_debug_swap_count?.() ?? 'N/A';
 			const currentInst = this.module._cedar_debug_current_slot_instruction_count?.() ?? 'N/A';
 			console.log(`[CedarProcessor] block=${this.blockCount} hasProgram=${hasProgram} crossfading=${isCrossfading} pendingSwap=${hasPendingSwap} swaps=${swapCount} instructions=${currentInst} peakLevel=${this._lastPeak?.toFixed(4) ?? '?'} nanCount=${this._nanCount} silentBlocks=${this._silentBlocks}`);
+		}
+
+		// Forward live audio input (in() opcode) to the WASM heap before
+		// processing. inputs[0] is the first input port — when the AudioWorklet
+		// has nothing connected, it's an empty array. inputs[0][0] is the
+		// left/mono channel; inputs[0][1] (if present) is the right channel.
+		// Mono sources are duplicated into both L and R per the audio-input
+		// PRD §4.5 contract.
+		const input = inputs && inputs[0];
+		const hasInput = input && input.length > 0 &&
+			input[0] && input[0].length > 0;
+		if (hasInput && this.inputLeftPtr && this.inputRightPtr &&
+			this.module._cedar_set_input_active) {
+			const ch0 = input[0];
+			const ch1 = (input.length > 1 && input[1] && input[1].length > 0)
+				? input[1] : ch0;  // mono → duplicate to right
+			const n = Math.min(ch0.length, this.blockSize);
+			if (this.module.wasmMemory) {
+				const heap = new Float32Array(this.module.wasmMemory.buffer);
+				const lIdx = this.inputLeftPtr / 4;
+				const rIdx = this.inputRightPtr / 4;
+				for (let i = 0; i < n; i++) {
+					heap[lIdx + i] = ch0[i];
+					heap[rIdx + i] = ch1[i];
+				}
+				// Zero remaining samples if input was shorter than blockSize.
+				for (let i = n; i < this.blockSize; i++) {
+					heap[lIdx + i] = 0;
+					heap[rIdx + i] = 0;
+				}
+			} else if (this.module.HEAPF32) {
+				const lIdx = this.inputLeftPtr / 4;
+				const rIdx = this.inputRightPtr / 4;
+				for (let i = 0; i < n; i++) {
+					this.module.HEAPF32[lIdx + i] = ch0[i];
+					this.module.HEAPF32[rIdx + i] = ch1[i];
+				}
+				for (let i = n; i < this.blockSize; i++) {
+					this.module.HEAPF32[lIdx + i] = 0;
+					this.module.HEAPF32[rIdx + i] = 0;
+				}
+			}
+			this.module._cedar_set_input_active(1);
+		} else if (this.module._cedar_set_input_active) {
+			this.module._cedar_set_input_active(0);
 		}
 
 		// Process one block with Cedar VM

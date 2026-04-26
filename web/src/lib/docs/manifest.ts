@@ -17,6 +17,7 @@ export const slugToPath: Record<string, string> = {
 	"variables": "reference/language/variables.md",
 	"closures": "reference/language/closures.md",
 	"operators": "reference/language/operators.md",
+	"audio-input": "reference/builtins/audio-input.md",
 	"stereo": "reference/builtins/stereo.md",
 	"sequencing": "reference/builtins/sequencing.md",
 	"delays": "reference/builtins/delays.md",
@@ -118,6 +119,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "visualizations",
 			"title": "Visualizations"
+		},
+		{
+			"slug": "audio-input",
+			"title": "Audio Input"
 		}
 	],
 	"language": [
@@ -1234,6 +1239,57 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "language",
 		"title": "Operators"
 	},
+	"in": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "in",
+		"anchor": "in"
+	},
+	"input": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"microphone": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"mic": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"tab": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"file": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"live": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"audio": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"capture": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
+	"getusermedia": {
+		"slug": "audio-input",
+		"category": "builtins",
+		"title": "Audio Input"
+	},
 	"left, right": {
 		"slug": "stereo",
 		"category": "builtins",
@@ -2075,6 +2131,7 @@ export const previews: Record<string, string> = {
 	"variables": "Variables store values for reuse throughout your patch.",
 	"closures": "Closures are anonymous functions that capture their environment. They're the bridge between patterns and synthesis.",
 	"operators": "Akkado uses operators for arithmetic, comparison, logic, and signal flow.",
+	"audio-input": "The  builtin exposes external audio as a signal source — microphone, tab/system audio, or an uploaded file — so any Cedar effect can process it....",
 	"stereo": "Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every signal; mono DSP ops applied to a stereo signal auto-lift — a...",
 	"sequencing": "Timing and sequencing functions create rhythmic patterns, triggers, and automation curves synchronized to the global clock.",
 	"delays": "Delay effects create copies of a signal offset in time, enabling echoes, rhythmic effects, and spatial depth.",

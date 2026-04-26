@@ -5,6 +5,8 @@
 #include <atomic>
 #include <array>
 #include <cstdint>
+#include <ostream>
+#include <string>
 
 namespace nkido {
 
@@ -26,6 +28,21 @@ public:
 
     // Initialize SDL2 audio with given config
     bool init(const Config& config);
+
+    // Optionally open a capture device (microphone / line-in) feeding the
+    // INPUT opcode. Pass nullptr for the system default; otherwise pass an
+    // exact device name as reported by `--list-devices`. Returns true if a
+    // device was successfully opened. On failure (no device, name not found,
+    // permission denied), this returns false and the VM continues with no
+    // input — `in()` then returns silence per the audio-input PRD contract.
+    // Must be called after init() and before start().
+    bool init_capture(const char* device_name);
+
+    // Print a numbered list of available capture devices (and default).
+    static void list_capture_devices(std::ostream& out);
+
+    // True when a capture device was successfully opened.
+    [[nodiscard]] bool has_input() const { return capture_device_id_ != 0; }
 
     // Start/stop playback
     bool start();
@@ -56,6 +73,9 @@ private:
     // SDL2 audio callback (static to match C callback signature)
     static void audio_callback(void* userdata, std::uint8_t* stream, int len);
 
+    // SDL2 capture callback — writes captured stereo frames into capture_ring_.
+    static void capture_callback(void* userdata, std::uint8_t* stream, int len);
+
     cedar::VM vm_;
     Config config_;
 
@@ -63,12 +83,22 @@ private:
     std::atomic<bool> shutdown_requested_{false};
     std::atomic<bool> initialized_{false};
 
-    // SDL2 device ID (0 = not initialized)
+    // SDL2 device IDs (0 = not initialized)
     std::uint32_t device_id_ = 0;
+    std::uint32_t capture_device_id_ = 0;
+    std::uint8_t capture_channels_ = 0;     // Number of channels SDL gave us (1 or 2)
 
     // Waveform ring buffer for visualization
     std::array<float, WAVEFORM_SIZE> waveform_buffer_{};
     std::atomic<std::size_t> waveform_write_pos_{0};
+
+    // Lock-free SPSC ring buffer for captured audio (stereo interleaved L,R,L,R...).
+    // Sized for ~170ms at 48kHz so a slow consumer never starves the producer in
+    // practice. The capture callback writes; the playback callback reads.
+    static constexpr std::size_t CAPTURE_RING_FRAMES = 8192;
+    std::array<float, CAPTURE_RING_FRAMES * 2> capture_ring_{};
+    std::atomic<std::uint64_t> capture_write_pos_{0};  // Total frames written
+    std::atomic<std::uint64_t> capture_read_pos_{0};   // Total frames read
 };
 
 // Global signal flag for Ctrl+C handling

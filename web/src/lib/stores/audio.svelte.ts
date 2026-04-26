@@ -9,6 +9,18 @@ import { DEFAULT_SOUNDFONTS, resolveDefaultSoundFontUrls } from '$lib/audio/defa
 import { settingsStore } from './settings.svelte';
 import { bankRegistry, type SampleReference } from '$lib/audio/bank-registry';
 import { loadFile, type FileSource } from '$lib/io/file-loader';
+import {
+	acquireMicSource,
+	acquireTabSource,
+	acquireFileSource,
+	enumerateInputDevices,
+	DEFAULT_INPUT_CONSTRAINTS,
+	type ActiveInputSource,
+	type InputConstraints,
+	type InputSourceConfig,
+	type InputSourceKind,
+	type InputStatus
+} from '$lib/audio/input-source';
 
 interface Diagnostic {
 	severity: number;
@@ -138,6 +150,9 @@ interface CompileResult {
 	requiredSamples?: string[]; // Legacy: simple sample names
 	requiredSamplesExtended?: RequiredSampleExtended[]; // Extended: with bank/variant info
 	requiredSoundfonts?: RequiredSoundFont[]; // SF2 files needed
+	// Source strings collected from in() calls (one per call, "" = UI default).
+	// Populated by audio-input PRD §4.4. Empty array when in() is not used.
+	requiredInputSources?: string[];
 	paramDecls?: ParamDecl[];
 	vizDecls?: VizDecl[];
 	disassembly?: DisassemblyInfo;
@@ -255,6 +270,13 @@ interface AudioState {
 	vizDecls: VizDecl[];
 	disassembly: DisassemblyInfo | null;
 	activeSampleRate: number | null;
+	// Audio input (audio-input PRD)
+	inputKind: InputSourceKind;
+	inputDeviceId: string | null;
+	inputFileName: string | null;
+	inputConstraints: InputConstraints;
+	inputStatus: InputStatus;
+	inputError: string | null;
 }
 
 function createAudioEngine() {
@@ -277,7 +299,13 @@ function createAudioEngine() {
 		paramValues: new Map(),
 		vizDecls: [],
 		disassembly: null,
-		activeSampleRate: null
+		activeSampleRate: null,
+		inputKind: 'none',
+		inputDeviceId: null,
+		inputFileName: null,
+		inputConstraints: { ...DEFAULT_INPUT_CONSTRAINTS },
+		inputStatus: 'idle',
+		inputError: null
 	});
 
 	let audioContext: AudioContext | null = null;
@@ -286,6 +314,14 @@ function createAudioEngine() {
 	let analyserNode: AnalyserNode | null = null;
 	let wasmJsCode: string | null = null;
 	let wasmBinary: ArrayBuffer | null = null;
+
+	// Currently connected live-input source (audio-input PRD §4.5).
+	// Null = no input attached; in() then returns silence.
+	let activeInput: ActiveInputSource | null = null;
+
+	// Uploaded input files keyed by display name. Map kept on the main thread
+	// because file sources need raw ArrayBuffers for ctx.decodeAudioData().
+	const inputFileBuffers = new Map<string, ArrayBuffer>();
 
 	// Compile result callback (resolved when worklet responds)
 	let compileResolve: ((result: CompileResult) => void) | null = null;
@@ -355,9 +391,11 @@ function createAudioEngine() {
 			// Load AudioWorklet processor
 			await audioContext.audioWorklet.addModule('/worklet/cedar-processor.js');
 
-			// Create worklet node
+			// Create worklet node. numberOfInputs=1 lets the audio-input PRD's
+			// in() opcode receive live audio (mic / tab / uploaded file) — see
+			// `setInputSource` below for how a source is connected.
 			workletNode = new AudioWorkletNode(audioContext, 'cedar-processor', {
-				numberOfInputs: 0,
+				numberOfInputs: 1,
 				numberOfOutputs: 1,
 				outputChannelCount: [2]
 			});
@@ -403,6 +441,7 @@ function createAudioEngine() {
 					requiredSamples: msg.requiredSamples as string[] | undefined,
 					requiredSamplesExtended: msg.requiredSamplesExtended as RequiredSampleExtended[] | undefined,
 					requiredSoundfonts: msg.requiredSoundfonts as RequiredSoundFont[] | undefined,
+					requiredInputSources: msg.requiredInputSources as string[] | undefined,
 					paramDecls: msg.paramDecls as ParamDecl[] | undefined,
 					vizDecls: msg.vizDecls as VizDecl[] | undefined,
 					disassembly: msg.disassembly as DisassemblyInfo | undefined
@@ -649,6 +688,10 @@ function createAudioEngine() {
 			await stop();
 		}
 
+		// Tear down any active live-input source — the audio context is about
+		// to close, so its source nodes will be invalid anyway.
+		disconnectActiveInput();
+
 		// Close existing audio context
 		if (audioContext) {
 			await audioContext.close();
@@ -671,6 +714,11 @@ function createAudioEngine() {
 		state.params = [];
 		state.paramValues = new Map();
 		state.disassembly = null;
+		state.inputKind = 'none';
+		state.inputDeviceId = null;
+		state.inputFileName = null;
+		state.inputStatus = 'idle';
+		state.inputError = null;
 
 		// Clear sample tracking
 		sampleLoadState.clear();
@@ -1723,6 +1771,135 @@ function createAudioEngine() {
 		});
 	}
 
+	// =========================================================================
+	// Audio input (audio-input PRD)
+	// =========================================================================
+
+	function disconnectActiveInput() {
+		if (activeInput) {
+			try { activeInput.stop(); } catch (e) {
+				console.warn('[AudioEngine] disconnectActiveInput error', e);
+			}
+			activeInput = null;
+		}
+	}
+
+	/**
+	 * Switch the live audio input source. Pass {kind:'none'} to disconnect.
+	 * UI surfaces granted/denied/etc via state.inputStatus.
+	 *
+	 * For 'file' sources, fileName must reference a sample registered with
+	 * bankRegistry (the upload flow / drag-drop pipeline). The existing
+	 * sample-loading registry is reused per the PRD §4.5.
+	 */
+	async function setInputSource(config: InputSourceConfig): Promise<void> {
+		if (!audioContext || !workletNode) {
+			state.inputError = 'Audio not initialized';
+			state.inputStatus = 'error';
+			return;
+		}
+
+		// Always tear down the previous source first to avoid summing two streams.
+		disconnectActiveInput();
+
+		state.inputKind = config.kind;
+		state.inputDeviceId = config.deviceId ?? null;
+		state.inputFileName = config.fileName ?? null;
+		if (config.constraints) state.inputConstraints = { ...config.constraints };
+		state.inputError = null;
+
+		if (config.kind === 'none') {
+			state.inputStatus = 'idle';
+			return;
+		}
+
+		state.inputStatus = 'connecting';
+		try {
+			let acquired: ActiveInputSource;
+			if (config.kind === 'mic') {
+				acquired = await acquireMicSource(
+					audioContext,
+					config.deviceId,
+					config.constraints ?? state.inputConstraints
+				);
+			} else if (config.kind === 'tab') {
+				acquired = await acquireTabSource(audioContext);
+			} else if (config.kind === 'file') {
+				if (!config.fileName) throw new Error('file source requires fileName');
+				const data = inputFileBuffers.get(config.fileName);
+				if (!data) {
+					throw new Error(`Input file "${config.fileName}" has not been uploaded`);
+				}
+				acquired = await acquireFileSource(audioContext, config.fileName, data);
+			} else {
+				throw new Error(`Unknown input source kind: ${config.kind}`);
+			}
+
+			acquired.node.connect(workletNode);
+			activeInput = acquired;
+			state.inputStatus = 'active';
+
+			// Forward source string to WASM for any compile-time consumers
+			// (currently informational; future per-call overrides will use it).
+			const sourceStr = config.kind === 'mic' ? 'mic'
+				: config.kind === 'tab' ? 'tab'
+				: config.kind === 'file' ? `file:${config.fileName ?? ''}`
+				: '';
+			workletNode.port.postMessage({ type: 'setInputSource', source: sourceStr });
+		} catch (err) {
+			console.warn('[AudioEngine] Failed to acquire input source:', err);
+			state.inputError = err instanceof Error ? err.message : String(err);
+			// Map common DOMException names onto the user-visible status.
+			const name = (err as { name?: string })?.name ?? '';
+			if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+				state.inputStatus = 'denied';
+			} else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+				state.inputStatus = 'unavailable';
+			} else {
+				state.inputStatus = 'error';
+			}
+			state.inputKind = 'none';
+		}
+	}
+
+	async function listInputDevices(): Promise<MediaDeviceInfo[]> {
+		return enumerateInputDevices();
+	}
+
+	/**
+	 * Register an uploaded file under `name`. The raw ArrayBuffer is kept in
+	 * memory so subsequent setInputSource({kind:'file', fileName: name}) can
+	 * decode and loop it. Returns the registered name (to surface in the UI).
+	 */
+	function registerInputFile(name: string, data: ArrayBuffer): string {
+		inputFileBuffers.set(name, data);
+		return name;
+	}
+
+	function unregisterInputFile(name: string) {
+		inputFileBuffers.delete(name);
+		if (state.inputKind === 'file' && state.inputFileName === name) {
+			void setInputSource({ kind: 'none' });
+		}
+	}
+
+	function getInputFileNames(): string[] {
+		return Array.from(inputFileBuffers.keys()).sort();
+	}
+
+	function setInputConstraints(c: Partial<InputConstraints>) {
+		const next = { ...state.inputConstraints, ...c };
+		state.inputConstraints = next;
+		// If a mic source is active, re-acquire so the new constraints take effect.
+		if (state.inputKind === 'mic' && activeInput) {
+			void setInputSource({
+				kind: 'mic',
+				deviceId: state.inputDeviceId ?? undefined,
+				constraints: next
+			});
+		}
+	}
+
 	return {
 		get isPlaying() { return state.isPlaying; },
 		get bpm() { return state.bpm; },
@@ -1747,6 +1924,20 @@ function createAudioEngine() {
 		get disassembly() { return state.disassembly; },
 		// Audio config
 		get activeSampleRate() { return state.activeSampleRate; },
+
+		// Audio input (audio-input PRD)
+		get inputKind() { return state.inputKind; },
+		get inputDeviceId() { return state.inputDeviceId; },
+		get inputFileName() { return state.inputFileName; },
+		get inputConstraints() { return state.inputConstraints; },
+		get inputStatus() { return state.inputStatus; },
+		get inputError() { return state.inputError; },
+		setInputSource,
+		setInputConstraints,
+		listInputDevices,
+		registerInputFile,
+		unregisterInputFile,
+		getInputFileNames,
 
 		initialize,
 		play,

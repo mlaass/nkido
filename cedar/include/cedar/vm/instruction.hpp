@@ -63,6 +63,9 @@ enum class Opcode : std::uint8_t {
     EDGE_OP = 55,     // Edge primitives: rate=0 SAH, 1 gateup, 2 gatedown, 3 counter
     ENV_GET = 56,     // Read external parameter from EnvMap
     STATE_OP = 57,    // User state cell I/O: rate=0 init, 1 load, 2 store
+    INPUT = 58,       // Live audio input: copies ctx.input_left/right to adjacent
+                      // output buffer pair (out_buffer = L, out_buffer+1 = R).
+                      // Writes silence when ctx.input_left/right are null.
 
     // Envelopes (60-69) - reserved
     ENV_ADSR = 60,

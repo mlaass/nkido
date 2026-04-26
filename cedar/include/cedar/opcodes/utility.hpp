@@ -57,6 +57,23 @@ inline void op_output(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// INPUT: Copy ctx.input_left/right into an adjacent output buffer pair.
+// out_buffer is the left slot; right is guaranteed adjacent (out_buffer + 1)
+// per the buffer-allocator convention used by every other stereo opcode.
+// Stateless — writes silence when ctx.input_left/right are null.
+[[gnu::always_inline]]
+inline void op_input(ExecutionContext& ctx, const Instruction& inst) {
+    float* out_l = ctx.buffers->get(inst.out_buffer);
+    float* out_r = ctx.buffers->get(inst.out_buffer + 1);
+    if (ctx.input_left && ctx.input_right) {
+        std::memcpy(out_l, ctx.input_left,  BLOCK_SIZE * sizeof(float));
+        std::memcpy(out_r, ctx.input_right, BLOCK_SIZE * sizeof(float));
+    } else {
+        std::memset(out_l, 0, BLOCK_SIZE * sizeof(float));
+        std::memset(out_r, 0, BLOCK_SIZE * sizeof(float));
+    }
+}
+
 // NOISE: Noise generator (deterministic LCG for reproducibility)
 // in0: freq - rate in Hz (0 = white noise, >0 = sample-and-hold at that frequency)
 // in1: trig - reset RNG to start_seed on rising edge (optional)
