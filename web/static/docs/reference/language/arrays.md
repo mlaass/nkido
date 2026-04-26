@@ -246,11 +246,12 @@ rotate([1, 2, 3, 4], 5)   // same as rotate(..., 1)
 
 ## shuffle
 
-**Shuffle** — Deterministic Fisher-Yates permutation seeded by the call's semantic path. Two calls in the same code position always produce the same permutation; calls in different positions produce different ones.
+**Shuffle** — Deterministic Fisher-Yates permutation seeded by the call's semantic path. Two calls in the same code position always produce the same permutation; calls in different positions produce different ones. Pass an explicit `seed` to vary the permutation while keeping the call in place.
 
-| Param | Type  | Default | Description |
-|-------|-------|---------|-------------|
-| array | array | -       | Input array |
+| Param | Type    | Default | Description |
+|-------|---------|---------|-------------|
+| array | array   | -       | Input array |
+| seed  | literal | path    | Compile-time integer mixed into the path-derived seed |
 
 ```akk
 // Same shuffle every compile — useful for stable variations
@@ -258,30 +259,38 @@ shuffle([220, 330, 440, 550])
   |> map(%, (f) -> osc("saw", f))
   |> sum(%) * 0.25
   |> out(%, %)
+
+// A different permutation at the same code position
+shuffle([220, 330, 440, 550], 7)
 ```
 
 ## sort
 
-**Sort** — Ascending numeric order. Operates at compile time on array literals of numbers; non-literal inputs pass through unchanged.
+**Sort** — Ascending numeric order by default; pass `reverse=true` for descending. Operates at compile time on array literals of numbers; non-literal inputs pass through unchanged.
 
-| Param | Type  | Default | Description |
-|-------|-------|---------|-------------|
-| array | array | -       | Input array |
+| Param   | Type    | Default | Description |
+|---------|---------|---------|-------------|
+| array   | array   | -       | Input array |
+| reverse | literal | false   | Sort descending when truthy |
 
 ```akk
-sort([3, 1, 4, 1, 5, 9, 2, 6])  // [1, 1, 2, 3, 4, 5, 6, 9]
+sort([3, 1, 4, 1, 5, 9, 2, 6])        // [1, 1, 2, 3, 4, 5, 6, 9]
+sort([3, 1, 4, 1, 5, 9, 2, 6], true)  // [9, 6, 5, 4, 3, 2, 1, 1]
 ```
 
 ## normalize
 
-**Normalize** — Scale elements so the minimum maps to `0` and the maximum maps to `1`. Single-element arrays return `0`.
+**Normalize** — Scale elements from their current min/max to `[lo, hi]`. With no extra arguments the output range is `[0, 1]`. Single-element arrays return `lo`.
 
-| Param | Type  | Default | Description |
-|-------|-------|---------|-------------|
-| array | array | -       | Input array |
+| Param | Type    | Default | Description |
+|-------|---------|---------|-------------|
+| array | array   | -       | Input array |
+| lo    | literal | 0       | Target minimum |
+| hi    | literal | 1       | Target maximum (must be > lo) |
 
 ```akk
-normalize([10, 20, 30])  // [0.0, 0.5, 1.0]
+normalize([10, 20, 30])         // [0.0, 0.5, 1.0]
+normalize([10, 20, 30], -1, 1)  // [-1.0, 0.0, 1.0]
 ```
 
 If all elements are equal, the divisor is zero — avoid `normalize` on constant-valued arrays.
@@ -335,48 +344,63 @@ repeat(0.5, 4)  // [0.5, 0.5, 0.5, 0.5]
 
 ## linspace
 
-**Linspace** — `n` evenly spaced values from `start` to `end`, **inclusive on both ends**. All arguments must be compile-time constants. `n=1` returns `[start]`; `n ≤ 0` returns an empty array.
+**Linspace** — `n` evenly spaced values from `start` to `end`, **inclusive on both ends**. The optional `mode` selects the spacing curve: `"linear"` (default), `"log"` (geometric — natural for frequency sweeps), or `"geom"` (alias for `"log"`). All non-mode arguments must be compile-time constants. `n=1` returns `[start]`; `n ≤ 0` returns an empty array.
 
-| Param | Type    | Default | Description |
-|-------|---------|---------|-------------|
-| start | literal | -       | First value |
-| end   | literal | -       | Last value |
-| n     | literal | -       | Number of points |
+| Param | Type    | Default    | Description |
+|-------|---------|------------|-------------|
+| start | literal | -          | First value |
+| end   | literal | -          | Last value |
+| n     | literal | -          | Number of points |
+| mode  | string  | `"linear"` | `"linear"`, `"log"`, or `"geom"` |
+
+`log` and `geom` require `start > 0` and `end > 0`.
 
 ```akk
-linspace(0, 1, 5)      // [0, 0.25, 0.5, 0.75, 1]
-linspace(100, 800, 4)  // [100, 333.33, 566.67, 800]
+linspace(0, 1, 5)                  // [0, 0.25, 0.5, 0.75, 1]
+linspace(100, 800, 4)              // [100, 333.33, 566.67, 800]
+linspace(20, 20000, 4, "log")      // [20, ~200, ~2000, 20000]
 ```
 
 ## random
 
-**Random** — `n` deterministic random values in `[0, 1)`, seeded by the call's semantic path. Same code position → same numbers.
+**Random** — `n` deterministic random values, seeded by the call's semantic path. Same code position → same numbers. Pass optional `min`/`max` to rescale from the default `[0, 1)` range.
 
 | Param | Type    | Default | Description |
 |-------|---------|---------|-------------|
 | n     | literal | -       | Number of values |
+| min   | literal | 0       | Lower bound (inclusive) |
+| max   | literal | 1       | Upper bound (exclusive; must be > min) |
 
 ```akk
-// Reproducible random voice gains
+// Reproducible random voice gains in [0, 1)
 gains = random(4)
-[220, 330, 440, 550]
-  |> zipWith(%, gains, (f, g) -> osc("saw", f) * g)
-  |> sum(%) * 0.25
-  |> out(%, %)
+
+// Random MIDI notes in C4–C5
+notes = random(8, 60, 72)
+
+// Random detune in cents
+detune = random(6, -50, 50)
 ```
 
 ## harmonics
 
-**Harmonics** — Harmonic series `[fundamental, 2·fundamental, ..., n·fundamental]`. Includes the fundamental as the first element. Both arguments must be compile-time constants.
+**Harmonics** — Harmonic series `[fundamental, 2·fundamental, ..., n·fundamental]` by default. Pass an optional `ratio` to bend the series: `ratio>1` stretches partials sharper than integer multiples (piano/bell-style inharmonicity); `ratio<1` compresses them. All arguments must be compile-time constants.
 
 | Param       | Type    | Default | Description |
 |-------------|---------|---------|-------------|
 | fundamental | literal | -       | Base frequency |
 | n           | literal | -       | Number of harmonics |
+| ratio       | literal | 1.0     | Stretch factor (must be > -1) |
 
 ```akk
-// Additive sawtooth approximation
+// Natural integer series (default)
 harmonics(110, 8)
+  |> map(%, (f) -> osc("sin", f) / (f / 110))
+  |> sum(%) * 0.2
+  |> out(%, %)
+
+// Slightly stretched, piano-like spectrum
+harmonics(110, 8, 1.05)
   |> map(%, (f) -> osc("sin", f) / (f / 110))
   |> sum(%) * 0.2
   |> out(%, %)

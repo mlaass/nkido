@@ -535,6 +535,17 @@ TEST_CASE("shuffle: deterministic permutation", "[arrays][shuffle]") {
         auto values = collect_consts(get_instructions(result));
         CHECK(std::find(values.begin(), values.end(), 42.0f) != values.end());
     }
+
+    SECTION("seeded shuffle compiles and preserves element count") {
+        auto result = must_compile("sum(shuffle([1, 2, 3, 4, 5], 7))");
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) == 4);
+    }
+
+    SECTION("non-constant seed is rejected") {
+        auto result = akkado::compile("shuffle([1, 2, 3], freq)");
+        REQUIRE_FALSE(result.success);
+    }
 }
 
 // =============================================================================
@@ -590,6 +601,37 @@ TEST_CASE("sort: ascending order at compile time", "[arrays][sort]") {
         auto result = akkado::compile("sort([osc(\"sin\", 220), osc(\"sin\", 440)])");
         REQUIRE(result.success);
     }
+
+    SECTION("reverse=true sorts descending") {
+        auto result = must_compile("sort([3, 1, 4, 1, 5, 9, 2, 6], true)");
+        auto values = collect_consts(get_instructions(result));
+        REQUIRE(values.size() >= 8);
+        auto tail = std::vector<float>(values.end() - 8, values.end());
+        CHECK(tail[0] == 9.0f);
+        CHECK(tail[1] == 6.0f);
+        CHECK(tail[2] == 5.0f);
+        CHECK(tail[3] == 4.0f);
+        CHECK(tail[4] == 3.0f);
+        CHECK(tail[5] == 2.0f);
+        CHECK(tail[6] == 1.0f);
+        CHECK(tail[7] == 1.0f);
+    }
+
+    SECTION("reverse=false matches default ascending") {
+        auto result = must_compile("sort([3, 1, 4, 1, 5], false)");
+        auto values = collect_consts(get_instructions(result));
+        auto tail = std::vector<float>(values.end() - 5, values.end());
+        CHECK(tail[0] == 1.0f);
+        CHECK(tail[1] == 1.0f);
+        CHECK(tail[2] == 3.0f);
+        CHECK(tail[3] == 4.0f);
+        CHECK(tail[4] == 5.0f);
+    }
+
+    SECTION("non-constant reverse argument is rejected") {
+        auto result = akkado::compile("sort([3, 1, 2], freq)");
+        REQUIRE_FALSE(result.success);
+    }
 }
 
 // =============================================================================
@@ -616,6 +658,35 @@ TEST_CASE("normalize: scales array to [0, 1]", "[arrays][normalize]") {
         auto result = must_compile("normalize([])");
         auto values = collect_consts(get_instructions(result));
         CHECK(std::find(values.begin(), values.end(), 0.0f) != values.end());
+    }
+
+    SECTION("custom target range emits MUL+ADD per element") {
+        auto result = must_compile("sum(normalize([10, 20, 30], -1, 1))");
+        auto insts = get_instructions(result);
+        // 3 elements: SUB (subtract min) + DIV + MUL (span) + ADD (lo) per element
+        CHECK(count_instructions(insts, cedar::Opcode::DIV) >= 3);
+        CHECK(count_instructions(insts, cedar::Opcode::MUL) >= 3);
+        CHECK(count_instructions(insts, cedar::Opcode::ADD) >= 3);
+    }
+
+    SECTION("default [0,1] target emits no extra MUL/ADD beyond min/max search") {
+        auto result = must_compile("sum(normalize([10, 20, 30]))");
+        auto insts = get_instructions(result);
+        // Default path: only SUB/DIV per element (no MUL); the trailing
+        // ADDs come from sum() (n-1 = 2), nothing from normalize.
+        CHECK(count_instructions(insts, cedar::Opcode::MUL) == 0);
+    }
+
+    SECTION("hi <= lo is rejected") {
+        auto bad = akkado::compile("normalize([1, 2, 3], 5, 1)");
+        CHECK_FALSE(bad.success);
+        auto eq = akkado::compile("normalize([1, 2, 3], 5, 5)");
+        CHECK_FALSE(eq.success);
+    }
+
+    SECTION("non-constant lo/hi is rejected") {
+        auto result = akkado::compile("normalize([1, 2, 3], 0, freq)");
+        CHECK_FALSE(result.success);
     }
 }
 
@@ -788,6 +859,56 @@ TEST_CASE("linspace: evenly spaced values, inclusive endpoints", "[arrays][linsp
         auto result = akkado::compile("n = 5\nlinspace(0, 1, n)");
         CHECK_FALSE(result.success);
     }
+
+    SECTION("explicit \"linear\" mode matches default") {
+        auto a = must_compile("linspace(0, 1, 5)");
+        auto b = must_compile("linspace(0, 1, 5, \"linear\")");
+        auto va = collect_consts(get_instructions(a));
+        auto vb = collect_consts(get_instructions(b));
+        REQUIRE(va.size() == vb.size());
+        for (std::size_t i = 0; i < va.size(); ++i) CHECK(va[i] == vb[i]);
+    }
+
+    SECTION("log mode produces a geometric frequency sweep") {
+        auto result = must_compile("linspace(20, 20000, 4, \"log\")");
+        auto values = collect_consts(get_instructions(result));
+        REQUIRE(values.size() >= 4);
+        auto tail = std::vector<float>(values.end() - 4, values.end());
+        // Endpoints exact, middle values are 20*1000^(1/3) and 20*1000^(2/3)
+        // = ~200 and ~2000.
+        CHECK_THAT(tail[0], WithinAbs(20.0f, 1e-2f));
+        CHECK_THAT(tail[1], WithinAbs(200.0f, 1.0f));
+        CHECK_THAT(tail[2], WithinAbs(2000.0f, 10.0f));
+        CHECK_THAT(tail[3], WithinAbs(20000.0f, 1.0f));
+    }
+
+    SECTION("geom mode is an alias for log mode") {
+        auto a = must_compile("linspace(1, 64, 7, \"log\")");
+        auto b = must_compile("linspace(1, 64, 7, \"geom\")");
+        auto va = collect_consts(get_instructions(a));
+        auto vb = collect_consts(get_instructions(b));
+        REQUIRE(va.size() == vb.size());
+        for (std::size_t i = 0; i < va.size(); ++i) {
+            CHECK_THAT(va[i], WithinAbs(vb[i], 1e-3f));
+        }
+    }
+
+    SECTION("unknown mode is rejected") {
+        auto result = akkado::compile("linspace(0, 1, 5, \"cheesy\")");
+        CHECK_FALSE(result.success);
+    }
+
+    SECTION("log mode with start <= 0 is rejected") {
+        auto bad = akkado::compile("linspace(0, 100, 5, \"log\")");
+        CHECK_FALSE(bad.success);
+        auto neg = akkado::compile("linspace(-1, 100, 5, \"log\")");
+        CHECK_FALSE(neg.success);
+    }
+
+    SECTION("non-string mode is rejected") {
+        auto result = akkado::compile("linspace(0, 1, 5, 0)");
+        CHECK_FALSE(result.success);
+    }
 }
 
 // =============================================================================
@@ -828,6 +949,39 @@ TEST_CASE("random: deterministic random values", "[arrays][random]") {
         auto insts = get_instructions(result);
         CHECK(count_instructions(insts, cedar::Opcode::ADD) == 0);
     }
+
+    SECTION("values lie in [min, max) when range is given") {
+        auto result = must_compile("random(8, 60, 72)");
+        auto values = collect_consts(get_instructions(result));
+        REQUIRE(values.size() >= 8);
+        auto tail = std::vector<float>(values.end() - 8, values.end());
+        for (float v : tail) {
+            CHECK(v >= 60.0f);
+            CHECK(v < 72.0f);
+        }
+    }
+
+    SECTION("negative range is supported (min < 0)") {
+        auto result = must_compile("random(8, -1, 1)");
+        auto values = collect_consts(get_instructions(result));
+        auto tail = std::vector<float>(values.end() - 8, values.end());
+        for (float v : tail) {
+            CHECK(v >= -1.0f);
+            CHECK(v < 1.0f);
+        }
+    }
+
+    SECTION("max <= min is rejected") {
+        auto bad = akkado::compile("random(4, 10, 5)");
+        CHECK_FALSE(bad.success);
+        auto equal = akkado::compile("random(4, 5, 5)");
+        CHECK_FALSE(equal.success);
+    }
+
+    SECTION("non-constant min/max is rejected") {
+        auto result = akkado::compile("random(4, 0, freq)");
+        CHECK_FALSE(result.success);
+    }
 }
 
 // =============================================================================
@@ -855,6 +1009,49 @@ TEST_CASE("harmonics: harmonic series including fundamental", "[arrays][harmonic
     SECTION("non-literal arguments are an error") {
         auto result = akkado::compile("f = 110\nharmonics(f, 4)");
         CHECK_FALSE(result.success);
+    }
+
+    SECTION("ratio=1.0 matches the default integer-multiplier path") {
+        auto a = must_compile("harmonics(110, 4)");
+        auto b = must_compile("harmonics(110, 4, 1.0)");
+        auto vals_a = collect_consts(get_instructions(a));
+        auto vals_b = collect_consts(get_instructions(b));
+        REQUIRE(vals_a.size() >= 4);
+        REQUIRE(vals_b.size() >= 4);
+        auto tail_a = std::vector<float>(vals_a.end() - 4, vals_a.end());
+        auto tail_b = std::vector<float>(vals_b.end() - 4, vals_b.end());
+        CHECK(tail_a == tail_b);
+    }
+
+    SECTION("ratio>1 stretches partials sharper than integer multiples") {
+        auto result = must_compile("harmonics(110, 4, 1.5)");
+        auto values = collect_consts(get_instructions(result));
+        REQUIRE(values.size() >= 4);
+        auto tail = std::vector<float>(values.end() - 4, values.end());
+        // Fundamental unchanged
+        CHECK_THAT(tail[0], WithinAbs(110.0f, 1e-3f));
+        // Higher partials should be sharper than n*f0
+        CHECK(tail[1] > 220.0f);
+        CHECK(tail[2] > 330.0f);
+        CHECK(tail[3] > 440.0f);
+    }
+
+    SECTION("ratio<1 compresses partials below integer multiples") {
+        auto result = must_compile("harmonics(110, 4, 0.5)");
+        auto values = collect_consts(get_instructions(result));
+        auto tail = std::vector<float>(values.end() - 4, values.end());
+        CHECK_THAT(tail[0], WithinAbs(110.0f, 1e-3f));
+        // Higher partials should be flatter than n*f0
+        CHECK(tail[1] < 220.0f);
+        CHECK(tail[2] < 330.0f);
+        CHECK(tail[3] < 440.0f);
+    }
+
+    SECTION("ratio <= -1 is rejected") {
+        auto bad = akkado::compile("harmonics(110, 4, -1)");
+        CHECK_FALSE(bad.success);
+        auto worse = akkado::compile("harmonics(110, 4, -2)");
+        CHECK_FALSE(worse.success);
     }
 }
 

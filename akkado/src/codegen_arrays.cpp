@@ -29,6 +29,10 @@ static std::optional<double> resolve_const_scalar(
         return n.as_number();
     }
 
+    if (n.type == NodeType::BoolLit) {
+        return n.as_bool() ? 1.0 : 0.0;
+    }
+
     if (n.type == NodeType::Identifier) {
         std::string name;
         if (std::holds_alternative<Node::IdentifierData>(n.data)) {
@@ -1047,10 +1051,20 @@ TypedValue CodeGenerator::handle_rotate_call(NodeIndex node, const Node& n) {
 
 // shuffle(array) - deterministic random permutation
 TypedValue CodeGenerator::handle_shuffle_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 1);
+    auto args = extract_call_args(ast_->arena, n.first_child, 1, 2);
     if (!args.valid) {
-        error("E168", "shuffle() requires 1 argument: shuffle(array)", n.location);
+        error("E168", "shuffle() requires 1 or 2 arguments: shuffle(array, seed=auto)", n.location);
         return TypedValue::void_val();
+    }
+
+    std::optional<double> user_seed;
+    if (args.nodes.size() == 2) {
+        user_seed = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
+        if (!user_seed) {
+            error("E168", "shuffle() seed must be a compile-time constant",
+                  ast_->arena[args.nodes[1]].location);
+            return TypedValue::void_val();
+        }
     }
 
     std::uint16_t array_buf = visit(args.nodes[0]).buffer;
@@ -1065,8 +1079,13 @@ TypedValue CodeGenerator::handle_shuffle_call(NodeIndex node, const Node& n) {
         return cache_and_return(node, TypedValue::signal(first_buf));
     }
 
-    // Use semantic path hash as seed for deterministic shuffle
+    // Default seed: semantic path hash for deterministic shuffle.
+    // User-provided seed XORs in so the same code position can produce
+    // distinct permutations.
     std::uint32_t seed = compute_state_id();
+    if (user_seed) {
+        seed ^= static_cast<std::uint32_t>(static_cast<std::int64_t>(*user_seed));
+    }
 
     // Fisher-Yates shuffle with simple LCG
     std::vector<std::uint16_t> result = elem_bufs;
@@ -1079,12 +1098,23 @@ TypedValue CodeGenerator::handle_shuffle_call(NodeIndex node, const Node& n) {
     return finalize_result(node, std::move(result), node_types_, buffers_, instructions_);
 }
 
-// sort(array) - sort elements in ascending order (compile-time constants only)
+// sort(array, reverse=false) - sort elements (compile-time constants only)
 TypedValue CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 1);
+    auto args = extract_call_args(ast_->arena, n.first_child, 1, 2);
     if (!args.valid) {
-        error("E169", "sort() requires 1 argument: sort(array)", n.location);
+        error("E169", "sort() requires 1 or 2 arguments: sort(array, reverse=false)", n.location);
         return TypedValue::void_val();
+    }
+
+    bool reverse = false;
+    if (args.nodes.size() == 2) {
+        auto rev_val = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
+        if (!rev_val) {
+            error("E169", "sort() reverse argument must be a compile-time constant",
+                  ast_->arena[args.nodes[1]].location);
+            return TypedValue::void_val();
+        }
+        reverse = (*rev_val != 0.0);
     }
 
     // For compile-time sort, we need to extract literal values
@@ -1116,9 +1146,14 @@ TypedValue CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
         return cache_and_return(node, TypedValue::signal(zero));
     }
 
-    // Sort by value
-    std::sort(values.begin(), values.end(),
-              [](const auto& a, const auto& b) { return a.first < b.first; });
+    // Sort by value (reverse swaps comparator)
+    if (reverse) {
+        std::sort(values.begin(), values.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+    } else {
+        std::sort(values.begin(), values.end(),
+                  [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
 
     // Emit sorted constants
     std::vector<std::uint16_t> result_buffers;
@@ -1134,26 +1169,51 @@ TypedValue CodeGenerator::handle_sort_call(NodeIndex node, const Node& n) {
     return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
-// normalize(array) - scale to 0-1 range
+// normalize(array, lo=0, hi=1) - scale to [lo, hi] range
 TypedValue CodeGenerator::handle_normalize_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 1);
+    auto args = extract_call_args(ast_->arena, n.first_child, 1, 3);
     if (!args.valid) {
-        error("E170", "normalize() requires 1 argument: normalize(array)", n.location);
+        error("E170", "normalize() requires 1-3 arguments: normalize(array, lo=0, hi=1)", n.location);
+        return TypedValue::void_val();
+    }
+
+    double lo_val = 0.0;
+    double hi_val = 1.0;
+    if (args.nodes.size() >= 2) {
+        auto v = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
+        if (!v) {
+            error("E170", "normalize() lo must be a compile-time constant",
+                  ast_->arena[args.nodes[1]].location);
+            return TypedValue::void_val();
+        }
+        lo_val = *v;
+    }
+    if (args.nodes.size() == 3) {
+        auto v = resolve_const_scalar(ast_->arena, args.nodes[2], *symbols_);
+        if (!v) {
+            error("E170", "normalize() hi must be a compile-time constant",
+                  ast_->arena[args.nodes[2]].location);
+            return TypedValue::void_val();
+        }
+        hi_val = *v;
+    }
+    if (hi_val <= lo_val) {
+        error("E170", "normalize() requires hi > lo", n.location);
         return TypedValue::void_val();
     }
 
     std::uint16_t array_buf = visit(args.nodes[0]).buffer;
 
     if (!is_multi_buffer(args.nodes[0])) {
-        // Single element normalizes to 0 (or could be 1, convention varies)
-        std::uint16_t zero = emit_zero(buffers_, instructions_);
-        return cache_and_return(node, TypedValue::signal(zero));
+        // Single element normalizes to lo (constant target floor)
+        std::uint16_t out = emit_push_const(buffers_, instructions_, static_cast<float>(lo_val));
+        return cache_and_return(node, TypedValue::signal(out));
     }
 
     auto elem_bufs = get_multi_buffers(args.nodes[0]);
     if (elem_bufs.size() <= 1) {
-        std::uint16_t zero = emit_zero(buffers_, instructions_);
-        return cache_and_return(node, TypedValue::signal(zero));
+        std::uint16_t out = emit_push_const(buffers_, instructions_, static_cast<float>(lo_val));
+        return cache_and_return(node, TypedValue::signal(out));
     }
 
     // Find min
@@ -1168,15 +1228,31 @@ TypedValue CodeGenerator::handle_normalize_call(NodeIndex node, const Node& n) {
         max_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::MAX, max_buf, elem_bufs[i]);
     }
 
-    // range = max - min
-    std::uint16_t range_buf = emit_binary_op(buffers_, instructions_, cedar::Opcode::SUB, max_buf, min_buf);
+    // src_range = max - min
+    std::uint16_t src_range = emit_binary_op(buffers_, instructions_, cedar::Opcode::SUB, max_buf, min_buf);
 
-    // Normalize each element: (elem - min) / range
+    // For the default [0,1] path, skip the extra MUL/ADD to keep emitted
+    // ops identical to the pre-extension behavior.
+    bool default_target = (lo_val == 0.0 && hi_val == 1.0);
+    std::uint16_t span_buf = 0;
+    std::uint16_t lo_buf = 0;
+    if (!default_target) {
+        span_buf = emit_push_const(buffers_, instructions_, static_cast<float>(hi_val - lo_val));
+        lo_buf = emit_push_const(buffers_, instructions_, static_cast<float>(lo_val));
+    }
+
     std::vector<std::uint16_t> result_buffers;
     for (auto buf : elem_bufs) {
         std::uint16_t shifted = emit_binary_op(buffers_, instructions_, cedar::Opcode::SUB, buf, min_buf);
-        std::uint16_t normalized = emit_binary_op(buffers_, instructions_, cedar::Opcode::DIV, shifted, range_buf);
-        result_buffers.push_back(normalized);
+        std::uint16_t unit = emit_binary_op(buffers_, instructions_, cedar::Opcode::DIV, shifted, src_range);
+        std::uint16_t out;
+        if (default_target) {
+            out = unit;
+        } else {
+            std::uint16_t scaled = emit_binary_op(buffers_, instructions_, cedar::Opcode::MUL, unit, span_buf);
+            out = emit_binary_op(buffers_, instructions_, cedar::Opcode::ADD, scaled, lo_buf);
+        }
+        result_buffers.push_back(out);
     }
 
     return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
@@ -1239,15 +1315,16 @@ TypedValue CodeGenerator::handle_scale_call(NodeIndex node, const Node& n) {
 // Array generation operations
 // ============================================================================
 
-// linspace(start, end, n) - N evenly spaced values
+// linspace(start, end, n, mode="linear") - N evenly spaced values
 TypedValue CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 3);
+    auto args = extract_call_args(ast_->arena, n.first_child, 3, 4);
     if (!args.valid) {
-        error("E172", "linspace() requires 3 arguments: linspace(start, end, n)", n.location);
+        error("E172", "linspace() requires 3 or 4 arguments: linspace(start, end, n, mode=\"linear\")",
+              n.location);
         return TypedValue::void_val();
     }
 
-    // All arguments must be compile-time constants
+    // start/end/n must be compile-time constants
     auto start_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
     auto end_val = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
     auto n_val = resolve_const_scalar(ast_->arena, args.nodes[2], *symbols_);
@@ -1257,8 +1334,27 @@ TypedValue CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    float start = static_cast<float>(*start_val);
-    float end = static_cast<float>(*end_val);
+    enum class Mode { Linear, Log, Geom };
+    Mode mode = Mode::Linear;
+    if (args.nodes.size() == 4) {
+        const Node& mode_node = ast_->arena[args.nodes[3]];
+        if (mode_node.type != NodeType::StringLit) {
+            error("E173", "linspace() mode must be a string literal", mode_node.location);
+            return TypedValue::void_val();
+        }
+        std::string m = std::string(mode_node.as_string());
+        if (m == "linear")    mode = Mode::Linear;
+        else if (m == "log")  mode = Mode::Log;
+        else if (m == "geom") mode = Mode::Geom;
+        else {
+            error("E173", "linspace() mode must be \"linear\", \"log\", or \"geom\"",
+                  mode_node.location);
+            return TypedValue::void_val();
+        }
+    }
+
+    double start = *start_val;
+    double end = *end_val;
     int count = static_cast<int>(*n_val);
 
     if (count <= 0) {
@@ -1266,11 +1362,27 @@ TypedValue CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n) {
         return cache_and_return(node, TypedValue::signal(zero));
     }
 
+    if ((mode == Mode::Log || mode == Mode::Geom) && (start <= 0.0 || end <= 0.0)) {
+        error("E173", "linspace() log/geom modes require start > 0 and end > 0", n.location);
+        return TypedValue::void_val();
+    }
+
     std::vector<std::uint16_t> result_buffers;
     for (int i = 0; i < count; ++i) {
-        float t = (count > 1) ? static_cast<float>(i) / static_cast<float>(count - 1) : 0.0f;
-        float val = start + t * (end - start);
-        std::uint16_t buf = emit_push_const(buffers_, instructions_, val);
+        double val;
+        if (count == 1) {
+            val = start;
+        } else if (mode == Mode::Linear) {
+            double t = static_cast<double>(i) / static_cast<double>(count - 1);
+            val = start + t * (end - start);
+        } else {
+            // log and geom both produce the same numbers (geometric series),
+            // exposed as two names to match user intent (frequency sweep vs
+            // exponential ramp).
+            double t = static_cast<double>(i) / static_cast<double>(count - 1);
+            val = start * std::pow(end / start, t);
+        }
+        std::uint16_t buf = emit_push_const(buffers_, instructions_, static_cast<float>(val));
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
             return TypedValue::void_val();
@@ -1281,11 +1393,11 @@ TypedValue CodeGenerator::handle_linspace_call(NodeIndex node, const Node& n) {
     return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
-// random(n) - N random values (deterministic by path)
+// random(n, min=0, max=1) - N random values in [min, max) (deterministic by path)
 TypedValue CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 1);
+    auto args = extract_call_args(ast_->arena, n.first_child, 1, 3);
     if (!args.valid) {
-        error("E174", "random() requires 1 argument: random(n)", n.location);
+        error("E174", "random() requires 1-3 arguments: random(n, min=0, max=1)", n.location);
         return TypedValue::void_val();
     }
 
@@ -1293,6 +1405,32 @@ TypedValue CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
     if (!n_val) {
         error("E175", "random() argument must be a compile-time constant",
               ast_->arena[args.nodes[0]].location);
+        return TypedValue::void_val();
+    }
+
+    double min_val = 0.0;
+    double max_val = 1.0;
+    if (args.nodes.size() >= 2) {
+        auto m = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
+        if (!m) {
+            error("E175", "random() min must be a compile-time constant",
+                  ast_->arena[args.nodes[1]].location);
+            return TypedValue::void_val();
+        }
+        min_val = *m;
+    }
+    if (args.nodes.size() == 3) {
+        auto m = resolve_const_scalar(ast_->arena, args.nodes[2], *symbols_);
+        if (!m) {
+            error("E175", "random() max must be a compile-time constant",
+                  ast_->arena[args.nodes[2]].location);
+            return TypedValue::void_val();
+        }
+        max_val = *m;
+    }
+
+    if (max_val <= min_val) {
+        error("E175", "random() requires max > min", n.location);
         return TypedValue::void_val();
     }
 
@@ -1304,12 +1442,15 @@ TypedValue CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
 
     // Use semantic path hash as seed for deterministic random values
     std::uint32_t seed = compute_state_id();
+    float span = static_cast<float>(max_val - min_val);
+    float lo = static_cast<float>(min_val);
 
     std::vector<std::uint16_t> result_buffers;
     for (int i = 0; i < count; ++i) {
-        // Simple LCG to generate random float in [0, 1)
+        // Simple LCG to generate random float in [0, 1), then rescale.
         seed = seed * 1103515245 + 12345;
-        float val = static_cast<float>((seed >> 16) & 0x7FFF) / 32768.0f;
+        float u = static_cast<float>((seed >> 16) & 0x7FFF) / 32768.0f;
+        float val = lo + u * span;
 
         std::uint16_t buf = emit_push_const(buffers_, instructions_, val);
         if (buf == BufferAllocator::BUFFER_UNUSED) {
@@ -1322,11 +1463,11 @@ TypedValue CodeGenerator::handle_random_call(NodeIndex node, const Node& n) {
     return finalize_result(node, std::move(result_buffers), node_types_, buffers_, instructions_);
 }
 
-// harmonics(fundamental, n) - harmonic series
+// harmonics(fundamental, n, ratio=1.0) - harmonic series with optional inharmonicity
 TypedValue CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 2);
+    auto args = extract_call_args(ast_->arena, n.first_child, 2, 3);
     if (!args.valid) {
-        error("E176", "harmonics() requires 2 arguments: harmonics(fundamental, n)", n.location);
+        error("E176", "harmonics() requires 2 or 3 arguments: harmonics(fundamental, n, ratio=1)", n.location);
         return TypedValue::void_val();
     }
 
@@ -1338,6 +1479,22 @@ TypedValue CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
+    double ratio_val = 1.0;
+    if (args.nodes.size() == 3) {
+        auto r = resolve_const_scalar(ast_->arena, args.nodes[2], *symbols_);
+        if (!r) {
+            error("E177", "harmonics() ratio must be a compile-time constant",
+                  ast_->arena[args.nodes[2]].location);
+            return TypedValue::void_val();
+        }
+        ratio_val = *r;
+    }
+
+    if (ratio_val <= -1.0) {
+        error("E177", "harmonics() ratio must be > -1 (1 + ratio must be positive)", n.location);
+        return TypedValue::void_val();
+    }
+
     float fundamental = static_cast<float>(*fund_val);
     int count = static_cast<int>(*n_val);
 
@@ -1346,9 +1503,16 @@ TypedValue CodeGenerator::handle_harmonics_call(NodeIndex node, const Node& n) {
         return cache_and_return(node, TypedValue::signal(zero));
     }
 
+    // Default ratio==1 keeps the integer-multiplier fast path to avoid
+    // float drift on the most common case.
+    bool natural = (ratio_val == 1.0);
+    double exponent = natural ? 0.0 : std::log2(1.0 + ratio_val);
+
     std::vector<std::uint16_t> result_buffers;
     for (int i = 1; i <= count; ++i) {
-        float harmonic = fundamental * static_cast<float>(i);
+        float harmonic = natural
+            ? fundamental * static_cast<float>(i)
+            : fundamental * static_cast<float>(std::pow(static_cast<double>(i), exponent));
         std::uint16_t buf = emit_push_const(buffers_, instructions_, harmonic);
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
