@@ -1793,8 +1793,16 @@ function createAudioEngine() {
 	 * sample-loading registry is reused per the PRD §4.5.
 	 */
 	async function setInputSource(config: InputSourceConfig): Promise<void> {
+		// Lazy-initialize the audio engine. The Audio Input panel lives in
+		// Settings, so users typically click Mic/Tab/File before pressing Play
+		// — the click counts as a user gesture, so AudioContext creation is
+		// allowed here. Without this, the panel silently shows "Audio not
+		// initialized" with no console output.
 		if (!audioContext || !workletNode) {
-			state.inputError = 'Audio not initialized';
+			await initialize();
+		}
+		if (!audioContext || !workletNode) {
+			state.inputError = state.error ?? 'Audio not initialized';
 			state.inputStatus = 'error';
 			return;
 		}
