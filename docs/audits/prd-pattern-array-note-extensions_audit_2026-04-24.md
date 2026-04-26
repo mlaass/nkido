@@ -12,6 +12,10 @@
 - Recommended PRD Status: `PARTIAL` (matches existing status; no change needed)
 - One-line verdict: Foundational phases (arrays/map, chords, polymeter, dot-call) ship and are tested; voicing (Phase 4), extended note properties (Phase 5: bend/aftertouch), and most time/structure modifiers (Phase 7) plus algorithmic generators `run`/`binary`/`binaryN` (Phase 8) are not implemented.
 
+## Follow-Up
+
+All four unmet goals (Phases 4, 5, 7, 8) are now scoped in [`docs/prd-pattern-array-note-extensions-phase-2.md`](../prd-pattern-array-note-extensions-phase-2.md). The findings, suggestions, and missing tests below feed into that follow-up PRD; no further action against the original PRD is expected — its status table has been updated to defer Phases 4/5/7/8 to Phase 2.
+
 ## Goal Verification
 
 | Goal | Status | Evidence |

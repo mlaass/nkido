@@ -1,4 +1,4 @@
-> **Status: PARTIAL** — Phases 1, 3, 6 done. Phase 2 mostly resolved via dot-call desugaring. Phase 7 (time/structure modifiers) and Phase 8 (algorithmic generators) are unblocked and in progress. Phase 4 (voicing) deferred. Phase 5 (extended note properties) partially done.
+> **Status: PARTIAL — Phase 1 of 2 complete.** Phases 1, 3, 6 done. Phase 2 (pattern objects) resolved via dot-call desugaring. Phases 4 (voicing), 5 (extended note properties), 7 (time/structure modifiers), and 8 (algorithmic generators) are tracked in the follow-up [`prd-pattern-array-note-extensions-phase-2.md`](./prd-pattern-array-note-extensions-phase-2.md). See `docs/audits/prd-pattern-array-note-extensions_audit_2026-04-24.md` for the gap analysis that scoped Phase 2.
 
 # PRD: Strudel-Style Pattern System Extensions
 
@@ -261,7 +261,9 @@ drums.slow(2).rev() |> out(%, %)
 - `chord("C7")` → `[48, 52, 55, 58]`
 - Listen: `chord("Am") |> mtof(%) |> osc("saw", %)` sounds like A minor
 
-### Phase 4: Voicing System
+### Phase 4: Voicing System — DEFERRED to Phase 2 PRD
+
+> Tracked in [`prd-pattern-array-note-extensions-phase-2.md`](./prd-pattern-array-note-extensions-phase-2.md) §5.4. The summary below is preserved for historical context.
 
 **Goal**: Voice leading and voicing controls.
 
@@ -289,7 +291,9 @@ drums.slow(2).rev() |> out(%, %)
 - `chord("C").anchor("c4").mode("below")` places all notes below C4
 - Voice leading minimizes movement between consecutive chords
 
-### Phase 5: Extended Note Properties
+### Phase 5: Extended Note Properties — DEFERRED to Phase 2 PRD
+
+> Tracked in [`prd-pattern-array-note-extensions-phase-2.md`](./prd-pattern-array-note-extensions-phase-2.md) §5.5. The summary below is preserved for historical context.
 
 **Goal**: MIDI-complete note model.
 
@@ -329,7 +333,9 @@ note("c4").velocity(0.7).dur(0.5)
 
 **Tests**: `test_mini_notation.cpp` — polymeter tokens, basic parsing, step count, nested polymeter, evaluation
 
-### Phase 7: Time & Structure Modifiers — IN PROGRESS
+### Phase 7: Time & Structure Modifiers — DEFERRED to Phase 2 PRD
+
+> Tracked in [`prd-pattern-array-note-extensions-phase-2.md`](./prd-pattern-array-note-extensions-phase-2.md) §5.1, §5.2. The 12 transforms below have not been implemented; the table is preserved for historical context.
 
 **Goal**: Strudel-compatible pattern transform functions. All are compile-time transforms on the event list, callable via both functional and dot-call syntax (e.g. `early(pat, 0.25)` or `pat.early(0.25)`).
 
@@ -364,7 +370,9 @@ note("c4").velocity(0.7).dur(0.5)
 - `akkado/src/codegen.cpp` — Register dispatch entries
 - `akkado/src/codegen_patterns.cpp` — Handler implementations + `compile_pattern_for_transform()` cases + `is_pattern_call()` entries
 
-### Phase 8: Algorithmic Generators — PARTIAL
+### Phase 8: Algorithmic Generators — PARTIAL (remainder DEFERRED to Phase 2 PRD)
+
+> `run`, `binary`, `binaryN` are tracked in [`prd-pattern-array-note-extensions-phase-2.md`](./prd-pattern-array-note-extensions-phase-2.md) §5.3. `euclid` already ships.
 
 **Already implemented:**
 - `euclid(hits, steps, rot)` — Cedar opcode `EUCLID`, runtime euclidean rhythm generator with optional rotation
