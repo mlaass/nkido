@@ -17,9 +17,14 @@ namespace cedar {
 //                  Subsequent executions are no-ops (slot value preserved across blocks
 //                  AND across hot-swap edits — see PRD §9). Output is broadcast of slot.
 //   rate=1 load  — output is broadcast of slot value. No input reads.
-//   rate=2 store — write LAST sample of inputs[0] to slot. Output is broadcast of new
+//   rate=2 store — scan inputs[0] and write the LATEST sample whose value differs
+//                  from the slot's value at the start of this block. Samples that
+//                  equal the start-of-block value are no-ops, so an `idx.set(
+//                  select(gateup(t), idx.get()+dir, idx.get()))` pattern survives
+//                  the rising-edge sample even when it isn't the final one. For a
+//                  constant-across-the-block input this collapses to the obvious
+//                  "write that constant" behavior. Output is broadcast of the new
 //                  slot value (so set() can be used in expression position).
-//                  Per-sample writes would conflict with the scalar-register semantic.
 [[gnu::always_inline]]
 inline void op_state(ExecutionContext& ctx, const Instruction& inst) {
     auto& state = ctx.states->get_or_create<CellState>(inst.state_id);
@@ -40,7 +45,10 @@ inline void op_state(ExecutionContext& ctx, const Instruction& inst) {
         }
         case 2: {
             const float* in = ctx.buffers->get(inst.inputs[0]);
-            state.value = in[BLOCK_SIZE - 1];
+            const float initial = state.value;
+            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+                if (in[i] != initial) state.value = in[i];
+            }
             state.initialized = true;
             break;
         }

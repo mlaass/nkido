@@ -724,9 +724,14 @@ TEST_CASE("Const: used in multiply", "[const]") {
 }
 
 TEST_CASE("Const: array used as osc input", "[const]") {
+    // Multi-voice arrays into a mono `out` need explicit summing — same rule
+    // that `chord("Am") |> osc(...) |> out(...)` enforces in test_chord.cpp.
+    // (Pre-Bug-A-fix this compiled because chord-expansion was silently
+    // dropping voices 2..N; now that it correctly identifies all three voices,
+    // the program needs a `sum()` step to be well-typed.)
     auto result = akkado::compile(R"(
         const freqs = [220, 440, 660]
-        osc("sin", freqs) |> out(%, %)
+        osc("sin", freqs) |> sum(%) |> out(%, %)
     )");
     REQUIRE(result.success);
     auto insts = get_instructions(result);

@@ -162,6 +162,12 @@ TypedValue CodeGenerator::handle_user_function_call(
     // IMPORTANT: Visit arguments BEFORE pushing scope to evaluate them in caller's context
     // This allows nested function calls like double(double(x)) to work correctly.
     std::vector<std::uint16_t> param_bufs;
+    // Parallel: each entry is empty unless the corresponding arg evaluated to a
+    // multi-element Array. When non-empty, the param is bound via define_array
+    // so arr[i] inside the body sees an Array TypedValue and emits ARRAY_PACK +
+    // ARRAY_INDEX with the correct length, instead of just the first element's
+    // buffer with length=1.
+    std::vector<std::vector<std::uint16_t>> param_multi_bufs(func.params.size());
     // Track rest param info separately
     std::string rest_param_name;
     std::vector<std::uint16_t> rest_buffers;
@@ -258,12 +264,20 @@ TypedValue CodeGenerator::handle_user_function_call(
                     }
 
                     // Visit argument in caller's scope
-                    param_buf = visit(args[i]).buffer;
+                    TypedValue arg_tv = visit(args[i]);
+                    param_buf = arg_tv.buffer;
 
                     // Track multi-buffer arguments for polyphonic propagation
                     if (is_multi_buffer(args[i])) {
                         std::uint32_t param_hash = fnv1a_hash(func.params[i].name);
                         param_multi_buffer_sources_[param_hash] = args[i];
+                    }
+                    // Capture array info so the param can be bound as an Array
+                    // symbol (lets arr[i] inside the body emit ARRAY_PACK +
+                    // ARRAY_INDEX with the correct length).
+                    if (arg_tv.type == ValueType::Array && arg_tv.array &&
+                        arg_tv.array->elements.size() > 1) {
+                        param_multi_bufs[i] = buffers_of(arg_tv);
                     }
                 }
             }
@@ -370,6 +384,12 @@ TypedValue CodeGenerator::handle_user_function_call(
                         }
                     }
                     symbols_->define_record(func.params[i].name, record_type);
+                } else if (!param_multi_bufs[i].empty()) {
+                    ArrayInfo arr;
+                    arr.source_node = NULL_NODE;
+                    arr.buffer_indices = param_multi_bufs[i];
+                    arr.element_count = param_multi_bufs[i].size();
+                    symbols_->define_array(func.params[i].name, arr);
                 } else {
                     symbols_->define_variable(func.params[i].name, param_bufs[i]);
                 }
@@ -468,6 +488,12 @@ TypedValue CodeGenerator::handle_function_value_call(
 
     // Visit arguments BEFORE pushing scope to evaluate them in caller's context
     std::vector<std::uint16_t> param_bufs;
+    // Parallel: each entry is empty unless the corresponding arg evaluated to a
+    // multi-element Array. When non-empty, the param is bound via define_array
+    // so arr[i] inside the lambda body sees an Array TypedValue (and emits
+    // ARRAY_PACK + ARRAY_INDEX with the correct length) instead of just the
+    // first element's buffer with length=1.
+    std::vector<std::vector<std::uint16_t>> param_multi_bufs(func.params.size());
     for (std::size_t i = 0; i < func.params.size(); ++i) {
         std::uint16_t param_buf;
 
@@ -482,7 +508,12 @@ TypedValue CodeGenerator::handle_function_value_call(
             }
 
             // Visit argument in caller's scope
-            param_buf = visit(args[i]).buffer;
+            TypedValue arg_tv = visit(args[i]);
+            param_buf = arg_tv.buffer;
+            if (arg_tv.type == ValueType::Array && arg_tv.array &&
+                arg_tv.array->elements.size() > 1) {
+                param_multi_bufs[i] = buffers_of(arg_tv);
+            }
         } else if (func.params[i].default_value.has_value()) {
             // Use numeric default value
             param_buf = buffers_.allocate();
@@ -561,7 +592,15 @@ TypedValue CodeGenerator::handle_function_value_call(
         symbols_->define_variable(capture.name, capture.buffer_index);
     }
     for (std::size_t i = 0; i < func.params.size(); ++i) {
-        symbols_->define_variable(func.params[i].name, param_bufs[i]);
+        if (!param_multi_bufs[i].empty()) {
+            ArrayInfo arr;
+            arr.source_node = NULL_NODE;
+            arr.buffer_indices = param_multi_bufs[i];
+            arr.element_count = param_multi_bufs[i].size();
+            symbols_->define_array(func.params[i].name, arr);
+        } else {
+            symbols_->define_variable(func.params[i].name, param_bufs[i]);
+        }
     }
 
     // Push semantic path for unique state IDs

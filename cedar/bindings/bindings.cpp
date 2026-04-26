@@ -133,6 +133,10 @@ PYBIND11_MODULE(cedar_core, m) {
         .value("DELAY_PINGPONG", cedar::Opcode::DELAY_PINGPONG)
         .value("MONO_DOWNMIX", cedar::Opcode::MONO_DOWNMIX)
         .value("PAN_STEREO", cedar::Opcode::PAN_STEREO)
+        // Signal mux + arrays (140, 160-166)
+        .value("SELECT", cedar::Opcode::SELECT)
+        .value("ARRAY_PACK", cedar::Opcode::ARRAY_PACK)
+        .value("ARRAY_INDEX", cedar::Opcode::ARRAY_INDEX)
         .export_values();
 
     // Instruction flag constants (bit values)
