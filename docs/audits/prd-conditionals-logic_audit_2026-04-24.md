@@ -6,6 +6,8 @@
 **Audited:** 2026-04-24
 **Mode:** Read-only bulk audit
 
+> **Update 2026-04-26 — all findings resolved.** Re-verified at HEAD `e8c73d6`. Runtime value tests, epsilon test, signal-rate square-wave test, direct opcode unit tests, and Phase 5 documentation (operators page, conditionals reference page, F1 lookup entries for all ten primitives) are all in place. PRD Status remains `DONE`. See [Resolution](#resolution-2026-04-26) for the final state.
+
 ## Summary
 - Goals met: 4/4 functional Goals met; 20/21 Phase checklist items complete.
 - Critical findings: 4 (Unmet=0, Stubs=0, Coverage Gaps=1, Missing Tests=3)
@@ -55,3 +57,37 @@ None. Files changed since base (`akkado/tests/test_codegen.cpp`, `docs/MVP-INCOM
 - Current: `DONE`
 - Recommended: `MOSTLY COMPLETE`
 - Reason: Core implementation shipped and tested for codegen, but Phase 5 documentation is entirely undone and the PRD's own Test Plan value assertions are not realized.
+
+---
+
+## Resolution (2026-04-26)
+
+**Re-verified at HEAD `e8c73d6`.** All findings from the original audit have been resolved. PRD Status correctly remains `DONE`.
+
+### Coverage Gaps — RESOLVED
+- **Epsilon behavior** — `akkado/tests/test_codegen.cpp:5520-5542` (`Runtime: eq/neq with epsilon`) verifies `eq(0.1 + 0.2, 0.3) == 1.0`, `neq(0.1 + 0.2, 0.3) == 0.0`, and that differences > epsilon (1e-3 vs. 1e-6) compare not-equal. Mirrored at the opcode level by `cedar/tests/test_vm.cpp:1859-1895` (`VM CMP_EQ uses LOGIC_EPSILON`), which uses a `static_assert(LOGIC_EPSILON == 1e-6f)` to force test-author review on epsilon changes.
+
+### Missing Tests — RESOLVED
+- **Signal-rate square-wave (`osc("sin", 1) > 0`)** — `akkado/tests/test_codegen.cpp:5640-5689` (`Runtime: osc(sin, 1) > 0 produces a square wave`). Runs 400 blocks at 48 kHz (one full 1 Hz period plus margin), asserts every output sample is exactly 0.0 or 1.0, asserts duty cycle is 45–55%, and asserts at least two transitions occurred. (51200 binary-output assertions per run.)
+- **Runtime `select` value tests including negative-falsy** — `akkado/tests/test_codegen.cpp:5574-5589` (`Runtime: select picks the right branch`). Covers truthy → `a`, zero → `b`, negative → `b` (the audit-flagged case).
+- **Runtime value assertions for comparisons/logic** —
+  - `Runtime: gt/lt/gte/lte produce 0.0 or 1.0` (`test_codegen.cpp:5492-5518`) — true/false/equal cases for all four.
+  - `Runtime: band/bor/bnot truth tables` (`test_codegen.cpp:5544-5572`) — full truth tables plus negative-falsy assertions for all three.
+  - `Runtime: infix syntax matches function-call syntax` (`test_codegen.cpp:5591-5610`) — proves desugaring fidelity.
+  - `Runtime: operator precedence` (`test_codegen.cpp:5612-5638`) — `&&` vs `||`, comparison vs logic, arithmetic vs comparison, equality vs comparison.
+  - Mirrored at the opcode level by `cedar/tests/test_vm.cpp:1761-1949` (4 `[opcodes][logic]` cases) so opcode regressions surface even if the parser still emits the right bytecode.
+
+### Missing documentation (Phase 5) — RESOLVED
+- `web/static/docs/reference/language/operators.md:5` — keywords list now includes `comparison, logic, conditional, gt, lt, gte, lte, eq, neq, band, bor, bnot, ternary, equal, equality, greater, less, and, or, not, boolean`. Page has full precedence table (entries for `>`, `<`, `>=`, `<=`, `==`, `!=`, `&&`, `||`, `!`), comparison/logic sections, conditional-selection section, and an "Operator Desugaring" table mapping every infix form to its builtin.
+- `web/static/docs/reference/language/conditionals.md` — full reference page covering all ten primitives (`select`, `gt`, `lt`, `gte`, `lte`, `eq`, `neq`, `band`, `bor`, `bnot`) with parameter tables, truth-convention notes, epsilon explanation, and runnable `akk` examples.
+- F1 lookup — `web/src/lib/docs/manifest.ts` has individual entries for `select` (line 528) and all nine other builtins (`gt`, `lt`, `gte`, `lte`, `eq`, `neq`, `band`, `bor`, `bnot` at lines 767–819), each pointing to the matching anchor in `conditionals.md`. The page itself is registered at line 14 / 141.
+
+### Test results at HEAD `e8c73d6`
+- `[conditionals][runtime]` — 7 test cases, **51871 assertions, all pass**.
+- `[conditionals]` (codegen + runtime) — 14 test cases, **51939 assertions, all pass**.
+- `[opcodes][logic]` (cedar) — 4 test cases, **416 assertions, all pass**.
+- Full akkado suite — 488 test cases, **136807 assertions, all pass** (no regressions).
+
+### Final PRD Status
+- Recommended: `DONE` (now matches current).
+- Reason: Implementation, runtime tests (codegen + VM), epsilon coverage, signal-rate Test-Plan item, language reference, conditionals reference page, and F1 lookup are all present and passing.

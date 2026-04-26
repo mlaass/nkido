@@ -354,6 +354,7 @@ TEST_CASE("Signal-rate conditionals", "[conditionals]") {
 - [x] Add precedence tests
 - [x] Add runtime value tests (akkado source → VM execution → buffer assertions, including epsilon equality and negative-falsy `select`; see `akkado/tests/test_codegen.cpp` `[conditionals][runtime]`)
 - [x] Add direct opcode unit tests (`cedar/tests/test_vm.cpp` `[opcodes][logic]`)
+- [x] Add signal-rate square-wave test (`osc("sin", 1) > 0` over a full 1 Hz period, asserting binary samples + ~50% duty cycle; `test_codegen.cpp` `Runtime: osc(sin, 1) > 0 produces a square wave`)
 - [x] Run full test suite
 
 ### Phase 5: Documentation

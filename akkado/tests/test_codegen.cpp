@@ -5637,6 +5637,63 @@ TEST_CASE("Runtime: operator precedence", "[conditionals][runtime]") {
     }
 }
 
+// Signal-rate square-wave verification from the PRD's Test Plan:
+//   check_signal("osc(\"sin\", 1) > 0", /* verify square wave */)
+// Threshold-comparing a sine against 0 must produce a 50% duty-cycle square
+// wave whose samples are exactly 0.0 or 1.0. At 48 kHz with f=1 Hz, one period
+// is 48000 samples = 375 blocks — we run 400 blocks to safely cover one full
+// period plus margin.
+TEST_CASE("Runtime: osc(sin, 1) > 0 produces a square wave", "[conditionals][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    auto result = akkado::compile("osc(\"sin\", 1) > 0");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    REQUIRE_FALSE(insts.empty());
+
+    cedar::VM vm;
+    vm.set_sample_rate(48000.0f);
+    std::span<const cedar::Instruction> bc(insts.data(), insts.size());
+    REQUIRE(vm.load_program_immediate(bc));
+
+    const std::uint16_t out_idx = insts.back().out_buffer;
+
+    constexpr std::size_t kBlocks = 400;
+    std::size_t high_samples = 0;
+    std::size_t low_samples = 0;
+    std::size_t transitions = 0;
+    float prev = -1.0f;  // sentinel so the first real sample doesn't count as a transition
+
+    for (std::size_t b = 0; b < kBlocks; ++b) {
+        std::array<float, cedar::BLOCK_SIZE> left{}, right{};
+        vm.process_block(left.data(), right.data());
+        const float* buf = vm.buffers().get(out_idx);
+        REQUIRE(buf != nullptr);
+
+        for (std::size_t i = 0; i < cedar::BLOCK_SIZE; ++i) {
+            const float v = buf[i];
+            // Output must be exactly binary — no intermediate values.
+            const bool is_binary = std::fabs(v) < 1e-6f || std::fabs(v - 1.0f) < 1e-6f;
+            REQUIRE(is_binary);
+            if (v > 0.5f) ++high_samples; else ++low_samples;
+            if (prev >= 0.0f && std::fabs(v - prev) > 0.5f) ++transitions;
+            prev = v;
+        }
+    }
+
+    // Over one full period at 50% duty cycle, high and low counts should be
+    // close to equal. Allow 5% tolerance for the partial extra cycle in 400
+    // blocks vs. one period (375 blocks).
+    const std::size_t total = high_samples + low_samples;
+    const float duty = static_cast<float>(high_samples) / static_cast<float>(total);
+    CHECK(duty > 0.45f);
+    CHECK(duty < 0.55f);
+
+    // Must transition at least twice (once high→low, once low→high) to prove
+    // it isn't stuck constant.
+    CHECK(transitions >= 2);
+}
+
 // =============================================================================
 // Bug repro: chord("C Em Am G") |> poly() — incomplete chord onsets
 // =============================================================================
