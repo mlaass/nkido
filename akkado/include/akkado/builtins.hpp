@@ -10,12 +10,15 @@
 
 namespace akkado {
 
-/// Maximum number of parameters for a builtin function (using inputs[0..4] + defaults)
-/// For builtins needing more parameters, use extended_param_count with ExtendedParams<N>
-constexpr std::size_t MAX_BUILTIN_PARAMS = 6;
+/// Maximum number of parameters for a builtin function (using inputs[0..4] + defaults).
+/// Up to 5 of these reach the instruction's input slots; positions 5+ are reserved
+/// for codegen-only literals (e.g. phaser packs stages/feedback into inst.rate).
+/// For builtins needing more *runtime* parameters, use extended_param_count with
+/// ExtendedParams<N>.
+constexpr std::size_t MAX_BUILTIN_PARAMS = 8;
 
-/// Maximum number of optional parameters with defaults
-constexpr std::size_t MAX_BUILTIN_DEFAULTS = 5;
+/// Maximum number of optional parameters with defaults.
+constexpr std::size_t MAX_BUILTIN_DEFAULTS = 7;
 
 /// Maximum number of extended parameters (stored in StatePool)
 constexpr std::size_t MAX_EXTENDED_PARAMS = 8;
@@ -339,12 +342,14 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                   {1.0f, 0.7f, 0.1f, 10.0f, NAN},
                   "Classic flanger effect",
                   0, {}, {}, ChannelCount::Mono, true}},
-    // phaser: min_freq (Hz), max_freq (Hz)
-    {"phaser",   {cedar::Opcode::EFFECT_PHASER, 1, 4, true,
-                  {"in", "rate", "depth", "min_freq", "max_freq", ""},
-                  {0.5f, 0.8f, 200.0f, 4000.0f, NAN},
+    // phaser: min_freq (Hz), max_freq (Hz), stages (compile-time literal int 2-12),
+    //         feedback (compile-time literal float 0-1, packed into rate field)
+    {"phaser",   {cedar::Opcode::EFFECT_PHASER, 1, 6, true,
+                  {"in", "rate", "depth", "min_freq", "max_freq", "stages", "feedback", ""},
+                  {0.5f, 0.8f, 200.0f, 4000.0f, 4.0f, 0.5f},
                   "Multi-stage phaser effect",
-                  0, {}, {}, ChannelCount::Mono, true}},
+                  0, {}, {}, ChannelCount::Mono, true,
+                  /*inst_rate=*/static_cast<std::uint8_t>((8u << 4) | 4u)}},
     {"comb",     {cedar::Opcode::EFFECT_COMB, 3, 0, true,
                   {"in", "time", "fb", "", "", ""},
                   {NAN, NAN, NAN},

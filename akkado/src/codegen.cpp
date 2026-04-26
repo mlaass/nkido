@@ -1435,6 +1435,41 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 inst.rate = 2;  // samples
             }
 
+            // Special handling for phaser: pack stages (arg 5, low 4 bits) and
+            // feedback (arg 6, high 4 bits) into the rate field. Both must be
+            // compile-time literals — they configure topology, not signal flow.
+            // Default (set in BuiltinInfo::inst_rate) is stages=4, feedback≈0.5.
+            // Note: walks AST positionally; named-arg use for these slots falls
+            // through to the inst_rate default.
+            if (func_name == "phaser") {
+                std::uint8_t stages_bits = inst.rate & 0x0F;
+                std::uint8_t fb_bits = (inst.rate >> 4) & 0x0F;
+                NodeIndex phaser_arg = n.first_child;
+                for (std::size_t idx = 0; phaser_arg != NULL_NODE && idx < 7; ++idx) {
+                    if (idx == 5 || idx == 6) {
+                        const Node& arg_node = ast_->arena[phaser_arg];
+                        NodeIndex arg_value = (arg_node.type == NodeType::Argument)
+                                                ? arg_node.first_child
+                                                : phaser_arg;
+                        if (arg_value != NULL_NODE) {
+                            const Node& val_node = ast_->arena[arg_value];
+                            if (val_node.type == NodeType::NumberLit) {
+                                float v = static_cast<float>(val_node.as_number());
+                                if (idx == 5) {
+                                    stages_bits = static_cast<std::uint8_t>(
+                                        std::clamp(static_cast<int>(std::lround(v)), 2, 12)) & 0x0F;
+                                } else {
+                                    fb_bits = static_cast<std::uint8_t>(
+                                        std::clamp(static_cast<int>(std::lround(v * 15.0f)), 0, 15)) & 0x0F;
+                                }
+                            }
+                        }
+                    }
+                    phaser_arg = ast_->arena[phaser_arg].next_sibling;
+                }
+                inst.rate = static_cast<std::uint8_t>((fb_bits << 4) | stages_bits);
+            }
+
             // Generate state_id from current path (already pushed if stateful)
             if (pushed_path) {
                 inst.state_id = compute_state_id();

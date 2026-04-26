@@ -101,17 +101,26 @@ Related: [chorus](#chorus), [phaser](#phaser), [comb](#comb)
 
 **Phaser** - Creates notches in frequency spectrum via allpass filters.
 
-| Param | Type   | Default | Description |
-|-------|--------|---------|-------------|
-| in    | signal | -       | Input signal |
-| rate  | number | 0.5     | LFO rate in Hz |
-| depth | number | 0.8     | Modulation depth (0-1) |
-| min_freq | number | 200.0 | Sweep range low (Hz) |
-| max_freq | number | 4000.0 | Sweep range high (Hz) |
+| Param    | Type   | Default | Description |
+|----------|--------|---------|-------------|
+| in       | signal | -       | Input signal |
+| rate     | number | 0.5     | LFO rate in Hz |
+| depth    | number | 0.8     | Modulation depth (0-1) |
+| min_freq | number | 200.0   | Sweep range low (Hz) |
+| max_freq | number | 4000.0  | Sweep range high (Hz) |
+| stages   | literal int | 4 | Number of allpass stages, 2-12 (compile-time constant) |
+| feedback | literal float | 0.5 | Feedback amount, 0-1 (compile-time constant) |
 
-Sweeps a series of notch filters through the spectrum, creating a distinctive swirling effect different from chorus or flanger.
+Sweeps a chain of allpass-derived notches through the spectrum, creating a
+distinctive swirling effect different from chorus or flanger.
 
-The `min_freq` and `max_freq` parameters define the frequency range of the sweep. Wider ranges create more dramatic effects.
+`stages` and `feedback` shape the topology and must be **literal constants** —
+they're packed into instruction metadata at compile time, not driven by signals.
+More stages give more notches (each pair of stages = one notch); higher feedback
+sharpens the resonance.
+
+The phaser output is the canonical Bode/MXR sum (dry + allpass cascade), so
+expect up to +6 dB peak gain at constructive interference points.
 
 ```akk
 // Classic phaser
@@ -131,6 +140,11 @@ osc("noise") |> lp(%, 2000) |> phaser(%, 0.1, 0.9) |> out(%, %)
 ```akk
 // Extended high-frequency sweep
 osc("saw", 110) |> phaser(%, 0.2, 0.8, 100, 8000) |> out(%, %)
+```
+
+```akk
+// Deep, resonant 6-stage phaser with strong feedback
+osc("saw", 110) |> phaser(%, 0.5, 0.9, 100, 5000, 6, 0.7) |> out(%, %)
 ```
 
 Related: [flanger](#flanger), [chorus](#chorus)

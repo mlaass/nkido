@@ -37,6 +37,7 @@ add_executable(cedar_tests
     test_fft.cpp
     test_edge_op.cpp
     test_state_op.cpp
+    test_phaser.cpp
 )
 
 # Add concurrency tests if enabled

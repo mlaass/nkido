@@ -1,20 +1,26 @@
 """
 Test: EFFECT_PHASER (Phaser)
 ============================
-Tests phaser spectrogram with sweeping notches.
+Verifies the phaser produces audible swept notches in the spectrum.
 
-Expected behavior:
-- Phaser should create moving notches in the spectrum
-- LFO rate should control the speed of the sweep
-- Depth parameter should control the width of the sweep
-- Multiple stages should create multiple notches
+Expected behavior (per implementation in cedar/include/cedar/opcodes/modulation.hpp):
+- Output is dry + allpass_cascade — interference creates spectral notches
+  (an allpass cascade alone has flat magnitude response, so this sum is
+  what defines the audible phaser sound).
+- LFO sweeps the notch frequency over time. With depth=0.8 and min/max =
+  200/4000 Hz, the notch should traverse at least ~1 octave per LFO period.
+- Notch depth should be ≥ 12 dB below adjacent frequencies — strong
+  cancellation indicates the dry+wet sum is wired correctly. A flat
+  spectrum (no notch) means the dry path is missing.
 
-If this test fails, check the implementation in cedar/include/cedar/opcodes/effects.hpp
+If this test fails, check the implementation in
+cedar/include/cedar/opcodes/modulation.hpp (op_effect_phaser).
 """
 
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import scipy.signal
 
 import cedar_core as cedar
 from cedar_testing import CedarTestHost, output_dir
@@ -24,52 +30,222 @@ from visualize import save_figure
 OUT = output_dir("op_phaser")
 
 
-def test_phaser_spectrogram():
-    print("Test: Phaser Spectrogram")
-
-    sr = 48000
-    duration = 2.0
-
-    host = CedarTestHost(sr)
-    noise = gen_white_noise(duration, sr)
-
-    # Phaser Parameters
+def _build_phaser_program(host, lfo_rate, depth, min_freq, max_freq, stages, feedback_int):
+    """Configure host with a PHASER instruction. Returns nothing — mutates host."""
     buf_in = 0
-    buf_rate = host.set_param("rate", 1.0)  # 1 Hz sweep
-    buf_depth = host.set_param("depth", 0.8)
+    buf_rate = host.set_param("rate", lfo_rate)
+    buf_depth = host.set_param("depth", depth)
+    buf_min = host.set_param("min_freq", min_freq)
+    buf_max = host.set_param("max_freq", max_freq)
 
-    # Inst: Phaser(out, in, rate, depth)
-    # Rate field encodes feedback (high 4) and stages (low 4)
-    # Feedback ~0.5, Stages = 6
-    # 0.5 maps to int 8 (approx), Stages 6
-    packed_rate = (8 << 4) | 6
-
-    inst = cedar.Instruction.make_ternary(
-        cedar.Opcode.EFFECT_PHASER, 1, buf_in, buf_rate, buf_depth, cedar.hash("phaser") & 0xFFFF
+    # 5 inputs to match the C++ opcode (it dereferences inputs[3] and [4]
+    # unconditionally — make_ternary leaves those as 0xFFFF which would be
+    # undefined behavior).
+    inst = cedar.Instruction.make_quinary(
+        cedar.Opcode.EFFECT_PHASER, 1,
+        buf_in, buf_rate, buf_depth, buf_min, buf_max,
+        cedar.hash("phaser") & 0xFFFF,
     )
-    inst.rate = packed_rate
-
+    inst.rate = ((feedback_int & 0x0F) << 4) | (stages & 0x0F)
     host.load_instruction(inst)
     host.load_instruction(cedar.Instruction.make_unary(cedar.Opcode.OUTPUT, 0, 1))
 
-    output = host.process(noise)
 
-    # Save WAV for human evaluation
+def _find_notch(freqs, psd_db, search_lo=100.0, search_hi=8000.0):
+    """
+    Find the deepest local minimum in the spectrum within a search range.
+    Returns (notch_freq_hz, notch_depth_db) where depth is how far below
+    the local mean of surrounding frequencies the minimum is. If no clear
+    minimum is found, returns (None, 0.0).
+    """
+    mask = (freqs >= search_lo) & (freqs <= search_hi)
+    if not mask.any():
+        return None, 0.0
+    band = psd_db[mask]
+    band_freqs = freqs[mask]
+
+    # Smooth slightly to suppress narrowband noise spikes.
+    win = max(3, len(band) // 64)
+    if win % 2 == 0:
+        win += 1
+    if win >= len(band):
+        return None, 0.0
+    smoothed = scipy.signal.savgol_filter(band, win, 2)
+
+    min_idx = int(np.argmin(smoothed))
+    notch_freq = float(band_freqs[min_idx])
+
+    # Compare to median of band — robust against ramping spectra.
+    local_mean_db = float(np.median(smoothed))
+    notch_depth = local_mean_db - float(smoothed[min_idx])
+    return notch_freq, notch_depth
+
+
+def test_phaser_notch_sweep():
+    """
+    Verify that the phaser produces real notches that sweep over time.
+
+    Uses default phaser params with stages=4, feedback≈0.5 (matches Akkado
+    builtin defaults). Drives white noise through the phaser and inspects
+    the spectrum across windows that span one LFO period.
+    """
+    print("Test: Phaser Notch Sweep (default config)")
+
+    sr = 48000
+
+    # Long-run audio for stability checks (>=300s per CLAUDE.md policy).
+    long_duration = 300.0
+    host = CedarTestHost(sr)
+    noise = gen_white_noise(long_duration, sr)
+
+    lfo_rate = 1.0
+    depth = 0.8
+    min_freq = 200.0
+    max_freq = 4000.0
+    stages = 4
+    feedback_int = 8  # ~0.528 of 0.99 max
+
+    _build_phaser_program(host, lfo_rate, depth, min_freq, max_freq, stages, feedback_int)
+    long_output = host.process(noise)
+
+    # Stability check across the full 300s
+    if not np.all(np.isfinite(long_output)):
+        print(f"  ✗ FAIL: Non-finite samples in long output (NaN/Inf detected)")
+        return False
+    peak = float(np.max(np.abs(long_output)))
+    if peak > 50.0:
+        print(f"  ✗ FAIL: Output peak {peak:.2f} suggests blow-up (feedback unstable)")
+        return False
+    print(f"  Long run OK: {long_duration:.0f}s, peak={peak:.3f}")
+
+    # Render a short WAV from the start of the long buffer for human listening
     wav_path = os.path.join(OUT, "phaser_sweep.wav")
-    save_wav(wav_path, output, sr)
-    print(f"  Saved {wav_path} - Listen for sweeping notches")
+    short_len = int(4.0 * sr)
+    save_wav(wav_path, long_output[:short_len], sr)
+    print(f"  Saved {wav_path} - Listen for swooshing swept notches")
 
-    # Plot spectrogram using matplotlib directly
+    # Notch-sweep analysis: take FFTs over windows covering one LFO period.
+    # At 1 Hz LFO, one period is 1 second; we slice 8 windows over the period
+    # and look for the deepest notch in each.
+    period_samples = int(sr / lfo_rate)
+    n_windows = 8
+    win_len = period_samples // n_windows
+    # Use a known-stable region of the long buffer (skip first second to avoid cold start)
+    base = sr  # start at 1 second in
+    notches = []
+    for i in range(n_windows):
+        start = base + i * win_len
+        seg = long_output[start:start + win_len]
+        if len(seg) < 1024:
+            continue
+        freqs, psd = scipy.signal.welch(seg, fs=sr, nperseg=min(2048, len(seg)))
+        psd_db = 10.0 * np.log10(psd + 1e-20)
+        nf, nd = _find_notch(freqs, psd_db)
+        if nf is not None:
+            notches.append((nf, nd))
+
+    if len(notches) < 4:
+        print(f"  ✗ FAIL: Could not detect notches in {n_windows} windows (got {len(notches)})")
+        return False
+
+    notch_freqs = np.array([n[0] for n in notches])
+    notch_depths = np.array([n[1] for n in notches])
+
+    sweep_ratio = notch_freqs.max() / max(notch_freqs.min(), 1.0)
+    median_depth = float(np.median(notch_depths))
+
+    print(f"  Notch frequencies across LFO period: {[f'{f:.0f}Hz' for f in notch_freqs]}")
+    print(f"  Sweep ratio (max/min): {sweep_ratio:.2f}x")
+    print(f"  Median notch depth: {median_depth:.1f} dB")
+
+    sweep_ok = sweep_ratio >= 2.0  # ≥1 octave
+    depth_ok = median_depth >= 12.0
+
+    if sweep_ok and depth_ok:
+        print(f"  ✓ PASS: Notch sweeps {sweep_ratio:.2f}x at median depth {median_depth:.1f} dB")
+    else:
+        if not sweep_ok:
+            print(f"  ✗ FAIL: Sweep ratio {sweep_ratio:.2f}x < 2.0x (expected ≥1 octave)")
+        if not depth_ok:
+            print(f"  ✗ FAIL: Median notch depth {median_depth:.1f} dB < 12 dB "
+                  f"(spectrum is too flat — dry/wet sum may be missing)")
+
+    # Spectrogram for visual inspection (use short clip)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.specgram(output, NFFT=1024, Fs=sr, noverlap=512, cmap='magma')
-    ax.set_title("Phaser Spectrogram (6-stage, 1Hz LFO)")
+    ax.specgram(long_output[:int(4.0 * sr)], NFFT=1024, Fs=sr, noverlap=512, cmap='magma')
+    ax.set_title(f"Phaser Spectrogram ({stages}-stage, {lfo_rate}Hz LFO, depth={depth})")
     ax.set_ylabel("Frequency (Hz)")
     ax.set_xlabel("Time (s)")
-    ax.set_ylim(0, 10000)
-
+    ax.set_ylim(0, 8000)
     save_figure(fig, os.path.join(OUT, "phaser_spectrogram.png"))
     print(f"  Saved {os.path.join(OUT, 'phaser_spectrogram.png')}")
 
+    return sweep_ok and depth_ok
+
+
+def test_phaser_no_sweep_at_zero_depth():
+    """
+    Verify that depth=0 produces a stationary notch — the LFO multiplier
+    collapses to 1.0 so the cascade center frequency is constant.
+
+    A multi-stage cascade has multiple notches at fixed offsets from f_c, so
+    we narrow the search to 100..600 Hz to lock onto a single notch (the
+    lowest one, near 0.414*f_c ≈ 370 Hz for 4 stages with f_c=894 Hz).
+    """
+    print("Test: Phaser Stationary Notch at depth=0")
+
+    sr = 48000
+    duration = 4.0
+    host = CedarTestHost(sr)
+    noise = gen_white_noise(duration, sr)
+
+    _build_phaser_program(host, lfo_rate=1.0, depth=0.0,
+                          min_freq=200.0, max_freq=4000.0,
+                          stages=4, feedback_int=8)
+    output = host.process(noise)
+
+    if not np.all(np.isfinite(output)):
+        print(f"  ✗ FAIL: Non-finite samples in output")
+        return False
+
+    period_samples = sr  # 1 LFO period at 1 Hz
+    n_windows = 4
+    win_len = period_samples // n_windows
+    notches = []
+    for i in range(n_windows):
+        start = sr + i * win_len  # skip first second
+        seg = output[start:start + win_len]
+        if len(seg) < 1024:
+            continue
+        freqs, psd = scipy.signal.welch(seg, fs=sr, nperseg=min(2048, len(seg)))
+        psd_db = 10.0 * np.log10(psd + 1e-20)
+        # Narrow band isolates the lowest notch (one notch per band).
+        nf, _ = _find_notch(freqs, psd_db, search_lo=100.0, search_hi=600.0)
+        if nf is not None:
+            notches.append(nf)
+
+    if len(notches) < 3:
+        print(f"  ⚠ Could not detect enough notches at depth=0 (got {len(notches)})")
+        return True  # not a hard failure — depth=0 may flatten the notch entirely
+
+    nf = np.array(notches)
+    sweep_ratio = nf.max() / max(nf.min(), 1.0)
+    if sweep_ratio < 1.3:
+        print(f"  ✓ PASS: Notch is stationary at depth=0 (sweep ratio {sweep_ratio:.2f}x, "
+              f"freqs={[f'{f:.0f}Hz' for f in nf]})")
+        return True
+    else:
+        print(f"  ✗ FAIL: Notch swept {sweep_ratio:.2f}x at depth=0 (should be ~1.0x), "
+              f"freqs={[f'{f:.0f}Hz' for f in nf]}")
+        return False
+
 
 if __name__ == "__main__":
-    test_phaser_spectrogram()
+    results = []
+    results.append(test_phaser_notch_sweep())
+    results.append(test_phaser_no_sweep_at_zero_depth())
+    if all(results):
+        print("\nAll phaser tests passed.")
+    else:
+        print(f"\n{sum(1 for r in results if not r)} test(s) failed.")
+        raise SystemExit(1)

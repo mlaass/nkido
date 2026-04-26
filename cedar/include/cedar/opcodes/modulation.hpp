@@ -212,8 +212,11 @@ constexpr float PHASER_MAX_FREQ_DEFAULT = 4000.0f;  // Hz
 // rate: feedback (high 4 bits 0-15 -> 0.0-0.99), stages (low 4 bits, clamped 2-12)
 //
 // Cascaded first-order allpass filters with modulated center frequencies.
-// Creates notches that sweep through the spectrum. Classic phaser sound.
-// Outputs 100% wet signal - user can mix dry/wet manually if needed.
+// Output is dry + allpass_cascade — interference between the two paths is
+// what creates the swept notches. (An allpass cascade alone has unity
+// magnitude response and produces no audible spectral effect.) This is the
+// canonical Bode/MXR-style topology; expect up to +6 dB peak gain at
+// constructive interference points.
 
 [[gnu::always_inline]]
 inline void op_effect_phaser(ExecutionContext& ctx, const Instruction& inst) {
@@ -270,8 +273,8 @@ inline void op_effect_phaser(ExecutionContext& ctx, const Instruction& inst) {
 
         state.last_output = x;
 
-        // Output 100% wet (user can mix dry/wet manually if needed)
-        out[i] = x;
+        // dry + allpass output — the sum is what creates the audible notches
+        out[i] = input[i] + x;
     }
 }
 
