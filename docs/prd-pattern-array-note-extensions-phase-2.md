@@ -18,7 +18,7 @@ Phase 2 of this PRD ships all four. It does **not** revisit string-as-pattern au
 - **Dot-call is free for everything.** Method chaining is pure desugaring at the AST level. No new builtin needs special treatment to gain `.method()` syntax — register the function and chaining works.
 - **Voicing is a pattern transform, not a primitive.** `chord("Am C G").anchor("c4").mode("below")` desugars to nested function calls; voicings are computed at compile time from chord intervals + anchor + mode using a greedy nearest-voicing algorithm.
 - **`compress` becomes a pattern transform.** The existing `compress` → `comp` alias on the audio compressor is removed to free the name for the Strudel-canonical pattern transform. Users who want the compressor write `comp(...)` or `compressor(...)`.
-- **`iter`/`iterBack` get one new runtime opcode field.** `SEQPAT_STEP` gains a cycle counter so `iter` can advance its starting subdivision per cycle without exploding event counts at compile time.
+- **`iter`/`iterBack` get one new runtime opcode field.** `SEQPAT_STEP` gains a cycle counter so `iter` can advance its starting position per cycle without exploding event counts at compile time.
 - **`PatternEvent` gains two fixed fields and one extensibility bag.** `bend` and `aftertouch` join `velocity` as first-class fields; arbitrary user properties go in a `std::vector<std::pair<std::string, float>>` that is empty by default (zero overhead when unused).
 - **Mini-notation gains a record-style suffix.** `c4{vel:0.8, bend:0.2}` is parsed as a note with named properties. The existing positional `c4:0.8` form keeps working as a velocity shorthand.
 
@@ -146,11 +146,13 @@ chord("Am").voicing("drop2")   // standard drop-2 voicing
 chord("Am").voicing("open")    // open position
 chord("Am").voicing("closed")  // close position
 
-// Custom voicing dictionaries
+// Custom voicing dictionaries (string-keyed record; quality names may include
+// non-identifier chars like "m7b5" so record literal accepts string keys here)
 addVoicings("piano-jazz", {
-  "M":  [0, 4, 7, 11, 14],   // intervals from root
-  "m":  [0, 3, 7, 10, 14],
-  "7":  [0, 4, 10, 13, 17]
+  "M":     [0, 4, 7, 11, 14],   // intervals from root
+  "m":     [0, 3, 7, 10, 14],
+  "7":     [0, 4, 10, 13, 17],
+  "m7b5":  [0, 3, 6, 10]
 })
 chord("CM Am7 Dm7 G7").voicing("piano-jazz")
 ```
@@ -178,6 +180,8 @@ pat("c4{cutoff:0.3} e4{cutoff:0.7}") as e
 // Existing positional shorthand still works
 pat("c4:0.8 e4:1.0")              // colon = velocity (unchanged)
 ```
+
+> **Note:** `bend` is per-event in Phase 2 — it sets a value on each event, like `velocity`. Continuous (signal-rate) pitch-bend is a richer model and is out of scope here; see §11.
 
 ---
 
@@ -214,17 +218,19 @@ Defaults: `swing(pat, n=4)`, `swingBy(pat, amount, n=4)`.
 
 ### 5.2 Runtime Cycle Counter for `iter` / `iterBack`
 
-`iter(pat, n)` divides the pattern into `n` parts and on each cycle starts playback from a different part — `[0..n-1, 1..n-1+0, 2..n-1+0+1, ...]`. This requires runtime cycle awareness.
+`iter(pat, n)` plays the full pattern every cycle, but rotates the pattern's time origin by `1/n` per cycle. After one cycle, the rotation is `1/n`; after two, `2/n`; and so on, wrapping at `n`. `iterBack` rotates in the opposite direction. This requires runtime cycle awareness.
 
-**Approach:** Add a `cycle_count` field to `SEQ_STEP_STATE` (the state struct read by `SEQPAT_STEP`) and a per-event `start_subdivision` rotation index applied at query time.
+**Semantics (precise):** Let `k = cycle_index mod n` and let `dir = +1` for `iter`, `-1` for `iterBack`. An event at original time `t` plays at effective time `((t - dir * k / n) mod 1)` within the current cycle. The full event list is queried each cycle; only the time origin shifts.
+
+**Approach:** Add three fields to `cedar::SequenceState` (defined at `cedar/include/cedar/opcodes/sequence.hpp:146`, the state struct read by `op_seqpat_step` in `cedar/include/cedar/opcodes/sequencing.hpp:415`).
 
 | Field | Location | Purpose |
 |-------|----------|---------|
-| `std::uint32_t cycle_index` | `cedar::SeqStepState` | Increments at each cycle wrap. |
-| `std::uint8_t iter_n` | `cedar::SeqStepState` | Number of subdivisions; 0 = no iter. |
-| `std::int8_t iter_dir` | `cedar::SeqStepState` | +1 for `iter`, -1 for `iterBack`, 0 for none. |
+| `std::uint32_t cycle_index` | `cedar::SequenceState` | Increments at each cycle wrap. |
+| `std::uint8_t iter_n` | `cedar::SequenceState` | Number of subdivisions; 0 = no iter. |
+| `std::int8_t iter_dir` | `cedar::SequenceState` | +1 for `iter`, -1 for `iterBack`, 0 for none. |
 
-**At query time:** if `iter_n > 0`, the effective offset into the event list is `(cycle_index * iter_dir) mod iter_n`, applied as a rotation of which subdivision plays first. Compile-time still emits the unrotated event list; the rotation is purely a query-time index transform.
+**At query time:** if `iter_n > 0`, the query's local cycle phase is shifted by `-dir * (cycle_index mod iter_n) / iter_n` before event lookup. Compile-time still emits the unrotated event list; the rotation is purely a query-time time-origin transform. `cycle_index` increments at the existing cycle-wrap detection (`beat_pos < state.last_beat_pos - 0.5f`).
 
 **Codegen:** `iter` and `iterBack` are compile-time *configurators* — they set `iter_n` and `iter_dir` on the emitted `SeqInit` payload. They do not multiply event count.
 
@@ -305,8 +311,8 @@ struct PatternEvent {
     // Dynamics
     float velocity = 1.0f;
     float chance = 1.0f;
-    float bend = 0.0f;           // NEW: pitch bend, -1..1
-    float aftertouch = 0.0f;     // NEW: aftertouch, 0..1
+    float bend = 0.0f;           // NEW: pitch bend, -1..1; default 0.0 = neutral
+    float aftertouch = 0.0f;     // NEW: aftertouch, 0..1; default 0.0 = none
 
     // Existing fields...
     std::uint8_t midi_note = 60;
@@ -317,7 +323,9 @@ struct PatternEvent {
 };
 ```
 
-**Transforms** mirror `velocity()`:
+**Override-flag asymmetry:** `dur_override` is a separate bool because `duration = 1.0` is a meaningful explicit value (one-cycle event). For `bend` and `aftertouch`, the default `0.0` already denotes "neutral / no message", and we deliberately do **not** distinguish "unset" from "explicitly 0" — a per-event override flag would only matter for a future MIDI-out path, and that path can re-derive the distinction from whether the pattern was wrapped in a `.bend()` or `.aftertouch()` transform call (out of Phase 2 scope).
+
+**Transforms** mirror `velocity()` once velocity is unblocked (see Phase D step 0):
 
 | Transform | Effect |
 |-----------|--------|
@@ -327,7 +335,30 @@ struct PatternEvent {
 
 All three follow the existing handler pattern in `codegen_patterns.cpp` and use `compile_pattern_for_transform()` recursion.
 
-**Property bag access:** Custom properties from `c4{cutoff:0.3}` land in `event.properties`. They are exposed at codegen time via the existing pipe-bind mechanism — `pat("c4{cutoff:0.3}") as e |> ... e.cutoff` resolves `e.cutoff` by looking up `"cutoff"` in the event's `properties` vector at compile time.
+**Recognized field-name aliases (record suffix):** Only short forms populate the fixed `PatternEvent` fields. Long forms go into the properties bag. Specifically:
+
+| Recognized key | Fixed field |
+|----------------|-------------|
+| `vel` | `velocity` |
+| `bend` | `bend` |
+| `aftertouch` | `aftertouch` |
+| `dur` | `duration` (sets `dur_override = true`) |
+
+Anything else — `velocity`, `cutoff`, `freq`, etc. — lands in `event.properties`. This is intentional: the short forms are the canonical mini-notation surface; long forms (and any user-defined keys) are user-property bag values.
+
+### 5.5a Custom-Property Field Access (`as e |> ... e.<key>`)
+
+Custom properties from `c4{cutoff:0.3}` need to be reachable from synth code. AST scaffolding for `as` pipe-binding exists (`PipeBindingData` in `akkado/include/akkado/ast.hpp:271`), but the codegen path that resolves `e.<key>` against a `properties` vector is **new work** — not a small wiring step.
+
+**Resolution rule:** when an expression `e.X` is encountered and `e` is bound to a pattern event:
+
+1. If `X` matches a fixed `PatternEvent` field (`time`, `duration`, `velocity`, `bend`, `aftertouch`, `chance`, `midi_note`, `freq`/`pitch`/`f`, `note`/`midi`/`n`, `vel`/`v`, `trig`/`trigger`/`t`), emit existing fixed-field codegen.
+2. Otherwise, look up `X` in the *static* set of property keys observed in the bound pattern's `MiniAtomData.properties` at compile time. If found, emit a load from the property slot.
+3. If not found anywhere in the pattern's events, emit error E15x: `"unknown property '<key>' on pattern event 'e'"` with a list of the keys that were defined.
+
+**Compile-time vs runtime:** because property keys are static (set in source), the lookup is resolved at codegen time to a stable per-key buffer index — no runtime string lookup. The `properties` vector on `PatternEvent` exists for compile-time AST→codegen plumbing, not for runtime hash-map access.
+
+**Missing-key behavior:** if event A defines `cutoff:0.3` and event B does not, reading `e.cutoff` on B yields `0.0`. Document this as the explicit semantics. (Alternative: error on missing-per-event keys — rejected because it would force users to set every property on every event.)
 
 ### 5.6 Mini-Notation Record Suffix
 
@@ -356,9 +387,9 @@ All three follow the existing handler pattern in `codegen_patterns.cpp` and use 
 | `is_pattern_call()` switch | **Modified** | Add 12 new transform names + 3 new constructors. |
 | `compile_pattern_for_transform()` | **Modified** | Add 12 new event-list rewrite branches; `iter`/`iterBack` set state instead of rewriting events. |
 | `PatternEvent` struct | **Modified** | Add `bend`, `aftertouch`, `dur_override`, `properties`. |
-| `cedar::SeqStepState` | **Modified** | Add `cycle_index`, `iter_n`, `iter_dir`. |
+| `cedar::SequenceState` | **Modified** | Add `cycle_index`, `iter_n`, `iter_dir`. (Defined in `cedar/include/cedar/opcodes/sequence.hpp:146`, not in any `state/` directory.) |
 | `BUILTIN_ALIASES` (`compress` → `comp`) | **Removed** | Frees `compress` for the pattern transform. |
-| `BUILTINS` map | **Modified** | Add 12 transform entries + 3 generator entries + 5 voicing entries (`anchor`, `mode`, `voicing`, `addVoicings`, plus 3 note-prop transforms `bend`, `aftertouch`, `dur`). |
+| `BUILTINS` map | **Modified** | Add 22 entries: 12 time/structure transforms (`early`, `late`, `palindrome`, `iter`, `iterBack`, `ply`, `linger`, `zoom`, `compress`, `segment`, `swing`, `swingBy`) + 3 generators (`run`, `binary`, `binaryN`) + 4 voicing (`anchor`, `mode`, `voicing`, `addVoicings`) + 3 note-prop transforms (`bend`, `aftertouch`, `dur`). |
 | Mini-notation lexer/parser | **Modified** | Add record-suffix sub-mode after notes. |
 | `voicing.hpp` / `voicing.cpp` | **New** | Voicing algorithms + dictionary registry. |
 | Audio compressor implementation | **Stays** | `comp` and `compressor` aliases unchanged. |
@@ -370,24 +401,25 @@ All three follow the existing handler pattern in `codegen_patterns.cpp` and use 
 
 | File | Change |
 |------|--------|
-| `akkado/include/akkado/builtins.hpp` | Add 23 new entries (`early`, `late`, `palindrome`, `iter`, `iterBack`, `ply`, `linger`, `zoom`, `compress`, `segment`, `swing`, `swingBy`, `run`, `binary`, `binaryN`, `anchor`, `mode`, `voicing`, `addVoicings`, `bend`, `aftertouch`, `dur`). Remove `{"compress", "comp"}` from `BUILTIN_ALIASES`. |
-| `akkado/include/akkado/codegen.hpp` | Declare 23 new `handle_*_call` functions. |
-| `akkado/src/codegen.cpp` | Register 23 new dispatch entries in the call-handler map. |
-| `akkado/src/codegen_patterns.cpp` | Implement 23 handlers + extend `compile_pattern_for_transform()` with new transform branches + extend `is_pattern_call()` recognition. |
+| `akkado/include/akkado/builtins.hpp` | Add 22 new entries (`early`, `late`, `palindrome`, `iter`, `iterBack`, `ply`, `linger`, `zoom`, `compress`, `segment`, `swing`, `swingBy`, `run`, `binary`, `binaryN`, `anchor`, `mode`, `voicing`, `addVoicings`, `bend`, `aftertouch`, `dur`). Remove `{"compress", "comp"}` from `BUILTIN_ALIASES` (line 983). |
+| `akkado/include/akkado/codegen.hpp` | Declare 22 new `handle_*_call` functions. |
+| `akkado/src/codegen.cpp` | Register 22 new dispatch entries in the call-handler map. |
+| `akkado/src/codegen_patterns.cpp` | Implement 22 handlers + extend `compile_pattern_for_transform()` with new transform branches + extend `is_pattern_call()` recognition. Fix existing `handle_velocity_call` (currently a stub — see Phase D step 0). |
 | `akkado/include/akkado/pattern_event.hpp` | Add `bend`, `aftertouch`, `dur_override`, `properties` fields to `PatternEvent`. |
 | `akkado/src/pattern_eval.cpp` | Copy record-suffix properties from AST into `PatternEvent`. |
 | `akkado/include/akkado/mini_token.hpp` | Token-class changes for record-suffix lexing if needed (likely reuse existing brace tokens). |
 | `akkado/src/mini_lexer.cpp` | Add note-record sub-mode (lexes `{key:value,...}` after a note). |
 | `akkado/include/akkado/ast.hpp` | Add optional `properties` field to `MiniNote` data. |
 | `akkado/src/mini_parser.cpp` | Parse record suffix into `MiniNote.properties`. |
-| `cedar/include/cedar/state/seq_step_state.hpp` (or equivalent) | Add `cycle_index`, `iter_n`, `iter_dir` fields. |
-| `cedar/include/cedar/opcodes/seqpat_step.hpp` (or equivalent) | Increment `cycle_index` at cycle wrap; apply iter rotation at query time. |
+| `cedar/include/cedar/opcodes/sequence.hpp` (line ~146, struct `SequenceState`) | Add `cycle_index`, `iter_n`, `iter_dir` fields. |
+| `cedar/include/cedar/opcodes/sequencing.hpp` (line ~415, `op_seqpat_step`) | Increment `cycle_index` at the existing cycle-wrap detection; apply iter rotation at query time. |
 | `akkado/include/akkado/voicing.hpp` | **New.** Public voicing API. |
 | `akkado/src/voicing.cpp` | **New.** Greedy voice-leading algorithm + built-in dictionaries + `addVoicings` registry. |
 | `akkado/tests/test_pattern_transforms.cpp` (new or existing) | One unit test per new transform. |
 | `akkado/tests/test_pattern_generators.cpp` (new) | Unit tests for `run`, `binary`, `binaryN`. |
 | `akkado/tests/test_voicing.cpp` (new) | Golden MIDI-note assertions for chord+anchor+mode combinations. |
-| `akkado/tests/test_pattern_event.cpp` (new or existing) | Tests for `bend`, `aftertouch`, `dur` transforms and record-suffix parsing. |
+| `akkado/tests/test_pattern_event.cpp` (existing) | Tests for `bend`, `aftertouch`, `dur` transforms and record-suffix parsing. |
+| `akkado/tests/test_builtins.cpp` | Update `canonical_name("compress") == "comp"` test — either remove or assert it errors after alias removal. `canonical_name("compressor") == "comp"` stays. |
 | `web/static/docs/reference/pattern/transforms.md` (existing or new) | Document new transforms; update F1 help index via `bun run build:docs`. |
 | `docs/mini-notation-reference.md` | Document `c4{vel:0.8, bend:0.2}` record suffix. |
 | `docs/prd-pattern-array-note-extensions.md` | Status line + Phase 4/5/7/8 sections updated to defer to this PRD. |
@@ -453,11 +485,12 @@ Staged so each sub-phase ships independently. Earlier phases unblock later ones 
 **Goal:** `bend`, `aftertouch`, `dur` transforms + record-suffix mini-notation.
 
 **Steps:**
+0. **Prerequisite — un-stub `velocity()`.** Current `handle_velocity_call` (`codegen_patterns.cpp:2398`) is a stub: its own comment says "currently doesn't modify velocity since velocity is not stored in cedar::Event." Make it write `event.velocity` in the emitted instruction stream so the new transforms can be implemented by genuinely mirroring it (rather than mirroring a stub).
 1. Extend `PatternEvent` with `bend`, `aftertouch`, `dur_override`, `properties`.
-2. Implement `.bend()`, `.aftertouch()`, `.dur()` transforms (mirrors `.velocity()`).
+2. Implement `.bend()`, `.aftertouch()`, `.dur()` transforms (mirrors fixed `.velocity()`).
 3. Extend mini-notation lexer/parser for `c4{key:value,...}` suffix.
-4. Wire record-suffix property values into `PatternEvent` (recognized → fixed field; unrecognized → `properties` bag).
-5. Wire `properties` bag access through `as e |> ... e.cutoff` pipe-binding.
+4. Wire record-suffix property values into `PatternEvent` (recognized short-form keys → fixed field per the §5.5 alias table; everything else → `properties` bag).
+5. Wire `properties` bag access through `as e |> ... e.cutoff` pipe-binding per §5.5a (compile-time lookup; new codegen path).
 
 **Verification:**
 - Transform tests: input event with default field, apply transform, assert field is set.
@@ -465,6 +498,39 @@ Staged so each sub-phase ships independently. Earlier phases unblock later ones 
 - Custom property test: `pat("c4{cutoff:0.3}") as e |> lp(%, 200 + e.cutoff * 4000)` compiles to the expected cutoff.
 
 **Acceptance:** `note("c4 e4 g4").bend("<0 0.5 -0.5>") |> mtof(% + bend(%) * 12) |> osc("sin", %)` audibly bends.
+
+### Phase E — Cross-Phase Smoke Acceptance
+
+**Goal:** All four areas compose in a single program without regression.
+
+**Smoke test program** — must compile clean and produce audible output:
+
+```akkado
+// 1. Voicing-led chord progression (Phase C)
+chord("Am C G F").anchor("c4").mode("below") as ch
+  |> mtof(ch)
+  |> poly(%, lead, 4)
+  |> out(%, %)
+
+// 2. Time-modified pattern (Phase A)
+pat("c4 e4 g4 b4").early(0.125).palindrome() as p
+  |> mtof(p)
+  |> osc("saw", %)
+  |> out(%, %)
+
+// 3. Generator-driven sample pattern (Phase B)
+binary(0b10110010) |> sampler(%, "hh") |> out(%, %)
+
+// 4. Bend + aftertouch + custom-property pattern (Phase D)
+pat("c4{vel:0.8, bend:0.2, cutoff:0.3} e4{vel:1.0, cutoff:0.7}") as e
+  |> osc("saw", e.freq)
+  |> lp(%, 200 + e.cutoff * 4000)
+  |> out(%, %)
+```
+
+**Acceptance:** the program compiles with `cmake --build build` clean, runs in `nkido-cli render` for ≥ 30 s without crashes, and an experiment script confirms event-list correctness for blocks 0–N (per §10.3).
+
+This phase blocks PRD closure — no Phase A–D claim is "done" until they all coexist in this program.
 
 ---
 
@@ -507,7 +573,7 @@ Staged so each sub-phase ships independently. Earlier phases unblock later ones 
 - **`.dur(pat, val)` with `val <= 0`:** Error.
 - **Record suffix conflict with positional:** `c4:0.8{bend:0.2}` — both forms — combine: `:0.8` sets velocity, `{bend:0.2}` sets bend. No error.
 - **Duplicate keys in record suffix:** `c4{vel:0.5, vel:0.7}` — last wins. No error (matches JS object semantics).
-- **Reserved-name override:** `c4{velocity:0.5}` — the longer name `velocity` is also recognized as the fixed field.
+- **Long-form keys go to properties bag, not fixed fields.** `c4{velocity:0.5}` populates `event.properties` with `("velocity", 0.5)` and leaves `event.velocity` at its default `1.0`. Only the short forms in the §5.5 alias table (`vel`, `bend`, `aftertouch`, `dur`) populate fixed fields. This is intentional: the short forms are the canonical surface; long forms behave like any user-defined key. Surface a lint warning E15y when a long form (`velocity`, `duration`, etc.) is used in record-suffix to nudge users toward the short form.
 
 ### 9.5 Compatibility
 
@@ -522,7 +588,14 @@ Staged so each sub-phase ships independently. Earlier phases unblock later ones 
 
 - **Per transform** (`akkado/tests/test_pattern_transforms.cpp`): build a pattern, apply transform, assert resulting `cedar::Event` list matches expected.
 - **Per generator** (`akkado/tests/test_pattern_generators.cpp`): assert event times, values, durations.
-- **Voicing** (`akkado/tests/test_voicing.cpp`): golden assertions per (chord, anchor, mode) tuple.
+- **Voicing** (`akkado/tests/test_voicing.cpp`): golden assertions per (chord, anchor, mode) tuple. At minimum, embed these worked examples to pin behavior:
+
+  | Chord | Anchor | Mode | Expected MIDI notes |
+  |-------|--------|------|---------------------|
+  | `Am` | `c4` (60) | `below` | `[57, 60, 64]` (A3, C4, E4 — top note ≤ anchor; root in close position) |
+  | `C` | `c5` (72) | `above` | `[60, 64, 67]` shifted up so all notes ≥ 72 → `[72, 76, 79]` (C5, E5, G5) |
+  | `Am` | `c4` (60) | `duck` | `[57, 64, 69]` (A3, E4, A4 — closest to anchor avoiding 60 itself) |
+  | `Am C G F` | `c4` | `below` | progression notes voice-led: each chord's voicing minimizes total semitone movement from previous (specific values per implementation, but total movement across the four chords ≤ 6 semitones) |
 - **PatternEvent extensions**: assert `bend`/`aftertouch`/`dur_override` set correctly.
 - **Mini-notation record suffix**: parse → assert AST contains expected `properties` vector.
 
