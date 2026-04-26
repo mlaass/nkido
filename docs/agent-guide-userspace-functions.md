@@ -21,7 +21,7 @@ fn voice(freq) -> {
 
 ## Parameters
 
-Required parameters first, then optional parameters with numeric defaults:
+Required parameters first, then optional parameters with literal defaults:
 
 ```akkado
 fn filtered(sig, cut = 1000, q = 0.7) -> lp(sig, cut, q)
@@ -36,8 +36,49 @@ filtered(noise(), cut: 500)          // named argument
 filtered(noise(), q: 2.0, cut: 500)  // named args, any order
 ```
 
+### String defaults
+
+Defaults can be either **number literals** or **string literals**:
+
+```akkado
+fn osc(type = "sin", freq = 440) -> match(type) {
+    "sin": sine(freq)
+    "saw": saw(freq)
+    _: sine(freq)
+}
+
+osc(440)              // type defaults to "sin"
+osc("saw", 440)       // explicit type
+```
+
+String defaults participate in compile-time `match()` resolution — when the default is used, only the matching arm is emitted into bytecode. String-defaulted params are **only meaningful inside a `match()` scrutinee**; using them as audio signals (e.g. `type * 2`) is undefined.
+
+### Variadic rest parameters
+
+A trailing `...name` collects remaining positional args into an array:
+
+```akkado
+fn mix(...sigs) -> sum(sigs) / len(sigs)
+
+mix(a)              // 1 signal
+mix(a, b)           // 2 signals
+mix(a, b, c, d)     // 4 signals
+```
+
+```akkado
+fn chain(input, ...fxs) -> fold(fxs, input, (acc, fx) -> fx(acc))
+noise() |> chain(%, lp(_, 500), delay(_, 0.3, 0.5, 0.5, 0.5))
+```
+
 Rules:
-- Default values must be **numeric literals** (no expressions, no strings)
+- The rest parameter must be **last**
+- Rest cannot have a default value
+- Required and optional params can precede the rest: `fn f(a, b = 5, ...rest)`
+- Empty rest is valid: `mix()` produces `len(sigs) == 0`
+- Rest args can be function values (closures, partials, fn refs) — useful for fx chains
+
+Rules (general):
+- Default values must be **literal numbers or strings** (no expressions)
 - Positional arguments must come before named arguments
 - Argument count is validated — missing required args or extra args are compile errors
 
@@ -97,7 +138,7 @@ fn subtractive(freq, cut = 800) -> {
 | No recursion | Functions cannot call themselves |
 | No forward declarations | Define before use |
 | No closures over mutable state | All variables are immutable; outer reads are fine |
-| Numeric-only defaults | `fn f(x = 0.5)` works, `fn f(x = "sin")` does not |
+| Literal-only defaults | `fn f(x = 0.5)`, `fn f(x = "sin")` work; expressions do not |
 | Builtin shadowing warns | Naming a function `lp`, `delay`, etc. compiles but warns; prefer distinct names |
 
 Functions are **fully inlined** at every call site. Writing `fn f(x) -> x * 2` and calling `f(100)` compiles to the same bytecode as `100 * 2`.
@@ -216,6 +257,81 @@ detune(1.5)  // 660
 ```
 
 This works because all Akkado variables are immutable.
+
+## Returning Closures
+
+A function whose body is a closure expression returns a **function value** that captures the outer parameters:
+
+```akkado
+fn make_filter(cut) -> (sig) -> lp(sig, cut, 0.7, 0.5, 0.5)
+
+filt = make_filter(1000)
+noise() |> filt(%) |> out(%, %)
+```
+
+```akkado
+fn make_voice(wave = "saw") -> (freq) -> match(wave) {
+    "saw": saw(freq) |> lp(%, freq * 4, 0.7, 0.5, 0.5)
+    "tri": tri(freq) |> lp(%, freq * 4, 0.7, 0.5, 0.5)
+    _:     sine(freq)
+}
+
+my_voice = make_voice("tri")
+my_voice(440) |> out(%, %)
+```
+
+Notes:
+- Captured outer params are bound at the moment the factory is called — they're read-only inside the returned closure.
+- Nested closure returns work: `fn f(a) -> (b) -> (c) -> a + b + c`.
+- String captures propagate into compile-time `match()` resolution inside the returned closure (same machinery as string defaults).
+
+## Partial Application with `_`
+
+Use `_` in any argument position to create a closure with that slot left open:
+
+```akkado
+fn add(a, b) -> a + b
+add3 = add(3, _)        // (x) -> add(3, x)
+add3(4)                 // 7
+
+clamp01 = clamp(0, _, 1)  // (x) -> clamp(0, x, 1)
+
+soft_lp = lp(_, 500, 0.7, 0.5, 0.5)
+noise() |> soft_lp(%) |> out(%, %)
+
+f = clamp(_, _, 1)        // (a, b) -> clamp(a, b, 1)
+```
+
+Rules:
+- Each `_` becomes a parameter of the resulting closure, in left-to-right order.
+- Works for both builtins and user-defined functions.
+- The result is a function value — assignable, callable, and passable as an argument: `map(arr, add(3, _))`.
+- `_` in an argument position is unrelated to `_` as a match wildcard — different parser paths.
+
+## Function Composition with `compose()`
+
+`compose(f, g, ...)` builds a left-to-right chain — `compose(a, b)` is `(x) -> b(a(x))`:
+
+```akkado
+fn double(x) -> x * 2
+fn inc(x) -> x + 1
+f = compose(double, inc)   // (x) -> inc(double(x))
+f(5)                       // 11
+
+pipeline = compose(lp(_, 1000, 0.7, 0.5, 0.5), hp(_, 200, 0.7, 0.5, 0.5))
+saw(440) |> pipeline(%) |> out(%, %)
+
+fx = compose(lp(_, 800, 0.7, 0.5, 0.5),
+             saturate(_, 0.3),
+             reverb(_))
+saw(220) |> fx(%) |> out(%, %)
+```
+
+Rules:
+- `compose()` accepts 2 or more function-valued arguments (closures, fn refs, partial applications).
+- Each function in the chain receives the output of the previous as its single argument.
+- The result is a function value, usable inline: `noise() |> compose(lp(_, 500, 0.7, 0.5, 0.5), reverb(_))(%) |> out(%, %)`.
+- Non-function arguments to `compose()` produce a compile error.
 
 ## Complete Example
 

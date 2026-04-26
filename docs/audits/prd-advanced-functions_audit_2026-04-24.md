@@ -4,13 +4,14 @@
 **Audit base:** `bfd896ef7c13fc6f91bf9b4621bde22314d07799 (2026-02-09)` (creation commit; originally `docs/PRD-Advanced-Functions.md`, renamed by `4977c77` on 2026-04-24)
 **Audit head:** `8fc1e05c81ca10d27bde68e6519bc65deb4f9859`
 **Audited:** 2026-04-24
+**Resolved:** 2026-04-26 (Phase 6 docs executed, PRD updated; see [Resolution](#resolution))
 **Mode:** Read-only bulk audit (no tests run, no fixes made)
 
 ## Summary
-- Goals met: 6 of 6 code features (5 of 6 phases including Phase 6 docs)
-- Critical findings: 3 (Unmet=0, Stubs=0, Coverage Gaps=0, Missing Tests=0, Doc Drift=2, Status Drift=1)
-- Recommended PRD Status: MOSTLY COMPLETE
-- One-line verdict: All six features ship with targeted tests, but the Phase 6 documentation work was skipped and the existing user-facing docs still contradict the new capabilities, so the DONE banner is premature.
+- Goals met: 6 of 6 code features, 6 of 6 phases (Phase 6 docs completed 2026-04-26)
+- Critical findings: 0 open / 3 resolved (Unmet=0, Stubs=0, Coverage Gaps=0, Missing Tests=0, Doc Drift=0, Status Drift=0)
+- Recommended PRD Status: COMPLETE
+- One-line verdict: All six features ship with targeted tests; the originally-skipped Phase 6 docs were completed and the strict-misuse edge case for string defaults is now explicitly tracked in PRD §7.6 as a deferred future extension.
 
 ## Goal Verification
 
@@ -46,19 +47,37 @@
 - Minor gap: PRD Section 6.1 edge case "String-defaulted param used in non-match context should error" has no explicit negative test. Not blocking.
 
 ### Scope Drift
-- **Phase 6 (documentation) not executed.** PRD Section 4 and the Phase 6 checklist require updating `docs/agent-guide-userspace-functions.md` and `web/static/docs/reference/language/closures.md` plus running `bun run build:docs`. Neither file was touched by the feature commit `bfd896e`:
+- **Phase 6 (documentation) not executed.** [RESOLVED 2026-04-26] PRD Section 4 and the Phase 6 checklist require updating `docs/agent-guide-userspace-functions.md` and `web/static/docs/reference/language/closures.md` plus running `bun run build:docs`. Neither file was touched by the feature commit `bfd896e`:
   - `docs/agent-guide-userspace-functions.md:40` still states `Default values must be **numeric literals** (no expressions, no strings)` -- directly contradicted by shipped string defaults.
   - `docs/agent-guide-userspace-functions.md:100` lists `Numeric-only defaults` as a live constraint.
   - Neither doc mentions variadic rest, partial application `_`, `compose()`, or closure-returning functions.
-- Minor naming divergence: PRD Section 2.3 calls the helper `build_closure_ref()`; the implementation reuses the pre-existing `resolve_function_arg()` at `akkado/src/codegen_functions.cpp:388`. Functionally equivalent.
+- Minor naming divergence: PRD Section 2.3 calls the helper `build_closure_ref()`; the implementation reuses the pre-existing `resolve_function_arg()` at `akkado/src/codegen_functions.cpp:388`. Functionally equivalent. [RESOLVED 2026-04-26 — PRD now documents the actual `resolve_function_arg()` reuse.]
 - Bonus cleanup in `bfd896e` (polyphony PRD update, web WASM export pruning) is incidental, not scope drift.
 
 ### Suggestions
-- Complete Phase 6: update `docs/agent-guide-userspace-functions.md` (remove "Numeric-only defaults" claim, document string defaults / variadic rest / partial app / compose / closure returns) and `web/static/docs/reference/language/closures.md`; run `bun run build:docs` to regenerate `web/src/lib/docs/lookup-index.ts`.
-- Add a negative test for PRD Section 6.1: using a string-default-only param as an audio signal should produce a compile error.
-- Align PRD helper name (`build_closure_ref`) with the actual `resolve_function_arg` used in `codegen_functions.cpp`, or leave a one-line comment in code pointing back to the PRD section.
+- Complete Phase 6: update `docs/agent-guide-userspace-functions.md` (remove "Numeric-only defaults" claim, document string defaults / variadic rest / partial app / compose / closure returns) and `web/static/docs/reference/language/closures.md`; run `bun run build:docs` to regenerate `web/src/lib/docs/lookup-index.ts`. [DONE 2026-04-26]
+- Add a negative test for PRD Section 6.1: using a string-default-only param as an audio signal should produce a compile error. [DEFERRED 2026-04-26 — probe showed the strict error isn't enforced today; full implementation requires propagating string-default tags through nested user-fn calls so `outer() -> inner(type)` still resolves. Tracked as PRD §7.6 future extension.]
+- Align PRD helper name (`build_closure_ref`) with the actual `resolve_function_arg` used in `codegen_functions.cpp`, or leave a one-line comment in code pointing back to the PRD section. [DONE 2026-04-26 — PRD §2.3 now references `resolve_function_arg()` directly.]
 
 ## PRD Status
-- Current: `> **Status: DONE** -- All 6 features implemented (string defaults, named args, closures, variadic, partial application, compose).`
-- Recommended: `Status: MOSTLY COMPLETE`
-- Reason: All six runtime/compiler features are in source with matching Catch2 tests and no stubs or TODOs. However, the Phase 6 documentation items in the PRD's own checklist are unchecked and the user-facing docs actively contradict the new behavior (still claim "Numeric-only defaults"). The DONE banner should either be softened or Phase 6 should be executed.
+- Original recommendation (2026-04-24): `Status: MOSTLY COMPLETE`
+- Updated recommendation (2026-04-26): `Status: COMPLETE`
+- Reason: All six runtime/compiler features are in source with matching Catch2 tests and no stubs or TODOs. The Phase 6 documentation items in the PRD's own checklist are now checked, the user-facing docs accurately describe the shipped behavior, and the lone deferred edge case (strict misuse error for string defaults) is explicitly tracked as PRD §7.6 future work.
+
+## Resolution
+
+Addressed 2026-04-26:
+
+1. **Phase 6 docs executed.**
+   - `docs/agent-guide-userspace-functions.md`: removed the "Numeric-only defaults" claim, added subsections for string defaults, variadic rest parameters, returning closures, partial application with `_`, and `compose()`.
+   - `web/static/docs/reference/language/closures.md`: extended frontmatter keywords; added "Returning Closures from `fn`", "Partial Application", and "Function Composition" sections.
+   - `bun run build:docs` re-run; `web/src/lib/docs/manifest.ts` regenerated (+25 lines for the new section anchors).
+
+2. **PRD updated** (`docs/prd-advanced-functions.md`):
+   - Status banner softened to acknowledge the §7.6 deferred edge case.
+   - §2.3 now describes the actual reuse of `resolve_function_arg()` instead of the never-built `build_closure_ref()`.
+   - §6.1 documents the unimplemented strict misuse error as a known gap.
+   - §7.6 added: "Strict Misuse Error for String-Default Params" tracks the deferred enforcement.
+   - Phase 6 checklist items checked with completion date.
+
+3. **Negative-test suggestion deferred.** A direct compile probe (`fn bad(type = "saw") -> type * 2`) confirmed the strict error doesn't fire today — string-defaulted params silently resolve to `BUFFER_UNUSED` outside `match()`. Adding a passing test would require first implementing the propagation logic; tracked as PRD §7.6 rather than added as a test stub.

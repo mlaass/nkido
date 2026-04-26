@@ -1168,6 +1168,31 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "language",
 		"title": "Closures"
 	},
+	"partial": {
+		"slug": "closures",
+		"category": "language",
+		"title": "Closures"
+	},
+	"compose": {
+		"slug": "closures",
+		"category": "language",
+		"title": "Closures"
+	},
+	"factory": {
+		"slug": "closures",
+		"category": "language",
+		"title": "Closures"
+	},
+	"underscore": {
+		"slug": "closures",
+		"category": "language",
+		"title": "Closures"
+	},
+	"placeholder": {
+		"slug": "closures",
+		"category": "language",
+		"title": "Closures"
+	},
 	"operators": {
 		"slug": "operators",
 		"category": "language",

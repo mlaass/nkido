@@ -1,4 +1,4 @@
-> **Status: DONE** — All 6 features implemented (string defaults, named args, closures, variadic, partial application, compose).
+> **Status: DONE** — All 6 features implemented (string defaults, named args, closures, variadic, partial application, compose) and Phase 6 user-facing docs updated. One non-blocking edge case (strict misuse error for string-default params) deferred to §7.6.
 
 # Advanced Function System PRD
 
@@ -288,7 +288,7 @@ if (body_ref.type == NodeType::Closure) {
 // Otherwise: normal body visit (existing code)
 ```
 
-**`build_closure_ref()`**: New helper that extracts parameters from a Closure AST node's children. Reuses the same logic as `resolve_function_arg()` (`codegen_arrays.cpp:110`).
+**Closure-ref construction**: The implementation reuses the existing `resolve_function_arg()` helper (`codegen.hpp:592`) directly on the function body node — no separate `build_closure_ref()` wrapper was needed. `resolve_function_arg()` extracts a `FunctionRef` from any closure or fn-reference AST node, which is exactly what's required here.
 
 **Assignment handler** (`codegen.cpp`): After `visit(rhs)`, check for pending function ref:
 
@@ -858,8 +858,8 @@ cmake --build build && ./build/akkado/tests/akkado_tests
 ### 6.1 String Defaults
 
 - String defaults must NOT emit `PUSH_CONST` -- they have no buffer representation. `param_buf` must be `BUFFER_UNUSED`.
-- When a string-defaulted param is used in a non-match context (e.g., passed to another function), it should produce a compile error: "Cannot use string parameter as audio signal."
 - Ensure the closure lookahead fix doesn't break `(x + y)` (grouped expression, not closure).
+- **Known gap (deferred):** Using a string-defaulted param outside a `match()` scrutinee (e.g. `type * 2`) currently compiles silently rather than emitting a typed error. Properly enforcing this requires propagating string-default tags through nested user-fn calls so a chain like `outer() -> inner(type)` still routes the literal correctly. Tracked under §7.6.
 
 ### 6.2 Named Arguments
 
@@ -917,6 +917,10 @@ Integration with the planned type system (`prd-compiler-type-system.md`) to vali
 ### 7.5 Pattern/Expression Defaults
 
 Allow expressions as defaults: `fn f(x, gain = param("gain", 0.5))`. Currently blocked by the requirement for literal-only defaults.
+
+### 7.6 Strict Misuse Error for String-Default Params
+
+Reject programs that reference a string-defaulted parameter outside a `match()` scrutinee with a clear diagnostic ("Cannot use string parameter '<name>' as audio signal — only valid as a `match()` scrutinee"). Requires propagating string-default tags through nested user-fn calls so legitimate forwarding (`outer() -> inner(type)`) still resolves at compile time.
 
 ---
 
@@ -984,6 +988,6 @@ Allow expressions as defaults: `fn f(x, gain = param("gain", 0.5))`. Currently b
 - [ ] Tests for composed function in pipe chains
 
 ### Phase 6: Documentation
-- [ ] Update `docs/agent-guide-userspace-functions.md`
-- [ ] Update `web/static/docs/reference/language/closures.md`
-- [ ] Run `bun run build:docs` to rebuild docs index
+- [x] Update `docs/agent-guide-userspace-functions.md` (2026-04-26)
+- [x] Update `web/static/docs/reference/language/closures.md` (2026-04-26)
+- [x] Run `bun run build:docs` to rebuild docs index (2026-04-26)
