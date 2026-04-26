@@ -671,6 +671,49 @@ TEST_CASE("range: integer sequence", "[arrays][range]") {
         // Empty sum → no ADDs
         CHECK(count_instructions(insts, cedar::Opcode::ADD) == 0);
     }
+
+    SECTION("ascending range with step > 1") {
+        auto result = must_compile("range(0, 10, 2)");
+        auto values = collect_consts(get_instructions(result));
+        auto tail = std::vector<float>(values.end() - 5, values.end());
+        CHECK(tail[0] == 0.0f);
+        CHECK(tail[1] == 2.0f);
+        CHECK(tail[2] == 4.0f);
+        CHECK(tail[3] == 6.0f);
+        CHECK(tail[4] == 8.0f);
+    }
+
+    SECTION("descending range with step > 1 (start > end auto-reverses)") {
+        auto result = must_compile("range(10, 0, 2)");
+        auto values = collect_consts(get_instructions(result));
+        auto tail = std::vector<float>(values.end() - 5, values.end());
+        CHECK(tail[0] == 10.0f);
+        CHECK(tail[1] == 8.0f);
+        CHECK(tail[2] == 6.0f);
+        CHECK(tail[3] == 4.0f);
+        CHECK(tail[4] == 2.0f);
+    }
+
+    SECTION("negative step value uses magnitude (direction from start/end)") {
+        auto result = must_compile("range(0, 10, -2)");
+        auto values = collect_consts(get_instructions(result));
+        auto tail = std::vector<float>(values.end() - 5, values.end());
+        CHECK(tail[0] == 0.0f);
+        CHECK(tail[1] == 2.0f);
+        CHECK(tail[2] == 4.0f);
+        CHECK(tail[3] == 6.0f);
+        CHECK(tail[4] == 8.0f);
+    }
+
+    SECTION("step=0 is rejected") {
+        auto result = akkado::compile("range(0, 4, 0)");
+        REQUIRE_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E153") found = true;
+        }
+        CHECK(found);
+    }
 }
 
 // =============================================================================

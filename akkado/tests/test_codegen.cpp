@@ -427,6 +427,17 @@ TEST_CASE("Codegen: range()", "[codegen][hof]") {
         CHECK(decode_const_float(insts[1]) == 2.0f);
         CHECK(decode_const_float(insts[2]) == 1.0f);
     }
+
+    SECTION("range with step > 1") {
+        auto result = akkado::compile("range(0, 10, 3)");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(count_instructions(insts, cedar::Opcode::PUSH_CONST) == 4);
+        CHECK(decode_const_float(insts[0]) == 0.0f);
+        CHECK(decode_const_float(insts[1]) == 3.0f);
+        CHECK(decode_const_float(insts[2]) == 6.0f);
+        CHECK(decode_const_float(insts[3]) == 9.0f);
+    }
 }
 
 TEST_CASE("Codegen: repeat()", "[codegen][hof]") {

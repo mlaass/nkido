@@ -1,5 +1,6 @@
 #include "akkado/const_eval.hpp"
 #include <cmath>
+#include <cstdlib>
 #include <algorithm>
 #include <numeric>
 
@@ -248,20 +249,35 @@ std::optional<ConstValue> ConstEvaluator::eval_call(NodeIndex node, const Node& 
     }
 
     // Handle array operations
+    // step is the interval size (always treated as positive); direction is
+    // determined by start vs end (start > end auto-reverses).
     if (func_name == "range") {
-        if (args.size() != 2) {
-            error("E153", "range() requires 2 arguments", n.location);
+        if (args.size() < 2 || args.size() > 3) {
+            error("E153", "range() requires 2 or 3 arguments", n.location);
             return std::nullopt;
         }
         auto start = as_scalar(args[0], n.location);
         auto end = as_scalar(args[1], n.location);
         if (!start || !end) return std::nullopt;
+        double step_d = 1.0;
+        if (args.size() == 3) {
+            auto step_opt = as_scalar(args[2], n.location);
+            if (!step_opt) return std::nullopt;
+            step_d = *step_opt;
+        }
 
-        std::vector<double> result;
         int s = static_cast<int>(*start);
         int e = static_cast<int>(*end);
-        int step = (s <= e) ? 1 : -1;
-        for (int i = s; i != e; i += step) {
+        int step_mag = std::abs(static_cast<int>(step_d));
+        if (step_mag == 0) {
+            error("E153", "range() step must be non-zero", n.location);
+            return std::nullopt;
+        }
+        int step = (s <= e) ? step_mag : -step_mag;
+
+        std::vector<double> result;
+        auto in_range = [&](int i) { return step > 0 ? i < e : i > e; };
+        for (int i = s; in_range(i); i += step) {
             result.push_back(static_cast<double>(i));
         }
         return ConstValue{std::move(result)};

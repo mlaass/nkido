@@ -620,6 +620,17 @@ TEST_CASE("Const: reversed range", "[const]") {
     CHECK(has_const_approx(insts, 1.0f));
 }
 
+TEST_CASE("Const: range with positive step", "[const]") {
+    auto result = akkado::compile("const r = range(0, 10, 2)");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    CHECK(has_const_approx(insts, 0.0f));
+    CHECK(has_const_approx(insts, 2.0f));
+    CHECK(has_const_approx(insts, 4.0f));
+    CHECK(has_const_approx(insts, 6.0f));
+    CHECK(has_const_approx(insts, 8.0f));
+}
+
 // =============================================================================
 // Group 6: Pitch Literals
 // =============================================================================

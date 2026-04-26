@@ -304,17 +304,20 @@ cutoffs = scale(shape, 200, 4000)
 
 ## range
 
-**Range** — Integer sequence `[start, start+1, ..., end-1]`. If `start > end`, the sequence counts down. Both arguments must be compile-time constants.
+**Range** — Integer sequence stepping from `start` toward `end` (exclusive). If `start > end`, the sequence counts down. `step` is the interval size and is always treated as positive — direction is determined by `start` vs `end`. All arguments must be compile-time constants.
 
 | Param | Type    | Default | Description |
 |-------|---------|---------|-------------|
 | start | literal | -       | Start value (inclusive) |
 | end   | literal | -       | End value (exclusive) |
+| step  | literal | 1       | Interval size (must be non-zero) |
 
 ```akk
-range(0, 4)   // [0, 1, 2, 3]
-range(4, 0)   // [4, 3, 2, 1]
-range(2, 2)   // []
+range(0, 4)       // [0, 1, 2, 3]
+range(4, 0)       // [4, 3, 2, 1]
+range(2, 2)       // []
+range(0, 10, 2)   // [0, 2, 4, 6, 8]
+range(10, 0, 3)   // [10, 7, 4, 1]
 ```
 
 ## repeat

@@ -6,6 +6,7 @@
 #include "akkado/const_eval.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 
 namespace akkado {
 
@@ -552,29 +553,42 @@ TypedValue CodeGenerator::handle_reverse_call(NodeIndex node, const Node& n) {
     return cache_and_return(node, TypedValue::make_array(std::move(elements), elem_bufs[0]));
 }
 
-// range(start, end)
+// range(start, end, step=1)
+// step is the interval size (always treated as positive); direction is
+// determined by start vs end (start > end auto-reverses).
 TypedValue CodeGenerator::handle_range_call(NodeIndex node, const Node& n) {
-    auto args = extract_call_args(ast_->arena, n.first_child, 2);
+    auto args = extract_call_args(ast_->arena, n.first_child, 2, 3);
     if (!args.valid) {
-        error("E152", "range() requires 2 arguments: range(start, end)", n.location);
+        error("E152", "range() requires 2 or 3 arguments: range(start, end, step=1)", n.location);
         return TypedValue::void_val();
     }
 
     auto start_val = resolve_const_scalar(ast_->arena, args.nodes[0], *symbols_);
     auto end_val = resolve_const_scalar(ast_->arena, args.nodes[1], *symbols_);
+    std::optional<double> step_val = 1.0;
+    if (args.nodes.size() == 3) {
+        step_val = resolve_const_scalar(ast_->arena, args.nodes[2], *symbols_);
+    }
 
-    if (!start_val || !end_val) {
+    if (!start_val || !end_val || !step_val) {
         error("E153", "range() arguments must be compile-time constants", n.location);
         return TypedValue::void_val();
     }
 
     int start = static_cast<int>(*start_val);
     int end = static_cast<int>(*end_val);
+    int step_mag = std::abs(static_cast<int>(*step_val));
+
+    if (step_mag == 0) {
+        error("E153", "range() step must be non-zero", n.location);
+        return TypedValue::void_val();
+    }
 
     std::vector<std::uint16_t> result_buffers;
-    int step = (start <= end) ? 1 : -1;
+    int step = (start <= end) ? step_mag : -step_mag;
+    auto in_range = [&](int i) { return step > 0 ? i < end : i > end; };
 
-    for (int i = start; i != end; i += step) {
+    for (int i = start; in_range(i); i += step) {
         std::uint16_t buf = buffers_.allocate();
         if (buf == BufferAllocator::BUFFER_UNUSED) {
             error("E101", "Buffer pool exhausted", n.location);
