@@ -40,17 +40,13 @@ struct PatternPayload {
     /// Fixed-position field buffers: [freq, vel, trig, gate, type]
     std::array<std::uint16_t, 5> fields = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
 
-    /// Per-voice field buffers (for polyphonic patterns)
-    std::vector<std::array<std::uint16_t, 5>> voice_fields;
-
-    /// State ID for SEQPAT instructions (links poly() to upstream pattern)
+    /// State ID for SEQPAT instructions (links poly() to upstream pattern).
+    /// poly() reads its source events through the SequenceState directly via
+    /// POLY_BEGIN — there is intentionally no per-voice buffer plumbing here.
     std::uint32_t state_id = 0;
 
     /// Cycle length in beats
     float cycle_length = 4.0f;
-
-    /// Number of polyphonic voices
-    std::uint8_t num_voices = 1;
 
     /// Field index constants
     static constexpr std::size_t FREQ = 0;

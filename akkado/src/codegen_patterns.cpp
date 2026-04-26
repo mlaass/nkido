@@ -9,8 +9,10 @@
 #include "akkado/pattern_debug.hpp"
 #include "akkado/tuning.hpp"
 #include <cedar/opcodes/sequence.hpp>
+#include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 
 namespace akkado {
 
@@ -470,124 +472,318 @@ private:
         add_event_to_sequence(parent_seq_idx, e);
     }
 
-    // MiniPolyrhythm [a, b, c]: all elements simultaneously
+    // ========================================================================
+    // MiniPolyrhythm [a, b, c, …]: parallel branches via recursive flatten+merge
+    // ========================================================================
+    // Each polyrhythm branch is recursively expanded into one or more parallel
+    // BranchTimelines. Group / Pattern / Polymeter / Euclidean nodes also widen
+    // to N timelines when they enclose a polyrhythm — sequential children get
+    // padded so [bd [hh, sn] cp] yields two parallel timelines, sn populated
+    // only in the middle third.
+    //
+    // All timelines are then merged into one sorted DATA-event stream by
+    // walking the union of unique trigger times. At each time we emit one
+    // multi-voice event whose values[i] = branch i's sample_id at that time
+    // (0 means "no trigger on this slot now"). SAMPLE_PLAY already treats
+    // values[i] == 0 as "skip this voice slot", so silence-on-empty falls out
+    // for free.
+    //
+    // Cap: branches > MAX_VALUES_PER_EVENT (4) silently truncate — same
+    // convention as the previous merge path. Pitched / chord / alternation /
+    // random subtrees aren't statically flattenable, so we fall back to the
+    // older per-child compile in those cases.
+
+    struct BranchEvent {
+        float time;
+        float duration;
+        float velocity;
+        std::uint16_t type_id;
+        std::uint16_t source_offset;
+        std::uint16_t source_length;
+        bool is_rest;
+        std::uint32_t sample_id;     // resolved (or 0 if unknown / rest)
+        std::string sample_name;     // for sample_mappings_ deferred resolution
+        std::string sample_bank;
+        std::uint8_t sample_variant;
+    };
+    using BranchTimeline = std::vector<BranchEvent>;
+
+    // True if the subtree contains only sample/rest atoms inside group /
+    // polyrhythm / polymeter / euclidean structures (with optional Repeat /
+    // Weight modifiers). Pitched atoms, chords, alternation, random, and
+    // dynamic modifiers all break flattening.
+    bool is_flattenable_sample_subtree(NodeIndex idx) const {
+        if (idx == NULL_NODE) return true;
+        const Node& n = arena_[idx];
+        switch (n.type) {
+            case NodeType::MiniAtom: {
+                const auto& ad = n.as_mini_atom();
+                return ad.kind == Node::MiniAtomKind::Sample ||
+                       ad.kind == Node::MiniAtomKind::Rest;
+            }
+            case NodeType::MiniGroup:
+            case NodeType::MiniPattern:
+            case NodeType::MiniPolyrhythm:
+            case NodeType::MiniPolymeter:
+            case NodeType::MiniEuclidean: {
+                for (NodeIndex c = n.first_child; c != NULL_NODE;
+                     c = arena_[c].next_sibling) {
+                    if (!is_flattenable_sample_subtree(c)) return false;
+                }
+                return true;
+            }
+            case NodeType::MiniModified: {
+                const auto& mod = n.as_mini_modifier();
+                if (mod.modifier_type == Node::MiniModifierType::Repeat ||
+                    mod.modifier_type == Node::MiniModifierType::Weight) {
+                    return is_flattenable_sample_subtree(n.first_child);
+                }
+                return false;
+            }
+            default:
+                return false;
+        }
+    }
+
+    // Recursively flatten a subtree into N≥1 parallel BranchTimelines covering
+    // [t_offset, t_offset + t_span].
+    std::vector<BranchTimeline> flatten_to_timelines(
+            NodeIndex idx, float t_offset, float t_span) {
+        if (idx == NULL_NODE) return { BranchTimeline{} };
+        const Node& n = arena_[idx];
+
+        switch (n.type) {
+            case NodeType::MiniPolyrhythm: {
+                std::vector<BranchTimeline> all;
+                for (NodeIndex c = n.first_child; c != NULL_NODE;
+                     c = arena_[c].next_sibling) {
+                    auto child_tls = flatten_to_timelines(c, t_offset, t_span);
+                    for (auto& tl : child_tls) all.push_back(std::move(tl));
+                }
+                if (all.empty()) all.push_back({});
+                return all;
+            }
+
+            case NodeType::MiniGroup:
+            case NodeType::MiniPattern:
+            case NodeType::MiniPolymeter: {
+                std::vector<NodeIndex> children;
+                std::vector<float> weights;
+                float total_weight = 0.0f;
+                for (NodeIndex c = n.first_child; c != NULL_NODE;
+                     c = arena_[c].next_sibling) {
+                    float w = get_node_weight(c);
+                    int repeat = get_node_repeat(c);
+                    for (int i = 0; i < repeat; ++i) {
+                        children.push_back(c);
+                        weights.push_back(w);
+                        total_weight += w;
+                    }
+                }
+                if (children.empty()) return { BranchTimeline{} };
+                if (total_weight <= 0.0f)
+                    total_weight = static_cast<float>(children.size());
+
+                std::vector<std::vector<BranchTimeline>> per_child;
+                std::size_t max_width = 1;
+                float accumulated = 0.0f;
+                for (std::size_t i = 0; i < children.size(); ++i) {
+                    float child_span = (weights[i] / total_weight) * t_span;
+                    float child_offset = t_offset + accumulated;
+                    accumulated += child_span;
+                    per_child.push_back(
+                        flatten_to_timelines(children[i], child_offset, child_span));
+                    max_width = std::max(max_width, per_child.back().size());
+                }
+
+                std::vector<BranchTimeline> result(max_width);
+                for (auto& child_timelines : per_child) {
+                    for (std::size_t ti = 0;
+                         ti < child_timelines.size() && ti < max_width; ++ti) {
+                        for (auto& ev : child_timelines[ti]) {
+                            result[ti].push_back(std::move(ev));
+                        }
+                    }
+                }
+                return result;
+            }
+
+            case NodeType::MiniEuclidean: {
+                const auto& euclid = n.as_mini_euclidean();
+                std::uint32_t hits = euclid.hits;
+                std::uint32_t steps = euclid.steps;
+                std::uint32_t rotation = euclid.rotation;
+                if (steps == 0 || hits == 0) return { BranchTimeline{} };
+                NodeIndex child = n.first_child;
+                if (child == NULL_NODE) return { BranchTimeline{} };
+
+                std::uint32_t pattern = compute_euclidean_pattern(hits, steps, rotation);
+                float step_span = t_span / static_cast<float>(steps);
+
+                std::size_t max_width = 1;
+                std::vector<std::vector<BranchTimeline>> per_hit;
+                std::vector<bool> hit_active(steps, false);
+                for (std::uint32_t i = 0; i < steps; ++i) {
+                    if (!((pattern >> i) & 1)) continue;
+                    hit_active[i] = true;
+                    float step_offset = t_offset + static_cast<float>(i) * step_span;
+                    per_hit.push_back(
+                        flatten_to_timelines(child, step_offset, step_span));
+                    max_width = std::max(max_width, per_hit.back().size());
+                }
+
+                std::vector<BranchTimeline> result(max_width);
+                for (auto& hit_tls : per_hit) {
+                    for (std::size_t ti = 0;
+                         ti < hit_tls.size() && ti < max_width; ++ti) {
+                        for (auto& ev : hit_tls[ti]) {
+                            result[ti].push_back(std::move(ev));
+                        }
+                    }
+                }
+                return result;
+            }
+
+            case NodeType::MiniAtom: {
+                const auto& ad = n.as_mini_atom();
+                BranchEvent be{};
+                be.time = t_offset;
+                be.duration = t_span;
+                be.velocity = ad.velocity;
+                be.source_offset = static_cast<std::uint16_t>(
+                    n.location.offset - pattern_base_offset_);
+                be.source_length = static_cast<std::uint16_t>(n.location.length);
+                if (ad.kind == Node::MiniAtomKind::Rest) {
+                    be.is_rest = true;
+                } else if (ad.kind == Node::MiniAtomKind::Sample) {
+                    be.is_rest = false;
+                    be.sample_name = ad.sample_name;
+                    be.sample_bank = ad.sample_bank;
+                    be.sample_variant = ad.sample_variant;
+                    if (!ad.sample_name.empty()) {
+                        be.type_id = get_or_assign_type_id(ad.sample_name);
+                        if (sample_registry_) {
+                            be.sample_id = sample_registry_->get_id(ad.sample_name);
+                        }
+                    }
+                }
+                return { BranchTimeline{ be } };
+            }
+
+            case NodeType::MiniModified:
+                // Repeat / Weight pass through; parents already consume those
+                // via get_node_repeat / get_node_weight at this level.
+                return flatten_to_timelines(n.first_child, t_offset, t_span);
+
+            default:
+                // Caller should have gated us via is_flattenable_sample_subtree.
+                return { BranchTimeline{} };
+        }
+    }
+
     void compile_polyrhythm_events(const Node& n, std::uint16_t seq_idx,
                                     float time_offset, float time_span) {
-        // Fast-path: if all direct children are bare sample atoms (or rests),
-        // merge them into a single DATA event with num_values=N. This lets
-        // [bd, hh] behave like a chord — SAMPLE_PLAY can allocate one voice per
-        // value. Otherwise (groups, pitch atoms, nested polyrhythms, euclidean)
-        // fall back to per-child compile so differing-subdivision polyrhythms
-        // like [c4 e4, g4 a4 b4] keep their current interleave behavior.
-        if (can_merge_sample_polyrhythm(n)) {
-            emit_merged_sample_polyrhythm(n, seq_idx, time_offset, time_span);
+        bool flattenable = true;
+        for (NodeIndex c = n.first_child; c != NULL_NODE;
+             c = arena_[c].next_sibling) {
+            if (!is_flattenable_sample_subtree(c)) { flattenable = false; break; }
+        }
+        if (!flattenable) {
+            // Non-sample / dynamic subtree — fall back to per-child compile.
+            // The single-stream runtime collapses overlaps to last-event-wins
+            // here, but that matches prior behavior for pitched polyrhythms.
+            for (NodeIndex c = n.first_child; c != NULL_NODE;
+                 c = arena_[c].next_sibling) {
+                compile_into_sequence(c, seq_idx, time_offset, time_span);
+            }
             return;
         }
 
-        NodeIndex child = n.first_child;
-        while (child != NULL_NODE) {
-            compile_into_sequence(child, seq_idx, time_offset, time_span);
-            child = arena_[child].next_sibling;
-        }
-    }
-
-    // Polyrhythm merges into a single chord-style event only when every direct
-    // child is a bare Sample or Rest atom. At least 2 non-rest children are
-    // required (otherwise there's nothing to merge).
-    bool can_merge_sample_polyrhythm(const Node& n) const {
-        int sample_count = 0;
-        int total_children = 0;
+        std::vector<BranchTimeline> branches;
         for (NodeIndex c = n.first_child; c != NULL_NODE;
              c = arena_[c].next_sibling) {
-            const Node& cn = arena_[c];
-            if (cn.type != NodeType::MiniAtom) return false;
-            const auto& ad = cn.as_mini_atom();
-            if (ad.kind != Node::MiniAtomKind::Sample &&
-                ad.kind != Node::MiniAtomKind::Rest) {
-                return false;
-            }
-            if (ad.kind == Node::MiniAtomKind::Sample) ++sample_count;
-            ++total_children;
-            if (total_children > static_cast<int>(cedar::MAX_VALUES_PER_EVENT)) {
-                // Caps at the chord limit. Extra voices would be dropped — let
-                // the fallback interleave path handle it instead so the user at
-                // least gets something audible (first-wins becomes last-wins,
-                // same as before the fix, but for the >4-voice edge case only).
-                return false;
+            auto child_tls = flatten_to_timelines(c, time_offset, time_span);
+            for (auto& tl : child_tls) branches.push_back(std::move(tl));
+        }
+        if (branches.empty()) return;
+
+        // Cap at the per-event voice limit. Extras truncate silently
+        // (matches the previous merge-path behavior).
+        std::size_t branch_count = std::min(branches.size(),
+            static_cast<std::size_t>(cedar::MAX_VALUES_PER_EVENT));
+
+        // Collect unique trigger times across all retained branches.
+        constexpr float TIME_EPS = 1e-6f;
+        std::vector<float> times;
+        for (std::size_t i = 0; i < branch_count; ++i) {
+            for (const auto& ev : branches[i]) {
+                if (ev.is_rest) continue;
+                bool found = false;
+                for (float t : times) {
+                    if (std::fabs(t - ev.time) < TIME_EPS) { found = true; break; }
+                }
+                if (!found) times.push_back(ev.time);
             }
         }
-        // Merge when at least one sample is present and there are ≥2 children;
-        // a lone [bd] is handled fine by either path, and all-rest polyrhythms
-        // would produce silence either way.
-        return sample_count >= 1 && total_children >= 2;
-    }
-
-    // Emit a single merged DATA event representing all simultaneous sample
-    // voices. values[slot] holds each voice's sample_id (0 for rests).
-    void emit_merged_sample_polyrhythm(const Node& n, std::uint16_t seq_idx,
-                                        float time_offset, float time_span) {
-        cedar::Event e;
-        e.type = cedar::EventType::DATA;
-        e.time = time_offset;
-        e.duration = time_span;
-        e.chance = 1.0f;
-        e.velocity = 1.0f;
-        e.num_values = 0;
-        // Highlight the whole [bd, hh] span in the UI, not just one child.
-        e.source_offset = static_cast<std::uint16_t>(
-            n.location.offset - pattern_base_offset_);
-        e.source_length = static_cast<std::uint16_t>(n.location.length);
+        if (times.empty()) return;
+        std::sort(times.begin(), times.end());
 
         is_sample_pattern_ = true;
 
-        std::uint16_t event_idx = static_cast<std::uint16_t>(
-            seq_idx < sequence_events_.size() ? sequence_events_[seq_idx].size() : 0);
+        for (float t : times) {
+            cedar::Event e;
+            e.type = cedar::EventType::DATA;
+            e.time = t;
+            e.duration = time_span;
+            e.chance = 1.0f;
+            e.velocity = 1.0f;
+            e.num_values = static_cast<std::uint8_t>(branch_count);
+            for (std::size_t s = 0; s < cedar::MAX_VALUES_PER_EVENT; ++s)
+                e.values[s] = 0.0f;
 
-        std::uint8_t slot = 0;
-        bool first_sample_seen = false;
-        for (NodeIndex c = n.first_child;
-             c != NULL_NODE && slot < cedar::MAX_VALUES_PER_EVENT;
-             c = arena_[c].next_sibling) {
-            const auto& ad = arena_[c].as_mini_atom();
+            std::uint16_t event_idx = static_cast<std::uint16_t>(
+                seq_idx < sequence_events_.size()
+                    ? sequence_events_[seq_idx].size() : 0);
 
-            if (ad.kind == Node::MiniAtomKind::Rest) {
-                e.values[slot] = 0.0f;  // SAMPLE_PLAY skips sample_id == 0
-                ++slot;
-                continue;
-            }
-
-            // Sample atom
-            if (!first_sample_seen) {
-                // First real voice sets the event's velocity + type_id so
-                // match() routing still picks up the primary sample.
-                e.velocity = ad.velocity;
-                if (!ad.sample_name.empty()) {
-                    e.type_id = get_or_assign_type_id(ad.sample_name);
+            bool primary_set = false;
+            float min_dur = std::numeric_limits<float>::max();
+            for (std::size_t i = 0; i < branch_count; ++i) {
+                const BranchEvent* hit = nullptr;
+                for (const auto& ev : branches[i]) {
+                    if (!ev.is_rest && std::fabs(ev.time - t) < TIME_EPS) {
+                        hit = &ev;
+                        break;
+                    }
                 }
-                first_sample_seen = true;
-            }
+                if (!hit) continue;
 
-            std::uint32_t sample_id = 0;
-            if (!ad.sample_name.empty()) {
-                sample_names_.insert(ad.sample_name);
-                sample_mappings_.push_back(SequenceSampleMapping{
-                    seq_idx,
-                    event_idx,
-                    slot,
-                    ad.sample_name,
-                    ad.sample_bank,
-                    ad.sample_variant
-                });
-                if (sample_registry_) {
-                    sample_id = sample_registry_->get_id(ad.sample_name);
+                e.values[i] = static_cast<float>(hit->sample_id);
+                min_dur = std::min(min_dur, hit->duration);
+                if (!primary_set) {
+                    e.velocity = hit->velocity;
+                    e.type_id = hit->type_id;
+                    e.source_offset = hit->source_offset;
+                    e.source_length = hit->source_length;
+                    primary_set = true;
+                }
+                if (!hit->sample_name.empty()) {
+                    sample_names_.insert(hit->sample_name);
+                    sample_mappings_.push_back(SequenceSampleMapping{
+                        seq_idx,
+                        event_idx,
+                        static_cast<std::uint8_t>(i),
+                        hit->sample_name,
+                        hit->sample_bank,
+                        hit->sample_variant
+                    });
                 }
             }
-            e.values[slot] = static_cast<float>(sample_id);
-            ++slot;
+            if (min_dur < std::numeric_limits<float>::max()) {
+                e.duration = min_dur;
+            }
+
+            add_event_to_sequence(seq_idx, e);
         }
-        e.num_values = slot;
-
-        add_event_to_sequence(seq_idx, e);
     }
 
     // MiniEuclidean: Euclidean rhythm pattern

@@ -3142,30 +3142,178 @@ TEST_CASE("Codegen: Sample polyrhythm merges into chord-like event",
         CHECK(events[7].num_values == 1);  // hh only
     }
 
-    SECTION("[[bd, sd], hh] → outer polyrhythm falls back to per-child compile") {
-        // When a polyrhythm's direct child is itself compound (nested
-        // polyrhythm, group, euclidean, pitch chord, …), the merge can't apply
-        // to the outer level because one of the voices would need to represent
-        // a multi-event sub-pattern. The outer polyrhythm therefore falls back
-        // to per-child compile, while the inner [bd, sd] still merges on its
-        // own level.
+    SECTION("[[bd, sd], hh] → nested polyrhythm flattens to 3 voices") {
+        // The recursive flatten unrolls nested polyrhythms: the inner [bd, sd]
+        // contributes 2 parallel timelines, and the outer adds hh, for 3
+        // simultaneous voices in a single event at t=0. This is the simple
+        // recursive semantics — every comma adds a parallel branch, no matter
+        // how deeply nested.
         auto result = akkado::compile(R"(pat("[[bd, sd], hh]") |> out(%, %))",
                                        "<input>", &registry);
         REQUIRE(result.success);
         const auto& events = result.state_inits[0].sequence_events[0];
-        // Outer produces 2 events both at time 0: the inner merged polyrhythm
-        // ([bd,sd] → num_values=2) plus the lone hh atom (num_values=1).
-        REQUIRE(events.size() == 2);
+        REQUIRE(events.size() == 1);
         CHECK(events[0].time == Catch::Approx(0.0f));
-        CHECK(events[1].time == Catch::Approx(0.0f));
-        // Inner merge produces a multi-value event; the sibling hh stays mono.
-        bool saw_merged = false, saw_mono = false;
-        for (const auto& e : events) {
-            if (e.num_values == 2) saw_merged = true;
-            if (e.num_values == 1) saw_mono = true;
+        CHECK(events[0].num_values == 3);
+        CHECK(events[0].values[0] == 1.0f);  // bd
+        CHECK(events[0].values[1] == 2.0f);  // sd
+        CHECK(events[0].values[2] == 3.0f);  // hh
+    }
+
+    SECTION("[bd, [hh hh hh hh]] → kick sustains while hihats subdivide") {
+        // The user's regression case. Branch 0 is a single bd at t=0 (whole
+        // cycle), branch 1 is four hihats at t=0/0.25/0.5/0.75. Merged: at
+        // t=0 we trigger both bd and hh; at the three later times we trigger
+        // only hh (slot 0 = 0 means "no new trigger on bd this step"). The
+        // bd voice plays out its sample naturally — SAMPLE_PLAY doesn't need
+        // a sustain marker.
+        auto result = akkado::compile(R"(pat("[bd, [hh hh hh hh]]") |> out(%, %))",
+                                       "<input>", &registry);
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.is_sample_pattern == true);
+        const auto& events = si.sequence_events[0];
+        REQUIRE(events.size() == 4);
+
+        CHECK(events[0].time == Catch::Approx(0.0f));
+        CHECK(events[0].num_values == 2);
+        CHECK(events[0].values[0] == 1.0f);  // bd triggers
+        CHECK(events[0].values[1] == 3.0f);  // hh triggers
+
+        CHECK(events[1].time == Catch::Approx(0.25f));
+        CHECK(events[1].num_values == 2);
+        CHECK(events[1].values[0] == 0.0f);  // bd does not retrigger
+        CHECK(events[1].values[1] == 3.0f);  // hh triggers
+
+        CHECK(events[2].time == Catch::Approx(0.5f));
+        CHECK(events[2].values[0] == 0.0f);
+        CHECK(events[2].values[1] == 3.0f);
+
+        CHECK(events[3].time == Catch::Approx(0.75f));
+        CHECK(events[3].values[0] == 0.0f);
+        CHECK(events[3].values[1] == 3.0f);
+
+        // Sample mappings: bd at slot 0 of event 0, hh at slot 1 of every event.
+        std::size_t bd_count = 0, hh_count = 0;
+        for (const auto& m : si.sequence_sample_mappings) {
+            if (m.sample_name == "bd") {
+                CHECK(m.value_slot == 0);
+                CHECK(m.event_idx == 0);
+                ++bd_count;
+            } else if (m.sample_name == "hh") {
+                CHECK(m.value_slot == 1);
+                ++hh_count;
+            }
         }
-        CHECK(saw_merged);
-        CHECK(saw_mono);
+        CHECK(bd_count == 1);
+        CHECK(hh_count == 4);
+    }
+
+    SECTION("[bd, [bd, cp]] → nested polyrhythm contributes 3 voices, all at t=0") {
+        // bd, bd, cp all triggered simultaneously — the inner [bd, cp] adds
+        // two parallel branches alongside the outer bd.
+        akkado::SampleRegistry reg2;
+        reg2.register_sample("bd", 1);
+        reg2.register_sample("cp", 4);
+        auto result = akkado::compile(R"(pat("[bd, [bd, cp]]") |> out(%, %))",
+                                       "<input>", &reg2);
+        REQUIRE(result.success);
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].num_values == 3);
+        CHECK(events[0].values[0] == 1.0f);  // outer bd
+        CHECK(events[0].values[1] == 1.0f);  // inner bd
+        CHECK(events[0].values[2] == 4.0f);  // inner cp
+    }
+
+    SECTION("[[bd cp], [hh hh hh hh]] → both branches subdivide; boundaries align") {
+        // Branch 0 ([bd cp]) splits in half: bd at t=0, cp at t=0.5.
+        // Branch 1 ([hh hh hh hh]) quarters: hh at t=0/0.25/0.5/0.75.
+        // Merged trigger times = {0, 0.25, 0.5, 0.75}. At t=0.5 both branches
+        // fire (cp + hh) — the only non-edge boundary that aligns.
+        // Polyrhythm branches must be bracketed to wrap multi-element sequences;
+        // the parser treats each comma-separated slot as a single element.
+        akkado::SampleRegistry reg2;
+        reg2.register_sample("bd", 1);
+        reg2.register_sample("cp", 4);
+        reg2.register_sample("hh", 3);
+        auto result = akkado::compile(R"(pat("[[bd cp], [hh hh hh hh]]") |> out(%, %))",
+                                       "<input>", &reg2);
+        REQUIRE(result.success);
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 4);
+
+        CHECK(events[0].time == Catch::Approx(0.0f));
+        CHECK(events[0].values[0] == 1.0f);  // bd
+        CHECK(events[0].values[1] == 3.0f);  // hh
+
+        CHECK(events[1].time == Catch::Approx(0.25f));
+        CHECK(events[1].values[0] == 0.0f);
+        CHECK(events[1].values[1] == 3.0f);
+
+        CHECK(events[2].time == Catch::Approx(0.5f));
+        CHECK(events[2].values[0] == 4.0f);  // cp triggers exactly here
+        CHECK(events[2].values[1] == 3.0f);
+
+        CHECK(events[3].time == Catch::Approx(0.75f));
+        CHECK(events[3].values[0] == 0.0f);
+        CHECK(events[3].values[1] == 3.0f);
+    }
+
+    SECTION("polyrhythm inside a group — [bd [hh, sn] cp] widens the group") {
+        // The middle group element is a polyrhythm with two sample voices.
+        // Recursion widens the enclosing group to two parallel timelines:
+        //   timeline 0: bd@0..1/3, hh@1/3..2/3, cp@2/3..1
+        //   timeline 1:           sn@1/3..2/3
+        // Merge yields 3 events; only the middle has both voices populated.
+        akkado::SampleRegistry reg2;
+        reg2.register_sample("bd", 1);
+        reg2.register_sample("hh", 3);
+        reg2.register_sample("sn", 2);
+        reg2.register_sample("cp", 4);
+        auto result = akkado::compile(R"(pat("[bd [hh, sn] cp]") |> out(%, %))",
+                                       "<input>", &reg2);
+        REQUIRE(result.success);
+        const auto& events = result.state_inits[0].sequence_events[0];
+        // [bd [hh, sn] cp] — sequential group of 3, middle one widens. The
+        // group itself isn't a polyrhythm so it doesn't go through the merge
+        // path at this level; each child compiles in time order, with the
+        // middle polyrhythm internally merging hh+sn.
+        REQUIRE(events.size() == 3);
+        // bd at t=0
+        CHECK(events[0].time == Catch::Approx(0.0f));
+        CHECK(events[0].values[0] == 1.0f);
+        // [hh, sn] merged at t=1/3
+        CHECK(events[1].time == Catch::Approx(1.0f / 3.0f));
+        CHECK(events[1].num_values == 2);
+        CHECK(events[1].values[0] == 3.0f);
+        CHECK(events[1].values[1] == 2.0f);
+        // cp at t=2/3
+        CHECK(events[2].time == Catch::Approx(2.0f / 3.0f));
+        CHECK(events[2].values[0] == 4.0f);
+    }
+
+    SECTION("[bd, sn, hh, cp, oh] — over-cap polyrhythm truncates to MAX_VALUES_PER_EVENT") {
+        // 5 branches > 4 (MAX_VALUES_PER_EVENT). The 5th voice is silently
+        // dropped to keep playback graceful. Matches the prior convention
+        // from the old emit_merged_sample_polyrhythm.
+        akkado::SampleRegistry reg2;
+        reg2.register_sample("bd", 1);
+        reg2.register_sample("sn", 2);
+        reg2.register_sample("hh", 3);
+        reg2.register_sample("cp", 4);
+        reg2.register_sample("oh", 5);
+        auto result = akkado::compile(R"(pat("[bd, sn, hh, cp, oh]") |> out(%, %))",
+                                       "<input>", &reg2);
+        REQUIRE(result.success);
+        const auto& events = result.state_inits[0].sequence_events[0];
+        REQUIRE(events.size() == 1);
+        CHECK(events[0].num_values == 4);  // capped at MAX_VALUES_PER_EVENT
+        CHECK(events[0].values[0] == 1.0f);  // bd
+        CHECK(events[0].values[1] == 2.0f);  // sn
+        CHECK(events[0].values[2] == 3.0f);  // hh
+        CHECK(events[0].values[3] == 4.0f);  // cp
+        // oh dropped (would be slot 4)
     }
 
     SECTION("single SAMPLE_PLAY instruction; in3/in4 link to SEQPAT state") {
@@ -4513,6 +4661,91 @@ TEST_CASE("Codegen: poly()", "[codegen][poly]") {
         auto insts = get_instructions(result);
         CHECK(count_instructions(insts, cedar::Opcode::POLY_BEGIN) == 1);
         CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_QUERY) == 1);
+    }
+
+    SECTION("pitched polyrhythm [c4, e4] into poly() emits both notes as parallel events") {
+        // Pitched polyrhythm doesn't go through the sample-merge path (atoms
+        // aren't samples), so it falls back to per-child compile. That path
+        // emits one DATA event per branch, both at t=0 with num_values=1.
+        // POLY_BEGIN reads the SequenceState directly and allocates one voice
+        // per (event, value) pair, so two voices fire in parallel.
+        // Verified end-to-end via FFT: both 261.6 Hz (c4) and 329.6 Hz (e4)
+        // are present at near-equal magnitude when rendered.
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq) * gate * 0.3
+            pat("[c4, e4]") |> poly(%, lead, 4) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        const akkado::StateInitData* seq_init = nullptr;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+                seq_init = &init;
+                break;
+            }
+        }
+        REQUIRE(seq_init != nullptr);
+        REQUIRE(!seq_init->sequence_events.empty());
+        const auto& events = seq_init->sequence_events[0];
+        REQUIRE(events.size() == 2);
+        // Both events at t=0, each carries one frequency.
+        CHECK(events[0].time == Catch::Approx(0.0f));
+        CHECK(events[1].time == Catch::Approx(0.0f));
+        CHECK(events[0].num_values == 1);
+        CHECK(events[1].num_values == 1);
+        // Frequencies: c4 ~ 261.63, e4 ~ 329.63 (one per event).
+        std::vector<float> got = {events[0].values[0], events[1].values[0]};
+        std::sort(got.begin(), got.end());
+        CHECK(got[0] == Catch::Approx(261.6256f).margin(0.5f));
+        CHECK(got[1] == Catch::Approx(329.6276f).margin(0.5f));
+
+        // Confirm poly_seq_state_id wires the SequenceState to POLY_BEGIN.
+        bool found_poly = false;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::PolyAlloc) {
+                CHECK(init.poly_seq_state_id != 0);
+                CHECK(init.poly_seq_state_id == seq_init->state_id);
+                found_poly = true;
+            }
+        }
+        CHECK(found_poly);
+    }
+
+    SECTION("pitched polyrhythm with subdivision [c4, [e4 g4 b4]] sustains c4") {
+        // c4 occupies the full cycle on branch A. Branch B subdivides into
+        // e4/g4/b4 thirds. POLY_BEGIN picks up all four events; FFT-verified
+        // peaks for c4/e4/g4/b4 all present in the rendered audio.
+        auto result = akkado::compile(R"(
+            fn lead(freq, gate, vel) -> osc("sin", freq) * gate * 0.25
+            pat("[c4, [e4 g4 b4]]") |> poly(%, lead, 4) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+
+        const akkado::StateInitData* seq_init = nullptr;
+        for (const auto& init : result.state_inits) {
+            if (init.type == akkado::StateInitData::Type::SequenceProgram) {
+                seq_init = &init;
+                break;
+            }
+        }
+        REQUIRE(seq_init != nullptr);
+        const auto& events = seq_init->sequence_events[0];
+        // 4 events in fallback path: c4@0 dur=1, e4@0 dur=1/3, g4@1/3 dur=1/3,
+        // b4@2/3 dur=1/3. All num_values=1.
+        REQUIRE(events.size() == 4);
+        std::size_t c4_count = 0, e4_count = 0, g4_count = 0, b4_count = 0;
+        for (const auto& e : events) {
+            REQUIRE(e.num_values == 1);
+            float f = e.values[0];
+            if (std::abs(f - 261.6256f) < 0.5f) ++c4_count;
+            else if (std::abs(f - 329.6276f) < 0.5f) ++e4_count;
+            else if (std::abs(f - 391.9954f) < 0.5f) ++g4_count;
+            else if (std::abs(f - 493.8833f) < 0.5f) ++b4_count;
+        }
+        CHECK(c4_count == 1);
+        CHECK(e4_count == 1);
+        CHECK(g4_count == 1);
+        CHECK(b4_count == 1);
     }
 }
 
