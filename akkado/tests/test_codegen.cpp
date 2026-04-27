@@ -2166,6 +2166,195 @@ TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][pattern
 }
 
 // =============================================================================
+// Phase 2 PRD: time/structure modifiers
+// =============================================================================
+
+TEST_CASE("Pattern transform: early()", "[codegen][patterns][phase2]") {
+    SECTION("early requires pattern as first argument") {
+        auto result = akkado::compile("early(42, 0.25)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("early requires a number as second argument") {
+        auto result = akkado::compile(R"(early(pat("c4 e4")))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("early(pat, 0.25) shifts event times by -0.25 (mod 1)") {
+        auto result = akkado::compile(R"(early(pat("c4 e4 g4 b4"), 0.25))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events.size() >= 1);
+        REQUIRE(si.sequence_events[0].size() == 4);
+        // Original times: 0.0, 0.25, 0.5, 0.75 -> after -0.25 wrap: 0.75, 0.0, 0.25, 0.5
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.25f).margin(0.001f));
+        CHECK(times[2] == Catch::Approx(0.5f).margin(0.001f));
+        CHECK(times[3] == Catch::Approx(0.75f).margin(0.001f));
+    }
+    SECTION("early with negative amount equivalent to late") {
+        auto early_result = akkado::compile(R"(early(pat("c4 e4 g4 b4"), -0.25))");
+        auto late_result = akkado::compile(R"(late(pat("c4 e4 g4 b4"), 0.25))");
+        REQUIRE(early_result.success);
+        REQUIRE(late_result.success);
+        // Events should rotate identically (sorted times match)
+        std::vector<float> et, lt;
+        for (const auto& e : early_result.state_inits[0].sequence_events[0]) et.push_back(e.time);
+        for (const auto& e : late_result.state_inits[0].sequence_events[0]) lt.push_back(e.time);
+        std::sort(et.begin(), et.end());
+        std::sort(lt.begin(), lt.end());
+        REQUIRE(et.size() == lt.size());
+        for (std::size_t i = 0; i < et.size(); ++i) {
+            CHECK(et[i] == Catch::Approx(lt[i]).margin(0.001f));
+        }
+    }
+    SECTION("early via dot-call matches functional form") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4 b4").early(0.5))");
+        auto direct = akkado::compile(R"(early(pat("c4 e4 g4 b4"), 0.5))");
+        CHECK(dot.success);
+        CHECK(direct.success);
+    }
+}
+
+TEST_CASE("Pattern transform: late()", "[codegen][patterns][phase2]") {
+    SECTION("late(pat, 0.25) shifts event times by +0.25 (mod 1)") {
+        auto result = akkado::compile(R"(late(pat("c4 e4 g4 b4"), 0.25))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 4);
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.25f).margin(0.001f));
+        CHECK(times[2] == Catch::Approx(0.5f).margin(0.001f));
+        CHECK(times[3] == Catch::Approx(0.75f).margin(0.001f));
+    }
+    SECTION("late with amount > 1 wraps") {
+        auto result = akkado::compile(R"(late(pat("c4 e4 g4 b4"), 1.25))");
+        REQUIRE(result.success);
+        // Same as late(pat, 0.25)
+        const auto& si = result.state_inits[0];
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        for (float t : times) {
+            CHECK(t >= 0.0f);
+            CHECK(t < 1.0f);
+        }
+    }
+}
+
+TEST_CASE("Pattern transform: palindrome()", "[codegen][patterns][phase2]") {
+    SECTION("palindrome requires pattern argument") {
+        auto result = akkado::compile("palindrome(42)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("palindrome doubles cycle_length and event count") {
+        auto result = akkado::compile(R"(palindrome(pat("c4 e4")))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        // pat has 2 elements -> base cycle_length = 2; palindrome doubles -> 4
+        CHECK(si.cycle_length == Catch::Approx(4.0f));
+        // 2 forward + 2 reverse = 4 events
+        REQUIRE(si.sequence_events[0].size() == 4);
+        // All events in [0, 1)
+        for (const auto& e : si.sequence_events[0]) {
+            CHECK(e.time >= 0.0f);
+            CHECK(e.time < 1.0f);
+        }
+    }
+    SECTION("palindrome via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4").palindrome())");
+        auto direct = akkado::compile(R"(palindrome(pat("c4 e4 g4")))");
+        CHECK(dot.success);
+        CHECK(direct.success);
+    }
+}
+
+TEST_CASE("Pattern transform: compress()", "[codegen][patterns][phase2]") {
+    SECTION("compress requires pattern as first argument") {
+        auto result = akkado::compile("compress(42, 0.0, 1.0)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("compress requires two numeric arguments") {
+        auto result = akkado::compile(R"(compress(pat("c4 e4")))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("compress rejects reversed range") {
+        auto result = akkado::compile(R"(compress(pat("c4 e4"), 0.5, 0.25))");
+        REQUIRE_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E132") { found = true; break; }
+        }
+        CHECK(found);
+    }
+    SECTION("compress rejects degenerate range (start == end)") {
+        auto result = akkado::compile(R"(compress(pat("c4 e4"), 0.5, 0.5))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("compress(pat, 0.25, 0.75) maps events into [0.25, 0.75)") {
+        auto result = akkado::compile(R"(compress(pat("c4 e4"), 0.25, 0.75))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        // Original times 0.0, 0.5 -> 0.25 + 0.0*0.5 = 0.25, 0.25 + 0.5*0.5 = 0.5
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        REQUIRE(times.size() == 2);
+        CHECK(times[0] == Catch::Approx(0.25f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.5f).margin(0.001f));
+        // Durations halved (width = 0.5)
+        for (const auto& e : si.sequence_events[0]) {
+            CHECK(e.duration == Catch::Approx(0.25f).margin(0.001f));
+        }
+    }
+    SECTION("compress(pat, 0, 1) is identity") {
+        auto result = akkado::compile(R"(compress(pat("c4 e4"), 0.0, 1.0))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.5f).margin(0.001f));
+    }
+    SECTION("compress via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4").compress(0.0, 0.5))");
+        auto direct = akkado::compile(R"(compress(pat("c4 e4 g4"), 0.0, 0.5))");
+        CHECK(dot.success);
+        CHECK(direct.success);
+    }
+}
+
+TEST_CASE("Phase 2 transforms compose with existing transforms", "[codegen][patterns][phase2]") {
+    SECTION("slow(palindrome(...)) compiles") {
+        auto result = akkado::compile(R"(slow(palindrome(pat("c4 e4")), 2))");
+        CHECK(result.success);
+    }
+    SECTION("palindrome(slow(...)) doubles slow cycle_length again") {
+        auto result = akkado::compile(R"(palindrome(slow(pat("c4 e4"), 2)))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        // pat: cycle=2; slow(2): cycle=4; palindrome: cycle=8
+        CHECK(si.cycle_length == Catch::Approx(8.0f));
+    }
+    SECTION("compress + early chain") {
+        auto result = akkado::compile(R"(early(compress(pat("c4 e4 g4 b4"), 0.0, 0.5), 0.1))");
+        CHECK(result.success);
+    }
+    SECTION("dot-call chain: pat().palindrome().compress(...)") {
+        auto result = akkado::compile(R"(pat("c4 e4").palindrome().compress(0.0, 0.5))");
+        CHECK(result.success);
+    }
+}
+
+// =============================================================================
 // Pattern Transform: velocity/bank/n Chaining Tests
 // =============================================================================
 

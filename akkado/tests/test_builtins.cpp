@@ -164,9 +164,14 @@ TEST_CASE("canonical_name", "[builtins]") {
     }
 
     SECTION("resolves alias to canonical - dynamics") {
-        CHECK(canonical_name("compress") == "comp");
+        // `compress` is now a pattern transform; only `compressor` aliases to `comp`.
         CHECK(canonical_name("compressor") == "comp");
         CHECK(canonical_name("limit") == "limiter");
+    }
+
+    SECTION("compress is no longer aliased to comp (Phase 2 PRD)") {
+        // Pattern transform takes the name; audio users must use comp/compressor.
+        CHECK(canonical_name("compress") == "compress");
     }
 
     SECTION("returns input for non-alias") {

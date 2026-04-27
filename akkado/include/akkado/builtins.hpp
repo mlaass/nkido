@@ -914,6 +914,25 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {NAN, NAN, NAN},
                  "Apply microtonal tuning context to a pattern."}},
 
+    // Phase 2 PRD: time & structure modifiers (Strudel-compatible).
+    // All compile-time event-list rewrites; opcode is NOP.
+    {"early",      {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "amount", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Shift events earlier by amount cycles (wraps)."}},
+    {"late",       {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "amount", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Shift events later by amount cycles (wraps)."}},
+    {"palindrome", {cedar::Opcode::NOP, 1, 0, false,
+                    {"pattern", "", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Play pattern forward then reversed (doubles cycle length)."}},
+    {"compress",   {cedar::Opcode::NOP, 3, 0, false,
+                    {"pattern", "start", "end", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Squash pattern into [start, end) of cycle (silence elsewhere)."}},
+
     // Parameter exposure builtins (handled specially by codegen)
     // These extract metadata at compile time for UI generation
     {"param",   {cedar::Opcode::ENV_GET, 2, 2, false,
@@ -998,7 +1017,9 @@ inline const std::unordered_map<std::string_view, std::string_view> BUILTIN_ALIA
     {"exciter",   "excite"},
     {"aural",     "excite"},
     // Dynamics aliases
-    {"compress",  "comp"},
+    // NOTE: `compress` was previously aliased to `comp` (audio compressor) but
+    // is now reserved for the Strudel-style pattern transform. Audio users
+    // must use `comp(...)` or `compressor(...)`.
     {"compressor", "comp"},
     {"limit",     "limiter"},
     {"noisegate", "gate"},

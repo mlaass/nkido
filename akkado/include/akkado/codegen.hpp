@@ -393,6 +393,18 @@ private:
     /// Handle tune(tuning_name, pattern) - apply microtonal tuning to pattern
     TypedValue handle_tune_call(NodeIndex node, const Node& n);
 
+    /// Handle early(pattern, amount) - shift events earlier (wraps within cycle)
+    TypedValue handle_early_call(NodeIndex node, const Node& n);
+
+    /// Handle late(pattern, amount) - shift events later (wraps within cycle)
+    TypedValue handle_late_call(NodeIndex node, const Node& n);
+
+    /// Handle palindrome(pattern) - forward then reversed (doubles cycle length)
+    TypedValue handle_palindrome_call(NodeIndex node, const Node& n);
+
+    /// Handle compress(pattern, start, end) - squash events into [start, end)
+    TypedValue handle_compress_call(NodeIndex node, const Node& n);
+
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     TypedValue handle_tap_delay_call(NodeIndex node, const Node& n);

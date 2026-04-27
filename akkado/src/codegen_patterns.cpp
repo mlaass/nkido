@@ -1589,7 +1589,10 @@ static bool is_pattern_call(const Node& n) {
            func_name == "slow" || func_name == "fast" ||
            func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
            func_name == "bank" || func_name == "variant" || func_name == "transport" ||
-           func_name == "tune";
+           func_name == "tune" ||
+           // Phase 2 PRD time/structure transforms
+           func_name == "early" || func_name == "late" ||
+           func_name == "palindrome" || func_name == "compress";
 }
 
 // Helper: Check if a node is a pattern-producing expression.
@@ -1675,7 +1678,10 @@ static bool compile_pattern_for_transform(
         bool is_transform = (func_name == "slow" || func_name == "fast" ||
                              func_name == "rev" || func_name == "transpose" ||
                              func_name == "velocity" || func_name == "bank" ||
-                             func_name == "variant" || func_name == "tune");
+                             func_name == "variant" || func_name == "tune" ||
+                             // Phase 2 PRD time/structure transforms
+                             func_name == "early" || func_name == "late" ||
+                             func_name == "palindrome" || func_name == "compress");
         if (is_transform) {
             // tune() sets context BEFORE compilation (not post-processing)
             if (func_name == "tune") {
@@ -1756,6 +1762,83 @@ static bool compile_pattern_for_transform(
                 if (!variant.has_value() || *variant < 0) return false;
                 for (auto& mapping : compiler.mutable_sample_mappings()) {
                     mapping.variant = static_cast<std::uint8_t>(*variant);
+                }
+            } else if (func_name == "early") {
+                // early(pat, n): t' = (t - n + 1) mod 1; wraps within [0,1).
+                auto amount = get_number_arg(ast, pat_node, 1);
+                if (!amount.has_value()) return false;
+                float a = std::fmod(*amount, 1.0f);
+                if (a < 0.0f) a += 1.0f;
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        float t = event.time - a;
+                        t = std::fmod(t, 1.0f);
+                        if (t < 0.0f) t += 1.0f;
+                        event.time = t;
+                    }
+                    std::sort(seq_events.begin(), seq_events.end(),
+                        [](const cedar::Event& x, const cedar::Event& y) {
+                            return x.time < y.time;
+                        });
+                }
+            } else if (func_name == "late") {
+                // late(pat, n): t' = (t + n) mod 1; wraps within [0,1).
+                auto amount = get_number_arg(ast, pat_node, 1);
+                if (!amount.has_value()) return false;
+                float a = std::fmod(*amount, 1.0f);
+                if (a < 0.0f) a += 1.0f;
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        float t = event.time + a;
+                        t = std::fmod(t, 1.0f);
+                        if (t < 0.0f) t += 1.0f;
+                        event.time = t;
+                    }
+                    std::sort(seq_events.begin(), seq_events.end(),
+                        [](const cedar::Event& x, const cedar::Event& y) {
+                            return x.time < y.time;
+                        });
+                }
+            } else if (func_name == "palindrome") {
+                // palindrome(pat): forward in [0, 0.5), reversed in [0.5, 1);
+                // doubles cycle_length so the full forward+reverse takes 2x.
+                for (auto& seq_events : out_events) {
+                    std::vector<cedar::Event> doubled;
+                    doubled.reserve(seq_events.size() * 2);
+                    for (const auto& event : seq_events) {
+                        cedar::Event e = event;
+                        e.time = event.time * 0.5f;
+                        e.duration = event.duration * 0.5f;
+                        doubled.push_back(e);
+                    }
+                    for (const auto& event : seq_events) {
+                        cedar::Event e = event;
+                        e.time = 1.0f - 0.5f * event.time - 0.5f * event.duration;
+                        e.duration = event.duration * 0.5f;
+                        if (e.time < 0.0f) e.time = 0.0f;
+                        doubled.push_back(e);
+                    }
+                    std::sort(doubled.begin(), doubled.end(),
+                        [](const cedar::Event& x, const cedar::Event& y) {
+                            return x.time < y.time;
+                        });
+                    seq_events = std::move(doubled);
+                }
+                out_cycle_length *= 2.0f;
+            } else if (func_name == "compress") {
+                // compress(pat, s, e): squash all events into [s, e) of cycle.
+                auto start_arg = get_number_arg(ast, pat_node, 1);
+                auto end_arg = get_number_arg(ast, pat_node, 2);
+                if (!start_arg.has_value() || !end_arg.has_value()) return false;
+                float s = *start_arg;
+                float e = *end_arg;
+                if (e <= s) return false;
+                float width = e - s;
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        event.time = s + event.time * width;
+                        event.duration *= width;
+                    }
                 }
             }
             return true;
@@ -3073,6 +3156,266 @@ TypedValue CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {
         error("E101", "Buffer pool exhausted", n.location);
     }
 
+    return result_tv;
+}
+
+// ============================================================================
+// Phase 2 PRD time/structure transform handlers
+// ============================================================================
+
+TypedValue CodeGenerator::handle_early_call(NodeIndex node, const Node& n) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto amount = get_number_arg(*ast_, n, 1);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "early() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!amount.has_value()) {
+        error("E131", "early() requires a number as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "early() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "early() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    std::uint32_t early_count = call_counters_["early"]++;
+    push_path("early#" + std::to_string(early_count));
+    std::uint32_t state_id = compute_state_id();
+
+    float a = std::fmod(*amount, 1.0f);
+    if (a < 0.0f) a += 1.0f;
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            float t = event.time - a;
+            t = std::fmod(t, 1.0f);
+            if (t < 0.0f) t += 1.0f;
+            event.time = t;
+        }
+        std::sort(seq_events.begin(), seq_events.end(),
+            [](const cedar::Event& x, const cedar::Event& y) {
+                return x.time < y.time;
+            });
+    }
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_late_call(NodeIndex node, const Node& n) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto amount = get_number_arg(*ast_, n, 1);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "late() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!amount.has_value()) {
+        error("E131", "late() requires a number as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "late() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "late() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    std::uint32_t late_count = call_counters_["late"]++;
+    push_path("late#" + std::to_string(late_count));
+    std::uint32_t state_id = compute_state_id();
+
+    float a = std::fmod(*amount, 1.0f);
+    if (a < 0.0f) a += 1.0f;
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            float t = event.time + a;
+            t = std::fmod(t, 1.0f);
+            if (t < 0.0f) t += 1.0f;
+            event.time = t;
+        }
+        std::sort(seq_events.begin(), seq_events.end(),
+            [](const cedar::Event& x, const cedar::Event& y) {
+                return x.time < y.time;
+            });
+    }
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_palindrome_call(NodeIndex node, const Node& n) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "palindrome() requires a pattern as argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "palindrome() argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "palindrome() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    std::uint32_t pal_count = call_counters_["palindrome"]++;
+    push_path("palindrome#" + std::to_string(pal_count));
+    std::uint32_t state_id = compute_state_id();
+
+    for (auto& seq_events : sequence_events) {
+        std::vector<cedar::Event> doubled;
+        doubled.reserve(seq_events.size() * 2);
+        for (const auto& event : seq_events) {
+            cedar::Event e = event;
+            e.time = event.time * 0.5f;
+            e.duration = event.duration * 0.5f;
+            doubled.push_back(e);
+        }
+        for (const auto& event : seq_events) {
+            cedar::Event e = event;
+            e.time = 1.0f - 0.5f * event.time - 0.5f * event.duration;
+            e.duration = event.duration * 0.5f;
+            if (e.time < 0.0f) e.time = 0.0f;
+            doubled.push_back(e);
+        }
+        std::sort(doubled.begin(), doubled.end(),
+            [](const cedar::Event& x, const cedar::Event& y) {
+                return x.time < y.time;
+            });
+        seq_events = std::move(doubled);
+    }
+    cycle_length *= 2.0f;
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_compress_call(NodeIndex node, const Node& n) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto start_arg = get_number_arg(*ast_, n, 1);
+    auto end_arg = get_number_arg(*ast_, n, 2);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "compress() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!start_arg.has_value() || !end_arg.has_value()) {
+        error("E131", "compress() requires two numbers (start, end) after the pattern", n.location);
+        return TypedValue::void_val();
+    }
+    float s = *start_arg;
+    float e_val = *end_arg;
+    if (e_val <= s) {
+        error("E132", "compress() end must be greater than start", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "compress() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "compress() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    std::uint32_t comp_count = call_counters_["compress"]++;
+    push_path("compress#" + std::to_string(comp_count));
+    std::uint32_t state_id = compute_state_id();
+
+    float width = e_val - s;
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            event.time = s + event.time * width;
+            event.duration *= width;
+        }
+    }
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
     return result_tv;
 }
 

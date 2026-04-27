@@ -819,6 +819,11 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"variant",   &CodeGenerator::handle_variant_call},
                 {"transport", &CodeGenerator::handle_transport_call},
                 {"tune",      &CodeGenerator::handle_tune_call},
+                // Phase 2 PRD time/structure transforms
+                {"early",      &CodeGenerator::handle_early_call},
+                {"late",       &CodeGenerator::handle_late_call},
+                {"palindrome", &CodeGenerator::handle_palindrome_call},
+                {"compress",   &CodeGenerator::handle_compress_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},
