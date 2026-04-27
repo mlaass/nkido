@@ -63,6 +63,7 @@ add_library(akkado STATIC
     src/codegen_viz.cpp
     src/typed_value.cpp
     src/chord_parser.cpp
+    src/voicing.cpp
     src/pattern_debug.cpp
     src/tuning.cpp
     src/source_map.cpp

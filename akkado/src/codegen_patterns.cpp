@@ -8,6 +8,7 @@
 #include "akkado/mini_parser.hpp"
 #include "akkado/pattern_debug.hpp"
 #include "akkado/tuning.hpp"
+#include "akkado/voicing.hpp"
 #include <cedar/opcodes/sequence.hpp>
 #include <algorithm>
 #include <bit>
@@ -42,6 +43,18 @@ public:
     /// Set the tuning context for microtonal Hz resolution
     void set_tuning(const TuningContext& tuning) { tuning_ = tuning; }
 
+    // Phase 2 PRD voicing accumulators. Set by recursive case as it descends
+    // through nested anchor/mode/voicing transforms. The top-level voicing
+    // handler reads these to apply voice_chords once at the end.
+    void set_voicing_anchor(int midi) { voicing_anchor_ = midi; }
+    void set_voicing_mode(voicing::Mode m) { voicing_mode_ = m; voicing_mode_explicit_ = true; }
+    void set_voicing_dict(std::string name) { voicing_dict_name_ = std::move(name); }
+
+    [[nodiscard]] int voicing_anchor() const { return voicing_anchor_; }
+    [[nodiscard]] voicing::Mode voicing_mode() const { return voicing_mode_; }
+    [[nodiscard]] bool voicing_mode_explicit() const { return voicing_mode_explicit_; }
+    [[nodiscard]] const std::string& voicing_dict_name() const { return voicing_dict_name_; }
+
     // Set base offset for computing pattern-relative source offsets
     void set_pattern_base_offset(std::uint32_t offset) {
         pattern_base_offset_ = offset;
@@ -53,6 +66,7 @@ public:
         sequences_.clear();
         sequence_events_.clear();
         sample_mappings_.clear();
+        chord_contexts_root_.clear();
         current_seq_idx_ = 0;
         total_events_ = 0;
         if (root == NULL_NODE) return false;
@@ -116,6 +130,17 @@ public:
         return max;
     }
 
+    // Side-channel: original chord context per event in sequence_events_[0].
+    // Populated when a chord MiniAtom is compiled. nullopt for non-chord
+    // events. Phase 2 PRD voicing transforms use this to re-voice without
+    // losing the original interval data after frequencies are derived.
+    const std::vector<std::optional<voicing::ChordSpec>>& chord_contexts_root() const {
+        return chord_contexts_root_;
+    }
+    std::vector<std::optional<voicing::ChordSpec>>& mutable_chord_contexts_root() {
+        return chord_contexts_root_;
+    }
+
     // Populate the compiler directly from synthesized events (Phase 2 PRD
     // generators: run/binary/binaryN). Bypasses AST traversal — used when
     // there is no inner pattern node to compile.
@@ -124,6 +149,8 @@ public:
         sequences_.clear();
         sequence_events_.clear();
         sample_mappings_.clear();
+        chord_contexts_root_.clear();
+        chord_contexts_root_.resize(events.size());  // all nullopt for synth events
         current_seq_idx_ = 0;
         total_events_ = 0;
         sample_names_.clear();
@@ -333,9 +360,11 @@ private:
             // Rest: emit event with num_values=0 for UI highlighting (no trigger/sound)
             e.num_values = 0;
             add_event_to_sequence(seq_idx, e);
+            if (seq_idx == 0) chord_contexts_root_.emplace_back();
             return;
         }
 
+        std::optional<voicing::ChordSpec> chord_ctx;
         if (atom_data.kind == Node::MiniAtomKind::Pitch) {
             // Convert MIDI note + micro_offset to frequency using tuning context
             float freq = tuning_.resolve_hz(atom_data.midi_note, atom_data.micro_offset);
@@ -348,12 +377,19 @@ private:
                                               static_cast<std::size_t>(8));  // Max 8 values
             e.num_values = static_cast<std::uint8_t>(num_notes);
 
+            // Capture original chord context for Phase 2 PRD voicing post-pass.
+            voicing::ChordSpec spec;
+            spec.root_midi = root_midi;
+            spec.intervals.reserve(num_notes);
+
             for (std::size_t i = 0; i < num_notes; ++i) {
                 int midi = root_midi + static_cast<int>(atom_data.chord_intervals[i]);
                 float freq = 440.0f * std::pow(2.0f,
                     (static_cast<float>(midi) - 69.0f) / 12.0f);
                 e.values[i] = freq;
+                spec.intervals.push_back(static_cast<int>(atom_data.chord_intervals[i]));
             }
+            chord_ctx = std::move(spec);
         } else {
             // Sample
             is_sample_pattern_ = true;
@@ -383,6 +419,7 @@ private:
         }
 
         add_event_to_sequence(seq_idx, e);
+        if (seq_idx == 0) chord_contexts_root_.push_back(std::move(chord_ctx));
     }
 
     // MiniGroup [a b c]: sequential concatenation, subdivide time
@@ -1025,6 +1062,20 @@ private:
     std::uint32_t pattern_base_offset_ = 0;
     std::uint16_t current_seq_idx_ = 0;  // Track current sequence index for sample mappings
     std::uint32_t total_events_ = 0;     // Total event count across all sequences
+
+    // Phase 2 PRD voicing side-channel: original chord (root_midi, intervals)
+    // for each event in sequence_events_[0]. Empty/nullopt for non-chord
+    // events. Populated when MiniAtomKind::Chord is compiled; consumed by
+    // voicing transforms in apply_voicing_to_compiler().
+    std::vector<std::optional<voicing::ChordSpec>> chord_contexts_root_;
+
+    // Phase 2 PRD voicing accumulators. -1 for anchor = "not set" (default
+    // c4 / MIDI 60). voicing_mode_explicit_ tracks whether the user set a
+    // mode (drives PRD §9.3 default behavior: anchor without mode → below).
+    int voicing_anchor_ = -1;
+    voicing::Mode voicing_mode_ = voicing::Mode::Below;
+    bool voicing_mode_explicit_ = false;
+    std::string voicing_dict_name_;
 };
 
 // ============================================================================
@@ -1608,6 +1659,7 @@ static bool is_pattern_call(const Node& n) {
     if (n.type != NodeType::Call) return false;
     const std::string& func_name = n.as_identifier();
     return func_name == "pat" || func_name == "timeline" ||
+           func_name == "chord" ||
            func_name == "slow" || func_name == "fast" ||
            func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
            func_name == "bank" || func_name == "variant" || func_name == "transport" ||
@@ -1620,7 +1672,10 @@ static bool is_pattern_call(const Node& n) {
            func_name == "swing" || func_name == "swingBy" ||
            func_name == "iter" || func_name == "iterBack" ||
            // Phase 2 PRD generators (constructors)
-           func_name == "run" || func_name == "binary" || func_name == "binaryN";
+           func_name == "run" || func_name == "binary" || func_name == "binaryN" ||
+           // Phase 2 PRD voicing transforms (anchor / mode / voicing only;
+           // addVoicings is a registry call, not a pattern producer)
+           func_name == "anchor" || func_name == "mode" || func_name == "voicing";
 }
 
 // Helper: Check if a node is a pattern-producing expression.
@@ -1759,6 +1814,32 @@ static bool compile_pattern_for_transform(
     if (pat_node.type == NodeType::Call) {
         const std::string& func_name = pat_node.as_identifier();
 
+        // Case 2.4: chord(...) base case — parse chord string and compile
+        // through the same mini-notation pipeline used by handle_chord_call.
+        if (func_name == "chord") {
+            NodeIndex first_arg = pat_node.first_child;
+            if (first_arg == NULL_NODE) return false;
+            const Node& arg_node = ast.arena[first_arg];
+            NodeIndex str_node = (arg_node.type == NodeType::Argument)
+                ? arg_node.first_child : first_arg;
+            if (str_node == NULL_NODE) return false;
+            const Node& str_n = ast.arena[str_node];
+            if (str_n.type != NodeType::StringLit) return false;
+            std::string chord_str = str_n.as_string();
+            auto [pattern_root, diags] = parse_mini(
+                chord_str, const_cast<AstArena&>(ast.arena),
+                str_n.location, /*sample_only=*/false);
+            if (pattern_root == NULL_NODE) return false;
+            out_pattern_node = pattern_root;
+            const Node& pattern = ast.arena[out_pattern_node];
+            compiler.set_pattern_base_offset(pattern.location.offset);
+            if (!compiler.compile(out_pattern_node)) return false;
+            out_num_elements = compiler.count_top_level_elements(out_pattern_node);
+            out_events = compiler.sequence_events();
+            out_cycle_length = static_cast<float>(std::max(1u, out_num_elements));
+            return true;
+        }
+
         // Case 2.5: Generator constructors (run/binary/binaryN) — synthesize
         // events directly into the compiler and seed out_* like a base case.
         if (func_name == "run") {
@@ -1818,7 +1899,11 @@ static bool compile_pattern_for_transform(
                              func_name == "ply" || func_name == "linger" ||
                              func_name == "zoom" || func_name == "segment" ||
                              func_name == "swing" || func_name == "swingBy" ||
-                             func_name == "iter" || func_name == "iterBack");
+                             func_name == "iter" || func_name == "iterBack" ||
+                             // Phase 2 PRD voicing transforms (state-only;
+                             // top-level handler applies voice_chords)
+                             func_name == "anchor" || func_name == "mode" ||
+                             func_name == "voicing");
         if (is_transform) {
             // tune() sets context BEFORE compilation (not post-processing)
             if (func_name == "tune") {
@@ -2055,6 +2140,23 @@ static bool compile_pattern_for_transform(
                 // compiled. The outer transform's handler will emit state
                 // without iter set, so iter/iterBack are only effective when
                 // applied at the outermost transform level. Documented in §5.2.
+            } else if (func_name == "anchor") {
+                // Voicing transform — accumulate state only. The outermost
+                // voicing transform's handler calls apply_voicing.
+                auto anchor_str = get_string_arg(ast, pat_node, 1);
+                if (anchor_str.has_value()) {
+                    auto midi = voicing::parse_anchor(*anchor_str);
+                    if (midi.has_value()) compiler.set_voicing_anchor(*midi);
+                }
+            } else if (func_name == "mode") {
+                auto mode_str = get_string_arg(ast, pat_node, 1);
+                if (mode_str.has_value()) {
+                    auto m = voicing::parse_mode(*mode_str);
+                    if (m.has_value()) compiler.set_voicing_mode(*m);
+                }
+            } else if (func_name == "voicing") {
+                auto name_str = get_string_arg(ast, pat_node, 1);
+                if (name_str.has_value()) compiler.set_voicing_dict(*name_str);
             } else if (func_name == "swing" || func_name == "swingBy") {
                 // swing(pat, n=4) ≡ swingBy(pat, 1/3, n=4).
                 // swingBy(pat, amount, n=4): divide cycle into n slices; events
@@ -4052,6 +4154,61 @@ TypedValue CodeGenerator::handle_iter_back_call(NodeIndex node, const Node& n) {
 }
 
 // ============================================================================
+// Phase 2 PRD voicing helpers
+// ============================================================================
+
+// Apply accumulated voicing state on the compiler to the chord events in
+// sequence_events. Walks chord_contexts in lockstep with events[0], voices
+// the chord progression, and rewrites cedar::Event values[] with the
+// resolved frequencies. Phase 2 PRD §5.4.
+static void apply_voicing(SequenceCompiler& compiler,
+                          std::vector<std::vector<cedar::Event>>& sequence_events) {
+    if (sequence_events.empty()) return;
+    const auto& contexts = compiler.chord_contexts_root();
+    auto& events = sequence_events[0];
+    if (contexts.size() != events.size()) return;  // structure mismatch — bail safely
+
+    int anchor = compiler.voicing_anchor();
+    if (anchor < 0) anchor = 60;  // PRD §9.3: default c4
+
+    voicing::Mode mode = compiler.voicing_mode();
+    // PRD §9.3: anchor without mode → default below (mode_explicit_ false
+    // means user set anchor without setting mode — use the default Below).
+    // The set_voicing_mode default (Below) already handles this.
+
+    const voicing::VoicingDict* dict = nullptr;
+    if (!compiler.voicing_dict_name().empty()) {
+        dict = voicing::lookup_voicing(compiler.voicing_dict_name());
+    }
+    if (dict == nullptr) dict = voicing::lookup_voicing("close");
+
+    // Collect chord specs in sequence order.
+    std::vector<voicing::ChordSpec> chords;
+    std::vector<std::size_t> chord_indices;
+    for (std::size_t i = 0; i < contexts.size(); ++i) {
+        if (contexts[i].has_value()) {
+            chords.push_back(*contexts[i]);
+            chord_indices.push_back(i);
+        }
+    }
+    if (chords.empty()) return;
+
+    auto voiced = voicing::voice_chords(chords, anchor, mode, dict);
+    for (std::size_t k = 0; k < chord_indices.size() && k < voiced.size(); ++k) {
+        std::size_t ev_idx = chord_indices[k];
+        auto& ev = events[ev_idx];
+        const auto& notes = voiced[k];
+        std::size_t num = std::min(notes.size(), static_cast<std::size_t>(cedar::MAX_VALUES_PER_EVENT));
+        ev.num_values = static_cast<std::uint8_t>(num);
+        for (std::size_t i = 0; i < num; ++i) {
+            float midi_f = static_cast<float>(notes[i]);
+            float freq = 440.0f * std::pow(2.0f, (midi_f - 69.0f) / 12.0f);
+            ev.values[i] = freq;
+        }
+    }
+}
+
+// ============================================================================
 // Phase 2 PRD generator handlers (run, binary, binaryN)
 // ============================================================================
 
@@ -4159,6 +4316,234 @@ TypedValue CodeGenerator::handle_binary_n_call(NodeIndex node, const Node& n) {
         error("E101", "Buffer pool exhausted", n.location);
     }
     return result_tv;
+}
+
+// ============================================================================
+// Phase 2 PRD voicing handlers (anchor, mode, voicing, addVoicings)
+// ============================================================================
+
+TypedValue CodeGenerator::handle_anchor_call(NodeIndex node, const Node& n) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto anchor_str = get_string_arg(*ast_, n, 1);
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "anchor() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!anchor_str.has_value()) {
+        error("E131", "anchor() requires a string note name (e.g., \"c4\") as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    auto midi = voicing::parse_anchor(*anchor_str);
+    if (!midi.has_value()) {
+        error("E140", "anchor() could not parse note name \"" + *anchor_str + "\"", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "anchor() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "anchor() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    compiler.set_voicing_anchor(*midi);
+    apply_voicing(compiler, sequence_events);
+
+    std::uint32_t cnt = call_counters_["anchor"]++;
+    push_path("anchor#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_mode_call(NodeIndex node, const Node& n) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto mode_str = get_string_arg(*ast_, n, 1);
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "mode() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!mode_str.has_value()) {
+        error("E131", "mode() requires a string mode name (\"below\"/\"above\"/\"duck\"/\"root\") as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    auto m = voicing::parse_mode(*mode_str);
+    if (!m.has_value()) {
+        error("E140", "mode() unknown mode \"" + *mode_str + "\"; expected below/above/duck/root", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "mode() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "mode() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    compiler.set_voicing_mode(*m);
+    apply_voicing(compiler, sequence_events);
+
+    std::uint32_t cnt = call_counters_["mode"]++;
+    push_path("mode#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_voicing_call(NodeIndex node, const Node& n) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto name_str = get_string_arg(*ast_, n, 1);
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "voicing() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!name_str.has_value()) {
+        error("E131", "voicing() requires a string dictionary name as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (voicing::lookup_voicing(*name_str) == nullptr) {
+        error("E141", "voicing() dictionary \"" + *name_str + "\" not registered (use addVoicings to register)", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "voicing() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "voicing() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    compiler.set_voicing_dict(*name_str);
+    apply_voicing(compiler, sequence_events);
+
+    std::uint32_t cnt = call_counters_["voicing"]++;
+    push_path("voicing#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_add_voicings_call(NodeIndex node, const Node& n) {
+    (void)node;
+    auto name_str = get_string_arg(*ast_, n, 0);
+    if (!name_str.has_value()) {
+        error("E131", "addVoicings() requires a name string as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    // Second argument should be a record literal {quality: [intervals], ...}.
+    NodeIndex second = NULL_NODE;
+    NodeIndex arg = n.first_child;
+    int idx = 0;
+    while (arg != NULL_NODE) {
+        const Node& a = ast_->arena[arg];
+        NodeIndex actual = arg;
+        if (a.type == NodeType::Argument && a.first_child != NULL_NODE) actual = a.first_child;
+        if (idx == 1) { second = actual; break; }
+        ++idx;
+        arg = a.next_sibling;
+    }
+    if (second == NULL_NODE) {
+        error("E131", "addVoicings() requires a record literal {quality: [intervals], ...} as second argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    voicing::VoicingDict dict;
+    dict.builtin_kind = -1;  // user dict — quality-table only
+    const Node& rec = ast_->arena[second];
+    if (rec.type != NodeType::RecordLit) {
+        error("E131", "addVoicings() second argument must be a record literal", n.location);
+        return TypedValue::void_val();
+    }
+    // Record fields are NodeType::Argument with RecordFieldData attached.
+    NodeIndex field = rec.first_child;
+    while (field != NULL_NODE) {
+        const Node& f = ast_->arena[field];
+        if (f.type == NodeType::Argument &&
+            std::holds_alternative<Node::RecordFieldData>(f.data)) {
+            const auto& fd = std::get<Node::RecordFieldData>(f.data);
+            const std::string& key = fd.name;
+            NodeIndex val_node = f.first_child;
+            if (val_node != NULL_NODE) {
+                const Node& vn = ast_->arena[val_node];
+                if (vn.type == NodeType::ArrayLit) {
+                    std::vector<int> intervals;
+                    NodeIndex ele = vn.first_child;
+                    while (ele != NULL_NODE) {
+                        const Node& en = ast_->arena[ele];
+                        if (std::holds_alternative<Node::NumberData>(en.data)) {
+                            intervals.push_back(static_cast<int>(en.as_number()));
+                        }
+                        ele = en.next_sibling;
+                    }
+                    if (!key.empty()) dict.qualities[key] = std::move(intervals);
+                }
+            }
+        }
+        field = f.next_sibling;
+    }
+
+    voicing::register_voicing(*name_str, std::move(dict));
+    return TypedValue::void_val();
 }
 
 // Helper: apply slice-based swing offset to events. Used by swing/swingBy.

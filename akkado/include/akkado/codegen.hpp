@@ -445,6 +445,18 @@ private:
     /// Handle binaryN(n, bits) - trigger pattern from low `bits` bits of n
     TypedValue handle_binary_n_call(NodeIndex node, const Node& n);
 
+    /// Handle anchor(pattern, "c4") - set voicing anchor MIDI note
+    TypedValue handle_anchor_call(NodeIndex node, const Node& n);
+
+    /// Handle mode(pattern, "below") - set chord voicing mode
+    TypedValue handle_mode_call(NodeIndex node, const Node& n);
+
+    /// Handle voicing(pattern, "drop2") - apply named voicing dictionary
+    TypedValue handle_voicing_call(NodeIndex node, const Node& n);
+
+    /// Handle addVoicings(name, {...}) - register a custom voicing dictionary
+    TypedValue handle_add_voicings_call(NodeIndex node, const Node& n);
+
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     TypedValue handle_tap_delay_call(NodeIndex node, const Node& n);

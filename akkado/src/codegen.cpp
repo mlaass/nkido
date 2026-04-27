@@ -836,6 +836,11 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"run",        &CodeGenerator::handle_run_call},
                 {"binary",     &CodeGenerator::handle_binary_call},
                 {"binaryN",    &CodeGenerator::handle_binary_n_call},
+                // Phase 2 PRD voicing
+                {"anchor",     &CodeGenerator::handle_anchor_call},
+                {"mode",       &CodeGenerator::handle_mode_call},
+                {"voicing",    &CodeGenerator::handle_voicing_call},
+                {"addVoicings", &CodeGenerator::handle_add_voicings_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},

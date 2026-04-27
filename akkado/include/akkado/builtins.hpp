@@ -980,6 +980,24 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                     {NAN, NAN, NAN},
                     "Trigger pattern from low `bits` bits of n (zero-padded, MSB first)."}},
 
+    // Phase 2 PRD: voicing transforms (chord-event manipulation).
+    {"anchor",     {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "note", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Set anchor MIDI note for chord voicing (e.g., \"c4\")."}},
+    {"mode",       {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "mode", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Set chord voicing mode: below/above/duck/root."}},
+    {"voicing",    {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "name", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Apply named voicing dictionary (close/open/drop2/drop3 or custom)."}},
+    {"addVoicings", {cedar::Opcode::NOP, 2, 0, false,
+                     {"name", "intervals", "", "", "", ""},
+                     {NAN, NAN, NAN},
+                     "Register a custom voicing dictionary by name."}},
+
     // Parameter exposure builtins (handled specially by codegen)
     // These extract metadata at compile time for UI generation
     {"param",   {cedar::Opcode::ENV_GET, 2, 2, false,
