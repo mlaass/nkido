@@ -1,4 +1,6 @@
-> **Status: NOT STARTED** — Follow-up to `prd-pattern-array-note-extensions.md`. Closes the four unmet goals from `docs/audits/prd-pattern-array-note-extensions_audit_2026-04-24.md`: time/structure modifiers (Phase 7), algorithmic generators (Phase 8), voicing system (Phase 4), and extended note properties (Phase 5).
+> **Status: SHIPPED (2026-04-27)** — Phases A–C and D1+D2 implemented; D3 (custom-property pipe-binding accessor `e.cutoff`) deferred. Follow-up to `prd-pattern-array-note-extensions.md`. Closes the four unmet goals from `docs/audits/prd-pattern-array-note-extensions_audit_2026-04-24.md`: time/structure modifiers (Phase 7), algorithmic generators (Phase 8), voicing system (Phase 4), and extended note properties (Phase 5).
+>
+> **Deferred to follow-up:** §5.5a custom-property pipe-binding accessor (`pat("c4{cutoff:0.3}") as e |> ... e.cutoff`) — requires new cedar runtime buffer plumbing to expose per-event property values to synth code. Custom keys are parsed and stored on `MiniAtomData.properties` but not yet reachable from runtime. The standalone `bend()` / `aftertouch()` / `dur()` *transforms* (PRD §4.4 first form) are also deferred for the same reason — bend/aftertouch need cedar `Event` fields and SEQPAT plumbing. Only `dur()` and `vel` propagate to runtime today (via the existing velocity buffer and `cedar::Event.duration`).
 
 # PRD: Strudel-Style Pattern System Extensions — Phase 2
 

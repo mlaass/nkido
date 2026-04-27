@@ -2,7 +2,7 @@
 title: Sequencing & Timing
 category: builtins
 order: 4
-keywords: [sequencing, timing, lfo, trigger, euclid, euclidean, timeline, clock, rhythm, pattern, poly, mono, legato, spread, polyphony, polyphonic, voice, voices, chord, instrument]
+keywords: [sequencing, timing, lfo, trigger, euclid, euclidean, timeline, clock, rhythm, pattern, poly, mono, legato, spread, polyphony, polyphonic, voice, voices, chord, instrument, early, late, palindrome, compress, ply, linger, zoom, segment, swing, swingBy, iter, iterBack, run, binary, binaryN, anchor, mode, voicing, addVoicings]
 ---
 
 # Sequencing & Timing
@@ -233,3 +233,154 @@ osc("saw", spread(5, [220, 220.7, 219.3, 221.4, 218.6])) |> out(@)
 ```
 
 Related: [poly](#poly)
+
+## Pattern transforms (Phase 2 PRD)
+
+Compile-time event-list rewriters that wrap a pattern. All compose via dot-call
+(`pat(...).slow(2).rev()`) and the equivalent functional form.
+
+### early
+
+`early(pattern, amount)` shifts events earlier by `amount` cycles, wrapping
+within `[0, 1)`.
+
+```akk
+pat("c4 e4 g4 b4").early(0.25)  // each event plays 1/4 cycle earlier
+```
+
+### late
+
+`late(pattern, amount)` shifts events later by `amount` cycles, wrapping.
+
+### palindrome
+
+`palindrome(pattern)` plays the pattern forward then reversed, doubling
+`cycle_length`.
+
+```akk
+pat("c4 e4 g4 b4").palindrome()  // c4 e4 g4 b4 b4 g4 e4 c4 over 2× cycles
+```
+
+### compress
+
+`compress(pattern, start, end)` squashes the entire pattern into the
+sub-window `[start, end)` of the cycle (silence outside).
+
+> Note: this name was previously aliased to the audio compressor; the audio
+> compressor is now reachable as `comp(...)` or `compressor(...)`.
+
+### ply
+
+`ply(pattern, n)` repeats each event `n` times within its slot.
+
+### linger
+
+`linger(pattern, frac)` keeps the first `frac` of the pattern and loops it
+across the cycle (equivalent to `zoom(0, frac).fast(1/frac)`).
+
+### zoom
+
+`zoom(pattern, start, end)` plays only the `[start, end)` portion of the
+pattern, stretched to fill the full cycle. Events that straddle the window
+are clipped.
+
+### segment
+
+`segment(pattern, n)` samples the pattern at `n` evenly-spaced points and
+emits `n` equal-duration events carrying the value active at each sample.
+
+### swing / swingBy
+
+`swing(pattern, n=4)` applies a 1/3 swing on an `n`-slice grid (default 4).
+`swingBy(pattern, amount, n=4)` lets you set the swing amount explicitly.
+
+```akk
+pat("bd hh sd hh").swing()           // default 1/3 on 4 slices
+pat("bd hh sd hh").swingBy(0.5, 8)   // half-amount on 8 slices
+```
+
+### iter / iterBack
+
+`iter(pattern, n)` rotates the pattern's start by `1/n` per cycle (forward);
+`iterBack` rotates the opposite way. Implemented as a runtime rotation on
+the SequenceState — no compile-time event explosion.
+
+```akk
+pat("c4 e4 g4 b4").iter(4)  // advance start by 1/4 each cycle
+```
+
+## Pattern generators
+
+Pattern constructors that emit an event stream directly from numeric input.
+Compose with transforms via dot-call.
+
+### run
+
+`run(n)` produces `n` events at times `i/n` carrying values `0, 1, ..., n-1`
+each of duration `1/n`. Useful as a rising/integer index pattern.
+
+```akk
+run(8) |> mtof(% + 60) |> osc("saw", %)  // ascending chromatic from C4
+```
+
+### binary
+
+`binary(n)` produces a trigger pattern from the binary representation of
+`n` (MSB first; `bits = floor(log2(n)) + 1`). Set bits emit triggers,
+unset bits emit rests.
+
+```akk
+binary(178) |> sampler(%, "hh")  // 0b10110010 = 8-step rhythm
+```
+
+### binaryN
+
+`binaryN(n, bits)` is the zero-padded fixed-width form. Truncates `n` to
+the lower `bits` bits.
+
+```akk
+binaryN(5, 8)  // 00000101 = 8 events with bits at positions 5 and 7
+```
+
+## Voicing transforms (chord patterns only)
+
+Apply mode + anchor + dictionary + greedy voice leading to chord events.
+Order-independent; the outermost transform applies the accumulated state.
+
+### anchor
+
+`anchor(pattern, "c4")` sets the MIDI anchor note for chord voicing. Note
+names accept letter + optional accidental (`#` / `b`) + octave (`c4`,
+`F#3`, `Bb-1`).
+
+### mode
+
+`mode(pattern, "below")` sets the chord voicing mode:
+- `below` — all chord notes ≤ anchor
+- `above` — all chord notes ≥ anchor
+- `duck` — closest to anchor avoiding the anchor itself
+- `root` — root in bass octave near anchor, rest stacked near anchor
+
+### voicing
+
+`voicing(pattern, "drop2")` applies a named voicing dictionary. Built-in
+dictionaries: `close`, `open`, `drop2`, `drop3`. User-registered dicts via
+`addVoicings`.
+
+### addVoicings
+
+`addVoicings("name", {quality: [intervals], ...})` registers a custom
+voicing dictionary by chord-quality name.
+
+```akk
+addVoicings("piano-jazz", {M: [0, 4, 7, 11, 14], m: [0, 3, 7, 10, 14]})
+chord("CM Am Dm G").voicing("piano-jazz")
+```
+
+```akk
+// Voice-led progression, top note ≤ c4
+chord("Am C G F").anchor("c4").mode("below")
+  |> mtof(%)
+  |> osc("saw", %)
+  |> out(%, %)
+```

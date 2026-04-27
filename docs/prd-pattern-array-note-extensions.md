@@ -1,4 +1,4 @@
-> **Status: PARTIAL — Phase 1 of 2 complete.** Phases 1, 3, 6 done. Phase 2 (pattern objects) resolved via dot-call desugaring. Phases 4 (voicing), 5 (extended note properties), 7 (time/structure modifiers), and 8 (algorithmic generators) are tracked in the follow-up [`prd-pattern-array-note-extensions-phase-2.md`](./prd-pattern-array-note-extensions-phase-2.md). See `docs/audits/prd-pattern-array-note-extensions_audit_2026-04-24.md` for the gap analysis that scoped Phase 2.
+> **Status: SHIPPED (2026-04-27)** — Phase 1 (this PRD) shipped earlier; Phase 2 ([`prd-pattern-array-note-extensions-phase-2.md`](./prd-pattern-array-note-extensions-phase-2.md)) shipped 2026-04-27 covering Phases 4, 5, 7, 8. One follow-up remains: §5.5a custom-property pipe-binding accessor — see Phase 2 status line for details. The gap analysis is in `docs/audits/prd-pattern-array-note-extensions_audit_2026-04-24.md`.
 
 # PRD: Strudel-Style Pattern System Extensions
 

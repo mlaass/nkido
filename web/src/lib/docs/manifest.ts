@@ -1370,6 +1370,24 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "spread",
 		"anchor": "spread"
 	},
+	"pattern transforms (phase 2 prd)": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Pattern transforms (Phase 2 PRD)",
+		"anchor": "pattern-transforms-phase-2-prd"
+	},
+	"pattern generators": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Pattern generators",
+		"anchor": "pattern-generators"
+	},
+	"voicing transforms (chord patterns only)": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Voicing transforms (chord patterns only)",
+		"anchor": "voicing-transforms-chord-patterns-only"
+	},
 	"sequencing": {
 		"slug": "sequencing",
 		"category": "builtins",
@@ -1386,6 +1404,101 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Sequencing & Timing"
 	},
 	"instrument": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"early": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"late": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"palindrome": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"compress": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"ply": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"linger": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"zoom": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"segment": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"swing": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"swingby": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"iter": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"iterback": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"run": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"binary": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"binaryn": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"anchor": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"mode": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"voicing": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "Sequencing & Timing"
+	},
+	"addvoicings": {
 		"slug": "sequencing",
 		"category": "builtins",
 		"title": "Sequencing & Timing"

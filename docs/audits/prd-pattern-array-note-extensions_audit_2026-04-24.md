@@ -1,5 +1,7 @@
 # Audit: Strudel-Style Pattern System Extensions
 
+> **Update 2026-04-27:** The unmet goals identified by this audit (Phases 4, 5, 7, 8) were closed by the Phase 2 PRD `docs/prd-pattern-array-note-extensions-phase-2.md`, shipped 2026-04-27. One sub-piece (§5.5a custom-property pipe-binding accessor) remains as a known follow-up; see the Phase 2 PRD status line.
+
 **PRD:** `docs/prd-pattern-array-note-extensions.md`
 **Audit base:** `4977c77217d47b5a9eb1c1c5c37c6cb77e7b3625` (rename commit; no earlier add commit found for this exact path)
 **Audit head:** `8fc1e05c81ca10d27bde68e6519bc65deb4f9859`

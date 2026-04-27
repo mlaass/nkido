@@ -226,6 +226,43 @@ c4*2?0.5    // Repeat twice, each with 50% chance
 c4:2@3      // Hold for 2 units with weight 3
 ```
 
+### Record Suffix `{key:value, ...}` (Phase 2 PRD)
+
+Atoms (pitch / sample / chord) can carry a record-style property suffix that
+must immediately follow the atom (no whitespace) before any modifiers:
+
+```
+c4{vel:0.8}                     // velocity = 0.8
+c4{vel:0.8, dur:0.5}            // velocity 0.8, duration override 0.5
+bd{vel:0.6}                     // sample with reduced velocity
+Am{vel:0.7}                     // chord with velocity
+c4{vel:0.5, cutoff:0.3}         // custom keys held on the atom
+```
+
+**Recognized short-form keys** populate fixed pattern-event fields:
+
+| Key   | Effect                                                       |
+|-------|--------------------------------------------------------------|
+| `vel` | Sets velocity (0..1, clamped). Overrides any `:0.x` suffix.  |
+| `dur` | Multiplies the event's duration by `value`.                  |
+| `bend` | Stored on the atom for future MIDI-out exposure.            |
+| `aftertouch` | Same — held on atom; runtime exposure deferred.       |
+
+**Custom keys** (e.g., `cutoff`, `freq`, anything not listed above) are kept
+on the atom AST. The `as e |> e.<key>` pipe-binding accessor that surfaces
+them at runtime is deferred to a follow-up; for now, use the short forms or
+positional `:0.x` syntax for runtime-effective velocity.
+
+**Disambiguation from polymeter:**
+- `c4{vel:0.8}` — record suffix (no whitespace before `{`).
+- `{c4 e4 g4}%3` — polymeter (no preceding completed note token).
+- `c4 {a b}%3` — polymeter (whitespace before `{`).
+
+**Order with positional shorthand:**
+- `c4:0.5` — positional velocity 0.5.
+- `c4{vel:0.5}` — record suffix; equivalent.
+- The two forms can be combined; the record-suffix value wins on overlap.
+
 ## Random Choice `|`
 
 Selects randomly between alternatives.
