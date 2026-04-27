@@ -186,6 +186,14 @@ void PatternEvaluator::eval_atom(NodeIndex node, const PatternEvalContext& ctx,
     event.velocity = ctx.velocity;
     event.chance = ctx.chance;
 
+    // Phase 2 PRD D0: propagate per-atom velocity (e.g., c4:0.8) into event.
+    // Previously this was lost — atom_data.velocity defaults to 1.0; values
+    // < 1.0 now multiply the inherited context velocity. Equivalent to a
+    // local velocity() applied at the atom level.
+    if (atom_data.velocity < 1.0f) {
+        event.velocity = ctx.velocity * atom_data.velocity;
+    }
+
     switch (atom_data.kind) {
         case Node::MiniAtomKind::Pitch:
             event.type = PatternEventType::Pitch;

@@ -2870,10 +2870,12 @@ TypedValue CodeGenerator::handle_transpose_call(NodeIndex node, const Node& n) {
 }
 
 TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
-    // velocity(pattern, vel) - set velocity on all events
-    // Note: This currently doesn't modify velocity since velocity is not stored
-    // in cedar::Event. Instead, we'd need to emit instructions that multiply
-    // the velocity buffer. For now, we emit a warning if vel != 1.0.
+    // velocity(pattern, vel) — multiply velocities on all events.
+    // Implementation: compile inner pattern, then emit a runtime MUL on the
+    // velocity buffer with the supplied scalar (Phase D0: comment updated to
+    // reflect the actual behavior; the recursive case in
+    // compile_pattern_for_transform also pre-multiplies event.velocity for
+    // nested calls).
 
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
     auto vel = get_number_arg(*ast_, n, 1);

@@ -2168,6 +2168,40 @@ TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][pattern
 }
 
 // =============================================================================
+// Phase 2 PRD D0: velocity-shorthand propagation fix
+// =============================================================================
+
+TEST_CASE("velocity-shorthand pat(\"c4:0.8\") propagates to event.velocity",
+          "[codegen][patterns][phase2]") {
+    auto result = akkado::compile(R"(pat("c4:0.5 e4:0.8"))");
+    REQUIRE(result.success);
+    REQUIRE_FALSE(result.state_inits.empty());
+    const auto& si = result.state_inits[0];
+    REQUIRE(si.sequence_events[0].size() == 2);
+    // Original eval bug: velocity stayed at 1.0 regardless of :0.8 suffix.
+    // After fix: per-atom velocity multiplies the inherited context velocity.
+    CHECK(si.sequence_events[0][0].velocity == Catch::Approx(0.5f).margin(0.01f));
+    CHECK(si.sequence_events[0][1].velocity == Catch::Approx(0.8f).margin(0.01f));
+}
+
+TEST_CASE("velocity-shorthand combines with nested velocity() transform",
+          "[codegen][patterns][phase2]") {
+    // Nested velocity() applies its multiplier at compile time on event.velocity.
+    // Top-level velocity() emits a runtime MUL on the velocity buffer (so the
+    // compile-time event.velocity reflects only the inner factors). Verify the
+    // recursive multiplication path works with per-atom :0.x velocities.
+    auto result = akkado::compile(R"(velocity(velocity(pat("c4:0.5 e4:0.8"), 0.5), 1.0))");
+    REQUIRE(result.success);
+    const auto& si = result.state_inits[0];
+    REQUIRE(si.sequence_events[0].size() == 2);
+    // Inner velocity(0.5) multiplies per-atom velocities at compile time:
+    //   c4:0.5 → 0.5 * 0.5 = 0.25
+    //   e4:0.8 → 0.8 * 0.5 = 0.4
+    CHECK(si.sequence_events[0][0].velocity == Catch::Approx(0.25f).margin(0.01f));
+    CHECK(si.sequence_events[0][1].velocity == Catch::Approx(0.4f).margin(0.01f));
+}
+
+// =============================================================================
 // Phase 2 PRD: time/structure modifiers
 // =============================================================================
 
