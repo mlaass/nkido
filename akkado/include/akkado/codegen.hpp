@@ -436,6 +436,15 @@ private:
     /// Handle iterBack(pattern, n) - rotate pattern start by 1/n per cycle (backward)
     TypedValue handle_iter_back_call(NodeIndex node, const Node& n);
 
+    /// Handle run(n) - integer pattern 0..n-1 evenly spaced
+    TypedValue handle_run_call(NodeIndex node, const Node& n);
+
+    /// Handle binary(n) - trigger pattern from binary representation of n
+    TypedValue handle_binary_call(NodeIndex node, const Node& n);
+
+    /// Handle binaryN(n, bits) - trigger pattern from low `bits` bits of n
+    TypedValue handle_binary_n_call(NodeIndex node, const Node& n);
+
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     TypedValue handle_tap_delay_call(NodeIndex node, const Node& n);

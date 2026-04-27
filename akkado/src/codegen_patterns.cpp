@@ -116,6 +116,28 @@ public:
         return max;
     }
 
+    // Populate the compiler directly from synthesized events (Phase 2 PRD
+    // generators: run/binary/binaryN). Bypasses AST traversal — used when
+    // there is no inner pattern node to compile.
+    void populate_synthetic(std::vector<cedar::Event> events,
+                            cedar::SequenceMode mode = cedar::SequenceMode::NORMAL) {
+        sequences_.clear();
+        sequence_events_.clear();
+        sample_mappings_.clear();
+        current_seq_idx_ = 0;
+        total_events_ = 0;
+        sample_names_.clear();
+        is_sample_pattern_ = false;
+
+        cedar::Sequence root_seq;
+        root_seq.mode = mode;
+        root_seq.duration = 1.0f;
+        sequences_.push_back(root_seq);
+        sequence_events_.push_back(std::move(events));
+
+        finalize_sequences();
+    }
+
     // Count top-level elements in a pattern (each element = 1 beat)
     // This determines cycle_length: pattern "a <b c> d" has 3 top-level elements
     std::uint32_t count_top_level_elements(NodeIndex node) {
@@ -1596,7 +1618,9 @@ static bool is_pattern_call(const Node& n) {
            func_name == "ply" || func_name == "linger" ||
            func_name == "zoom" || func_name == "segment" ||
            func_name == "swing" || func_name == "swingBy" ||
-           func_name == "iter" || func_name == "iterBack";
+           func_name == "iter" || func_name == "iterBack" ||
+           // Phase 2 PRD generators (constructors)
+           func_name == "run" || func_name == "binary" || func_name == "binaryN";
 }
 
 // Helper: Check if a node is a pattern-producing expression.
@@ -1617,6 +1641,63 @@ static bool is_pattern_node(const Ast& ast, const SymbolTable& symbols, NodeInde
     }
 
     return false;
+}
+
+// Helpers: synthesize events for Phase 2 PRD generators (run/binary/binaryN).
+// Each returns the event count for cycle_length sizing; caller stores events
+// either directly into the compiler or into out_events for transform recursion.
+static std::vector<cedar::Event> synth_run_events(int n) {
+    std::vector<cedar::Event> events;
+    if (n <= 0) return events;
+    events.reserve(static_cast<std::size_t>(n));
+    float step = 1.0f / static_cast<float>(n);
+    for (int i = 0; i < n; ++i) {
+        cedar::Event e;
+        e.type = cedar::EventType::DATA;
+        e.time = static_cast<float>(i) * step;
+        e.duration = step;
+        e.num_values = 1;
+        e.values[0] = static_cast<float>(i);
+        e.velocity = 1.0f;
+        e.chance = 1.0f;
+        events.push_back(e);
+    }
+    return events;
+}
+
+static std::vector<cedar::Event> synth_binary_events(std::uint32_t n, int bits) {
+    // Emit `bits` events MSB-first; set bits emit triggers (num_values=1,
+    // value=1.0), unset bits emit rests (num_values=0). Per PRD §5.3.
+    std::vector<cedar::Event> events;
+    if (bits <= 0) return events;
+    events.reserve(static_cast<std::size_t>(bits));
+    float step = 1.0f / static_cast<float>(bits);
+    for (int i = 0; i < bits; ++i) {
+        int bit_pos = bits - 1 - i;  // MSB first
+        bool is_set = (n >> bit_pos) & 1u;
+        cedar::Event e;
+        e.type = cedar::EventType::DATA;
+        e.time = static_cast<float>(i) * step;
+        e.duration = step;
+        e.velocity = 1.0f;
+        e.chance = 1.0f;
+        if (is_set) {
+            e.num_values = 1;
+            e.values[0] = 1.0f;
+        } else {
+            e.num_values = 0;  // rest
+        }
+        events.push_back(e);
+    }
+    return events;
+}
+
+static int compute_binary_bits(std::uint32_t n) {
+    if (n == 0) return 1;
+    int bits = 0;
+    std::uint32_t v = n;
+    while (v > 0) { ++bits; v >>= 1; }
+    return bits;
 }
 
 // Helper: Compile a pattern and return the compiled data
@@ -1677,6 +1758,54 @@ static bool compile_pattern_for_transform(
     // Handle Call nodes
     if (pat_node.type == NodeType::Call) {
         const std::string& func_name = pat_node.as_identifier();
+
+        // Case 2.5: Generator constructors (run/binary/binaryN) — synthesize
+        // events directly into the compiler and seed out_* like a base case.
+        if (func_name == "run") {
+            auto n_arg = get_number_arg(ast, pat_node, 0);
+            if (!n_arg.has_value() || *n_arg < 0) return false;
+            int n_int = static_cast<int>(*n_arg);
+            auto events = synth_run_events(n_int);
+            compiler.populate_synthetic(std::move(events));
+            out_pattern_node = pat_node.first_child;
+            out_num_elements = static_cast<std::uint32_t>(std::max(1, n_int));
+            out_events = compiler.sequence_events();
+            out_cycle_length = static_cast<float>(out_num_elements);
+            return true;
+        }
+        if (func_name == "binary") {
+            auto n_arg = get_number_arg(ast, pat_node, 0);
+            if (!n_arg.has_value() || *n_arg < 0) return false;
+            std::uint32_t n_val = static_cast<std::uint32_t>(*n_arg);
+            int bits = compute_binary_bits(n_val);
+            auto events = synth_binary_events(n_val, bits);
+            compiler.populate_synthetic(std::move(events));
+            out_pattern_node = pat_node.first_child;
+            out_num_elements = static_cast<std::uint32_t>(std::max(1, bits));
+            out_events = compiler.sequence_events();
+            out_cycle_length = static_cast<float>(out_num_elements);
+            return true;
+        }
+        if (func_name == "binaryN") {
+            auto n_arg = get_number_arg(ast, pat_node, 0);
+            auto bits_arg = get_number_arg(ast, pat_node, 1);
+            if (!n_arg.has_value() || !bits_arg.has_value()) return false;
+            if (*n_arg < 0 || *bits_arg < 0) return false;
+            int bits = static_cast<int>(*bits_arg);
+            if (bits < 0) return false;
+            std::uint32_t n_val = static_cast<std::uint32_t>(*n_arg);
+            // Truncate to lower `bits` bits per PRD §9.2.
+            if (bits < 32) {
+                n_val &= (1u << bits) - 1u;
+            }
+            auto events = synth_binary_events(n_val, bits);
+            compiler.populate_synthetic(std::move(events));
+            out_pattern_node = pat_node.first_child;
+            out_num_elements = static_cast<std::uint32_t>(std::max(1, bits));
+            out_events = compiler.sequence_events();
+            out_cycle_length = static_cast<float>(out_num_elements);
+            return true;
+        }
 
         // Case 3: Transform calls (recursive case)
         bool is_transform = (func_name == "slow" || func_name == "fast" ||
@@ -3914,6 +4043,116 @@ TypedValue CodeGenerator::handle_iter_back_call(NodeIndex node, const Node& n) {
         state_inits_.back().iter_n = static_cast<std::uint8_t>(n_int);
         state_inits_.back().iter_dir = -1;
     }
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+// ============================================================================
+// Phase 2 PRD generator handlers (run, binary, binaryN)
+// ============================================================================
+
+TypedValue CodeGenerator::handle_run_call(NodeIndex node, const Node& n) {
+    auto n_arg = get_number_arg(*ast_, n, 0);
+    if (!n_arg.has_value() || *n_arg < 0) {
+        error("E131", "run() requires a non-negative integer", n.location);
+        return TypedValue::void_val();
+    }
+    int n_int = static_cast<int>(*n_arg);
+
+    auto events = synth_run_events(n_int);
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    compiler.populate_synthetic(std::move(events));
+
+    std::uint32_t cnt = call_counters_["run"]++;
+    push_path("run#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    auto sequence_events = compiler.sequence_events();
+    float cycle_length = static_cast<float>(std::max(1, n_int));
+
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, n.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_binary_call(NodeIndex node, const Node& n) {
+    auto n_arg = get_number_arg(*ast_, n, 0);
+    if (!n_arg.has_value() || *n_arg < 0) {
+        error("E131", "binary() requires a non-negative integer", n.location);
+        return TypedValue::void_val();
+    }
+    std::uint32_t n_val = static_cast<std::uint32_t>(*n_arg);
+    int bits = compute_binary_bits(n_val);
+
+    auto events = synth_binary_events(n_val, bits);
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    compiler.populate_synthetic(std::move(events));
+
+    std::uint32_t cnt = call_counters_["binary"]++;
+    push_path("binary#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    auto sequence_events = compiler.sequence_events();
+    float cycle_length = static_cast<float>(std::max(1, bits));
+
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, n.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_binary_n_call(NodeIndex node, const Node& n) {
+    auto n_arg = get_number_arg(*ast_, n, 0);
+    auto bits_arg = get_number_arg(*ast_, n, 1);
+    if (!n_arg.has_value() || !bits_arg.has_value()) {
+        error("E131", "binaryN() requires two non-negative integers (n, bits)", n.location);
+        return TypedValue::void_val();
+    }
+    if (*n_arg < 0 || *bits_arg < 0) {
+        error("E131", "binaryN() requires non-negative integers", n.location);
+        return TypedValue::void_val();
+    }
+    int bits = static_cast<int>(*bits_arg);
+    std::uint32_t n_val = static_cast<std::uint32_t>(*n_arg);
+    if (bits < 32) {
+        n_val &= (1u << bits) - 1u;  // PRD §9.2: truncate
+    }
+
+    auto events = synth_binary_events(n_val, bits);
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    compiler.populate_synthetic(std::move(events));
+
+    std::uint32_t cnt = call_counters_["binaryN"]++;
+    push_path("binaryN#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    auto sequence_events = compiler.sequence_events();
+    float cycle_length = static_cast<float>(std::max(1, bits));
+
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, n.location, n.location,
+        emit_instruction_helper);
 
     pop_path();
     if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {

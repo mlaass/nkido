@@ -2579,6 +2579,133 @@ TEST_CASE("Pattern transform: iter()/iterBack()", "[codegen][patterns][phase2]")
     }
 }
 
+// =============================================================================
+// Phase 2 PRD: algorithmic generators (run, binary, binaryN)
+// =============================================================================
+
+TEST_CASE("Pattern generator: run()", "[codegen][patterns][phase2]") {
+    SECTION("run requires non-negative integer") {
+        auto result = akkado::compile("run(-1)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("run(8) produces 8 events at i/8 with values 0..7") {
+        auto result = akkado::compile("run(8)");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(8.0f));
+        REQUIRE(si.sequence_events[0].size() == 8);
+        for (std::size_t i = 0; i < 8; ++i) {
+            const auto& e = si.sequence_events[0][i];
+            CHECK(e.time == Catch::Approx(static_cast<float>(i) / 8.0f).margin(0.001f));
+            CHECK(e.duration == Catch::Approx(1.0f / 8.0f).margin(0.001f));
+            REQUIRE(e.num_values == 1);
+            CHECK(e.values[0] == Catch::Approx(static_cast<float>(i)).margin(0.001f));
+        }
+    }
+    SECTION("run(0) yields empty pattern") {
+        auto result = akkado::compile("run(0)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.sequence_events[0].size() == 0);
+    }
+    SECTION("run(1) yields single full-cycle event") {
+        auto result = akkado::compile("run(1)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 1);
+        CHECK(si.sequence_events[0][0].time == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(si.sequence_events[0][0].duration == Catch::Approx(1.0f).margin(0.001f));
+        CHECK(si.sequence_events[0][0].values[0] == Catch::Approx(0.0f).margin(0.001f));
+    }
+    SECTION("run inside slow() composes via recursion") {
+        auto result = akkado::compile("slow(run(4), 2)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        // run(4) cycle_length = 4; slow(2) doubles -> 8
+        CHECK(si.cycle_length == Catch::Approx(8.0f));
+        REQUIRE(si.sequence_events[0].size() == 4);
+    }
+    SECTION("run dot-call composes with transforms") {
+        auto result = akkado::compile("run(4).fast(2)");
+        REQUIRE(result.success);
+    }
+}
+
+TEST_CASE("Pattern generator: binary()", "[codegen][patterns][phase2]") {
+    SECTION("binary rejects negative argument") {
+        auto result = akkado::compile("binary(-5)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("binary(0b1010) produces 4 events MSB-first") {
+        // 0b1010 = 10. bits = 4. MSB-first: 1, 0, 1, 0.
+        // Event 0: trigger (set), 1: rest, 2: trigger, 3: rest.
+        auto result = akkado::compile("binary(10)");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(4.0f));
+        REQUIRE(si.sequence_events[0].size() == 4);
+        CHECK(si.sequence_events[0][0].num_values == 1);
+        CHECK(si.sequence_events[0][1].num_values == 0);
+        CHECK(si.sequence_events[0][2].num_values == 1);
+        CHECK(si.sequence_events[0][3].num_values == 0);
+    }
+    SECTION("binary(0) produces single rest event") {
+        auto result = akkado::compile("binary(0)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 1);
+        CHECK(si.sequence_events[0][0].num_values == 0);
+    }
+    SECTION("binary(1) produces single trigger event") {
+        auto result = akkado::compile("binary(1)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 1);
+        CHECK(si.sequence_events[0][0].num_values == 1);
+    }
+    SECTION("binary dot-call composes") {
+        auto result = akkado::compile("binary(170).slow(2)");
+        REQUIRE(result.success);
+    }
+}
+
+TEST_CASE("Pattern generator: binaryN()", "[codegen][patterns][phase2]") {
+    SECTION("binaryN rejects negative bits") {
+        auto result = akkado::compile("binaryN(5, -1)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("binaryN(5, 8) produces 8 events with 0b00000101 pattern") {
+        // 5 = 0b101. binaryN with 8 bits zero-pads: 00000101.
+        // MSB-first: 0,0,0,0,0,1,0,1.
+        auto result = akkado::compile("binaryN(5, 8)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(8.0f));
+        REQUIRE(si.sequence_events[0].size() == 8);
+        std::array<bool, 8> expected{false, false, false, false, false, true, false, true};
+        for (std::size_t i = 0; i < 8; ++i) {
+            CHECK(static_cast<bool>(si.sequence_events[0][i].num_values > 0) == expected[i]);
+        }
+    }
+    SECTION("binaryN truncates n to lower bits per PRD §9.2") {
+        // n=5 (0b101) with bits=2 -> truncate to 0b01 -> [0, 1].
+        auto result = akkado::compile("binaryN(5, 2)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 2);
+        CHECK(si.sequence_events[0][0].num_values == 0);
+        CHECK(si.sequence_events[0][1].num_values == 1);
+    }
+    SECTION("binaryN(0, 0) produces empty pattern") {
+        auto result = akkado::compile("binaryN(0, 0)");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.sequence_events[0].size() == 0);
+    }
+}
+
 TEST_CASE("Phase 2 transforms compose with existing transforms", "[codegen][patterns][phase2]") {
     SECTION("slow(palindrome(...)) compiles") {
         auto result = akkado::compile(R"(slow(palindrome(pat("c4 e4")), 2))");

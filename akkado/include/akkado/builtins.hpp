@@ -965,6 +965,21 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                     {NAN, NAN, NAN},
                     "Rotate pattern start by 1/n per cycle (backward)."}},
 
+    // Phase 2 PRD: algorithmic pattern generators.
+    // These emit a PatternEventStream directly (no inner pattern).
+    {"run",        {cedar::Opcode::NOP, 1, 0, false,
+                    {"n", "", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Pattern of integers 0..n-1 evenly distributed in cycle."}},
+    {"binary",     {cedar::Opcode::NOP, 1, 0, false,
+                    {"n", "", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Trigger pattern from binary representation of n (MSB first)."}},
+    {"binaryN",    {cedar::Opcode::NOP, 2, 0, false,
+                    {"n", "bits", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Trigger pattern from low `bits` bits of n (zero-padded, MSB first)."}},
+
     // Parameter exposure builtins (handled specially by codegen)
     // These extract metadata at compile time for UI generation
     {"param",   {cedar::Opcode::ENV_GET, 2, 2, false,

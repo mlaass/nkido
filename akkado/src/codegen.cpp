@@ -832,6 +832,10 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"swingBy",    &CodeGenerator::handle_swing_by_call},
                 {"iter",       &CodeGenerator::handle_iter_call},
                 {"iterBack",   &CodeGenerator::handle_iter_back_call},
+                // Phase 2 PRD generators
+                {"run",        &CodeGenerator::handle_run_call},
+                {"binary",     &CodeGenerator::handle_binary_call},
+                {"binaryN",    &CodeGenerator::handle_binary_n_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},
