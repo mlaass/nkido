@@ -2470,6 +2470,75 @@ TEST_CASE("Pattern transform: segment()", "[codegen][patterns][phase2]") {
     }
 }
 
+TEST_CASE("Pattern transform: swing()/swingBy()", "[codegen][patterns][phase2]") {
+    SECTION("swing requires pattern argument") {
+        auto result = akkado::compile("swing(42)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("swing with default n=4 compiles") {
+        auto result = akkado::compile(R"(swing(pat("bd hh sd hh")))");
+        CHECK(result.success);
+    }
+    SECTION("swing(pat, 8) compiles") {
+        auto result = akkado::compile(R"(swing(pat("bd hh sd hh"), 8))");
+        CHECK(result.success);
+    }
+    SECTION("swingBy requires pattern and amount") {
+        auto result = akkado::compile(R"(swingBy(pat("bd hh")))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("swingBy(pat, 0.5, 4) shifts off-beat events") {
+        // pat with 4 elements at times 0, 0.25, 0.5, 0.75.
+        // Slice width = 0.25; events at slice offset 0 -> no shift; slice
+        // offset 0 (start) -> no shift since frac < 0.5.
+        // For 4 events at slice starts, none shift. Use 8 elements to test:
+        // pat("a b c d e f g h"), times 0, 0.125, 0.25, ..., 0.875.
+        // Slices of width 0.25 starting at 0, 0.25, 0.5, 0.75.
+        // Event at 0.0   -> slice 0, frac 0 -> no shift.
+        // Event at 0.125 -> slice 0, frac 0.5 -> shift += 0.5 * 0.125 = 0.0625
+        // Event at 0.25  -> slice 1, frac 0 -> no shift.
+        // Event at 0.375 -> slice 1, frac 0.5 -> shift.
+        // ...
+        auto result = akkado::compile(R"(swingBy(pat("a b c d e f g h"), 0.5, 4))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 8);
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        // Expected times after swing: 0.0, 0.1875 (0.125+0.0625), 0.25,
+        // 0.4375, 0.5, 0.6875, 0.75, 0.9375.
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.1875f).margin(0.001f));
+        CHECK(times[2] == Catch::Approx(0.25f).margin(0.001f));
+        CHECK(times[3] == Catch::Approx(0.4375f).margin(0.001f));
+        CHECK(times[4] == Catch::Approx(0.5f).margin(0.001f));
+        CHECK(times[5] == Catch::Approx(0.6875f).margin(0.001f));
+        CHECK(times[6] == Catch::Approx(0.75f).margin(0.001f));
+        CHECK(times[7] == Catch::Approx(0.9375f).margin(0.001f));
+    }
+    SECTION("swing with amount=0 is identity") {
+        auto result = akkado::compile(R"(swingBy(pat("a b c d"), 0.0, 4))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.25f).margin(0.001f));
+        CHECK(times[2] == Catch::Approx(0.5f).margin(0.001f));
+        CHECK(times[3] == Catch::Approx(0.75f).margin(0.001f));
+    }
+    SECTION("swing dot-call") {
+        auto dot = akkado::compile(R"(pat("a b c d e f g h").swing())");
+        CHECK(dot.success);
+    }
+    SECTION("swingBy dot-call") {
+        auto dot = akkado::compile(R"(pat("a b c d").swingBy(0.4, 4))");
+        CHECK(dot.success);
+    }
+}
+
 TEST_CASE("Phase 2 transforms compose with existing transforms", "[codegen][patterns][phase2]") {
     SECTION("slow(palindrome(...)) compiles") {
         auto result = akkado::compile(R"(slow(palindrome(pat("c4 e4")), 2))");

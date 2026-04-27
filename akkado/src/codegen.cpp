@@ -828,6 +828,8 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"linger",     &CodeGenerator::handle_linger_call},
                 {"zoom",       &CodeGenerator::handle_zoom_call},
                 {"segment",    &CodeGenerator::handle_segment_call},
+                {"swing",      &CodeGenerator::handle_swing_call},
+                {"swingBy",    &CodeGenerator::handle_swing_by_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},

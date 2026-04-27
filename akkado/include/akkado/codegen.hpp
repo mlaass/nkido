@@ -417,6 +417,12 @@ private:
     /// Handle segment(pattern, n) - sample at n evenly-spaced points
     TypedValue handle_segment_call(NodeIndex node, const Node& n);
 
+    /// Handle swing(pattern, n=4) - 1/3 swing on n-slice grid
+    TypedValue handle_swing_call(NodeIndex node, const Node& n);
+
+    /// Handle swingBy(pattern, amount, n=4) - custom-amount swing on n-slice grid
+    TypedValue handle_swing_by_call(NodeIndex node, const Node& n);
+
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     TypedValue handle_tap_delay_call(NodeIndex node, const Node& n);
