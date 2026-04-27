@@ -2332,6 +2332,144 @@ TEST_CASE("Pattern transform: compress()", "[codegen][patterns][phase2]") {
     }
 }
 
+TEST_CASE("Pattern transform: ply()", "[codegen][patterns][phase2]") {
+    SECTION("ply requires pattern as first argument") {
+        auto result = akkado::compile("ply(42, 3)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("ply rejects n < 1") {
+        auto result = akkado::compile(R"(ply(pat("c4 e4"), 0))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("ply(pat, 3) triples event count") {
+        auto result = akkado::compile(R"(ply(pat("c4 e4"), 3))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        // pat("c4 e4") produces 2 events, ply(3) -> 6
+        REQUIRE(si.sequence_events[0].size() == 6);
+    }
+    SECTION("ply(pat, 2) produces correct sub-times") {
+        auto result = akkado::compile(R"(ply(pat("c4 e4"), 2))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        // Original: events at 0.0 (dur 0.5), 0.5 (dur 0.5)
+        // After ply(2): events at 0.0, 0.25, 0.5, 0.75 (dur 0.25 each)
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        REQUIRE(times.size() == 4);
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.25f).margin(0.001f));
+        CHECK(times[2] == Catch::Approx(0.5f).margin(0.001f));
+        CHECK(times[3] == Catch::Approx(0.75f).margin(0.001f));
+        for (const auto& e : si.sequence_events[0]) {
+            CHECK(e.duration == Catch::Approx(0.25f).margin(0.001f));
+        }
+    }
+    SECTION("ply via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4").ply(3))");
+        CHECK(dot.success);
+    }
+}
+
+TEST_CASE("Pattern transform: linger()", "[codegen][patterns][phase2]") {
+    SECTION("linger rejects non-positive frac") {
+        auto result = akkado::compile(R"(linger(pat("c4 e4"), 0))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("linger(pat, 1.0) is a no-op") {
+        auto result = akkado::compile(R"(linger(pat("c4 e4"), 1.0))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(2.0f));
+        REQUIRE(si.sequence_events[0].size() == 2);
+    }
+    SECTION("linger(pat, 0.5) keeps first half, halves cycle_length") {
+        // pat("c4 e4 g4 b4"): events at 0.0, 0.25, 0.5, 0.75; base cycle=4.
+        // Keep events with time < 0.5: {c4@0.0, e4@0.25}
+        // Scale by 1/0.5=2: c4@0.0, e4@0.5; durations also scaled.
+        // cycle_length *= 0.5 -> 2.
+        auto result = akkado::compile(R"(linger(pat("c4 e4 g4 b4"), 0.5))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.cycle_length == Catch::Approx(2.0f));
+        REQUIRE(si.sequence_events[0].size() == 2);
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.5f).margin(0.001f));
+    }
+    SECTION("linger via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4 b4").linger(0.5))");
+        CHECK(dot.success);
+    }
+}
+
+TEST_CASE("Pattern transform: zoom()", "[codegen][patterns][phase2]") {
+    SECTION("zoom rejects reversed range") {
+        auto result = akkado::compile(R"(zoom(pat("c4 e4"), 0.5, 0.25))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("zoom rejects degenerate range") {
+        auto result = akkado::compile(R"(zoom(pat("c4 e4"), 0.5, 0.5))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("zoom(pat, 0.25, 0.75) keeps middle 50% remapped to [0,1)") {
+        // pat("c4 e4 g4 b4"): events at 0.0, 0.25, 0.5, 0.75 (dur 0.25 each).
+        // Window [0.25, 0.75): events e4(0.25-0.5), g4(0.5-0.75) overlap fully.
+        // Remap: e4 -> t=0.0 dur 0.5, g4 -> t=0.5 dur 0.5.
+        auto result = akkado::compile(R"(zoom(pat("c4 e4 g4 b4"), 0.25, 0.75))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 2);
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        CHECK(times[0] == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(times[1] == Catch::Approx(0.5f).margin(0.001f));
+    }
+    SECTION("zoom via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4 b4").zoom(0.0, 0.5))");
+        CHECK(dot.success);
+    }
+}
+
+TEST_CASE("Pattern transform: segment()", "[codegen][patterns][phase2]") {
+    SECTION("segment rejects n < 1") {
+        auto result = akkado::compile(R"(segment(pat("c4 e4"), 0))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("segment(pat, 8) emits 8 events with duration 1/8") {
+        auto result = akkado::compile(R"(segment(pat("c4 e4"), 8))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 8);
+        for (const auto& e : si.sequence_events[0]) {
+            CHECK(e.duration == Catch::Approx(0.125f).margin(0.001f));
+        }
+        std::vector<float> times;
+        for (const auto& e : si.sequence_events[0]) times.push_back(e.time);
+        std::sort(times.begin(), times.end());
+        for (std::size_t i = 0; i < times.size(); ++i) {
+            CHECK(times[i] == Catch::Approx(static_cast<float>(i) * 0.125f).margin(0.001f));
+        }
+    }
+    SECTION("segment(pat, 1) emits single full-cycle event") {
+        auto result = akkado::compile(R"(segment(pat("c4 e4"), 1))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        REQUIRE(si.sequence_events[0].size() == 1);
+        CHECK(si.sequence_events[0][0].time == Catch::Approx(0.0f).margin(0.001f));
+        CHECK(si.sequence_events[0][0].duration == Catch::Approx(1.0f).margin(0.001f));
+    }
+    SECTION("segment via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4").segment(8))");
+        CHECK(dot.success);
+    }
+}
+
 TEST_CASE("Phase 2 transforms compose with existing transforms", "[codegen][patterns][phase2]") {
     SECTION("slow(palindrome(...)) compiles") {
         auto result = akkado::compile(R"(slow(palindrome(pat("c4 e4")), 2))");

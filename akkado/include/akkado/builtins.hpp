@@ -932,6 +932,22 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                     {"pattern", "start", "end", "", "", ""},
                     {NAN, NAN, NAN},
                     "Squash pattern into [start, end) of cycle (silence elsewhere)."}},
+    {"ply",        {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "n", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Repeat each event n times within its slot."}},
+    {"linger",     {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "frac", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Keep first frac of pattern; loop it to fill the cycle."}},
+    {"zoom",       {cedar::Opcode::NOP, 3, 0, false,
+                    {"pattern", "start", "end", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Play only [start, end) portion of pattern, stretched to fill cycle."}},
+    {"segment",    {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "n", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Sample pattern at n evenly-spaced points; emit n equal-duration events."}},
 
     // Parameter exposure builtins (handled specially by codegen)
     // These extract metadata at compile time for UI generation

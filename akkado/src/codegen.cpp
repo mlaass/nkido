@@ -824,6 +824,10 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"late",       &CodeGenerator::handle_late_call},
                 {"palindrome", &CodeGenerator::handle_palindrome_call},
                 {"compress",   &CodeGenerator::handle_compress_call},
+                {"ply",        &CodeGenerator::handle_ply_call},
+                {"linger",     &CodeGenerator::handle_linger_call},
+                {"zoom",       &CodeGenerator::handle_zoom_call},
+                {"segment",    &CodeGenerator::handle_segment_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},

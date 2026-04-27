@@ -405,6 +405,18 @@ private:
     /// Handle compress(pattern, start, end) - squash events into [start, end)
     TypedValue handle_compress_call(NodeIndex node, const Node& n);
 
+    /// Handle ply(pattern, n) - replace each event with n equal-duration copies
+    TypedValue handle_ply_call(NodeIndex node, const Node& n);
+
+    /// Handle linger(pattern, frac) - keep first frac of pattern, loop to fill cycle
+    TypedValue handle_linger_call(NodeIndex node, const Node& n);
+
+    /// Handle zoom(pattern, start, end) - keep events in [start, end), stretch to fill
+    TypedValue handle_zoom_call(NodeIndex node, const Node& n);
+
+    /// Handle segment(pattern, n) - sample at n evenly-spaced points
+    TypedValue handle_segment_call(NodeIndex node, const Node& n);
+
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE
     TypedValue handle_tap_delay_call(NodeIndex node, const Node& n);
