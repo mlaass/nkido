@@ -562,7 +562,9 @@ MiniToken MiniLexer::lex_pitch() {
         velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
     }
 
-    return make_token(MiniTokenType::PitchToken, MiniPitchData{midi, has_octave, velocity, micro_offset});
+    auto props = try_lex_record_suffix();
+    return make_token(MiniTokenType::PitchToken,
+                      MiniPitchData{midi, has_octave, velocity, micro_offset, std::move(props)});
 }
 
 MiniToken MiniLexer::lex_pitch_or_sample() {
@@ -633,7 +635,9 @@ MiniToken MiniLexer::lex_pitch_or_sample() {
                 velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
             }
 
-            return make_token(MiniTokenType::PitchToken, MiniPitchData{midi, has_octave, velocity});
+            auto props = try_lex_record_suffix();
+            return make_token(MiniTokenType::PitchToken,
+                              MiniPitchData{midi, has_octave, velocity, 0, std::move(props)});
         }
     }
 
@@ -652,7 +656,86 @@ MiniToken MiniLexer::lex_pitch_or_sample() {
         variant = static_cast<std::uint8_t>(var_val);
     }
 
-    return make_token(MiniTokenType::SampleToken, MiniSampleData{std::string(text), variant});
+    auto props = try_lex_record_suffix();
+    return make_token(MiniTokenType::SampleToken,
+                      MiniSampleData{std::string(text), variant, "", std::move(props)});
+}
+
+std::vector<std::pair<std::string, float>> MiniLexer::try_lex_record_suffix() {
+    // Phase 2 PRD §5.6: parse `{key:number(,key:number)*}` immediately after
+    // a note token (no whitespace). Disambiguates from polymeter `{a b}%n`:
+    // record-suffix `{` MUST be the very next char, AND its first content
+    // tokens must be `identifier:number` form. If anything doesn't match,
+    // we rewind and produce nothing (so polymeter's lex path can take over).
+    std::vector<std::pair<std::string, float>> properties;
+    if (peek() != '{') return properties;
+
+    // Try to peek at the content: identifier `:` number ?
+    std::size_t save = current_;
+    advance();  // consume `{`
+
+    while (!is_at_end()) {
+        // Skip whitespace within the record body — minimal tolerance.
+        while (!is_at_end() && is_whitespace(peek())) advance();
+
+        if (peek() == '}') { advance(); return properties; }
+
+        // Parse identifier (key).
+        if (!is_alpha(peek())) {
+            // Not a valid record-suffix; rewind.
+            current_ = save;
+            properties.clear();
+            return properties;
+        }
+        std::size_t key_start = current_;
+        while (!is_at_end() && (is_alpha(peek()) || is_digit(peek()) || peek() == '_')) {
+            advance();
+        }
+        std::string key(pattern_.substr(key_start, current_ - key_start));
+
+        while (!is_at_end() && is_whitespace(peek())) advance();
+        if (peek() != ':') {
+            // Not a record-suffix; rewind.
+            current_ = save;
+            properties.clear();
+            return properties;
+        }
+        advance();  // consume `:`
+        while (!is_at_end() && is_whitespace(peek())) advance();
+
+        // Parse number value (optional leading `-` and `.`).
+        std::size_t val_start = current_;
+        if (peek() == '-' || peek() == '+') advance();
+        bool has_digit = false;
+        while (!is_at_end() && is_digit(peek())) { advance(); has_digit = true; }
+        if (!is_at_end() && peek() == '.') {
+            advance();
+            while (!is_at_end() && is_digit(peek())) { advance(); has_digit = true; }
+        }
+        if (!has_digit) {
+            current_ = save;
+            properties.clear();
+            return properties;
+        }
+        std::string num_buf(pattern_.substr(val_start, current_ - val_start));
+        char* num_end = nullptr;
+        double num = std::strtod(num_buf.c_str(), &num_end);
+        properties.emplace_back(std::move(key), static_cast<float>(num));
+
+        while (!is_at_end() && is_whitespace(peek())) advance();
+        if (peek() == ',') { advance(); continue; }
+        if (peek() == '}') { advance(); return properties; }
+
+        // Malformed — rewind.
+        current_ = save;
+        properties.clear();
+        return properties;
+    }
+
+    // Reached end without `}`.
+    current_ = save;
+    properties.clear();
+    return properties;
 }
 
 MiniToken MiniLexer::lex_sample_only() {

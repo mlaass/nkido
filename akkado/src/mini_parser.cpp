@@ -287,7 +287,10 @@ NodeIndex MiniParser::parse_pitch_atom(const MiniToken& token) {
         .chord_root = "",
         .chord_quality = "",
         .chord_root_midi = 0,
-        .chord_intervals = {}
+        .chord_intervals = {},
+        .curve_value = 0.0f,
+        .curve_smooth = false,
+        .properties = pitch.properties
     };
 
     return node;
@@ -307,7 +310,10 @@ NodeIndex MiniParser::parse_sample_atom(const MiniToken& token) {
         .chord_root = "",
         .chord_quality = "",
         .chord_root_midi = 0,
-        .chord_intervals = {}
+        .chord_intervals = {},
+        .curve_value = 0.0f,
+        .curve_smooth = false,
+        .properties = sample.properties
     };
 
     return node;
@@ -326,7 +332,10 @@ NodeIndex MiniParser::parse_chord_atom(const MiniToken& token) {
         .chord_root = chord.root,
         .chord_quality = chord.quality,
         .chord_root_midi = chord.root_midi,
-        .chord_intervals = chord.intervals
+        .chord_intervals = chord.intervals,
+        .curve_value = 0.0f,
+        .curve_smooth = false,
+        .properties = chord.properties
     };
 
     return node;

@@ -78,6 +78,13 @@ private:
     [[nodiscard]] bool looks_like_pitch() const;
     [[nodiscard]] std::uint8_t parse_pitch_to_midi(char note, int accidental, int octave) const;
 
+    // Phase 2 PRD: scan a record-suffix `{key:value, ...}` immediately after
+    // a note token (no whitespace). Caller has already produced the note
+    // token; this consumes from `{` to `}` and returns the parsed properties.
+    // If `{` is not present (or is followed by anything that doesn't look
+    // like `key:value`), returns an empty vector and consumes nothing.
+    std::vector<std::pair<std::string, float>> try_lex_record_suffix();
+
     // Chord symbol detection
     [[nodiscard]] std::optional<MiniToken> try_lex_chord_symbol();
 

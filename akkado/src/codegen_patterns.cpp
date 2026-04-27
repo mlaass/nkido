@@ -356,6 +356,18 @@ private:
         e.source_offset = static_cast<std::uint16_t>(n.location.offset - pattern_base_offset_);
         e.source_length = static_cast<std::uint16_t>(n.location.length);
 
+        // Phase 2 PRD §5.5: apply recognized short-form record-suffix keys
+        // (vel, dur) to fixed cedar::Event fields. bend/aftertouch and
+        // unrecognized keys remain on atom_data.properties for the §5.5a
+        // pipe-binding accessor (deferred to a follow-up).
+        for (const auto& [key, value] : atom_data.properties) {
+            if (key == "vel") {
+                e.velocity = std::clamp(value, 0.0f, 1.0f);
+            } else if (key == "dur") {
+                if (value > 0.0f) e.duration = value * time_span;
+            }
+        }
+
         if (atom_data.kind == Node::MiniAtomKind::Rest) {
             // Rest: emit event with num_values=0 for UI highlighting (no trigger/sound)
             e.num_values = 0;

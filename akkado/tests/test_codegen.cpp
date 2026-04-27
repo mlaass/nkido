@@ -2168,6 +2168,59 @@ TEST_CASE("Pattern transform chaining: semantic correctness", "[codegen][pattern
 }
 
 // =============================================================================
+// Phase 2 PRD D2: mini-notation record suffix `c4{vel:0.8, ...}`
+// =============================================================================
+
+TEST_CASE("Mini-notation record suffix: vel sets velocity",
+          "[codegen][patterns][phase2][record_suffix]") {
+    auto result = akkado::compile(R"(pat("c4{vel:0.7} e4{vel:0.5}"))");
+    REQUIRE(result.success);
+    const auto& si = result.state_inits[0];
+    REQUIRE(si.sequence_events[0].size() == 2);
+    CHECK(si.sequence_events[0][0].velocity == Catch::Approx(0.7f).margin(0.01f));
+    CHECK(si.sequence_events[0][1].velocity == Catch::Approx(0.5f).margin(0.01f));
+}
+
+TEST_CASE("Mini-notation record suffix: positional :vel and {vel} resolve compatibly",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // Both forms should produce identical velocities (the record-suffix `vel`
+    // overrides the :0.x shorthand when both are present per §9.4 last-wins).
+    auto pos = akkado::compile(R"(pat("c4:0.5"))");
+    auto rec = akkado::compile(R"(pat("c4{vel:0.5}"))");
+    REQUIRE(pos.success);
+    REQUIRE(rec.success);
+    CHECK(pos.state_inits[0].sequence_events[0][0].velocity ==
+          Catch::Approx(rec.state_inits[0].sequence_events[0][0].velocity).margin(0.001f));
+}
+
+TEST_CASE("Mini-notation record suffix: backwards compat with polymeter `{a b}%n`",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // {a b}%3 (polymeter) must still parse: there is no preceding note, so
+    // the record-suffix lexer never activates.
+    auto result = akkado::compile(R"(pat("{c4 e4 g4}%3"))");
+    CHECK(result.success);
+}
+
+TEST_CASE("Mini-notation record suffix: whitespace before `{` keeps polymeter",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // `c4 {a b}%3` — record-suffix requires `{` to immediately follow the
+    // note. With whitespace, the brace starts a polymeter group instead.
+    auto result = akkado::compile(R"(pat("c4 {c4 e4}%3"))");
+    CHECK(result.success);
+}
+
+TEST_CASE("Mini-notation record suffix: multiple keys",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // vel and dur are recognized; bend/cutoff stay on atom_data.properties
+    // (deferred runtime exposure). Compile succeeds; velocity reflects vel.
+    auto result = akkado::compile(R"(pat("c4{vel:0.8, bend:0.3, cutoff:0.4}"))");
+    REQUIRE(result.success);
+    const auto& si = result.state_inits[0];
+    REQUIRE(si.sequence_events[0].size() == 1);
+    CHECK(si.sequence_events[0][0].velocity == Catch::Approx(0.8f).margin(0.01f));
+}
+
+// =============================================================================
 // Phase 2 PRD D0: velocity-shorthand propagation fix
 // =============================================================================
 

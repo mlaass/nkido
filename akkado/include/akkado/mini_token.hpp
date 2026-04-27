@@ -94,6 +94,9 @@ struct MiniPitchData {
     bool has_octave;           // Whether octave was explicit in source
     float velocity = 1.0f;     // 0.0-1.0, from :vel suffix (e.g., c4:0.8)
     std::int8_t micro_offset = 0;  // Microtonal step offset (^=+1, v=-1, stacking for larger)
+    // Phase 2 PRD: record-suffix properties from `c4{vel:0.8, bend:0.2}`.
+    // Lexer parses {key:value, ...} immediately following a note token.
+    std::vector<std::pair<std::string, float>> properties;
 };
 
 /// Sample data for mini-notation
@@ -101,6 +104,7 @@ struct MiniSampleData {
     std::string name;          // Sample name (e.g., "bd", "sd")
     std::uint8_t variant = 0;  // Sample variant (e.g., 2 for "bd:2")
     std::string bank;          // Bank name (empty = default)
+    std::vector<std::pair<std::string, float>> properties;  // record suffix
 };
 
 /// Chord data for mini-notation (chord symbol like Am, C7, Fmaj7)
@@ -110,6 +114,7 @@ struct MiniChordData {
     std::uint8_t root_midi;                // MIDI note of root (default octave 4)
     std::vector<std::int8_t> intervals;    // Semitone intervals from root
     float velocity = 1.0f;                 // 0.0-1.0, from :vel suffix (e.g., Am:0.5)
+    std::vector<std::pair<std::string, float>> properties;  // record suffix
 };
 
 /// Curve level data for curve-mode notation (value level atom)

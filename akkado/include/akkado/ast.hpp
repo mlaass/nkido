@@ -206,6 +206,11 @@ struct Node {
         std::vector<std::int8_t> chord_intervals;  // Semitone intervals
         float curve_value = 0.0f;    // For CurveLevel: 0.0, 0.25, 0.5, 0.75, 1.0
         bool curve_smooth = false;   // For CurveLevel: true if preceded by ~ modifier
+        // Phase 2 PRD: record-suffix properties from `c4{vel:0.8, bend:0.2}`.
+        // Recognized short-form keys (vel/bend/aftertouch/dur) populate fixed
+        // PatternEvent fields; unrecognized keys are kept here for the §5.5a
+        // pipe-binding pattern-property accessor.
+        std::vector<std::pair<std::string, float>> properties;
     };
 
     // Data for mini-notation euclidean patterns
