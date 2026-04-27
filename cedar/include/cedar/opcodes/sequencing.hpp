@@ -389,9 +389,31 @@ inline void op_seqpat_query(ExecutionContext& ctx, const Instruction& inst) {
 
     // Update cycle tracking
     state.last_queried_cycle = current_cycle;
+    // cycle_index drives iter()/iterBack() rotation. Tracking the global
+    // cycle number directly (not a wrap-detect counter) means seek/scrub
+    // produces the correct rotation for any cycle.
+    state.cycle_index = static_cast<std::uint32_t>(current_cycle);
 
     // Query the root sequence for this cycle
     query_pattern(state, static_cast<std::uint64_t>(current_cycle), state.cycle_length);
+
+    // iter()/iterBack(): rotate query results so that an event at original
+    // time t plays at effective time ((t - dir * k / n) mod 1), where
+    // k = cycle_index mod iter_n. Per PRD §5.2.
+    if (state.iter_n > 0 && state.cycle_length > 0.0f) {
+        std::uint32_t k = state.cycle_index % static_cast<std::uint32_t>(state.iter_n);
+        float shift = -static_cast<float>(state.iter_dir) *
+                      static_cast<float>(k) * state.cycle_length /
+                      static_cast<float>(state.iter_n);
+        for (std::uint32_t i = 0; i < state.output.num_events; ++i) {
+            auto& e = state.output.events[i];
+            float t = e.time + shift;
+            t = std::fmod(t, state.cycle_length);
+            if (t < 0.0f) t += state.cycle_length;
+            e.time = t;
+        }
+        state.output.sort_by_time();
+    }
 
     // Find first event at or after current beat position within cycle
     float cycle_pos = std::fmod(beat_start, state.cycle_length);

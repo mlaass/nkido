@@ -2539,6 +2539,46 @@ TEST_CASE("Pattern transform: swing()/swingBy()", "[codegen][patterns][phase2]")
     }
 }
 
+TEST_CASE("Pattern transform: iter()/iterBack()", "[codegen][patterns][phase2]") {
+    SECTION("iter requires pattern argument") {
+        auto result = akkado::compile("iter(42, 4)");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("iter rejects n < 1") {
+        auto result = akkado::compile(R"(iter(pat("c4 e4 g4 b4"), 0))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("iter sets iter_n=4 and iter_dir=+1 on StateInitData") {
+        auto result = akkado::compile(R"(iter(pat("c4 e4 g4 b4"), 4))");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        CHECK(si.iter_n == 4);
+        CHECK(si.iter_dir == 1);
+        // Events themselves are not rewritten — runtime applies rotation.
+        REQUIRE(si.sequence_events[0].size() == 4);
+    }
+    SECTION("iterBack sets iter_n=4 and iter_dir=-1") {
+        auto result = akkado::compile(R"(iterBack(pat("c4 e4 g4 b4"), 4))");
+        REQUIRE(result.success);
+        const auto& si = result.state_inits[0];
+        CHECK(si.iter_n == 4);
+        CHECK(si.iter_dir == -1);
+    }
+    SECTION("iter n must be in [1, 255]") {
+        auto result = akkado::compile(R"(iter(pat("c4 e4"), 256))");
+        REQUIRE_FALSE(result.success);
+    }
+    SECTION("iter via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4 b4").iter(4))");
+        CHECK(dot.success);
+    }
+    SECTION("iterBack via dot-call") {
+        auto dot = akkado::compile(R"(pat("c4 e4 g4 b4").iterBack(4))");
+        CHECK(dot.success);
+    }
+}
+
 TEST_CASE("Phase 2 transforms compose with existing transforms", "[codegen][patterns][phase2]") {
     SECTION("slow(palindrome(...)) compiles") {
         auto result = akkado::compile(R"(slow(palindrome(pat("c4 e4")), 2))");

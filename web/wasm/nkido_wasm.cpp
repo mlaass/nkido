@@ -750,6 +750,9 @@ WASM_EXPORT uint32_t cedar_apply_state_inits() {
                 init.is_sample_pattern,
                 init.total_events
             );
+            if (init.iter_n > 0) {
+                g_vm->init_sequence_iter_state(init.state_id, init.iter_n, init.iter_dir);
+            }
             count++;
         }
         else if (init.type == akkado::StateInitData::Type::PolyAlloc) {

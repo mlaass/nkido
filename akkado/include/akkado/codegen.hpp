@@ -152,6 +152,13 @@ struct StateInitData {
     std::uint8_t poly_max_voices = 8;
     std::uint8_t poly_mode = 0;            // 0=poly, 1=mono, 2=legato
     std::uint8_t poly_steal_strategy = 0;  // 0=oldest
+
+    // For SequenceProgram: iter()/iterBack() rotation configuration.
+    // iter_n=0 disables rotation. iter_dir is +1 for iter, -1 for iterBack.
+    // Hosts should call vm.init_sequence_iter_state() after
+    // init_sequence_program_state() when iter_n > 0.
+    std::uint8_t iter_n = 0;
+    std::int8_t iter_dir = 0;
 };
 
 /// Required sample with bank context
@@ -422,6 +429,12 @@ private:
 
     /// Handle swingBy(pattern, amount, n=4) - custom-amount swing on n-slice grid
     TypedValue handle_swing_by_call(NodeIndex node, const Node& n);
+
+    /// Handle iter(pattern, n) - rotate pattern start by 1/n per cycle (forward)
+    TypedValue handle_iter_call(NodeIndex node, const Node& n);
+
+    /// Handle iterBack(pattern, n) - rotate pattern start by 1/n per cycle (backward)
+    TypedValue handle_iter_back_call(NodeIndex node, const Node& n);
 
     /// Handle tap_delay(in, time, fb, processor) - tap delay with inline feedback chain
     /// Emits DELAY_TAP, compiles processor closure inline, then emits DELAY_WRITE

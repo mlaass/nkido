@@ -715,6 +715,20 @@ public:
         state.current_index = 0;
         state.last_beat_pos = -1.0f;
         state.last_queried_cycle = -1.0f;
+        // iter rotation cleared on init; set via init_sequence_iter() below.
+        state.cycle_index = 0;
+        state.iter_n = 0;
+        state.iter_dir = 0;
+    }
+
+    // Configure iter()/iterBack() rotation on a SequenceState. Called after
+    // init_sequence_program. n=0 disables rotation; dir is +1 for iter, -1
+    // for iterBack. Does nothing if the state slot is not a SequenceState.
+    void init_sequence_iter(std::uint32_t state_id,
+                            std::uint8_t n, std::int8_t dir) {
+        auto& state = get_or_create<SequenceState>(state_id);
+        state.iter_n = n;
+        state.iter_dir = dir;
     }
 
 private:

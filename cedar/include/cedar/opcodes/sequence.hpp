@@ -162,6 +162,14 @@ struct SequenceState {
     float last_beat_pos = -1.0f;
     float last_queried_cycle = -1.0f;
 
+    // iter()/iterBack() rotation state. Set via state_pool.init_sequence_iter().
+    // When iter_n > 0, SEQPAT_QUERY rotates query results by
+    // -iter_dir * (cycle_index mod iter_n) / iter_n of the cycle each cycle.
+    // Default values disable rotation.
+    std::uint32_t cycle_index = 0;
+    std::uint8_t iter_n = 0;     // 0 = no rotation
+    std::int8_t iter_dir = 0;    // +1 for iter, -1 for iterBack, 0 for none
+
     // Active event for UI highlighting
     std::uint16_t active_source_offset = 0;
     std::uint16_t active_source_length = 0;

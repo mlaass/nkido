@@ -956,6 +956,14 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                     {"pattern", "amount", "n", "", "", ""},
                     {NAN, NAN, NAN, NAN},
                     "Apply swing of `amount` on n-slice grid (default n=4)."}},
+    {"iter",       {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "n", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Rotate pattern start by 1/n per cycle (forward)."}},
+    {"iterBack",   {cedar::Opcode::NOP, 2, 0, false,
+                    {"pattern", "n", "", "", "", ""},
+                    {NAN, NAN, NAN},
+                    "Rotate pattern start by 1/n per cycle (backward)."}},
 
     // Parameter exposure builtins (handled specially by codegen)
     // These extract metadata at compile time for UI generation

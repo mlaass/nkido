@@ -291,6 +291,9 @@ void apply_state_inits(cedar::VM& vm, const akkado::CompileResult& result,
             vm.init_sequence_program_state(
                 init.state_id, stored.data(), stored.size(),
                 init.cycle_length, init.is_sample_pattern, init.total_events);
+            if (init.iter_n > 0) {
+                vm.init_sequence_iter_state(init.state_id, init.iter_n, init.iter_dir);
+            }
         } else if (init.type == akkado::StateInitData::Type::PolyAlloc) {
             vm.init_poly_state(init.state_id, init.poly_seq_state_id,
                                init.poly_max_voices, init.poly_mode,

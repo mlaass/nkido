@@ -159,6 +159,13 @@ public:
                                           &audio_arena_, total_events);
     }
 
+    // Configure iter()/iterBack() rotation on an existing SequenceState.
+    // Called after init_sequence_program_state when iter_n > 0.
+    void init_sequence_iter_state(std::uint32_t state_id,
+                                  std::uint8_t n, std::int8_t dir) {
+        state_pool_.init_sequence_iter(state_id, n, dir);
+    }
+
     // Initialize polyphony state for a POLY_BEGIN opcode
     void init_poly_state(std::uint32_t state_id, std::uint32_t seq_state_id,
                          std::uint8_t max_voices, std::uint8_t mode,

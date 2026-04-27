@@ -830,6 +830,8 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"segment",    &CodeGenerator::handle_segment_call},
                 {"swing",      &CodeGenerator::handle_swing_call},
                 {"swingBy",    &CodeGenerator::handle_swing_by_call},
+                {"iter",       &CodeGenerator::handle_iter_call},
+                {"iterBack",   &CodeGenerator::handle_iter_back_call},
                 // Parameter exposure builtins
                 {"param",   &CodeGenerator::handle_param_call},
                 {"button",  &CodeGenerator::handle_button_call},

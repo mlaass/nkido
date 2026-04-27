@@ -1595,7 +1595,8 @@ static bool is_pattern_call(const Node& n) {
            func_name == "palindrome" || func_name == "compress" ||
            func_name == "ply" || func_name == "linger" ||
            func_name == "zoom" || func_name == "segment" ||
-           func_name == "swing" || func_name == "swingBy";
+           func_name == "swing" || func_name == "swingBy" ||
+           func_name == "iter" || func_name == "iterBack";
 }
 
 // Helper: Check if a node is a pattern-producing expression.
@@ -1687,7 +1688,8 @@ static bool compile_pattern_for_transform(
                              func_name == "palindrome" || func_name == "compress" ||
                              func_name == "ply" || func_name == "linger" ||
                              func_name == "zoom" || func_name == "segment" ||
-                             func_name == "swing" || func_name == "swingBy");
+                             func_name == "swing" || func_name == "swingBy" ||
+                             func_name == "iter" || func_name == "iterBack");
         if (is_transform) {
             // tune() sets context BEFORE compilation (not post-processing)
             if (func_name == "tune") {
@@ -1918,6 +1920,12 @@ static bool compile_pattern_for_transform(
                     }
                     seq_events = std::move(kept);
                 }
+            } else if (func_name == "iter" || func_name == "iterBack") {
+                // iter/iterBack configure runtime rotation state, not events.
+                // In nested context (recursive case), inner pattern is already
+                // compiled. The outer transform's handler will emit state
+                // without iter set, so iter/iterBack are only effective when
+                // applied at the outermost transform level. Documented in §5.2.
             } else if (func_name == "swing" || func_name == "swingBy") {
                 // swing(pat, n=4) ≡ swingBy(pat, 1/3, n=4).
                 // swingBy(pat, amount, n=4): divide cycle into n slices; events
@@ -3784,6 +3792,128 @@ TypedValue CodeGenerator::handle_segment_call(NodeIndex node, const Node& n) {
         node_types_, node, state_id, cycle_length,
         compiler, sequence_events, pattern.location, n.location,
         emit_instruction_helper);
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_iter_call(NodeIndex node, const Node& n) {
+    // iter(pat, n): rotate pattern start by 1/n per cycle (forward, dir=+1).
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto n_arg = get_number_arg(*ast_, n, 1);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "iter() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!n_arg.has_value() || *n_arg < 1) {
+        error("E131", "iter() requires a positive integer (>= 1) as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    int n_int = static_cast<int>(*n_arg);
+    if (n_int < 1 || n_int > 255) {
+        error("E131", "iter() n must be in [1, 255]", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "iter() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "iter() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    std::uint32_t cnt = call_counters_["iter"]++;
+    push_path("iter#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    if (!state_inits_.empty() &&
+        state_inits_.back().state_id == state_id &&
+        state_inits_.back().type == StateInitData::Type::SequenceProgram) {
+        state_inits_.back().iter_n = static_cast<std::uint8_t>(n_int);
+        state_inits_.back().iter_dir = +1;
+    }
+
+    pop_path();
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_iter_back_call(NodeIndex node, const Node& n) {
+    // iterBack(pat, n): rotate pattern start by 1/n per cycle (backward, dir=-1).
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto n_arg = get_number_arg(*ast_, n, 1);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "iterBack() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!n_arg.has_value() || *n_arg < 1) {
+        error("E131", "iterBack() requires a positive integer (>= 1) as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    int n_int = static_cast<int>(*n_arg);
+    if (n_int < 1 || n_int > 255) {
+        error("E131", "iterBack() n must be in [1, 255]", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "iterBack() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "iterBack() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    std::uint32_t cnt = call_counters_["iterBack"]++;
+    push_path("iterBack#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    if (!state_inits_.empty() &&
+        state_inits_.back().state_id == state_id &&
+        state_inits_.back().type == StateInitData::Type::SequenceProgram) {
+        state_inits_.back().iter_n = static_cast<std::uint8_t>(n_int);
+        state_inits_.back().iter_dir = -1;
+    }
 
     pop_path();
     if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
