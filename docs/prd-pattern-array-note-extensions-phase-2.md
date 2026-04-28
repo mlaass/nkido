@@ -629,7 +629,92 @@ Per `docs/dsp-experiment-methodology.md` and the long-window guidance in `CLAUDE
 
 ---
 
-## 11. Open Questions
+## 11. Follow-up Work (deferred from Phase 2 ship)
+
+Two pieces from the original Phase 2 scope landed only partially because they
+share a common blocker — they need new cedar runtime buffer plumbing (either a
+new opcode or new `cedar::Event` fields and corresponding SEQPAT_STEP work) to
+surface per-event property values to running synth code. Both should be picked
+up as a Phase 2.1 follow-up.
+
+### 11.1 §5.5a custom-property pipe-binding accessor
+
+**Status:** AST + lexer + parser shipped; runtime exposure deferred.
+
+**What works today:**
+- `pat("c4{cutoff:0.3} e4{cutoff:0.7}")` parses cleanly. The `cutoff` key is
+  preserved on `MiniAtomData.properties`. Recognized short-form keys (`vel`,
+  `dur`) already populate `cedar::Event` fields and reach runtime.
+- `as e |> ... e.freq` (existing fixed-field accessor) still works.
+
+**What's missing:**
+- `pat("c4{cutoff:0.3}") as e |> lp(%, 200 + e.cutoff * 4000)` — the `e.cutoff`
+  member-access path. `pattern_field_index()` returns -1 for unrecognized
+  keys; per the PRD §5.5a design, the resolver needs to fall through to
+  `tv.pattern->custom_fields` (a `std::unordered_map<std::string, std::uint16_t>`
+  added to `PatternPayload`) populated during pattern compile.
+- Per-key buffer allocation in `SequenceCompiler` (one buffer per distinct
+  non-aliased key collected from `MiniAtomData.properties` across the bound
+  pattern's atoms). SEQPAT_STEP needs to write each event's per-key value to
+  the corresponding buffer slot — likely via a new opcode or by extending
+  `cedar::Event` with a small inline property table (max 4 keys, matching
+  `MAX_VALUES_PER_EVENT`).
+- Error path E15x: `"unknown property '<key>' on pattern event 'e'"` listing
+  defined keys.
+
+**Acceptance test (unblocked by this work):**
+```akkado
+pat("c4{vel:0.8, cutoff:0.3} e4{vel:1.0, cutoff:0.7}") as e
+  |> osc("saw", e.freq)
+  |> lp(%, 200 + e.cutoff * 4000)
+  |> out(%, %)
+```
+
+### 11.2 Standalone `bend()` / `aftertouch()` transforms
+
+**Status:** Reserved as builtins but not registered as dispatch handlers; cedar
+runtime fields not added.
+
+**What works today:**
+- Record-suffix `c4{bend:0.5, aftertouch:0.7}` parses; values are kept on
+  `MiniAtomData.properties`. `dur` propagates to runtime via existing
+  `cedar::Event.duration`.
+
+**What's missing:**
+- `cedar::Event` needs `float bend` and `float aftertouch` fields, OR (cleaner)
+  a generic property bag on the event (see 11.1 — same plumbing).
+- Per-key buffer slots in `PatternPayload` (e.g., `BEND` and `AFTERTOUCH`
+  beyond the existing `FREQ`/`VEL`/`TRIG`/`GATE`/`TYPE`).
+- `pattern_field_index()` recognizes `"bend"` and `"aftertouch"` as fixed
+  fields once buffers exist.
+- Top-level handlers `handle_bend_call` / `handle_aftertouch_call` /
+  `handle_dur_call` that mirror `handle_velocity_call`'s shape (compile inner
+  pattern → emit runtime MUL/SET on the new buffer). The `dur` transform can
+  ship before the others since `cedar::Event.duration` already exists.
+
+**Acceptance test (unblocked by this work):**
+```akkado
+note("c4 e4 g4").bend("<0 0.5 -0.5>") |> mtof(% + bend(%) * 12) |> osc("sin", %) |> out(%, %)
+```
+
+### 11.3 Implementation sequencing
+
+The two follow-ups overlap at the runtime side: one shared design decision
+(generic `cedar::Event` property table vs. fixed `bend`/`aftertouch` fields)
+unblocks both. Recommended order:
+
+1. Pick the runtime model (probably: extend `cedar::Event` with a small
+   `prop_keys[N] / prop_vals[N]` array and a key→buffer mapping carried on
+   `SequenceState` for SEQPAT_STEP to dispatch).
+2. Wire §5.5a (custom-key accessor): more general, demonstrates the new
+   plumbing under user-provided keys.
+3. Build standalone `bend()` / `aftertouch()` / `dur()` transforms on top:
+   they're a special case of §5.5a where the key is one of a few known
+   short-form names, with optional MIDI-out semantics layered on later.
+
+---
+
+## 12. Open Questions
 
 - **Should `bend` be a per-event step value, or a continuous time-varying signal?** Phase 2 ships per-event (matches `velocity`). Continuous bend is a richer model that may want a separate signal-rate path; deferred.
 - **Voicing dictionary sharing across compile units:** `addVoicings()` registers globally; should hot-reload preserve registrations? **Tentative:** yes — registry survives across recompiles, like `param()` values. Open until implementation.
