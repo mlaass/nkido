@@ -1,0 +1,730 @@
+> **Status: NOT STARTED** — Patterns become first-class scalar values via typed string prefixes (`v"…"` / `n"…"` / `s"…"` / `c"…"`), implicit `Pattern → Signal` coercion in the type checker, and an explicit `scalar()` cast. Subsumes Phase 2.1 §11.1 (custom-property accessor) and §11.2 (standalone `bend`/`aftertouch`/`dur` transforms) — both ride on the same coerce mechanism. Follow-up to `prd-pattern-array-note-extensions-phase-2.md` and the design review `review-patterns-as-first-class-data.md`.
+
+# PRD: Patterns as Scalar Values
+
+## 1. Executive Summary
+
+Today, patterns can only be consumed via field access (`p.freq`, `p.vel`) or via a fixed set of pattern-aware builtins (`osc(…, freq_pat)` works because `osc` is hand-wired). You cannot write `bend(notes, "<0 0.5 -0.5>")` and have the pattern's per-cycle values feed `bend`'s second argument as a scalar — the second arg expects a `Signal`, not a `Pattern`, and there is no implicit conversion.
+
+This PRD makes patterns usable **anywhere a scalar `Signal` is accepted**. Two complementary mechanisms ship together:
+
+1. **Typed mini-notation prefixes** disambiguate parse semantics at the literal site:
+   - `v"<0 0.5 -0.5>"` — **value** pattern. Numeric atoms only; produces a stepped scalar.
+   - `n"c4 e4 g4"` / `n"60 64 67"` — **note** pattern. Note names and bare MIDI ints both map to Hz via mtof.
+   - `s"bd sd hh"` — **sample** pattern.
+   - `c"Am C G"` — **chord** pattern.
+   The legacy `pat()` / `p"…"` form stays as the auto-detect alias (additive, no breakage).
+
+2. **Type-system-level implicit `Pattern → Signal` coercion**: when an expression of type `Pattern` is passed where a `Signal` is expected, the analyzer inserts an implicit `scalar()` cast that unwraps the pattern's primary value buffer. Multi-voice (chord) and sample patterns are rejected at the coerce site with a clear error — the user must pick a field or voice explicitly. An explicit `scalar(p)` builtin is also exposed as sugar for `p.freq` (works on `n`/`m`/`c` patterns).
+
+### Key Design Decisions
+
+- **Four typed prefixes (`v` / `n` / `s` / `c`); `p` stays as auto-detect.** No hard removal — pre-1.0 still, but additive change.
+- **`v"…"` keeps `ValueType::Pattern`.** It does not become a different type. `.vel` / `.trig` / `.gate` access still works at the binding site. Coercion only fires at use sites that expect `Signal`.
+- **Coerce site lives in the analyzer/visit pass**, not in each builtin handler. When an AST node produces `Pattern` and its consumer expects `Signal`, the visitor wraps the node in an implicit `scalar()` cast before codegen runs. This is the same shape the planned compiler-type-system pass will use for stereo lifting and signal lifting.
+- **`scalar(p) ≡ p.freq`** for `n`/`m`/`c` patterns; error on `s` patterns. No voice/field selector — for any other field, write `p.vel` / `p.gate` directly.
+- **Mini-notation parser gains a numeric mode** for `v"…"`. In numeric mode, atoms must parse as numeric literals (`-0.5`, `1e3`, `42`); symbolic atoms (`c4`, `bd`, `Am`) are a parse error. Full mini-notation otherwise — brackets, angle, polymeter, euclidean, generators (`run`, `binary`).
+- **Auto-coerce only succeeds for monophonic, non-sample patterns.** Multi-voice (chord) or sample patterns in scalar context error at the coerce point with E160; user must select a field/voice explicitly.
+- **User-defined functions get default `Signal` coercion** for any `Pattern` arg. Per-param kind annotations (`pitch` / `signal` / `pattern`) are out of scope here and tracked under `prd-compiler-type-system.md`.
+- **Phase 2.1 §11.1 / §11.2 ride on this foundation.** This PRD subsumes their remaining surface: once auto-coerce lands, `bend(notes, v"<0 0.5 -0.5>")` "just works" through the standard coerce path; per-event property buffers (`SEQPAT_PROP`) feed the same coerce path when accessed via `as e |> e.cutoff`.
+
+---
+
+## 2. Problem Statement
+
+### 2.1 Current behavior
+
+Patterns are second-class:
+
+- `osc("sin", n"c4 e4 g4")` works (osc-freq is hand-wired to accept patterns).
+- `osc("sin", p"c4 e4 g4")` works (auto-detect gives a note pattern).
+- `bend(notes, "<0 0.5 -0.5>")` **does not work**. `bend`'s second arg is a scalar slot, and a string literal is not a pattern in scalar context.
+- `bend(notes, p"<0 0.5 -0.5>")` **does not work**. `p"…"` produces a `Pattern`, but `bend`'s codegen has no path that consumes `Pattern` as a scalar value.
+- `lp(sig, p"<200 800 2000>", 0.7)` **does not work** for the same reason — the cutoff slot expects `Signal`.
+
+The user-facing consequence: every pattern consumer must be hand-wired in codegen. This blocks:
+
+- Per-event modulation pulled from a pattern (filter cutoff, bend depth, aftertouch, custom DSP params).
+- The user's reported gap: `bend("<0 0.5 -0.5>")` syntax for time-varying bend depth.
+- Symmetric use of patterns as values in arithmetic: `v"<0 0.5>" * 12` does not currently produce a `Signal`.
+
+### 2.2 Mini-notation parse-mode ambiguity
+
+`p"…"` is an auto-detector. It guesses note vs sample vs chord by atom shape. For scalar values the auto-detector is ambiguous — `"<0 0.5 -0.5>"` could mean MIDI 0 / 0.5 / -0.5 (mtof-applied), or could mean raw scalars 0, 0.5, -0.5. There is no way for the user to express their intent.
+
+| Today's behavior | What user wants for `bend()` |
+|------------------|------------------------------|
+| `p"<0 0.5>"` → atoms parsed as MIDI ints → mtof → ~8.18 Hz, ~13 Hz | Atoms parsed as raw numbers → 0.0, 0.5 |
+| No way to say "this string is numeric values, not pitches" | Need a syntactic signal at the literal site |
+
+### 2.3 Phase 2.1 standalone `bend`/`aftertouch`/`dur` transforms (§11.2)
+
+These shipped as part of f8dca4d but only by accepting per-event constants or by mirroring `velocity()`'s shape. The richer use case — passing a *pattern* of values — was deferred because it requires both a parse-mode for raw numerics and a `Pattern → Signal` coerce path on the consumer side. This PRD closes both.
+
+---
+
+## 3. Goals and Non-Goals
+
+### Goals
+
+1. Add four typed mini-notation prefixes — `v"…"`, `n"…"`, `s"…"`, `c"…"` — and corresponding builtin functions `value()`, `note()`, `sample()`, `chord()` (the latter three already exist in some form; `value` is new and `note` may need polymorphism over patterns).
+2. Add a numeric-atom parse mode to `MiniLexer` / `MiniParser`, gated by the prefix in use.
+3. Implement type-system-level implicit `Pattern → Signal` coercion in the analyzer/visit pass: when a Pattern-typed expression feeds a Signal-expecting position, wrap with an implicit `scalar()` cast before codegen.
+4. Implement `scalar(p)` as an explicit builtin that returns `p.freq` for `n`/`m`/`c` patterns; error on `s` patterns.
+5. Reject multi-voice / sample patterns in scalar coerce sites with diagnostic E160, naming the disallowed shape and pointing to the explicit field-access path (`.freq`, `poly`, etc.).
+6. Subsume Phase 2.1 §11.1 (custom-property accessor `as e |> e.cutoff`) and §11.2 (standalone `bend`/`aftertouch`/`dur` transforms accepting pattern args) — both consume the new coerce path.
+7. Keep `pat()` / `p"…"` working as the auto-detect alias. No migration of existing user code is required.
+8. Per-mode unit tests for the four prefixes; integration tests for the `bend(notes, v"<0 0.5 -0.5>")` user story; coerce-error tests for chord/sample patterns in scalar slots.
+
+### Non-Goals
+
+- **User-defined-function param-kind annotations.** `fn f(freq: pitch)` is out of scope; tracked under `prd-compiler-type-system.md`. User fns get default `Signal` coerce for any `Pattern` arg passed.
+- **Removing `pat()` / `p"…"` auto-detect.** It stays additive. A future PRD may deprecate it once `v`/`n`/`s`/`c` adoption is high.
+- **Per-builtin slot-kind metadata for pitch vs numeric.** Slot kind is `Signal` everywhere; `n"…"` literals still apply mtof to integer atoms because they always do — that's encoded in the lexer's parse mode, not in slot metadata.
+- **Stereo lifting through patterns.** Patterns remain mono. `Pattern → Stereo Signal` is not auto-handled; users wrap with `stereo()` explicitly.
+- **Full runtime pattern mutation** (Approach A from the review). This PRD only adds *consumption* of patterns as values — not runtime mutation of pattern event content. That stays as future work in `review-patterns-as-first-class-data.md`.
+- **`m"…"` as a separate MIDI-int prefix.** Subsumed by `n"…"`, which detects bare ints vs note names per-atom.
+- **New cedar opcodes** for the coerce path. The Pattern's primary value buffer (the `freq` field, populated by `SEQPAT_STEP`) IS the Signal — no new opcode needed for the cast itself. (Phase 2.1 already shipped `SEQPAT_PROP` for custom keys.)
+
+---
+
+## 4. Target Syntax
+
+### 4.1 Typed prefixes — overview
+
+| Prefix | Builtin | Atom semantics | Output `PatternPayload.fields` | Auto-coerce to Signal |
+|--------|---------|----------------|-------------------------------|------------------------|
+| `v"…"` | `value(str)` | Numeric only: `-0.5`, `42`, `1e3`, `0.125` | `freq` ← raw value, `vel` ← 1.0 default, `trig` / `gate` populated | Yes — the freq buffer holds raw scalars |
+| `n"…"` | `note(str)` | Note names (`c4`, `eb5`) AND bare MIDI ints (`60`, `127`); both → mtof → Hz | `freq` ← Hz, `vel` ← per-atom velocity, `trig` / `gate` populated | Yes — freq buffer is the scalar |
+| `s"…"` | `sample(str)` | Sample names: `bd`, `sd`, `kick:2`, `loop@bank` | `freq` ← type_id (rarely used), `vel` populated | **No** — error E160 if used in scalar slot |
+| `c"…"` | `chord(str)` | Chord symbols: `Am`, `C7`, `F#m7b5_3` | Multi-voice `freq` (1–N voices) | **No** — error E160 if used in scalar slot |
+| `p"…"` | `pat(str)` | Auto-detect (legacy) | Depends on detected mode | Inherits from detected mode — yes if detected as note or value |
+
+### 4.2 The user's bend() example — now works
+
+```akkado
+// Original request:
+bend("<0 0.5 -0.5>")  // standalone, no host pattern — semantic? Probably error.
+
+// Concrete usage (the actual user story):
+n"c4 e4 g4" |> bend(%, v"<0 0.5 -0.5>") |> mtof(% + bend(%) * 12) |> osc("sin", %)
+
+// Functional form:
+bend(n"c4 e4 g4", v"<0 0.5 -0.5>")
+
+// In a record / pipe-binding:
+n"c4 e4 g4" as e |> osc("sin", e.freq + v"<0 -10 10 0>")  // detune scalar pattern
+```
+
+### 4.3 Patterns as scalars in arithmetic and DSP slots
+
+```akkado
+// v"" patterns work in any Signal slot:
+osc("sin", v"<220 440 880>")            // raw Hz values, no mtof
+lp(sig, v"<200 800 2000>", v"<0.7 0.5>")  // cutoff and Q both pattern-driven
+sig * v"<0.2 0.5 1.0 0.5>"              // amplitude envelope per cycle
+
+// Pattern arithmetic (auto-coerce on each operand):
+v"<0 0.5 -0.5>" * 12       // → Signal carrying 0/6/-6 stepped over the cycle
+v"<60 64 67>" + v"<0 0 0 12>"  // chromatic + octave-shift overlay; emits sum at sample rate
+
+// Using note + value patterns together:
+osc("saw", n"c4 e4 g4" + v"<0 0 12 0>")  // octave displaces the third event
+```
+
+### 4.4 Explicit `scalar()` cast
+
+```akkado
+// Sugar for .freq on note/midi/chord patterns:
+scalar(n"c4 e4 g4")        // Signal carrying mtof(c4), mtof(e4), mtof(g4) stepped
+scalar(n"c4 e4 g4") * 2    // 2× freq, same pattern timing
+osc("sin", scalar(n"c4 e4 g4"))   // identical to osc("sin", n"c4 e4 g4") — auto-coerce already does this
+
+// Errors:
+scalar(s"bd sd")           // E161: cannot cast sample pattern to scalar
+scalar(c"Am C G")          // E161: cannot cast chord pattern to scalar; pick a voice or use poly()
+
+// dot-call form:
+n"c4 e4 g4".scalar()       // identical to scalar(n"c4 e4 g4")
+```
+
+### 4.5 Pipe-binding `as e |> e.<field>` still works
+
+```akkado
+// Binding preserves Pattern type:
+v"<0.3 0.5 0.7>" as e |> osc("saw", 440 + e.freq * 100)
+//   ^^ e is bound as Pattern; e.freq is a Signal pulled from the value buffer.
+//   e.vel, e.trig, e.gate also accessible.
+
+n"c4 e4 g4" as e |> osc("sin", e.freq) |> % * e.vel |> out(%, %)
+//   identical to today's behavior; n"" doesn't change pipe-binding semantics.
+```
+
+### 4.6 Custom-property accessor (subsumed §11.1)
+
+```akkado
+n"c4{cutoff:0.3} e4{cutoff:0.7} g4{cutoff:0.5}" as e
+  |> osc("saw", e.freq)
+  |> lp(%, 200 + e.cutoff * 4000)   // e.cutoff is Signal pulled from SEQPAT_PROP buffer
+  |> out(%, %)
+```
+
+`e.cutoff` returns a Signal-typed `TypedValue` resolved through the existing `PatternPayload.custom_fields` map (already wired in `typed_value.cpp:56` for Phase 2.1). This PRD adds the test coverage and the documented behavior; the runtime plumbing landed in commit f8dca4d.
+
+### 4.7 Standalone `bend` / `aftertouch` / `dur` with pattern args (subsumed §11.2)
+
+```akkado
+// Pattern-valued bend depth:
+n"c4 e4 g4".bend(v"<0 0.5 -0.5>")
+
+// Pattern-valued aftertouch envelope:
+n"c4 e4 g4 b4".aftertouch(v"<0 0.25 0.5 1.0>")
+
+// Pattern-valued duration override:
+n"c4 e4 g4".dur(v"<0.25 0.5 0.75>")
+
+// Constant arg still works (current Phase 2.1 behavior):
+n"c4 e4 g4".bend(0.5)
+```
+
+The transform recognizes that its second arg may be a `Pattern` and routes through the auto-coerce path. The resulting Signal is sample-and-held at each event's trigger time and stored on the event's per-property buffer.
+
+---
+
+## 5. Architecture
+
+### 5.1 Lexer — new prefix tokens
+
+`akkado/src/lexer.cpp:425` already handles `p"…"` and `t"…"`. Extend the same path with three new prefix characters: `v`, `n`, `s`, `c`.
+
+```cpp
+// At lex_identifier(), after the existing p/t checks:
+if (current_ == start_ + 1) {
+    char c = source_[start_];
+    char next = peek();
+    if (next == '"' || next == '`') {
+        switch (c) {
+            case 'v': return make_token(TokenType::ValuePat);
+            case 'n': return make_token(TokenType::NotePat);
+            case 's': return make_token(TokenType::SamplePat);
+            case 'c': return make_token(TokenType::ChordPat);
+            // 'p' and 't' already handled above
+        }
+    }
+}
+```
+
+`TokenType` gains four new variants: `ValuePat`, `NotePat`, `SamplePat`, `ChordPat`. Each carries an enum-tagged "parse mode" for the mini-parser.
+
+**Disambiguation with single-letter identifiers.** `s` / `n` / `c` / `v` are all currently legal identifier names. Today, `s` followed by a quote is ambiguous-looking. Resolution:
+
+- Lexer only treats `<letter>"` / `<letter>\`` as a string-prefix when the letter token is exactly one character at this position AND the next character is a quote. Otherwise it lexes as a regular identifier.
+- Existing `p"…"` already follows this rule (`current_ == start_ + 1`). New prefixes use the same gate.
+- Identifier shadowing: if a user writes `s = 0.5` and then `s"bd"`, the lexer still produces `SamplePat` followed by a string body — never falls through to identifier `s`. Document this in the language reference; the conflict is rare and analogous to existing `p"…"` behavior.
+
+### 5.2 Mini-notation parser — numeric mode
+
+`akkado/src/mini_lexer.cpp` and `akkado/src/mini_parser.cpp` gain a `MiniParseMode` enum:
+
+```cpp
+enum class MiniParseMode : std::uint8_t {
+    Auto,    // p"…" — current behavior, detect per atom
+    Note,    // n"…" — note names + bare MIDI ints both → mtof
+    Sample,  // s"…" — atom = sample name
+    Chord,   // c"…" — atom = chord symbol
+    Value,   // v"…" — atom must be numeric literal; raw value, no mtof
+};
+```
+
+The mode flows from `Lexer` → `Parser::parse_mini_string()` → `MiniLexer` constructor.
+
+**Per-mode atom rules:**
+
+| Mode | Atom accepted | Atom rejected | Resulting `MiniAtomData` |
+|------|---------------|---------------|--------------------------|
+| `Auto` | (current behavior) | — | (current behavior) |
+| `Note` | `c4`, `eb5`, `60`, `0` (treated as MIDI 0), `Am'` (chord literal) | None — falls back to current auto-detect within Note semantics | `pitch_hz` populated via mtof |
+| `Sample` | Sample-name token: `bd`, `sd`, `kick:2`, `loop@bank` | Numeric atoms (warn or error E162) | `sample_name` populated |
+| `Chord` | Chord symbol: `Am`, `C7`, `F#m7b5` | Numeric atoms, sample names | `chord_root_midi` + `chord_intervals` populated |
+| `Value` | Numeric literal: `0`, `0.5`, `-0.5`, `1e3`, `-1.25e-2` | Note names (`c4`), sample names (`bd`), chord symbols (`Am`) — parse error E163 | `value` field populated; `pitch_hz` left at default |
+
+**`MiniAtomData` change:** add a `float scalar_value` field used in `Value` mode. `pat_eval` writes `scalar_value` into `Event::values[0]` directly (bypasses mtof).
+
+### 5.3 Type system — implicit cast at visit
+
+The analyzer (currently inlined in `CodeGenerator::visit`) gains a coerce step before each consumer reads its arg's `TypedValue`.
+
+**Where the coerce hook lives.** Today, builtins-call dispatch in `codegen.cpp` walks each arg, calls `visit(arg_node)`, and stores the result. Add:
+
+```cpp
+TypedValue CodeGenerator::coerce_arg_for_signal(NodeIndex arg_node) {
+    TypedValue tv = visit(arg_node);
+    if (tv.type == ValueType::Pattern) {
+        return implicit_scalar_cast(tv, arg_node);
+    }
+    return tv;
+}
+
+TypedValue CodeGenerator::implicit_scalar_cast(const TypedValue& tv, NodeIndex node) {
+    if (!tv.pattern) {
+        return TypedValue::error_val();
+    }
+    // Reject sample patterns (s"…") and chord/multi-voice patterns.
+    if (tv.pattern->is_sample_pattern) {
+        emit_error(node, ErrorCode::E160_PatternToScalarSample,
+                   "cannot use sample pattern as scalar; pick a field (e.g. p.type) "
+                   "or use sampler() / poly() to consume it");
+        return TypedValue::error_val();
+    }
+    if (tv.pattern->max_voices > 1) {
+        emit_error(node, ErrorCode::E160_PatternToScalarPolyphonic,
+                   "cannot use polyphonic pattern as scalar; pick a field (e.g. p.freq) "
+                   "or use poly() to consume it");
+        return TypedValue::error_val();
+    }
+    // Coerce: the freq buffer IS the scalar Signal.
+    std::uint16_t buf = tv.pattern->fields[PatternPayload::FREQ];
+    if (buf == 0xFFFF) {
+        emit_error(node, ErrorCode::E160_PatternToScalarMissing,
+                   "pattern has no value buffer to coerce to scalar");
+        return TypedValue::error_val();
+    }
+    return TypedValue::signal(buf);
+}
+```
+
+**Where `coerce_arg_for_signal` is called.** Three sites — the boundary between Pattern and the rest of the language:
+
+1. **Builtin call args** (most common). For each builtin in `BUILTINS` map, the dispatch handler reads its args via `coerce_arg_for_signal()` instead of bare `visit()`. **Exceptions** (must use raw `visit()`): handlers that intentionally take a `Pattern` arg — `pat`, `note`, `value`, `chord`, `sample`, `slow`, `fast`, `rev`, every transform in `is_pattern_call()`, and `poly`. Mark these with a `bool args_are_signal` flag in `BuiltinDef`, default true.
+2. **Binary / unary operators** (`+`, `-`, `*`, `/`, `%`, comparisons). The operator visit branch coerces both operands.
+3. **Pipe expression** (`a |> b`). When `a` is a Pattern and `b`'s first slot expects Signal, coerce.
+
+**`PatternPayload` flag changes.** Add two booleans referenced by the coerce hook:
+
+```cpp
+struct PatternPayload {
+    // … existing fields …
+    bool is_sample_pattern = false;   // set by sample() / s"" / pat() detect
+    std::uint8_t max_voices = 1;      // set by chord() / c"" / pat() detect
+};
+```
+
+`SequenceCompiler::is_sample_pattern()` and the existing `max_voices` plumbing (already in compiler) populate these on payload construction.
+
+### 5.4 `value()` builtin and the `v"…"` literal
+
+```cpp
+// In builtins.hpp:
+{"value", {Opcode::NOP, 1, 0, false,    // 1 required arg: string literal
+           {"pattern_str", "", "", "", ""},
+           {NAN, NAN, NAN, NAN, NAN},
+           "Numeric pattern literal (raw scalars, no mtof)"}}
+```
+
+Codegen for `value(str)` mirrors `pat(str)` (`codegen_patterns.cpp` `handle_pat_call`), but threads `MiniParseMode::Value` to the parser and asserts `MiniAtomData.value` is populated.
+
+The `v"…"` literal token desugars at parse time to `value("…")` exactly the way `p"…"` desugars to `pat("…")`.
+
+### 5.5 `note()` / `sample()` / `chord()` builtins
+
+These already exist (`note()` and `chord()`) or have closely-related forms (`sample()` is partially the auto-detect path). Changes:
+
+- `note(str)` — explicit Note mode parse. Distinct from `pat(str)` only in that it forces the parse mode (no sample-name fallback).
+- `sample(str)` — explicit Sample mode parse. Today, sample patterns come out of the `pat()` auto-detect path; expose a direct entrypoint for `s"…"`.
+- `chord(str)` — already exists; now also reachable via `c"…"` literal.
+- The existing `pat()` builtin sets `MiniParseMode::Auto` and is unchanged.
+
+### 5.6 `scalar()` builtin
+
+```cpp
+// In builtins.hpp:
+{"scalar", {Opcode::NOP, 1, 0, false,
+            {"pattern", "", "", "", ""},
+            {NAN, NAN, NAN, NAN, NAN},
+            "Cast a note/midi/chord pattern to its primary value buffer as a Signal"}}
+```
+
+```cpp
+// codegen — handle_scalar_call in codegen_patterns.cpp:
+TypedValue handle_scalar_call(const Node& call_node) {
+    if (call_node.children.size() != 1) {
+        emit_error(call_node, "scalar() takes exactly one pattern argument");
+        return TypedValue::error_val();
+    }
+    TypedValue arg = visit(call_node.children[0]);  // raw visit — DON'T coerce here
+    if (arg.type != ValueType::Pattern || !arg.pattern) {
+        emit_error(call_node, "scalar() expects a Pattern, got " + value_type_name(arg.type));
+        return TypedValue::error_val();
+    }
+    if (arg.pattern->is_sample_pattern) {
+        emit_error(call_node, "scalar() cannot cast a sample pattern; pick a field explicitly");
+        return TypedValue::error_val();
+    }
+    if (arg.pattern->max_voices > 1) {
+        emit_error(call_node, "scalar() cannot cast a polyphonic pattern; pick a voice with .freq[i] or use poly()");
+        return TypedValue::error_val();
+    }
+    std::uint16_t buf = arg.pattern->fields[PatternPayload::FREQ];
+    if (buf == 0xFFFF) {
+        emit_error(call_node, "scalar() pattern has no freq buffer");
+        return TypedValue::error_val();
+    }
+    return TypedValue::signal(buf);
+}
+```
+
+`scalar(p)` is intentionally not free — it explicitly returns a Signal even when the surrounding context would not have triggered auto-coerce. Useful in pipelines where the pattern would otherwise be passed through pattern-aware transforms.
+
+### 5.7 Subsumed Phase 2.1 work
+
+#### 5.7.1 §11.1 custom-property accessor — already shipped, now formalized
+
+Phase 2.1 commit f8dca4d shipped `SEQPAT_PROP` and the `custom_fields` map on `PatternPayload`. `pattern_field()` already falls through to `custom_fields` when a name is not in the fixed-field set (`typed_value.cpp:56`).
+
+This PRD's contribution: the auto-coerce hook treats custom-field Signal results the same as fixed-field Signal results. `n"c4{cutoff:0.3}" as e |> lp(%, e.cutoff * 4000 + 200)` works because `e.cutoff` returns `TypedValue::signal(custom_fields["cutoff"])`, which feeds `lp`'s cutoff slot natively without needing further coercion. Test coverage and a documented happy path are added.
+
+#### 5.7.2 §11.2 standalone `bend`/`aftertouch`/`dur` with pattern args
+
+The transforms already exist as Phase 2.1 dispatch handlers, but they only accept constant `Number` second args. This PRD extends them:
+
+- `handle_bend_call` / `handle_aftertouch_call` / `handle_dur_call` now accept `Signal` as the second arg. When the second arg is a `Pattern`, the auto-coerce pass converts it to `Signal` before the handler runs.
+- The Signal is sample-and-held at each host pattern's event trigger and written to the per-event property buffer via the existing `SEQPAT_PROP` machinery.
+- For the constant case (e.g. `bend(notes, 0.5)`), behavior is unchanged.
+
+**No new opcodes** — the path reuses `SEQPAT_PROP`, which already accepts a per-event Signal source.
+
+### 5.8 Identity preservation for top-level bindings
+
+```akkado
+x = v"<0 0.5 -0.5>"        // x has ValueType::Pattern
+osc("sin", x)              // auto-coerce at osc-freq slot — emits Signal usage
+y = x.vel                  // x stays Pattern, .vel still works
+```
+
+The binding `let` / `=` does not coerce. Coerce fires only at the consumer site. This matches the planned semantics in `prd-compiler-type-system.md`.
+
+---
+
+## 6. Impact Assessment
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `pat()` / `p"…"` auto-detect | **Stays** | Unchanged; remains the legacy entrypoint. |
+| `chord()` / `c"…"` | **Modified** | `c"…"` literal added to lexer; builtin unchanged behaviorally. |
+| `sample()` / `s"…"` | **Modified** | `s"…"` literal added; `sample()` builtin exposed as the explicit form (replaces partial auto-detect for sample patterns). |
+| `note()` / `n"…"` | **Modified** | `n"…"` literal added; `note()` builtin exposed as the explicit Note-mode form. |
+| `value()` / `v"…"` | **New** | Numeric-only mini-notation pattern. |
+| `scalar()` builtin | **New** | Explicit `Pattern → Signal` cast. |
+| `MiniLexer` / `MiniParser` | **Modified** | New `MiniParseMode` enum; per-mode atom rules; numeric-atom path. |
+| `Lexer` | **Modified** | Four new string-prefix tokens (`v`/`n`/`s`/`c`). |
+| `Parser` | **Modified** | New token types desugar to corresponding builtin calls. |
+| `MiniAtomData` | **Modified** | Add `float scalar_value` field for `Value`-mode atoms. |
+| `PatternPayload` | **Modified** | Add `is_sample_pattern` and `max_voices` flags, populated at compile. |
+| `TypedValue` | **Stays** | No new ValueType; coerce produces a `Signal` from the freq buffer. |
+| `CodeGenerator::visit` | **Modified** | Add `coerce_arg_for_signal` helper; route builtin/operator/pipe arg evaluation through it. |
+| `BuiltinDef` | **Modified** | Add `bool args_are_signal` (default true); pattern-aware builtins set false. |
+| Existing pattern-aware builtins (`osc`, `slow`, `pat`, etc.) | **Stays** | Behavior unchanged; opt out of auto-coerce via `args_are_signal = false`. |
+| `bend()` / `aftertouch()` / `dur()` transforms (Phase 2.1) | **Modified** | Accept `Pattern` as second arg via the auto-coerce path; constant case unchanged. |
+| `SEQPAT_PROP` opcode | **Stays** | Reused for the new pattern-arg path. |
+| `cedar::Event` | **Stays** | No new fields. |
+| Existing tests | **Stays** | All current behavior preserved. |
+| `docs/mini-notation-reference.md` | **Modified** | Document the four prefixes. |
+| F1 help index | **Regenerated** | `bun run build:docs` regenerates lookup-index for new prefixes/builtins. |
+
+---
+
+## 7. File-Level Changes
+
+| File | Change |
+|------|--------|
+| `akkado/include/akkado/token.hpp` | Add `TokenType::ValuePat`, `NotePat`, `SamplePat`, `ChordPat`. |
+| `akkado/src/lexer.cpp` (~line 425) | Add `v` / `n` / `s` / `c` single-char prefix recognition (mirror `p` / `t`). |
+| `akkado/src/parser.cpp` | Recognize new token types and desugar to `value()` / `note()` / `sample()` / `chord()` calls. |
+| `akkado/include/akkado/mini_token.hpp` | Add `MiniParseMode` enum. |
+| `akkado/src/mini_lexer.cpp` | Accept a `MiniParseMode` parameter; per-mode atom rules. Add numeric-literal lex path for `Value` mode (signed, decimals, scientific). |
+| `akkado/src/mini_parser.cpp` | Threads parse mode; rejects mismatched atoms with E162 / E163. |
+| `akkado/include/akkado/ast.hpp` | Add `float scalar_value` to `MiniAtomData`. |
+| `akkado/src/pattern_eval.cpp` | When emitting a `PatternEvent` from a `Value`-mode atom, write `scalar_value` into `Event::values[0]` directly. |
+| `akkado/include/akkado/typed_value.hpp` | Add `bool is_sample_pattern` and `std::uint8_t max_voices` to `PatternPayload`. |
+| `akkado/src/typed_value.cpp` | (No change to `pattern_field` — fixed-field + custom-field path already covers what's needed.) |
+| `akkado/include/akkado/builtins.hpp` | Add `value`, `scalar` entries. Add `bool args_are_signal` field (default true) and set false on `pat`, `value`, `note`, `sample`, `chord`, `slow`, `fast`, `rev`, `transpose`, `velocity`, `bank`, `variant`, `tune`, `transport`, `early`, `late`, `palindrome`, `compress`, `ply`, `linger`, `zoom`, `segment`, `swing`, `swingBy`, `iter`, `iterBack`, `run`, `binary`, `binaryN`, `anchor`, `mode`, `voicing`, `addVoicings`, `bend`, `aftertouch`, `dur`, `poly`, `scalar`. |
+| `akkado/include/akkado/codegen.hpp` | Declare `handle_value_call`, `handle_scalar_call`, `coerce_arg_for_signal`, `implicit_scalar_cast`. |
+| `akkado/src/codegen.cpp` | Register `value` and `scalar` dispatch entries. Implement `coerce_arg_for_signal` and route every `args_are_signal == true` builtin's arg evaluation through it. Apply the same coerce in binary-op visit branches. |
+| `akkado/src/codegen_patterns.cpp` | Implement `handle_value_call` (mirrors `handle_pat_call` with `MiniParseMode::Value`). Populate `PatternPayload.is_sample_pattern` / `max_voices` on every payload construction (8 sites). Implement `handle_scalar_call`. Update `handle_bend_call`, `handle_aftertouch_call`, `handle_dur_call` to accept `Signal` second args via the coerce path. |
+| `akkado/include/akkado/diagnostics.hpp` | Add error codes E160 (pattern→scalar reject), E161 (scalar() reject), E162 (sample mode wrong-atom), E163 (value mode non-numeric atom). |
+| `akkado/src/codegen_functions.cpp` | When a user-defined function call has `Pattern` args, route through `coerce_arg_for_signal` (default Signal coercion per Round 4 decision). |
+| `akkado/tests/test_pattern_prefixes.cpp` (new) | Per-prefix lex / parse tests + auto-coerce integration tests. |
+| `akkado/tests/test_pattern_scalar.cpp` (new) | `v"…"` numeric atoms; `scalar()` cast on `n`/`s`/`c` patterns; auto-coerce success and reject paths. |
+| `akkado/tests/test_pattern_event.cpp` (existing) | Add `bend(notes, v"…")`, `aftertouch(notes, v"…")`, `dur(notes, v"…")` integration tests. |
+| `akkado/tests/test_lexer.cpp` | Coverage for the four new string-prefix tokens; identifier-vs-prefix disambiguation. |
+| `akkado/tests/test_mini_parser.cpp` | Per-mode parse-mode tests; reject paths (E162, E163). |
+| `experiments/test_op_seqpat_prop.py` | Long-window experiment (300+ s) confirming pattern-driven `bend`/`aftertouch`/`dur` produce correct per-event values across many cycles. |
+| `web/static/docs/reference/pattern/literals.md` (new) | Document `v"…"`, `n"…"`, `s"…"`, `c"…"` prefixes. |
+| `docs/mini-notation-reference.md` | Add the four-prefix table; document numeric-atom mode. |
+| `web/scripts/build-opcodes.ts` (no change) | No new opcodes. |
+| `docs/prd-pattern-array-note-extensions-phase-2.md` | Status line: §11.1 marked SHIPPED (was SHIPPED in f8dca4d); §11.2 marked SUBSUMED into this PRD. |
+
+---
+
+## 8. Implementation Phases
+
+### Phase A — Lexer + Mini-Parser numeric mode
+
+**Goal:** `v"<0 0.5 -0.5>"` parses without error and emits a `MiniLiteral` AST node carrying numeric atoms.
+
+**Steps:**
+1. Add token types and lexer paths for `v` / `n` / `s` / `c` prefixes.
+2. Add `MiniParseMode` enum; thread it through `MiniLexer` / `MiniParser`.
+3. Implement `Value`-mode atom rules (numeric literals only).
+4. Implement reject paths for mismatched atoms (E162 / E163).
+5. Add `MiniAtomData::scalar_value` field.
+
+**Verification:**
+- Lexer test: each of `v"…"`, `n"…"`, `s"…"`, `c"…"` produces the expected token with the expected body.
+- Mini-parser test per mode: round-trip parse → AST inspection.
+- Reject test: `v"c4 e4"` errors with E163 pointing at `c4`.
+- Identifier disambiguation test: `let s = 0.5; s + 1` lexes correctly without confusing the `s` identifier with `s"…"`.
+
+**Acceptance:** `bun run check` clean; new tests pass.
+
+### Phase B — `value()`/`note()`/`sample()`/`chord()` builtin codegen + Pattern flags
+
+**Goal:** Each prefix produces a `Pattern`-typed `TypedValue` with appropriate `is_sample_pattern` / `max_voices` set.
+
+**Steps:**
+1. Add `value` and `scalar` entries to `BUILTINS`.
+2. Implement `handle_value_call` (mirrors `handle_pat_call` with `MiniParseMode::Value`).
+3. Audit all 8 `make_pattern` sites in `codegen_patterns.cpp`; populate `is_sample_pattern` and `max_voices` correctly on each.
+4. Wire the four prefix tokens to desugar through the corresponding builtin call.
+
+**Verification:**
+- `let p = v"<0 0.5 -0.5>"; p.freq` produces a Signal carrying the parsed scalars.
+- `let p = s"bd sd"; p.is_sample_pattern == true` (via inspector).
+- `let p = c"Am"; p.max_voices == 3`.
+
+**Acceptance:** Compiler accepts and compiles all four prefixes; payloads have correct flags.
+
+### Phase C — Auto-coerce at type-system level
+
+**Goal:** `Pattern → Signal` implicit cast fires at builtin call args, operators, and pipe boundaries; chord/sample patterns error E160.
+
+**Steps:**
+1. Add `bool args_are_signal` flag to `BuiltinDef` (default true); set false on the existing pattern-aware builtins.
+2. Implement `implicit_scalar_cast` and `coerce_arg_for_signal` in `codegen.cpp`.
+3. Route all builtin call args through `coerce_arg_for_signal` when `args_are_signal == true`.
+4. Route binary/unary operators through the same coerce.
+5. Route pipe-`%`-injection through the same coerce when downstream first slot is Signal.
+6. Implement `handle_scalar_call` for the explicit cast.
+
+**Verification:**
+- `osc("sin", v"<220 440>")` compiles and produces audible alternating frequencies.
+- `lp(sig, v"<200 800>", 0.7)` compiles; cutoff buffer matches v-pattern values.
+- `osc("sin", c"Am")` errors E160 with a helpful message.
+- `osc("sin", s"bd sd")` errors E160.
+- `scalar(s"bd")` errors E161.
+- `scalar(n"c4 e4 g4")` returns a Signal carrying mtof'd freqs.
+- `v"<0 0.5>" * 12` produces a Signal carrying 0/6 stepped.
+
+**Acceptance:** Build + tests clean; new error paths produce diagnostics with expected codes.
+
+### Phase D — Pattern-arg `bend` / `aftertouch` / `dur` (subsume Phase 2.1 §11.2)
+
+**Goal:** `n"c4 e4 g4".bend(v"<0 0.5 -0.5>")` works.
+
+**Steps:**
+1. Update `handle_bend_call` to accept `Signal` second arg via `coerce_arg_for_signal`. When second arg is a `Number`/constant, behavior is unchanged.
+2. Same for `handle_aftertouch_call` and `handle_dur_call`.
+3. Wire the per-event sample-and-hold via `SEQPAT_PROP` (already shipped); extend to read from a Signal source when present.
+
+**Verification:**
+- Unit test: `n"c4 e4 g4".bend(v"<0 0.5 -0.5>")` produces three events with `event.bend` ∈ {0, 0.5, -0.5}.
+- Integration test: full pipeline compiles and runs in `nkido-cli render` for ≥ 30s without crashes.
+- Long-window experiment (`experiments/test_op_seqpat_prop.py`): 300+ s of simulated audio confirming bend depth tracks v-pattern across many cycles.
+
+**Acceptance:** Pattern-arg `bend()` / `aftertouch()` / `dur()` audibly modulate; constant-arg behavior unchanged.
+
+### Phase E — Custom-property accessor coerce coverage (subsume Phase 2.1 §11.1)
+
+**Goal:** `e.cutoff` (Signal from `SEQPAT_PROP`) feeds Signal slots through the same coerce-aware path; tests and docs land.
+
+**Steps:**
+1. Confirm `pattern_field()` returns `TypedValue::signal(custom_fields[name])` for custom keys (already shipped per typed_value.cpp:56).
+2. Add integration tests covering `n"c4{cutoff:0.3}" as e |> lp(%, e.cutoff * 4000)`.
+3. Extend the docs index entry for pipe-binding to call out custom-key access.
+
+**Verification:**
+- Integration test passes; renders produce expected per-event filter cutoff modulation.
+- F1 help: searching for `cutoff` (in pattern context) surfaces the custom-property docs.
+
+**Acceptance:** Phase 2.1 §11.1 closed; documentation reflects the shipped behavior.
+
+### Phase F — Cross-phase smoke acceptance
+
+**Goal:** All capabilities compose in one program without regression.
+
+**Smoke program:**
+```akkado
+// Pattern-driven oscillator, filter, and bend depth, plus per-event cutoff
+n"c4{cutoff:0.3} e4{cutoff:0.7} g4{cutoff:0.5}" as e
+  |> osc("saw", e.freq + v"<0 -10 10>")          // detune via scalar pattern
+  |> lp(%, 200 + e.cutoff * 4000, v"<0.3 0.7>")  // cutoff custom-property + Q v-pattern
+  |> % * v"<0.5 1.0 0.7>"                        // amplitude pattern
+  |> out(%, %)
+
+// Pattern-driven bend on a separate voice
+n"c4 e4 g4 b4".bend(v"<0 0.25 -0.25 0>") as e
+  |> osc("sin", mtof(e.freq + e.bend * 12))      // bend is a per-event property
+  |> out(%, %)
+
+// Negative coerce path: chord pattern in scalar slot must error
+// osc("sin", c"Am C G")  // E160 expected
+```
+
+**Acceptance:** First two stanzas compile clean and render audibly correct for ≥ 30 s in `nkido-cli render`. Commented-out third line, when uncommented in a separate test program, produces E160 with the documented message.
+
+This phase blocks PRD closure — no Phase A–E claim is "done" until they all coexist in this program.
+
+---
+
+## 9. Edge Cases
+
+### 9.1 Lexer
+
+- **Identifier collision with prefix.** `s` / `n` / `c` / `v` are valid identifier names. The lexer treats `<letter>"` / `<letter>\`` as a string-prefix only when the letter token is exactly one character at the prefix position. Existing `p"…"` rule already covers this. Document explicitly.
+- **Long identifiers starting with the prefix letter.** `value`, `note`, `sample`, `chord` are still legal identifiers / function names — lexer does not consume them as prefixes (they're more than one char, so the `current_ == start_ + 1` gate fails).
+- **Empty body.** `v""` parses to an empty `value()` call → empty pattern → `freq` buffer carries 0.0 throughout. No error.
+- **Mixed-mode mistake.** `v"c4 e4"` errors E163 ("atom 'c4' is not a numeric literal in value-mode pattern"). Error message names the offending atom and points to the `n"…"` form for note semantics.
+
+### 9.2 Mini-notation in `Value` mode
+
+- **Generators.** `v"run(8)"` yields events 0..7 as raw scalars (NOT mtof'd). `v"binary(0b1010)"` yields trigger pattern with scalar values 0/1. `v"binaryN(5, 8)"` likewise.
+- **Pattern transforms.** `v"<0 0.5 -0.5>".slow(2)` extends the cycle; numeric values unchanged. `v"<0 0.5>".rev()` reverses the order.
+- **Chord brackets.** `v"[1,2,3]"` (chord notation in mini-notation) — atoms parse as numerics, but the result is a multi-voice pattern. In a scalar slot, this errors E160 (multi-voice). Document that chord brackets are legal in `v"…"` syntactically but only usable via field access (`p.freq` returns voice-0 buffer, etc.).
+- **Polymeter.** `v"{0 0.5 1, -0.5 0.5}"` — legal. Output is monophonic at the polymeter cycle.
+- **Euclidean.** `v"1(3,8)"` — legal (numeric atom 1 with euclidean rhythm).
+- **Record suffix.** `v"0.5{cutoff:0.3}"` — atoms in `Value` mode do not accept record suffixes (no semantic field assignment). Reject at parse with E164 ("record suffix not allowed on value-mode atoms").
+- **NaN / Inf.** `v"NaN"` / `v"Inf"` — reject E163. Numeric literals are finite reals only.
+- **Scientific notation.** `v"1e3 -1.25e-2"` — accepted.
+- **Negative numbers.** `v"-0.5 -1 0"` — accepted. Mini-lexer numeric path must handle leading `-`.
+
+### 9.3 Auto-coerce
+
+- **Pattern bound to a name and used twice.** `let x = v"<0 0.5>"; osc("sin", x); lp(sig, x, 0.7)` — coerce fires at each consumer site. Both consumers see `Signal::signal(x.freq_buf)`. No re-evaluation; both share the same buffer (idempotent).
+- **Pattern fed to a `pat()`-style transform.** `slow(v"<0 0.5>", 2)` — slow's first arg is `Pattern` (not Signal); no coerce. Result remains a `Pattern`.
+- **Chord pattern in pipe-binding.** `c"Am" as e |> osc("sin", e.freq)` — `e.freq` is a multi-voice buffer. The `osc` slot expects mono Signal; coerce... but `e.freq` is already a `Signal` (extracted by field access), not a `Pattern`. Coerce is not triggered. Instead, the existing multi-voice handling on `osc` (chord auto-expansion) takes effect. Confirm this stays working.
+- **Sample pattern in non-Signal slot.** `s"bd sd" |> sampler(%, ...)` — `sampler` is pattern-aware (`args_are_signal = false`). No coerce. Works as today.
+- **Empty value pattern.** `v""` produces a pattern with `freq` buffer initialized to 0.0. `osc("sin", v"")` produces a 0 Hz oscillator (silent). No error.
+
+### 9.4 `scalar()` cast
+
+- **Sample pattern.** `scalar(s"bd")` — E161 with message pointing to `.type` field access if the user wants the type_id buffer.
+- **Polyphonic chord pattern.** `scalar(c"Am")` — E161 with message pointing to `poly()` or `.freq[i]` voice-indexed access (the latter is future work).
+- **`p"…"` auto-detected as note.** `scalar(p"c4 e4")` — works (auto-detect set max_voices=1, is_sample_pattern=false).
+- **`p"…"` auto-detected as sample.** `scalar(p"bd sd")` — E161.
+- **Already-Signal arg.** `scalar(my_signal)` — error: `scalar() expects a Pattern, got Signal`. This is intentional — `scalar()` is a Pattern→Signal cast, not a no-op on Signals.
+- **Dot-call form.** `n"c4 e4".scalar()` — desugars to `scalar(n"c4 e4")` per existing dot-call mechanism.
+
+### 9.5 User-defined functions
+
+- **Pattern arg passed to user fn.** Default coerce to Signal applies. `let f = (x) -> x * 2; f(v"<0 0.5>")` — the `x` param sees a `Signal` (the freq buffer); the `* 2` produces a Signal multiplied by 2.
+- **User fn that wants Pattern arg.** Out of scope for this PRD; tracked under `prd-compiler-type-system.md`. Workaround: bind the pattern outside the fn and use `.freq` / `.vel` from inside.
+- **Pattern arithmetic inside user fn.** `let f = (x, y) -> x + y; f(v"<0 0.5>", v"<0 12>")` — both args coerce to Signal, `+` operates on Signals, result is a Signal.
+
+### 9.6 Phase 2.1 transforms
+
+- **Constant arg still works.** `n"c4 e4".bend(0.5)` — second arg is `Number`/`Signal` from a literal; behavior unchanged from Phase 2.1.
+- **Pattern arg now works.** `n"c4 e4".bend(v"<0 0.5>")` — second arg is `Pattern` → coerce → Signal → SEQPAT_PROP per-event sample-and-hold writes to `event.bend`.
+- **Pattern arg with mismatched cycle length.** `n"c4 e4 g4 b4".bend(v"<0 0.5>")` — bend's pattern has 2 events per cycle, host has 4. The bend Signal is sampled at each host trigger, so events at host phases 0, 0.25, 0.5, 0.75 read bend at those phases (which is 0/0/0.5/0.5). Document this — no error; longest-cycle-wins is the existing pattern-engine behavior.
+- **Pattern arg with sample pattern.** `n"c4 e4".bend(s"bd sd")` — coerce errors E160 (cannot coerce sample pattern to scalar). Diagnostic must clearly say the failure is in `bend`'s second arg.
+
+### 9.7 Compatibility
+
+- **Existing user code.** `pat()` / `p"…"` works exactly as before. No migration required.
+- **Existing tests.** All Phase 2 / Phase 2.1 tests continue to pass. Audit confirms no test relies on `Pattern → Signal` failing — currently failing on this transition is rare because most patterns are consumed via `.freq` access or pattern-aware builtins.
+- **Documentation.** `docs/mini-notation-reference.md` adds a new "Typed Prefixes" section. `web/static/docs/reference/pattern/` gains a `literals.md` page indexed by `bun run build:docs`.
+
+---
+
+## 10. Testing & Verification
+
+### 10.1 Unit Tests
+
+**Lexer (`akkado/tests/test_lexer.cpp`):**
+- Each of `v"…"`, `n"…"`, `s"…"`, `c"…"` produces the expected token and body.
+- `value`, `note`, `sample`, `chord` lex as ordinary identifiers (length > 1 disqualifies prefix).
+- `s = 0.5\ns"bd"` lexes as identifier `s`, `=`, number `0.5`, then `SamplePat` token (no confusion).
+
+**Mini-parser (`akkado/tests/test_mini_parser.cpp`):**
+- `Value` mode: `<0 0.5 -0.5>` parses to 3 atoms with `scalar_value` ∈ {0, 0.5, -0.5}.
+- `Value` mode: `c4` rejects with E163.
+- `Value` mode: `1e3 -1.25e-2 0.125` accepted.
+- `Value` mode: `NaN` / `Inf` rejected.
+- `Value` mode: record suffix `0.5{cutoff:0.3}` rejected with E164.
+- `Sample` mode: numeric atom rejects with E162.
+- Generators in `Value` mode: `run(8)` produces atoms 0..7 with `scalar_value` set.
+
+**Codegen (`akkado/tests/test_pattern_prefixes.cpp`, `akkado/tests/test_pattern_scalar.cpp`):**
+- `osc("sin", v"<220 440>")` compiles; emitted bytecode shows `osc` reading the freq buffer of the value pattern.
+- `osc("sin", c"Am")` errors with E160_PatternToScalarPolyphonic.
+- `osc("sin", s"bd")` errors with E160_PatternToScalarSample.
+- `scalar(n"c4 e4")` returns a Signal-typed `TypedValue` with the freq buffer.
+- `scalar(s"bd")` errors with E161.
+- `v"<0 0.5>" * 12` compiles; result is a Signal carrying scaled values.
+- `let x = v"<0 0.5>"; x.freq` works; `x` still typed Pattern at the binding.
+- `let x = v"<0 0.5>"; osc("sin", x); lp(sig, x, 0.7)` — both consumers see the same coerced Signal buffer.
+
+**Phase 2.1 transforms with pattern args (`akkado/tests/test_pattern_event.cpp`):**
+- `n"c4 e4 g4".bend(v"<0 0.5 -0.5>")` — events have `bend` ∈ {0, 0.5, -0.5} per their host trigger time.
+- `n"c4 e4".aftertouch(v"<0 1>")` — events have `aftertouch` ∈ {0, 1}.
+- `n"c4 e4 g4".dur(v"<0.25 0.5 0.75>")` — events have explicit durations matching.
+- `n"c4 e4".bend(0.5)` — constant arg behavior unchanged.
+- `n"c4 e4".bend(s"bd sd")` errors E160 with diagnostic naming `bend`'s second arg.
+
+### 10.2 Integration Tests
+
+- The Phase F smoke program compiles clean with `cmake --build build`.
+- `nkido-cli render` runs the smoke program for 30 s without crashes; output WAV non-trivial.
+- `bun run check` and `bun run build` clean in `web/`.
+
+### 10.3 Experiments (Cedar runtime, ≥ 300 s simulated)
+
+Per `docs/dsp-experiment-methodology.md` and the long-window guidance in `CLAUDE.md`:
+
+- `experiments/test_op_seqpat_prop.py` (extend) — verify pattern-driven `bend` / `aftertouch` / `dur` produce correct per-event values across 300+ seconds. No drift, no zombie events, no value drops.
+- `experiments/test_op_seqpat_step_value.py` (new) — verify `v"…"`-driven `osc` modulation produces stepped Hz output matching the parsed atoms across 300+ seconds.
+
+### 10.4 Manual Audition
+
+- The user's example: `n"c4 e4 g4" |> bend(%, v"<0 0.5 -0.5>") |> ...` should audibly bend the third event by -0.5 (a downward bend depth applied per voice).
+- `osc("sin", v"<220 440 880>")` should cycle three pitches.
+- `lp(sig, v"<200 800 2000>", 0.7)` should produce a clearly modulated filter sweep.
+
+### 10.5 Build & Lint
+
+- `cmake --build build` clean.
+- `bun run check` clean.
+- `bun run build:docs` regenerates the F1 lookup index for the new prefixes / `value` / `scalar` builtins.
+
+---
+
+## 11. Open Questions
+
+- **Pipe-binding on `v"…"` patterns: are `.vel` / `.trig` / `.gate` meaningful?**
+  Tentative: yes, populated by SEQPAT_STEP / SEQPAT_GATE the same way as for `n"…"`. `.vel` defaults to 1.0 for value-mode atoms unless a record-suffix overrides (currently rejected per §9.2). `.trig` fires at each event boundary. Document; revisit only if user reports confusion.
+
+- **Polyphonic value patterns in non-scalar contexts.** `v"[0.3,0.5,0.7]"` is syntactically a multi-voice value pattern (chord-style brackets). It only becomes useful once we have a multi-voice scalar consumer. Currently no such consumer exists — keep the parse legal but document that the only path to use it is field access (`.freq` returns voice-0 buffer); revisit when poly-scalar consumers appear.
+
+- **`scalar(p)` for `n"…"` vs `n"…".freq` — do we need both?**
+  Both work; both produce the same Signal. `scalar()` is more discoverable; `.freq` is more flexible (also handles `.vel`, `.gate`, etc.). Keep both. If the docs feel redundant, the resolution is editorial, not a design change.
+
+- **Future: `m"…"` for midi-int-only patterns.**
+  Punted in Round 4 — `n"…"` handles both note names and bare ints. If users hit ambiguities (e.g. they want `60` to literally mean 60 Hz, not MIDI 60), the `v"…"` form gives them that. If the ambiguity becomes a pain point, revisit a dedicated `m"…"` prefix.
+
+- **`p"…"` deprecation timeline.**
+  This PRD keeps `p"…"` indefinitely. A future PRD may flag it for removal once telemetry / community feedback shows the typed prefixes have replaced it.
+
+- **`Pattern → Stereo Signal` coerce.**
+  Out of scope. Patterns remain mono. Users wrap with `stereo(...)` or use `pan()` explicitly.
+
+- **User-defined function pitch-aware param annotations.**
+  Out of scope per Round 4. Tracked under `prd-compiler-type-system.md`.
