@@ -235,6 +235,21 @@ void generateMipMaps(WavetableFrame& frame,
 }
 ```
 
+### 5.3 Alternative band-limiting techniques (follow-up exploration)
+
+Raised-cosine over 4 bins is a reasonable v1 default — well-understood, cheap, and a clear improvement over a hard brickwall — but it is unlikely to be the *best*-sounding option. Because the preprocessor runs offline, we have plenty of compute budget to experiment with more sophisticated approaches in a follow-up DSP-quality pass. Listening tests should drive the final choice, since psychoacoustic perception of the cutoff region (especially at the top of each mip's bandwidth) doesn't always match what the magnitude spectrum suggests. Candidates worth A/B'ing:
+
+- **Wider raised-cosine** (e.g., 8 or 16 bins). Same shape, gentler slope. Less ringing at the cost of slightly more spectral overlap into the stop band — usually inaudible since the rolled-off harmonics are already at the top of the audible range.
+- **Gaussian taper.** Smoothest possible rolloff (no derivative discontinuities at any order). Often perceived as "warmer" or "more natural" than cosine-based tapers. Tunable via standard deviation.
+- **Kaiser window** applied to the spectrum. Tunable β parameter trades sidelobe rejection against transition-band width; lets us tune the taper without changing its shape family.
+- **Tukey window** (flat top + cosine flanks). Generalizes our raised-cosine; with `α = 1` it *is* a half-cosine, with smaller α it's flatter in the passband.
+- **Frequency-dependent taper width.** Narrower taper at high mip levels (where few bins remain to spend) and wider at low mip levels (where there's headroom). Could match perceptual bandwidth better than a uniform 4-bin taper.
+- **Lanczos / windowed-sinc reconstruction.** Closer to the ideal lowpass without Gibbs ringing. Slightly more compute but still trivial offline.
+- **Additive resynthesis from explicit harmonics.** Skip the spectral-filter approach entirely: extract harmonic amplitudes and phases at the source bins, then reconstruct each mip via additive synthesis using only the harmonics that fit. Maximally accurate for harmonic content but loses any inharmonic/noise content present in the source — a tradeoff that may or may not be desirable depending on the wavetable.
+- **Iterative / least-squares FIR design** (Parks-McClellan or similar) for an "ideal" passband-stopband shape, applied as a multiplicative spectral mask. Overkill for v1 but useful as a reference against which simpler tapers can be compared.
+
+This is **deliberately deferred**. v1 ships with raised-cosine; the test in §12 (#2 aliasing sweep, #4 mip-boundary crossfade) gives us an objective baseline, and subjective listening tests on a curated wavetable set will guide the choice of which alternatives to integrate.
+
 ---
 
 ## 6. Algorithm 2: Runtime Opcode (`OSC_WAVETABLE`)
