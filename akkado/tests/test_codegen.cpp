@@ -2220,6 +2220,33 @@ TEST_CASE("Mini-notation record suffix: multiple keys",
     CHECK(si.sequence_events[0][0].velocity == Catch::Approx(0.8f).margin(0.01f));
 }
 
+TEST_CASE("Mini-notation record suffix: dur sets event.duration",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // `dur` is a recognized short-form key; codegen multiplies the atom's
+    // time_span by the dur value when emitting the cedar event. For a
+    // single-atom pat, time_span == 1.0 (one full cycle), so dur:0.5
+    // yields event.duration == 0.5.
+    auto single = akkado::compile(R"(pat("c4{dur:0.5}"))");
+    REQUIRE(single.success);
+    REQUIRE_FALSE(single.state_inits.empty());
+    REQUIRE(single.state_inits[0].sequence_events[0].size() == 1);
+    CHECK(single.state_inits[0].sequence_events[0][0].duration ==
+          Catch::Approx(0.5f).margin(0.001f));
+
+    // For a 2-atom pat, each atom's time_span == 0.5; dur:0.5 yields
+    // event.duration == 0.25.
+    auto two = akkado::compile(R"(pat("c4{dur:0.5} e4{dur:1.0}"))");
+    REQUIRE(two.success);
+    const auto& events = two.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 2);
+    // Sort by time so assertion order is stable.
+    std::vector<std::pair<float, float>> pairs;
+    for (const auto& e : events) pairs.emplace_back(e.time, e.duration);
+    std::sort(pairs.begin(), pairs.end());
+    CHECK(pairs[0].second == Catch::Approx(0.25f).margin(0.001f));   // c4 dur 0.5 * 0.5
+    CHECK(pairs[1].second == Catch::Approx(0.5f).margin(0.001f));    // e4 dur 1.0 * 0.5
+}
+
 // =============================================================================
 // Phase 2 PRD D0: velocity-shorthand propagation fix
 // =============================================================================
@@ -2812,22 +2839,28 @@ TEST_CASE("Voicing: anchor() basic", "[codegen][voicing][phase2]") {
         auto result = akkado::compile(R"(anchor(chord("Am"), "not_a_note"))");
         REQUIRE_FALSE(result.success);
     }
-    SECTION("anchor + below produces top note <= anchor") {
-        // Am @ c4 below: A3=57, C4=60, E4=64. Top note is C4 (60) <= 60. Good.
+    SECTION("anchor + below produces exact MIDI [52, 57, 60] for Am @ c4") {
+        // Greedy nearest-anchor selection picks the inversion+octave with
+        // minimum sum |note - anchor| that satisfies max(notes) <= anchor.
+        // For Am intervals [0,3,7] @ root_midi A4=69, anchor c4=60, the
+        // winning candidate is the 2nd inversion shifted -2 octaves:
+        // E3=52, A3=57, C4=60. Pinning the exact MIDI per audit 2026-04-28
+        // (PRD §10.1's [57,60,64] is internally inconsistent — top=64 > 60
+        // would violate "below"; algorithmic output is correct).
         auto result = akkado::compile(R"(anchor(chord("Am"), "c4").mode("below"))");
         REQUIRE(result.success);
         REQUIRE_FALSE(result.state_inits.empty());
         const auto& si = result.state_inits[0];
         REQUIRE(si.sequence_events[0].size() >= 1);
         const auto& ev = si.sequence_events[0][0];
-        REQUIRE(ev.num_values >= 1);
-        // Convert top freq back to MIDI. Highest value should be <= 60 + epsilon.
-        float top_freq = 0.0f;
+        REQUIRE(ev.num_values == 3);
+        std::vector<int> midis;
         for (std::uint8_t i = 0; i < ev.num_values; ++i) {
-            if (ev.values[i] > top_freq) top_freq = ev.values[i];
+            midis.push_back(static_cast<int>(std::round(
+                69.0f + 12.0f * std::log2(ev.values[i] / 440.0f))));
         }
-        float top_midi = 69.0f + 12.0f * std::log2(top_freq / 440.0f);
-        CHECK(top_midi <= 60.5f);
+        std::sort(midis.begin(), midis.end());
+        CHECK(midis == std::vector<int>{52, 57, 60});
     }
 }
 
@@ -2840,17 +2873,58 @@ TEST_CASE("Voicing: mode() basic", "[codegen][voicing][phase2]") {
         auto result = akkado::compile(R"(mode(chord("Am"), "below"))");
         CHECK(result.success);
     }
-    SECTION("mode above forces all notes >= anchor") {
+    SECTION("mode above produces exact MIDI [72, 76, 79] for C @ c5") {
+        // C major intervals [0,4,7] @ root C4=60 shifted up to satisfy
+        // bottom >= c5 (72). Winning candidate is root-position shifted +1
+        // octave: C5=72, E5=76, G5=79. Matches PRD §10.1 golden values.
         auto result = akkado::compile(R"(anchor(chord("C"), "c5").mode("above"))");
         REQUIRE(result.success);
         const auto& ev = result.state_inits[0].sequence_events[0][0];
-        REQUIRE(ev.num_values >= 1);
-        float bottom_freq = ev.values[0];
+        REQUIRE(ev.num_values == 3);
+        std::vector<int> midis;
         for (std::uint8_t i = 0; i < ev.num_values; ++i) {
-            if (ev.values[i] < bottom_freq) bottom_freq = ev.values[i];
+            midis.push_back(static_cast<int>(std::round(
+                69.0f + 12.0f * std::log2(ev.values[i] / 440.0f))));
         }
-        float bottom_midi = 69.0f + 12.0f * std::log2(bottom_freq / 440.0f);
-        CHECK(bottom_midi >= 71.5f);  // anchor c5 = 72; tolerance for rounding
+        std::sort(midis.begin(), midis.end());
+        CHECK(midis == std::vector<int>{72, 76, 79});
+    }
+    SECTION("mode duck excludes the anchor pitch class and stays nearby") {
+        // Am @ c4 duck: anchor MIDI 60 must NOT appear in the output. Greedy
+        // selection minimizes sum |note - 60| while excluding 60 itself.
+        // Algorithm yields [48, 52, 57] = C3, E3, A3 (per audit 2026-04-28
+        // probe; PRD §10.1's [57,64,69] is informational and doesn't match
+        // the implemented selection). Pin exact output for regression.
+        auto result = akkado::compile(R"(anchor(chord("Am"), "c4").mode("duck"))");
+        REQUIRE(result.success);
+        const auto& ev = result.state_inits[0].sequence_events[0][0];
+        REQUIRE(ev.num_values == 3);
+        std::vector<int> midis;
+        for (std::uint8_t i = 0; i < ev.num_values; ++i) {
+            midis.push_back(static_cast<int>(std::round(
+                69.0f + 12.0f * std::log2(ev.values[i] / 440.0f))));
+        }
+        std::sort(midis.begin(), midis.end());
+        CHECK(std::find(midis.begin(), midis.end(), 60) == midis.end());
+        CHECK(midis == std::vector<int>{48, 52, 57});
+    }
+    SECTION("mode root places the bass roughly an octave below anchor") {
+        // Root mode: bass = root note shifted toward anchor-12 (=48 for c4).
+        // Upper voices placed near anchor (60). Algorithm yields A2=45 in
+        // bass with C4=60, E4=64 above. Pin exact output.
+        auto result = akkado::compile(R"(anchor(chord("Am"), "c4").mode("root"))");
+        REQUIRE(result.success);
+        const auto& ev = result.state_inits[0].sequence_events[0][0];
+        REQUIRE(ev.num_values == 3);
+        std::vector<int> midis;
+        for (std::uint8_t i = 0; i < ev.num_values; ++i) {
+            midis.push_back(static_cast<int>(std::round(
+                69.0f + 12.0f * std::log2(ev.values[i] / 440.0f))));
+        }
+        std::sort(midis.begin(), midis.end());
+        CHECK(midis == std::vector<int>{45, 60, 64});
+        // Bass should be at least an octave below the next voice.
+        CHECK(midis[1] - midis[0] >= 12);
     }
 }
 
