@@ -815,6 +815,10 @@ void VM::execute(const Instruction& inst) {
             op_seqpat_transport(ctx_, inst);
             break;
 
+        case Opcode::SEQPAT_PROP:
+            op_seqpat_prop(ctx_, inst);
+            break;
+
         // === Envelopes ===
         case Opcode::ENV_ADSR:
             op_env_adsr(ctx_, inst);

@@ -118,6 +118,40 @@ public:
         return sample_mappings_;
     }
 
+    // Phase 2.1 PRD §11: custom property slot map. Populated as
+    // unrecognized record-suffix keys are encountered in MiniAtomData.properties
+    // and by standalone bend()/aftertouch() transforms. Slot indices are
+    // assigned in insertion order, capped at cedar::MAX_PROPS_PER_EVENT.
+    const std::unordered_map<std::string, std::uint8_t>& custom_property_slots() const {
+        return custom_slots_;
+    }
+    std::unordered_map<std::string, std::uint8_t>& mutable_custom_slots() {
+        return custom_slots_;
+    }
+    bool custom_slots_overflowed() const { return custom_slots_overflowed_; }
+    const std::string& overflow_first_extra_key() const {
+        return overflow_first_extra_key_;
+    }
+
+    // Allocate or look up a slot for a custom property key. Returns the slot
+    // index (0..MAX_PROPS_PER_EVENT-1) on success. Returns -1 if the slot
+    // table is full and the key was not previously registered. Also records
+    // overflow state so handlers can emit a diagnostic.
+    int allocate_property_slot(const std::string& key) {
+        auto it = custom_slots_.find(key);
+        if (it != custom_slots_.end()) return static_cast<int>(it->second);
+        if (custom_slots_.size() >= cedar::MAX_PROPS_PER_EVENT) {
+            if (!custom_slots_overflowed_) {
+                custom_slots_overflowed_ = true;
+                overflow_first_extra_key_ = key;
+            }
+            return -1;
+        }
+        std::uint8_t slot = static_cast<std::uint8_t>(custom_slots_.size());
+        custom_slots_[key] = slot;
+        return static_cast<int>(slot);
+    }
+
     // Get maximum number of values per event (for polyphonic chord support)
     // Returns 1 for monophonic patterns, >1 for patterns with chords
     std::uint8_t max_voices() const {
@@ -357,14 +391,20 @@ private:
         e.source_length = static_cast<std::uint16_t>(n.location.length);
 
         // Phase 2 PRD §5.5: apply recognized short-form record-suffix keys
-        // (vel, dur) to fixed cedar::Event fields. bend/aftertouch and
-        // unrecognized keys remain on atom_data.properties for the §5.5a
-        // pipe-binding accessor (deferred to a follow-up).
+        // (vel, dur) to fixed cedar::Event fields. Phase 2.1 PRD §11.1:
+        // unrecognized keys (e.g. cutoff, bend, aftertouch) get a slot
+        // assigned and their value lands on event.prop_vals[slot] for
+        // SEQPAT_PROP to surface at runtime via PatternPayload.custom_fields.
         for (const auto& [key, value] : atom_data.properties) {
             if (key == "vel") {
                 e.velocity = std::clamp(value, 0.0f, 1.0f);
             } else if (key == "dur") {
                 if (value > 0.0f) e.duration = value * time_span;
+            } else {
+                int slot = allocate_property_slot(key);
+                if (slot >= 0) {
+                    e.prop_vals[slot] = value;
+                }
             }
         }
 
@@ -1088,6 +1128,12 @@ private:
     voicing::Mode voicing_mode_ = voicing::Mode::Below;
     bool voicing_mode_explicit_ = false;
     std::string voicing_dict_name_;
+
+    // Phase 2.1 PRD §11: custom property slot tracking. Populated by
+    // record-suffix keys and standalone bend()/aftertouch() transforms.
+    std::unordered_map<std::string, std::uint8_t> custom_slots_;
+    bool custom_slots_overflowed_ = false;
+    std::string overflow_first_extra_key_;
 };
 
 // ============================================================================
@@ -1180,6 +1226,14 @@ TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
                                                   trigger_buf, is_sample_pattern, n.location);
     if (!pattern_payload) {
         pop_path();
+        return TypedValue::void_val();
+    }
+
+    // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties
+    // collected by the SequenceCompiler from `c4{cutoff:0.3}`-style suffixes.
+    if (!emit_custom_property_buffers(compiler, *pattern_payload, state_id)) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
         return TypedValue::void_val();
     }
 
@@ -1346,6 +1400,35 @@ std::shared_ptr<PatternPayload> CodeGenerator::emit_per_voice_seqpat(NodeIndex n
     return payload;
 }
 
+// Phase 2.1 PRD §11: emit one SEQPAT_PROP per registered custom-property slot,
+// allocate a buffer per slot, and populate payload->custom_fields. The slot
+// indices come from SequenceCompiler::custom_property_slots(), which is
+// populated by record-suffix keys in MiniAtomData.properties (and by
+// standalone bend()/aftertouch() transforms in compile_pattern_for_transform).
+bool CodeGenerator::emit_custom_property_buffers(
+    const SequenceCompiler& compiler,
+    PatternPayload& payload,
+    std::uint32_t state_id,
+    std::uint16_t clock_override) {
+    for (const auto& [key, slot] : compiler.custom_property_slots()) {
+        std::uint16_t buf = buffers_.allocate();
+        if (buf == BufferAllocator::BUFFER_UNUSED) return false;
+        cedar::Instruction inst{};
+        inst.opcode = cedar::Opcode::SEQPAT_PROP;
+        inst.out_buffer = buf;
+        inst.rate = slot;
+        inst.inputs[0] = 0;            // voice 0
+        inst.inputs[1] = clock_override;
+        inst.inputs[2] = 0xFFFF;
+        inst.inputs[3] = 0xFFFF;
+        inst.inputs[4] = 0xFFFF;
+        inst.state_id = state_id;
+        emit(inst);
+        payload.custom_fields[key] = buf;
+    }
+    return true;
+}
+
 // Handle pattern variable reference
 TypedValue CodeGenerator::handle_pattern_reference(const std::string& name,
                                                     NodeIndex pattern_node,
@@ -1429,6 +1512,13 @@ TypedValue CodeGenerator::handle_pattern_reference(const std::string& name,
                                                   trigger_buf, is_sample_pattern, loc);
     if (!pattern_payload) {
         pop_path();
+        return TypedValue::void_val();
+    }
+
+    // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties.
+    if (!emit_custom_property_buffers(compiler, *pattern_payload, state_id)) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", loc);
         return TypedValue::void_val();
     }
 
@@ -1601,8 +1691,6 @@ TypedValue CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
-    pop_path();
-
     // Build PatternPayload with monophonic fields
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
@@ -1612,6 +1700,16 @@ TypedValue CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     // TYPE stays 0xFFFF
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+
+    // Phase 2.1 PRD §11: chord patterns can carry record-suffix properties too
+    // (e.g. `chord("Am{velmod:0.5}")`). Surface them via SEQPAT_PROP.
+    if (!emit_custom_property_buffers(compiler, *payload, state_id)) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::void_val();
+    }
+
+    pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
 }
 
@@ -1687,7 +1785,9 @@ static bool is_pattern_call(const Node& n) {
            func_name == "run" || func_name == "binary" || func_name == "binaryN" ||
            // Phase 2 PRD voicing transforms (anchor / mode / voicing only;
            // addVoicings is a registry call, not a pattern producer)
-           func_name == "anchor" || func_name == "mode" || func_name == "voicing";
+           func_name == "anchor" || func_name == "mode" || func_name == "voicing" ||
+           // Phase 2.1 PRD §11.2: standalone note-property transforms
+           func_name == "bend" || func_name == "aftertouch" || func_name == "dur";
 }
 
 // Helper: Check if a node is a pattern-producing expression.
@@ -1915,7 +2015,10 @@ static bool compile_pattern_for_transform(
                              // Phase 2 PRD voicing transforms (state-only;
                              // top-level handler applies voice_chords)
                              func_name == "anchor" || func_name == "mode" ||
-                             func_name == "voicing");
+                             func_name == "voicing" ||
+                             // Phase 2.1 PRD §11.2: note-property transforms
+                             func_name == "bend" || func_name == "aftertouch" ||
+                             func_name == "dur");
         if (is_transform) {
             // tune() sets context BEFORE compilation (not post-processing)
             if (func_name == "tune") {
@@ -1983,6 +2086,31 @@ static bool compile_pattern_for_transform(
                 for (auto& seq_events : out_events) {
                     for (auto& event : seq_events) {
                         event.velocity *= *vel;
+                    }
+                }
+            } else if (func_name == "bend" || func_name == "aftertouch") {
+                // Phase 2.1 PRD §11.2: standalone bend/aftertouch transforms.
+                // Reserve a slot keyed by the transform name (so users can
+                // access via e.bend / e.aftertouch after pipe-binding) and
+                // write the value to event.prop_vals[slot] on every event.
+                auto value = get_number_arg(ast, pat_node, 1);
+                if (!value.has_value()) return false;
+                int slot = compiler.allocate_property_slot(func_name);
+                if (slot < 0) return false;  // overflow — drop the transform
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        event.prop_vals[slot] = *value;
+                    }
+                }
+            } else if (func_name == "dur") {
+                // Phase 2.1 PRD §11.2: pure compile-time duration multiplier.
+                // event.duration already exists on cedar::Event, so no slot
+                // plumbing needed.
+                auto factor = get_number_arg(ast, pat_node, 1);
+                if (!factor.has_value() || *factor <= 0) return false;
+                for (auto& seq_events : out_events) {
+                    for (auto& event : seq_events) {
+                        event.duration *= *factor;
                     }
                 }
             } else if (func_name == "bank") {
@@ -2443,6 +2571,13 @@ static TypedValue emit_pattern_with_state(
     payload->fields[PatternPayload::TYPE] = type_buf;
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+
+    // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties
+    // collected by SequenceCompiler. Covers all transforms going through this
+    // helper (slow, fast, rev, transpose, early, late, palindrome, ...).
+    if (!gen.emit_custom_property_buffers(compiler, *payload, state_id)) {
+        return TypedValue::void_val();
+    }
 
     auto tv = TypedValue::make_pattern(payload, result_buf);
     node_types[node] = tv;
@@ -3017,8 +3152,6 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
-    pop_path();
-
     // Build PatternPayload with scaled velocity
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
@@ -3027,7 +3160,146 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     // GATE and TYPE stay 0xFFFF
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+
+    // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties.
+    if (!emit_custom_property_buffers(compiler, *payload, state_id)) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::void_val();
+    }
+
+    pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
+}
+
+// Phase 2.1 PRD §11.2: standalone bend()/aftertouch() — set a custom-property
+// slot value on every event and surface it via SEQPAT_PROP. Shared private
+// helper since bend and aftertouch differ only in the slot key.
+TypedValue CodeGenerator::handle_property_transform_call(
+    NodeIndex node, const Node& n, const std::string& key) {
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto value = get_number_arg(*ast_, n, 1);
+
+    if (pattern_arg == NULL_NODE) {
+        error("E130", key + "() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!value.has_value()) {
+        error("E131", key + "() requires a number as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", key + "() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", key + "() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    int slot = compiler.allocate_property_slot(key);
+    if (slot < 0) {
+        error("E137", "Pattern already uses " +
+              std::to_string(cedar::MAX_PROPS_PER_EVENT) +
+              " custom properties; cannot add '" + key + "'", n.location);
+        return TypedValue::void_val();
+    }
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            event.prop_vals[slot] = *value;
+        }
+    }
+
+    std::uint32_t cnt = call_counters_[key]++;
+    push_path(key + "#" + std::to_string(cnt));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
+}
+
+TypedValue CodeGenerator::handle_bend_call(NodeIndex node, const Node& n) {
+    return handle_property_transform_call(node, n, "bend");
+}
+
+TypedValue CodeGenerator::handle_aftertouch_call(NodeIndex node, const Node& n) {
+    return handle_property_transform_call(node, n, "aftertouch");
+}
+
+TypedValue CodeGenerator::handle_dur_call(NodeIndex node, const Node& n) {
+    // dur(pattern, factor) — multiply event durations by factor. Pure
+    // compile-time, no SEQPAT_PROP needed (cedar::Event.duration exists).
+    NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    auto factor = get_number_arg(*ast_, n, 1);
+    if (pattern_arg == NULL_NODE) {
+        error("E130", "dur() requires a pattern as first argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!factor.has_value() || *factor <= 0) {
+        error("E131", "dur() requires a positive number as second argument", n.location);
+        return TypedValue::void_val();
+    }
+    if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
+        error("E133", "dur() first argument must be a pattern", n.location);
+        return TypedValue::void_val();
+    }
+
+    SequenceCompiler compiler(ast_->arena, sample_registry_);
+    NodeIndex pattern_node = NULL_NODE;
+    std::uint32_t num_elements = 1;
+    std::vector<std::vector<cedar::Event>> sequence_events;
+    float cycle_length = 1.0f;
+
+    if (!compile_pattern_for_transform(*this, *ast_, pattern_arg, sample_registry_,
+                                        compiler, pattern_node, num_elements,
+                                        sequence_events, cycle_length)) {
+        error("E130", "dur() failed to compile pattern argument", n.location);
+        return TypedValue::void_val();
+    }
+
+    for (auto& seq_events : sequence_events) {
+        for (auto& event : seq_events) {
+            event.duration *= *factor;
+        }
+    }
+
+    std::uint32_t dur_count = call_counters_["dur"]++;
+    push_path("dur#" + std::to_string(dur_count));
+    std::uint32_t state_id = compute_state_id();
+
+    const Node& pattern = ast_->arena[pattern_node];
+    auto result_tv = emit_pattern_with_state(
+        *this, buffers_, instructions_, state_inits_, required_samples_,
+        node_types_, node, state_id, cycle_length,
+        compiler, sequence_events, pattern.location, n.location,
+        emit_instruction_helper);
+
+    pop_path();
+
+    if (result_tv.buffer == BufferAllocator::BUFFER_UNUSED && !result_tv.pattern) {
+        error("E101", "Buffer pool exhausted", n.location);
+    }
+    return result_tv;
 }
 
 TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
@@ -3148,8 +3420,6 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
         }
     }
 
-    pop_path();
-
     // Build PatternPayload
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
@@ -3157,6 +3427,15 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     payload->fields[PatternPayload::TRIG] = trigger_buf;
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+
+    // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties.
+    if (!emit_custom_property_buffers(compiler, *payload, state_id)) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::void_val();
+    }
+
+    pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
 }
 
@@ -3332,8 +3611,6 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
         }
     }
 
-    pop_path();
-
     // Build PatternPayload
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
@@ -3341,6 +3618,15 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
     payload->fields[PatternPayload::TRIG] = trigger_buf;
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+
+    // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties.
+    if (!emit_custom_property_buffers(compiler, *payload, state_id)) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::void_val();
+    }
+
+    pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
 }
 
@@ -3475,6 +3761,13 @@ TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
                                                   trigger_buf, is_sample_pattern, n.location, beat_pos_buf);
     if (!pattern_payload) {
         pop_path();
+        return TypedValue::void_val();
+    }
+
+    // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers (with same clock override).
+    if (!emit_custom_property_buffers(compiler, *pattern_payload, seq_state_id, beat_pos_buf)) {
+        pop_path();
+        error("E101", "Buffer pool exhausted", n.location);
         return TypedValue::void_val();
     }
 

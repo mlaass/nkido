@@ -235,6 +235,11 @@ private:
     std::uint16_t next_ = 0;
 };
 
+// Forward declaration: SequenceCompiler is defined in codegen_patterns.cpp.
+// Used by emit_custom_property_buffers() to read the compile-time slot map
+// without exposing the full SequenceCompiler implementation in this header.
+class SequenceCompiler;
+
 /// Code generator: converts analyzed AST to Cedar bytecode
 class CodeGenerator {
 public:
@@ -369,6 +374,21 @@ private:
         bool is_sample_pattern, SourceLocation loc,
         std::uint16_t clock_override = 0xFFFF);
 
+public:
+    /// Phase 2.1 PRD §11: emit one SEQPAT_PROP instruction per registered
+    /// custom property slot in `compiler`, allocate a buffer per slot, and
+    /// populate `payload->custom_fields` so `e.<key>` resolves to the buffer.
+    /// Returns false on buffer exhaustion (caller should emit E101).
+    /// Public so that the free static `emit_pattern_with_state()` helper in
+    /// codegen_patterns.cpp can call it.
+    bool emit_custom_property_buffers(
+        const SequenceCompiler& compiler,
+        PatternPayload& payload,
+        std::uint32_t state_id,
+        std::uint16_t clock_override = 0xFFFF);
+
+private:
+
     // ============================================================================
     // Pattern transformation handlers
     // ============================================================================
@@ -387,6 +407,24 @@ private:
 
     /// Handle velocity(pattern, vel) - set velocity on all events
     TypedValue handle_velocity_call(NodeIndex node, const Node& n);
+
+    /// Phase 2.1 PRD §11.2: Handle bend(pattern, value) — set bend property
+    /// on all events. Surfaced as `e.bend` after pipe-binding.
+    TypedValue handle_bend_call(NodeIndex node, const Node& n);
+
+    /// Phase 2.1 PRD §11.2: Handle aftertouch(pattern, value) — set aftertouch
+    /// property on all events. Surfaced as `e.aftertouch` after pipe-binding.
+    TypedValue handle_aftertouch_call(NodeIndex node, const Node& n);
+
+    /// Phase 2.1 PRD §11.2: Handle dur(pattern, factor) — multiply event
+    /// durations by factor. Pure compile-time mutation of cedar::Event.duration.
+    TypedValue handle_dur_call(NodeIndex node, const Node& n);
+
+    /// Phase 2.1 PRD §11.2: shared backbone for bend/aftertouch handlers.
+    /// `key` is the slot name (e.g. "bend", "aftertouch") used both for
+    /// SequenceCompiler slot allocation and `e.<key>` accessor resolution.
+    TypedValue handle_property_transform_call(
+        NodeIndex node, const Node& n, const std::string& key);
 
     /// Handle bank(pattern, bank_name) - set sample bank for all events
     TypedValue handle_bank_call(NodeIndex node, const Node& n);

@@ -2016,6 +2016,150 @@ TEST_CASE("SEQPAT iter() with n=0 disables rotation (identity)",
 }
 
 // =============================================================================
+// SEQPAT_PROP — Phase 2.1 PRD §11
+//
+// Verifies that SEQPAT_PROP reads `evt.prop_vals[slot]` for the active event
+// (selected by beat_pos against event start times — same logic as SEQPAT_TYPE)
+// and writes per-sample values to its output buffer.
+// =============================================================================
+
+TEST_CASE("SEQPAT_PROP outputs per-event prop_vals[slot] for active event",
+          "[vm][sequence][phase21][prop]") {
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    constexpr std::uint32_t STATE_ID = 0xABCDE;
+    constexpr float CYCLE_LENGTH = 4.0f;
+
+    // Two events at t=0 and t=0.5 (normalized phase). Slot 0 carries 0.3
+    // for the first event, 0.7 for the second.
+    std::vector<Event> events(2);
+    for (int i = 0; i < 2; ++i) {
+        events[i] = Event{};
+        events[i].type = EventType::DATA;
+        events[i].time = static_cast<float>(i) * 0.5f;
+        events[i].duration = 0.5f;
+        events[i].num_values = 1;
+        events[i].values[0] = static_cast<float>(i + 1);
+        events[i].velocity = 1.0f;
+        events[i].chance = 1.0f;
+    }
+    events[0].prop_vals[0] = 0.3f;
+    events[1].prop_vals[0] = 0.7f;
+
+    Sequence seq{};
+    seq.events = events.data();
+    seq.num_events = 2;
+    seq.capacity = 2;
+    seq.duration = 1.0f;
+    seq.mode = SequenceMode::NORMAL;
+
+    vm.init_sequence_program_state(STATE_ID, &seq, 1, CYCLE_LENGTH, false, 2);
+
+    // Program: SEQPAT_QUERY → SEQPAT_PROP(slot=0) into buffer 0.
+    std::vector<Instruction> program;
+    Instruction query{};
+    query.opcode = Opcode::SEQPAT_QUERY;
+    query.out_buffer = BUFFER_UNUSED;
+    for (auto& inp : query.inputs) inp = BUFFER_UNUSED;
+    query.state_id = STATE_ID;
+    program.push_back(query);
+
+    Instruction prop{};
+    prop.opcode = Opcode::SEQPAT_PROP;
+    prop.out_buffer = 0;
+    prop.rate = 0;  // slot 0
+    prop.inputs[0] = 0;             // voice 0
+    prop.inputs[1] = BUFFER_UNUSED; // internal clock
+    prop.inputs[2] = BUFFER_UNUSED;
+    prop.inputs[3] = BUFFER_UNUSED;
+    prop.inputs[4] = BUFFER_UNUSED;
+    prop.state_id = STATE_ID;
+    program.push_back(prop);
+
+    auto load_result = vm.load_program(std::span<const Instruction>(program));
+    REQUIRE(load_result == VM::LoadResult::Success);
+
+    // Run for one full cycle. spb = samples per beat at 120 BPM, 48 kHz.
+    float spb = (60.0f / 120.0f) * 48000.0f;
+    int blocks_per_cycle = static_cast<int>(std::ceil(CYCLE_LENGTH * spb / BLOCK_SIZE));
+
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    int samples_first_half = 0, samples_second_half = 0;
+    int hits_first = 0, hits_second = 0;
+
+    for (int b = 0; b < blocks_per_cycle; ++b) {
+        vm.process_block(left.data(), right.data());
+        const float* out = vm.buffers().get(0);
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            // Sample is in first half (event 0) until t=0.5 of cycle, then event 1.
+            float beat_in_cycle = std::fmod(
+                (static_cast<float>(b * BLOCK_SIZE + i)) / spb, CYCLE_LENGTH);
+            if (beat_in_cycle < CYCLE_LENGTH * 0.5f) {
+                samples_first_half++;
+                if (std::abs(out[i] - 0.3f) < 0.001f) hits_first++;
+            } else {
+                samples_second_half++;
+                if (std::abs(out[i] - 0.7f) < 0.001f) hits_second++;
+            }
+        }
+    }
+
+    // Expect at least 95% of samples in each half to match the corresponding
+    // prop_vals (a small fraction near the boundary may be off-by-one).
+    CHECK(hits_first > samples_first_half * 95 / 100);
+    CHECK(hits_second > samples_second_half * 95 / 100);
+}
+
+TEST_CASE("SEQPAT_PROP with no events outputs zeros",
+          "[vm][sequence][phase21][prop]") {
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+    vm.set_bpm(120.0f);
+
+    constexpr std::uint32_t STATE_ID = 0xBCDEF;
+
+    Sequence seq{};
+    seq.events = nullptr;
+    seq.num_events = 0;
+    seq.capacity = 0;
+    seq.duration = 1.0f;
+    seq.mode = SequenceMode::NORMAL;
+    vm.init_sequence_program_state(STATE_ID, &seq, 1, 4.0f, false, 0);
+
+    std::vector<Instruction> program;
+    Instruction query{};
+    query.opcode = Opcode::SEQPAT_QUERY;
+    query.out_buffer = BUFFER_UNUSED;
+    for (auto& inp : query.inputs) inp = BUFFER_UNUSED;
+    query.state_id = STATE_ID;
+    program.push_back(query);
+
+    Instruction prop{};
+    prop.opcode = Opcode::SEQPAT_PROP;
+    prop.out_buffer = 0;
+    prop.rate = 0;
+    prop.inputs[0] = 0;
+    prop.inputs[1] = BUFFER_UNUSED;
+    prop.inputs[2] = BUFFER_UNUSED;
+    prop.inputs[3] = BUFFER_UNUSED;
+    prop.inputs[4] = BUFFER_UNUSED;
+    prop.state_id = STATE_ID;
+    program.push_back(prop);
+
+    auto load_result = vm.load_program(std::span<const Instruction>(program));
+    REQUIRE(load_result == VM::LoadResult::Success);
+
+    std::array<float, BLOCK_SIZE> left{}, right{};
+    vm.process_block(left.data(), right.data());
+    const float* out = vm.buffers().get(0);
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        CHECK_THAT(out[i], WithinAbs(0.0f, 1e-6f));
+    }
+}
+
+// =============================================================================
 // Conditionals & Logic — Direct Opcode Tests
 //
 // These tests exercise the SELECT / CMP_* / LOGIC_* opcodes at the VM level,

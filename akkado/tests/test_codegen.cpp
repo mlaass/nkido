@@ -2248,6 +2248,167 @@ TEST_CASE("Mini-notation record suffix: dur sets event.duration",
 }
 
 // =============================================================================
+// Phase 2.1 PRD §11.1: custom-property pipe-binding accessor
+// =============================================================================
+
+TEST_CASE("Phase 2.1: custom-property slot population from record suffix",
+          "[codegen][patterns][phase21][custom_property]") {
+    // `cutoff` is unrecognized — gets allocated slot 0; values land on
+    // event.prop_vals[0]. PRD §11.1 / SequenceCompiler::custom_property_slots().
+    auto result = akkado::compile(R"(pat("c4{cutoff:0.3} e4{cutoff:0.7}"))");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 2);
+    // Order events by time so the assertion is stable.
+    std::vector<std::pair<float, float>> by_time;
+    for (const auto& e : events) by_time.emplace_back(e.time, e.prop_vals[0]);
+    std::sort(by_time.begin(), by_time.end());
+    CHECK(by_time[0].second == Catch::Approx(0.3f).margin(0.001f));
+    CHECK(by_time[1].second == Catch::Approx(0.7f).margin(0.001f));
+}
+
+TEST_CASE("Phase 2.1: SEQPAT_PROP emitted for custom property",
+          "[codegen][patterns][phase21][custom_property]") {
+    // The §11.1 example must compile and emit SEQPAT_PROP for `cutoff`.
+    auto result = akkado::compile(R"(
+        pat("c4{cutoff:0.3} e4{cutoff:0.7}") as e
+          |> osc("saw", e.freq)
+          |> lp(%, 200 + e.cutoff * 4000)
+          |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    // Exactly one SEQPAT_PROP for the `cutoff` slot.
+    auto count = count_instructions(insts, cedar::Opcode::SEQPAT_PROP);
+    CHECK(count == 1);
+    const auto* prop_inst = find_instruction(insts, cedar::Opcode::SEQPAT_PROP);
+    REQUIRE(prop_inst != nullptr);
+    CHECK(prop_inst->rate == 0);  // first registered slot
+}
+
+TEST_CASE("Phase 2.1: e.unknownkey lists custom fields in error",
+          "[codegen][patterns][phase21][custom_property]") {
+    auto result = akkado::compile(R"(
+        pat("c4{cutoff:0.5}") as e |> osc("sin", e.unknownkey) |> out(%, %)
+    )");
+    REQUIRE_FALSE(result.success);
+    bool found = false;
+    for (const auto& d : result.diagnostics) {
+        if (d.code == "E136" &&
+            d.message.find("cutoff") != std::string::npos &&
+            d.message.find("unknownkey") != std::string::npos) {
+            found = true; break;
+        }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("Phase 2.1: pattern with > 4 custom properties keeps first 4",
+          "[codegen][patterns][phase21][custom_property]") {
+    // Keys beyond the 4-slot limit are silently dropped; the first 4 each
+    // get a slot. PRD §9.4 — overflow is not a hard error so users can
+    // experiment freely; if buffer plumbing for >4 keys is ever needed it's
+    // a separate enhancement.
+    auto result = akkado::compile(
+        R"(pat("c4{a:1, b:2, c:3, d:4, e:5}") as p |> osc("sin", p.a) |> out(%, %))");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    // Four custom keys take slots 0..3; the 5th is dropped. Expect exactly
+    // 4 SEQPAT_PROP instructions emitted.
+    auto count = count_instructions(insts, cedar::Opcode::SEQPAT_PROP);
+    CHECK(count == 4);
+}
+
+// =============================================================================
+// Phase 2.1 PRD §11.2: standalone bend()/aftertouch()/dur() transforms
+// =============================================================================
+
+TEST_CASE("Phase 2.1: standalone bend() writes to event.prop_vals[0]",
+          "[codegen][patterns][phase21][bend]") {
+    auto result = akkado::compile(R"(bend(pat("c4 e4 g4"), 0.5))");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 3);
+    for (const auto& e : events) {
+        CHECK(e.prop_vals[0] == Catch::Approx(0.5f).margin(0.001f));
+    }
+}
+
+TEST_CASE("Phase 2.1: bend() result reachable via e.bend pipe-binding",
+          "[codegen][patterns][phase21][bend]") {
+    // Standalone bend() registers slot keyed by "bend"; e.bend resolves via
+    // pattern_field() fallthrough to payload->custom_fields["bend"].
+    auto result = akkado::compile(R"(
+        bend(pat("c4 e4"), 0.3) as e |> osc("sin", e.freq + e.bend) |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    auto count = count_instructions(insts, cedar::Opcode::SEQPAT_PROP);
+    CHECK(count == 1);
+}
+
+TEST_CASE("Phase 2.1: aftertouch() writes to its own slot independent of bend",
+          "[codegen][patterns][phase21][aftertouch]") {
+    // Both transforms applied — bend takes slot 0, aftertouch takes slot 1
+    // (deterministic insertion order). Each event carries both values.
+    auto result = akkado::compile(R"(aftertouch(bend(pat("c4 e4"), 0.4), 0.7))");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 2);
+    for (const auto& e : events) {
+        CHECK(e.prop_vals[0] == Catch::Approx(0.4f).margin(0.001f));  // bend (slot 0)
+        CHECK(e.prop_vals[1] == Catch::Approx(0.7f).margin(0.001f));  // aftertouch (slot 1)
+    }
+}
+
+TEST_CASE("Phase 2.1: inline {bend:x} reused by standalone bend(pat, y) — value overwritten",
+          "[codegen][patterns][phase21][bend]") {
+    // The inline `{bend:0.2}` registers the bend slot with 0.2; the outer
+    // bend() transform uses the same slot and overwrites to 0.7.
+    auto result = akkado::compile(R"(bend(pat("c4{bend:0.2}"), 0.7))");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].prop_vals[0] == Catch::Approx(0.7f).margin(0.001f));
+}
+
+TEST_CASE("Phase 2.1: dur() multiplies event.duration",
+          "[codegen][patterns][phase21][dur]") {
+    auto result = akkado::compile(R"(dur(pat("c4 e4"), 0.5))");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 2);
+    // Each atom's natural time_span in a 2-atom pat is 0.5; dur(0.5) halves
+    // that to 0.25.
+    for (const auto& e : events) {
+        CHECK(e.duration == Catch::Approx(0.25f).margin(0.001f));
+    }
+}
+
+TEST_CASE("Phase 2.1: dur() rejects zero/negative factor",
+          "[codegen][patterns][phase21][dur]") {
+    auto neg = akkado::compile(R"(dur(pat("c4"), -1))");
+    bool found_neg = false;
+    for (const auto& d : neg.diagnostics) {
+        if (d.code == "E131") { found_neg = true; break; }
+    }
+    CHECK(found_neg);
+}
+
+TEST_CASE("Phase 2.1: nested bend() inside slow() preserves prop_vals",
+          "[codegen][patterns][phase21][bend][nested]") {
+    // The inner bend() runs in compile_pattern_for_transform's recursion;
+    // outer slow() should not clobber prop_vals.
+    auto result = akkado::compile(R"(slow(bend(pat("c4 e4"), 0.3), 2))");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE_FALSE(events.empty());
+    for (const auto& e : events) {
+        CHECK(e.prop_vals[0] == Catch::Approx(0.3f).margin(0.001f));
+    }
+}
+
+// =============================================================================
 // Phase 2 PRD D0: velocity-shorthand propagation fix
 // =============================================================================
 

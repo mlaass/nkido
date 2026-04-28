@@ -33,6 +33,11 @@ enum class EventType : std::uint8_t {
 // Maximum values per event (covers single notes and basic chords)
 static constexpr std::size_t MAX_VALUES_PER_EVENT = 4;
 
+// Maximum custom property slots per event (Phase 2.1, PRD §11). Slot
+// assignment is compile-time, pattern-local. Used by SEQPAT_PROP to surface
+// values from `c4{cutoff:0.3}` and standalone `bend()/aftertouch()` transforms.
+static constexpr std::size_t MAX_PROPS_PER_EVENT = 4;
+
 struct Event {
     float time;              // Position in cycle (beats)
     float duration;          // Event duration (beats)
@@ -47,11 +52,18 @@ struct Event {
         float values[MAX_VALUES_PER_EVENT]; // DATA: up to 4 voices
         std::uint16_t seq_id;               // SUB_SEQ: which sequence to call
     };
+    // Custom property values (Phase 2.1, PRD §11). Slot indices are assigned
+    // at compile time by SequenceCompiler; semantics are pattern-local.
+    // Default 0.0f means "not set".
+    float prop_vals[MAX_PROPS_PER_EVENT];
 
     Event() : time(0.0f), duration(1.0f), chance(1.0f), velocity(1.0f),
               type(EventType::DATA), num_values(0), type_id(0),
               source_offset(0), source_length(0) {
         values[0] = 0.0f;
+        for (std::size_t i = 0; i < MAX_PROPS_PER_EVENT; ++i) {
+            prop_vals[i] = 0.0f;
+        }
     }
 };
 
@@ -99,6 +111,8 @@ struct OutputEvents {
         std::uint16_t type_id;        // Type identifier for routing
         std::uint16_t source_offset;
         std::uint16_t source_length;
+        // Custom property values (Phase 2.1, PRD §11). Mirrors Event::prop_vals.
+        float prop_vals[MAX_PROPS_PER_EVENT];
     };
 
     OutputEvent* events = nullptr;    // Pointer to arena-allocated output events
@@ -269,6 +283,14 @@ inline void process_event(SequenceState& state, const Event& e, std::uint64_t se
         out.add(time_offset, e.duration * time_scale,
                 e.values, e.num_values, e.velocity, e.type_id,
                 e.source_offset, e.source_length);
+        // Copy custom property values onto the just-added OutputEvent
+        // (PRD §11.1 / §11.2 — surfaced via SEQPAT_PROP).
+        if (out.num_events > 0) {
+            auto& last = out.events[out.num_events - 1];
+            for (std::size_t i = 0; i < MAX_PROPS_PER_EVENT; ++i) {
+                last.prop_vals[i] = e.prop_vals[i];
+            }
+        }
     } else {
         // SUB_SEQ: recursively query the referenced sequence
         // Scale time_scale by event duration so child events fit within this event's span

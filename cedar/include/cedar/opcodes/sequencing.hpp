@@ -676,4 +676,77 @@ inline void op_seqpat_gate(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// ============================================================================
+// SEQPAT_PROP - Per-event custom property signal (Phase 2.1, PRD §11)
+// ============================================================================
+// out_buffer: float buffer receiving the slot value of the active event
+// rate: property slot index (0..MAX_PROPS_PER_EVENT-1)
+// inputs[0]: voice index for polyphonic patterns (0-7, default 0 if 0xFFFF)
+// inputs[1]: external clock buffer (0xFFFF = use internal)
+// state_id: must match the SEQPAT_QUERY that populated the SequenceState
+//
+// Reads `state.output.events[active_idx].prop_vals[slot]` per sample, where
+// active_idx is determined by beat_pos against event start times (same logic
+// as SEQPAT_TYPE).
+[[gnu::always_inline]]
+inline void op_seqpat_prop(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    auto& state = ctx.states->get_or_create<SequenceState>(inst.state_id);
+    std::uint8_t slot = static_cast<std::uint8_t>(inst.rate);
+
+    // Voice index for polyphonic patterns
+    std::uint8_t voice_index = (inst.inputs[0] != BUFFER_UNUSED)
+        ? static_cast<std::uint8_t>(inst.inputs[0]) : 0;
+
+    if (state.output.num_events == 0 || slot >= MAX_PROPS_PER_EVENT) {
+        std::fill_n(out, BLOCK_SIZE, 0.0f);
+        return;
+    }
+
+    // External clock override: inputs[1] contains beat_pos buffer
+    bool external_clock = (inst.inputs[1] != BUFFER_UNUSED);
+    const float* ext_beat_pos = external_clock ? ctx.buffers->get(inst.inputs[1]) : nullptr;
+
+    const float spb = external_clock ? 1.0f : ctx.samples_per_beat();
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        // Current beat position within cycle
+        float beat_pos;
+        if (external_clock) {
+            beat_pos = std::fmod(ext_beat_pos[i], state.cycle_length);
+            if (beat_pos < 0.0f) beat_pos += state.cycle_length;
+        } else {
+            beat_pos = std::fmod(
+                static_cast<float>(ctx.global_sample_counter + i) / spb,
+                state.cycle_length
+            );
+        }
+
+        // Find the most recent event that started before or at beat_pos
+        // (same logic as SEQPAT_TYPE)
+        std::uint32_t event_index = 0;
+        for (std::uint32_t e = 0; e < state.output.num_events; ++e) {
+            if (state.output.events[e].time <= beat_pos) {
+                event_index = e;
+            } else {
+                break;
+            }
+        }
+
+        // If beat_pos is before first event, wrap to last event
+        if (state.output.num_events > 0 && beat_pos < state.output.events[0].time) {
+            event_index = state.output.num_events - 1;
+        }
+
+        const auto& evt = state.output.events[event_index];
+
+        // Voice gate: silent for events that don't carry this voice
+        if (voice_index < evt.num_values) {
+            out[i] = evt.prop_vals[slot];
+        } else {
+            out[i] = 0.0f;
+        }
+    }
+}
+
 }  // namespace cedar

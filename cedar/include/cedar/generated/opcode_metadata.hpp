@@ -124,6 +124,7 @@ inline const char* opcode_to_string(Opcode op) {
         case Opcode::SEQPAT_TYPE: return "SEQPAT_TYPE";
         case Opcode::SEQPAT_GATE: return "SEQPAT_GATE";
         case Opcode::SEQPAT_TRANSPORT: return "SEQPAT_TRANSPORT";
+        case Opcode::SEQPAT_PROP: return "SEQPAT_PROP";
         case Opcode::ARRAY_PACK: return "ARRAY_PACK";
         case Opcode::ARRAY_INDEX: return "ARRAY_INDEX";
         case Opcode::ARRAY_UNPACK: return "ARRAY_UNPACK";
@@ -217,6 +218,7 @@ inline bool opcode_is_stateful(Opcode op) {
         case Opcode::SEQPAT_TYPE:
         case Opcode::SEQPAT_GATE:
         case Opcode::SEQPAT_TRANSPORT:
+        case Opcode::SEQPAT_PROP:
         case Opcode::DELAY_PINGPONG:
         case Opcode::PROBE:
         case Opcode::FFT_PROBE:

@@ -47,12 +47,27 @@ TypedValue pattern_field(const TypedValue& tv, const std::string& name) {
     }
 
     int idx = pattern_field_index(name);
-    if (idx < 0) return TypedValue::error_val();
+    if (idx >= 0) {
+        std::uint16_t buf = tv.pattern->fields[static_cast<std::size_t>(idx)];
+        if (buf == 0xFFFF) return TypedValue::error_val();
+        return TypedValue::signal(buf);
+    }
 
-    std::uint16_t buf = tv.pattern->fields[static_cast<std::size_t>(idx)];
-    if (buf == 0xFFFF) return TypedValue::error_val();
+    // Phase 2.1 PRD §11.1: custom-property pipe-binding accessor.
+    auto it = tv.pattern->custom_fields.find(name);
+    if (it != tv.pattern->custom_fields.end() && it->second != 0xFFFF) {
+        return TypedValue::signal(it->second);
+    }
+    return TypedValue::error_val();
+}
 
-    return TypedValue::signal(buf);
+std::string available_fields(const PatternPayload& payload) {
+    std::string s = "freq, vel, trig, gate, type";
+    for (const auto& [key, _] : payload.custom_fields) {
+        s += ", ";
+        s += key;
+    }
+    return s;
 }
 
 } // namespace akkado

@@ -40,6 +40,11 @@ struct PatternPayload {
     /// Fixed-position field buffers: [freq, vel, trig, gate, type]
     std::array<std::uint16_t, 5> fields = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
 
+    /// Phase 2.1 PRD §11: custom property buffers populated by SEQPAT_PROP.
+    /// Keyed by source name (e.g. "cutoff"); value is the buffer index.
+    /// Resolved by `pattern_field()` after the fixed-field check fails.
+    std::unordered_map<std::string, std::uint16_t> custom_fields;
+
     /// State ID for SEQPAT instructions (links poly() to upstream pattern).
     /// poly() reads its source events through the SequenceState directly via
     /// POLY_BEGIN — there is intentionally no per-voice buffer plumbing here.
@@ -55,6 +60,11 @@ struct PatternPayload {
     static constexpr std::size_t GATE = 3;
     static constexpr std::size_t TYPE = 4;
 };
+
+/// Build a human-readable list of available pattern field names: the five
+/// fixed fields plus any custom keys registered on the payload. Used for
+/// E136 diagnostics.
+std::string available_fields(const PatternPayload& payload);
 
 /// Record payload: named fields mapped to TypedValues
 struct RecordPayload {

@@ -815,6 +815,10 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"rev",       &CodeGenerator::handle_rev_call},
                 {"transpose", &CodeGenerator::handle_transpose_call},
                 {"velocity",  &CodeGenerator::handle_velocity_call},
+                // Phase 2.1 PRD §11.2: standalone note-property transforms
+                {"bend",        &CodeGenerator::handle_bend_call},
+                {"aftertouch",  &CodeGenerator::handle_aftertouch_call},
+                {"dur",         &CodeGenerator::handle_dur_call},
                 {"bank",      &CodeGenerator::handle_bank_call},
                 {"variant",   &CodeGenerator::handle_variant_call},
                 {"transport", &CodeGenerator::handle_transport_call},
@@ -1986,7 +1990,11 @@ TypedValue CodeGenerator::handle_field_access(NodeIndex node, const Node& n) {
                     return cache_and_return(node, result);
                 }
             }
-            error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
+            std::string avail = (pat_tv.type == ValueType::Pattern && pat_tv.pattern)
+                ? available_fields(*pat_tv.pattern)
+                : std::string("freq, vel, trig, gate, type");
+            error("E136", "Unknown field '" + field_name +
+                  "' on pattern. Available: " + avail, n.location);
             return TypedValue::error_val();
         }
 
@@ -2015,7 +2023,11 @@ TypedValue CodeGenerator::handle_field_access(NodeIndex node, const Node& n) {
             if (!result.error) {
                 return cache_and_return(node, result);
             }
-            error("E136", "Unknown field '" + field_name + "' on pattern. Available: freq, vel, trig, gate, type", n.location);
+            std::string avail = expr_tv.pattern
+                ? available_fields(*expr_tv.pattern)
+                : std::string("freq, vel, trig, gate, type");
+            error("E136", "Unknown field '" + field_name +
+                  "' on pattern. Available: " + avail, n.location);
             return TypedValue::error_val();
         }
 
