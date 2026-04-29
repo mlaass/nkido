@@ -267,6 +267,21 @@ TypedValue CodeGenerator::handle_user_function_call(
                     TypedValue arg_tv = visit(args[i]);
                     param_buf = arg_tv.buffer;
 
+                    // PRD prd-patterns-as-scalar-values §5.3 / §9.5: user-fn
+                    // params get default Signal coerce. Polyphonic non-sample
+                    // patterns would silently pass voice-0 — reject E160 so
+                    // the user picks a voice or wraps with poly().
+                    if (arg_tv.type == ValueType::Pattern && arg_tv.pattern &&
+                        arg_tv.pattern->max_voices > 1 &&
+                        !arg_tv.pattern->is_sample_pattern) {
+                        error("E160",
+                              "user function parameter '" + func.params[i].name +
+                              "' cannot accept a polyphonic pattern as scalar; "
+                              "use poly() to consume it, or pick a voice/field "
+                              "explicitly (e.g. p.freq)",
+                              ast_->arena[args[i]].location);
+                    }
+
                     // Track multi-buffer arguments for polyphonic propagation
                     if (is_multi_buffer(args[i])) {
                         std::uint32_t param_hash = fnv1a_hash(func.params[i].name);

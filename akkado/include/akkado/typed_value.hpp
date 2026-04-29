@@ -53,6 +53,15 @@ struct PatternPayload {
     /// Cycle length in beats
     float cycle_length = 4.0f;
 
+    /// PRD prd-patterns-as-scalar-values §5.3.
+    /// Pattern→Signal coerce inspects these flags to decide whether the
+    /// pattern can be implicitly cast to its primary value buffer (Signal).
+    /// Sample patterns (`s"…"`) and polyphonic chord patterns (`c"…"`,
+    /// `n"[c4,e4]"`) are rejected at coerce sites with E160; users must
+    /// pick a field or wrap with poly() / sampler() explicitly.
+    bool is_sample_pattern = false;
+    std::uint8_t max_voices = 1;
+
     /// Field index constants
     static constexpr std::size_t FREQ = 0;
     static constexpr std::size_t VEL  = 1;

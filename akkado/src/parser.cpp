@@ -96,6 +96,10 @@ void Parser::synchronize() {
             case TokenType::Post:
             case TokenType::Pat:
             case TokenType::Timeline:
+            case TokenType::ValuePat:
+            case TokenType::NotePat:
+            case TokenType::SamplePat:
+            case TokenType::ChordPat:
             case TokenType::Const:
                 return;
             default:
@@ -481,6 +485,10 @@ NodeIndex Parser::parse_prefix() {
             return parse_record_literal();
         case TokenType::Pat:
         case TokenType::Timeline:
+        case TokenType::ValuePat:
+        case TokenType::NotePat:
+        case TokenType::SamplePat:
+        case TokenType::ChordPat:
             return parse_mini_literal();
         case TokenType::Match:
             return parse_match_expr();
@@ -1145,17 +1153,29 @@ NodeIndex Parser::parse_mini_literal() {
     Token kw_tok = advance();
 
     bool is_timeline = (kw_tok.type == TokenType::Timeline);
+    bool is_pat_call = (kw_tok.type == TokenType::Pat);
 
-    if (kw_tok.type != TokenType::Pat && kw_tok.type != TokenType::Timeline) {
-        error("Expected 'pat' or 't' keyword");
-        return NULL_NODE;
+    // Map token type to MiniParseMode for the prefix forms.
+    MiniParseMode mode = MiniParseMode::Auto;
+    std::string mode_marker;
+    switch (kw_tok.type) {
+        case TokenType::Pat:       mode = MiniParseMode::Auto;   mode_marker = "pat";    break;
+        case TokenType::Timeline:  mode = MiniParseMode::Curve;  mode_marker = "timeline"; break;
+        case TokenType::ValuePat:  mode = MiniParseMode::Value;  mode_marker = "value";  break;
+        case TokenType::NotePat:   mode = MiniParseMode::Note;   mode_marker = "note";   break;
+        case TokenType::SamplePat: mode = MiniParseMode::Sample; mode_marker = "sample"; break;
+        case TokenType::ChordPat:  mode = MiniParseMode::Chord;  mode_marker = "chord";  break;
+        default:
+            error("Expected pattern prefix");
+            return NULL_NODE;
     }
 
     NodeIndex node = make_node(NodeType::MiniLiteral, kw_tok);
 
-    // Timeline prefix t"..." doesn't support parens form
+    // Only `pat()` accepts the function-call-with-closure form. The typed
+    // prefix and timeline forms are bare string literals.
     bool has_parens = false;
-    if (!is_timeline && check(TokenType::LParen)) {
+    if (is_pat_call && check(TokenType::LParen)) {
         has_parens = true;
         advance(); // consume '('
     }
@@ -1176,9 +1196,7 @@ NodeIndex Parser::parse_mini_literal() {
     content_loc.column += 1;
     content_loc.length = pattern_str.length();  // Content length without quotes
 
-    // Timeline (t"...") uses curve_mode=true
-    auto [pattern_ast, mini_diags] = parse_mini(pattern_str, arena_, content_loc,
-                                                 false, is_timeline);
+    auto [pattern_ast, mini_diags] = parse_mini(pattern_str, arena_, content_loc, mode);
 
     // Add mini-notation diagnostics to our diagnostics
     for (auto& diag : mini_diags) {
@@ -1191,9 +1209,10 @@ NodeIndex Parser::parse_mini_literal() {
         arena_.add_child(node, pattern_ast);
     }
 
-    // Mark timeline nodes so codegen can distinguish from pat
-    if (is_timeline) {
-        arena_[node].data = Node::StringData{.value = "timeline"};
+    // Tag the MiniLiteral so codegen knows the parse mode.
+    // "pat" is the default and uses no marker; everything else gets a tag.
+    if (mode != MiniParseMode::Auto) {
+        arena_[node].data = Node::StringData{.value = mode_marker};
     }
 
     if (has_parens) {

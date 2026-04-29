@@ -796,6 +796,10 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 {"get",     &CodeGenerator::handle_get_call},
                 {"set",     &CodeGenerator::handle_set_call},
                 {"chord",   &CodeGenerator::handle_chord_call},
+                // PRD prd-patterns-as-scalar-values: typed-prefix call forms.
+                {"value",   &CodeGenerator::handle_value_call},
+                {"note",    &CodeGenerator::handle_note_call},
+                {"scalar",  &CodeGenerator::handle_scalar_call},
                 {"map",     &CodeGenerator::handle_map_call},
                 {"sum",     &CodeGenerator::handle_sum_call},
                 {"reduce",  &CodeGenerator::handle_reduce_call},
@@ -1019,6 +1023,38 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                     }
                 } else {
                     TypedValue arg_tv = visit(arg_value);
+
+                    // PRD prd-patterns-as-scalar-values §5.3: implicit
+                    // Pattern→Signal coerce. arg_tv.buffer is already the
+                    // pattern's primary value buffer — for monophonic non-
+                    // sample patterns this is the FREQ buffer (Signal-typed
+                    // since SEQPAT_STEP populates raw scalars); for sample
+                    // patterns it is the post-SAMPLE_PLAY audio output
+                    // (already a Signal), which legitimately routes through
+                    // out(), gain stages, and effects.
+                    //
+                    // The genuine footgun is a polyphonic non-sample pattern
+                    // (chord, multi-voice note pattern): without a coerce
+                    // reject, `osc("sin", c"Am")` would silently emit only
+                    // voice-0's freq, dropping the chord's other voices.
+                    // Reject those at the slot with E160 so the user opts
+                    // into poly() / scalar() / a voice index explicitly.
+                    bool slot_expects_signal =
+                        arg_idx < MAX_BUILTIN_PARAMS &&
+                        (builtin->param_types[arg_idx] == ParamValueType::Signal ||
+                         builtin->param_types[arg_idx] == ParamValueType::Any);
+                    if (builtin->args_are_signal && slot_expects_signal &&
+                        arg_tv.type == ValueType::Pattern && arg_tv.pattern &&
+                        arg_tv.pattern->max_voices > 1 &&
+                        !arg_tv.pattern->is_sample_pattern) {
+                        error("E160",
+                              func_name + "() cannot use a polyphonic pattern as scalar at "
+                              "argument '" + std::string(builtin->param_names[arg_idx]) +
+                              "'; use poly() to consume it, or pick a voice/field "
+                              "explicitly (e.g. p.freq)",
+                              ast_->arena[arg_value].location);
+                    }
+
                     arg_buffers.push_back(arg_tv.buffer);
 
                     // Type check against annotation (non-fatal — continue for max error reporting)

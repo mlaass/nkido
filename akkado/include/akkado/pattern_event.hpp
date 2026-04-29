@@ -24,6 +24,7 @@ enum class PatternEventType : std::uint8_t {
     Elongate,   // Internal marker: extends previous event's duration (filtered during post-processing)
     CurveLevel, // Curve value level (holds a value for its duration)
     CurveRamp,  // Curve ramp (interpolates between neighbors)
+    Value,      // Raw numeric scalar (v"…" pattern atom — no mtof)
 };
 
 /// A single event in an expanded pattern timeline
@@ -56,6 +57,9 @@ struct PatternEvent {
     // Curve data (for CurveLevel/CurveRamp types)
     float curve_value = 0.0f;      // For CurveLevel: 0.0, 0.25, 0.5, 0.75, 1.0
     bool curve_smooth = false;     // For CurveLevel: true if ~ prefix (linear interp)
+
+    // Value data (for Value type — v"…" raw numeric atoms)
+    float scalar_value = 0.0f;     // Raw user-provided number, no mtof applied
 
     /// Check if this event should trigger (based on chance)
     /// @param random_value Random value in [0, 1)

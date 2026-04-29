@@ -81,6 +81,7 @@ private:
     NodeIndex parse_pitch_atom(const MiniToken& token);
     NodeIndex parse_sample_atom(const MiniToken& token);
     NodeIndex parse_chord_atom(const MiniToken& token);
+    NodeIndex parse_value_atom(const MiniToken& token);
     NodeIndex parse_rest();
     NodeIndex parse_elongate();
 
@@ -104,11 +105,17 @@ private:
 /// @param pattern The pattern string content
 /// @param arena Reference to the AST arena
 /// @param base_location Location for error reporting
-/// @param sample_only When true, treat all alphanumeric sequences as samples (for chord patterns)
+/// @param mode Parse mode (Auto/Note/Sample/Chord/Value/Curve)
 /// @return Pair of root node index and diagnostics
 std::pair<NodeIndex, std::vector<Diagnostic>>
 parse_mini(std::string_view pattern, AstArena& arena,
-           SourceLocation base_location = {}, bool sample_only = false,
+           SourceLocation base_location = {},
+           MiniParseMode mode = MiniParseMode::Auto);
+
+/// Backward-compat overload using the old bool flags.
+std::pair<NodeIndex, std::vector<Diagnostic>>
+parse_mini(std::string_view pattern, AstArena& arena,
+           SourceLocation base_location, bool sample_only,
            bool curve_mode = false);
 
 } // namespace akkado

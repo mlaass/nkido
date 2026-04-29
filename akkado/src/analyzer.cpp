@@ -1634,7 +1634,8 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
                 if (std::holds_alternative<Node::IdentifierData>(expr_node.data)) {
                     call_name = expr_node.as_identifier();
                 }
-                if (call_name == "chord" || call_name == "pat" || call_name == "seq") {
+                if (call_name == "chord" || call_name == "pat" || call_name == "seq" ||
+                    call_name == "value" || call_name == "note") {
                     // Pattern-producing call - define as Pattern for field access
                     PatternInfo pat_info{};
                     pat_info.pattern_node = bound_expr;

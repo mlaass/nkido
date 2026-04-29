@@ -167,6 +167,7 @@ bool MiniParser::is_atom_start() const {
            type == MiniTokenType::CurveLevel ||
            type == MiniTokenType::CurveRamp ||
            type == MiniTokenType::CurveSmooth ||
+           type == MiniTokenType::ValueAtom ||
            type == MiniTokenType::LBracket ||
            type == MiniTokenType::LAngle ||
            type == MiniTokenType::LBrace;
@@ -185,6 +186,10 @@ NodeIndex MiniParser::parse_atom() {
 
     if (match(MiniTokenType::ChordToken)) {
         return parse_chord_atom(previous());
+    }
+
+    if (match(MiniTokenType::ValueAtom)) {
+        return parse_value_atom(previous());
     }
 
     if (match(MiniTokenType::Rest)) {
@@ -338,6 +343,29 @@ NodeIndex MiniParser::parse_chord_atom(const MiniToken& token) {
         .properties = chord.properties
     };
 
+    return node;
+}
+
+NodeIndex MiniParser::parse_value_atom(const MiniToken& token) {
+    NodeIndex node = make_node(NodeType::MiniAtom, token);
+    double v = std::get<double>(token.value);
+    arena_[node].data = Node::MiniAtomData{
+        .kind = Node::MiniAtomKind::Value,
+        .midi_note = 0,
+        .micro_offset = 0,
+        .velocity = 1.0f,
+        .sample_name = "",
+        .sample_variant = 0,
+        .sample_bank = "",
+        .chord_root = "",
+        .chord_quality = "",
+        .chord_root_midi = 0,
+        .chord_intervals = {},
+        .curve_value = 0.0f,
+        .curve_smooth = false,
+        .scalar_value = static_cast<float>(v),
+        .properties = {}
+    };
     return node;
 }
 
@@ -593,8 +621,8 @@ NodeIndex MiniParser::parse_modifiers(NodeIndex atom) {
 // Convenience function
 std::pair<NodeIndex, std::vector<Diagnostic>>
 parse_mini(std::string_view pattern, AstArena& arena, SourceLocation base_location,
-           bool sample_only, bool curve_mode) {
-    auto [tokens, lex_diags] = lex_mini(pattern, base_location, sample_only, curve_mode);
+           MiniParseMode mode) {
+    auto [tokens, lex_diags] = lex_mini(pattern, base_location, mode);
 
     MiniParser parser(std::move(tokens), arena, base_location);
     NodeIndex root = parser.parse();
@@ -605,6 +633,14 @@ parse_mini(std::string_view pattern, AstArena& arena, SourceLocation base_locati
     all_diags.insert(all_diags.end(), parse_diags.begin(), parse_diags.end());
 
     return {root, std::move(all_diags)};
+}
+
+std::pair<NodeIndex, std::vector<Diagnostic>>
+parse_mini(std::string_view pattern, AstArena& arena, SourceLocation base_location,
+           bool sample_only, bool curve_mode) {
+    MiniParseMode m = curve_mode ? MiniParseMode::Curve
+                                 : (sample_only ? MiniParseMode::Sample : MiniParseMode::Auto);
+    return parse_mini(pattern, arena, base_location, m);
 }
 
 } // namespace akkado

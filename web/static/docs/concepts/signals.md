@@ -96,7 +96,39 @@ The `dry * 0.3` stays mono, `wet * 0.7` stays stereo, and `mono + stereo` promot
 
 Mono on mono stays mono. Stereo on stereo stays stereo (L op L, R op R). There's no implicit mono-to-stereo promotion anywhere else — the compiler will complain if it can't make sense of a mismatch.
 
+## Patterns and Signals
+
+Patterns (`pat()`, `n"…"`, `v"…"`, `c"…"`, `s"…"`) carry a primary value buffer that doubles as a Signal. When you pass a pattern to a slot that expects a Signal — `osc("sin", n"c4 e4 g4")`, `lp(sig, v"<200 800>", 0.7)` — the compiler implicitly extracts that buffer.
+
+The **Pattern → Signal coerce** rule:
+
+| Pattern shape           | Coerces to Signal? | Where the buffer points                  |
+|-------------------------|--------------------|------------------------------------------|
+| Monophonic note (`n"…"`)| Yes                | `freq` field — Hz post-mtof              |
+| Numeric (`v"…"`)        | Yes                | `freq` field — raw scalar                |
+| Sample (`s"…"`)         | Yes                | Audio output (post-`SAMPLE_PLAY`)        |
+| Polyphonic chord (`c"…"`) | **No — E160**    | Use `poly()` to expand voices            |
+| Polyphonic note (e.g. `n"[c4,e4]"`) | **No — E160** | Use `poly()`                       |
+
+### Operator type rules
+
+Arithmetic between patterns and other types follows these rules:
+
+| LHS     | RHS     | Result   | Notes                                        |
+|---------|---------|----------|----------------------------------------------|
+| Pattern | Pattern | Pattern  | Pointwise op on `freq` buffers, longest wins |
+| Pattern | Signal  | Signal   | Pattern coerces; sample-rate result          |
+| Pattern | Number  | Pattern  | `n"c4 e4" + 12` is still a Pattern           |
+| Signal  | Signal  | Signal   | Standard                                     |
+| Pattern | Stereo  | E165     | Wrap with `stereo(scalar(...))` explicitly   |
+
+### `scalar()` — the explicit cast
+
+`scalar(p)` unwraps a monophonic pattern's `freq` buffer. It's idempotent on Signals (`scalar(scalar(p))` is safe) and errors **E161** on sample / polyphonic patterns. See the [Pattern Literals reference](../reference/pattern/literals.md).
+
 ## See also
 
+- [Pattern Literals](../reference/pattern/literals.md) — typed prefixes (`v"…"`, `n"…"`, `s"…"`, `c"…"`) and `scalar()`.
+- [Pattern Modulation tutorial](../tutorials/06-pattern-modulation.md) — flagship walkthrough of `bend(notes, v"…")` and custom-property accessors.
 - [Stereo builtins reference](/docs/reference/builtins/stereo) — signatures and behaviour for `stereo`, `mono`, `left`, `right`, `pan`, `width`, `ms_encode`, `ms_decode`, `pingpong`.
 - [Cedar architecture — STEREO_INPUT flag](../../../docs/cedar-architecture.md#bytecode-format) — the VM-level dispatch mechanism that powers auto-lift.

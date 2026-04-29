@@ -4,16 +4,33 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 
 namespace akkado {
 
-MiniLexer::MiniLexer(std::string_view pattern, SourceLocation base_location, bool sample_only, bool curve_mode)
+static MiniParseMode mode_from_bools(bool sample_only, bool curve_mode) {
+    if (curve_mode) return MiniParseMode::Curve;
+    if (sample_only) return MiniParseMode::Sample;
+    return MiniParseMode::Auto;
+}
+
+MiniLexer::MiniLexer(std::string_view pattern, SourceLocation base_location, MiniParseMode mode)
     : pattern_(pattern)
     , base_location_(base_location)
-    , sample_only_(sample_only)
-    , curve_mode_(curve_mode)
+    , mode_(mode)
+    // Sample mode disables pitch/chord detection entirely (every alpha atom
+    // is a sample). Chord mode goes through the standard lex path so that
+    // try_lex_chord_symbol() recognises Am / C7 / Fmaj7 as ChordToken atoms.
+    , sample_only_(mode == MiniParseMode::Sample)
+    , curve_mode_(mode == MiniParseMode::Curve)
+    , value_mode_(mode == MiniParseMode::Value)
+    , note_mode_(mode == MiniParseMode::Note)
+{}
+
+MiniLexer::MiniLexer(std::string_view pattern, SourceLocation base_location, bool sample_only, bool curve_mode)
+    : MiniLexer(pattern, base_location, mode_from_bools(sample_only, curve_mode))
 {}
 
 std::vector<MiniToken> MiniLexer::lex_all() {
@@ -260,6 +277,37 @@ MiniToken MiniLexer::lex_token() {
         return make_token(MiniTokenType::Elongate);
     }
 
+    // Value mode (v"…"): atoms must be numeric literals.
+    // Negative numbers, decimals, scientific notation are accepted.
+    // Reject any letter-leading token with E163.
+    if (value_mode_) {
+        // Possible numeric atom: optional sign + digits (or .digits).
+        bool starts_numeric = is_digit(c) || (c == '.' && is_digit(peek_next()));
+        if (c == '-' || c == '+') {
+            // Distinguish leading sign on a numeric atom from a stray operator.
+            char nx = peek_next();
+            if (is_digit(nx) || (nx == '.' && current_ + 2 < pattern_.size() && is_digit(pattern_[current_ + 2]))) {
+                starts_numeric = true;
+            }
+        }
+        if (starts_numeric) {
+            return lex_value_atom();
+        }
+        // Letter-leading atoms are an error in v"…" mode.
+        if (is_alpha(c)) {
+            // Consume the bad word for a focused error span.
+            while (!is_at_end() && (is_alpha(peek()) || is_digit(peek()) || peek() == '#')) {
+                advance();
+            }
+            std::string_view bad = pattern_.substr(start_, current_ - start_);
+            std::string msg = "atom '";
+            msg += bad;
+            msg += "' is not a numeric literal in v\"…\" mode (E163)";
+            return make_error_token(msg);
+        }
+        // Fall through to standard punctuation lexing for [, <, {, etc.
+    }
+
     // In sample_only mode (chord patterns), skip pitch detection
     if (!sample_only_) {
         // For uppercase A-G, try chord detection FIRST
@@ -324,6 +372,45 @@ MiniToken MiniLexer::lex_token() {
         default:
             return make_error_token("Unexpected character in pattern");
     }
+}
+
+MiniToken MiniLexer::lex_value_atom() {
+    // Lex a numeric literal for v"…" mode atoms.
+    // Accepts: optional leading +/-, integer part, optional fractional part,
+    // optional exponent (e/E with optional sign).
+    if (peek() == '+' || peek() == '-') {
+        advance();
+    }
+    bool has_digit = false;
+    while (is_digit(peek())) { advance(); has_digit = true; }
+    if (peek() == '.') {
+        advance();
+        while (is_digit(peek())) { advance(); has_digit = true; }
+    }
+    // Exponent
+    if (peek() == 'e' || peek() == 'E') {
+        // Look ahead so we don't consume an 'e' that's part of an identifier.
+        std::size_t save = current_;
+        advance();  // consume e/E
+        if (peek() == '+' || peek() == '-') advance();
+        bool exp_has_digit = false;
+        while (is_digit(peek())) { advance(); exp_has_digit = true; }
+        if (!exp_has_digit) {
+            // Roll back the 'e' — wasn't a valid exponent.
+            current_ = save;
+        }
+    }
+    if (!has_digit) {
+        return make_error_token("expected numeric atom in v\"…\" mode (E163)");
+    }
+    std::string_view text = pattern_.substr(start_, current_ - start_);
+    std::string buf(text);
+    char* end = nullptr;
+    double value = std::strtod(buf.c_str(), &end);
+    if (end == buf.c_str() || !std::isfinite(value)) {
+        return make_error_token("invalid numeric atom in v\"…\" mode (E163)");
+    }
+    return make_token(MiniTokenType::ValueAtom, value);
 }
 
 MiniToken MiniLexer::lex_number() {
@@ -770,10 +857,15 @@ MiniToken MiniLexer::lex_sample_only() {
 
 // Convenience function
 std::pair<std::vector<MiniToken>, std::vector<Diagnostic>>
-lex_mini(std::string_view pattern, SourceLocation base_location, bool sample_only, bool curve_mode) {
-    MiniLexer lexer(pattern, base_location, sample_only, curve_mode);
+lex_mini(std::string_view pattern, SourceLocation base_location, MiniParseMode mode) {
+    MiniLexer lexer(pattern, base_location, mode);
     auto tokens = lexer.lex_all();
     return {std::move(tokens), lexer.diagnostics()};
+}
+
+std::pair<std::vector<MiniToken>, std::vector<Diagnostic>>
+lex_mini(std::string_view pattern, SourceLocation base_location, bool sample_only, bool curve_mode) {
+    return lex_mini(pattern, base_location, mode_from_bools(sample_only, curve_mode));
 }
 
 } // namespace akkado

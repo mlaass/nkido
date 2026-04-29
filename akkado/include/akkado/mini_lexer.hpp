@@ -30,10 +30,13 @@ public:
     /// Construct a mini-lexer for a pattern string
     /// @param pattern The pattern string content (without quotes)
     /// @param base_location Location of the pattern string in source for error reporting
-    /// @param sample_only When true, all alphanumeric sequences are treated as sample tokens
-    ///                    (used for chord patterns where "C7" is a chord, not pitch C at octave 7)
+    /// @param mode Parse mode (Auto/Note/Sample/Chord/Value/Curve) — see MiniParseMode
     explicit MiniLexer(std::string_view pattern, SourceLocation base_location = {},
-                       bool sample_only = false, bool curve_mode = false);
+                       MiniParseMode mode = MiniParseMode::Auto);
+
+    /// Backward-compat constructor (replaces sample_only/curve_mode bools).
+    explicit MiniLexer(std::string_view pattern, SourceLocation base_location,
+                       bool sample_only, bool curve_mode);
 
     /// Lex all tokens from the pattern
     /// @return Vector of tokens, ending with Eof token
@@ -72,7 +75,8 @@ private:
     MiniToken lex_number();
     MiniToken lex_pitch();          // Character-by-character pitch parsing (handles ^v+x modifiers)
     MiniToken lex_pitch_or_sample();
-    MiniToken lex_sample_only();  // For sample_only mode
+    MiniToken lex_sample_only();    // For sample_only mode
+    MiniToken lex_value_atom();     // For value mode: numeric literal (incl. negative, scientific)
 
     // Pitch detection
     [[nodiscard]] bool looks_like_pitch() const;
@@ -94,8 +98,11 @@ private:
     std::string_view pattern_;
     SourceLocation base_location_;
     std::vector<Diagnostic> diagnostics_;
-    bool sample_only_ = false;   // When true, skip pitch detection
+    MiniParseMode mode_ = MiniParseMode::Auto;
+    bool sample_only_ = false;   // When true, skip pitch detection (Sample/Chord mode)
     bool curve_mode_ = false;    // When true, lex curve notation characters
+    bool value_mode_ = false;    // When true, atoms must be numeric literals (v"…")
+    bool note_mode_ = false;     // When true, bare ints are MIDI notes (n"…")
 
     // Current position
     std::uint32_t start_ = 0;    // Start of current token
@@ -106,10 +113,15 @@ private:
 /// Convenience function to lex a mini-notation pattern
 /// @param pattern The pattern string content
 /// @param base_location Location for error reporting
-/// @param sample_only When true, treat all alphanumeric sequences as samples (for chord patterns)
+/// @param mode Parse mode (Auto/Note/Sample/Chord/Value/Curve)
 /// @return Pair of tokens and diagnostics
 std::pair<std::vector<MiniToken>, std::vector<Diagnostic>>
 lex_mini(std::string_view pattern, SourceLocation base_location = {},
-         bool sample_only = false, bool curve_mode = false);
+         MiniParseMode mode = MiniParseMode::Auto);
+
+/// Backward-compat overload that maps the old bool flags to a MiniParseMode.
+std::pair<std::vector<MiniToken>, std::vector<Diagnostic>>
+lex_mini(std::string_view pattern, SourceLocation base_location,
+         bool sample_only, bool curve_mode);
 
 } // namespace akkado

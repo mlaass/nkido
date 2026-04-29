@@ -32,8 +32,12 @@ enum class TokenType : std::uint8_t {
     Import,         // import
 
     // Pattern types (used with mini-notation)
-    Pat,            // pat(...)
+    Pat,            // pat(...) / p"…" (auto-detect)
     Timeline,       // t"..." (timeline curve notation)
+    ValuePat,       // v"…" — numeric scalar pattern (no mtof)
+    NotePat,        // n"…" — note name + bare-MIDI pattern
+    SamplePat,      // s"…" — sample-name pattern
+    ChordPat,       // c"…" — chord-symbol pattern
 
     // Operators
     Plus,           // +
@@ -108,6 +112,10 @@ constexpr std::string_view token_type_name(TokenType type) {
         case TokenType::Import:       return "Import";
         case TokenType::Pat:          return "Pat";
         case TokenType::Timeline:     return "Timeline";
+        case TokenType::ValuePat:     return "ValuePat";
+        case TokenType::NotePat:      return "NotePat";
+        case TokenType::SamplePat:    return "SamplePat";
+        case TokenType::ChordPat:     return "ChordPat";
         case TokenType::Plus:         return "Plus";
         case TokenType::Minus:        return "Minus";
         case TokenType::Star:         return "Star";

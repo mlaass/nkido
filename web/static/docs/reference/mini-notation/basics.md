@@ -9,6 +9,20 @@ keywords: [mini-notation, pattern, sequence, rhythm, pitch, chord, rest, tidal, 
 
 Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.
 
+## Typed Prefixes
+
+Mini-notation strings carry a parse-mode prefix that disambiguates atom semantics:
+
+| Prefix | Atom semantics                              | Example                |
+|--------|---------------------------------------------|------------------------|
+| `v"…"` | Numeric only (raw scalars, no mtof)         | `v"<0 0.5 -0.5>"`      |
+| `n"…"` | Note names + bare MIDI ints (both → Hz)     | `n"c4 e4 g4"`          |
+| `s"…"` | Sample names                                | `s"bd ~ bd ~"`         |
+| `c"…"` | Chord symbols                               | `c"Am C G"`            |
+| `p"…"` | Auto-detect (legacy, still works)           | `p"c4 bd Am"`          |
+
+See [Pattern Literals](../pattern/literals.md) for full coverage of typed prefixes and the `scalar()` cast.
+
 ## Pitch Tokens
 
 Specify notes with letter name and octave:

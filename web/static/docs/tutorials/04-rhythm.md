@@ -213,6 +213,7 @@ For the full operator precedence table and the complete list of comparison/logic
 
 You now have the tools to create complex rhythmic music! Explore further:
 - [Mini-Notation](../mini-notation/basics.md) for pattern syntax
+- [Pattern Modulation](./06-pattern-modulation.md) — patterns as values: `bend(notes, v"<0 0.5 -0.5>")`, `e.cutoff` custom properties, scalar arithmetic.
 - [Effects](../builtins/reverbs.md) for space and depth
 - [Dynamics](../builtins/dynamics.md) for polish
 

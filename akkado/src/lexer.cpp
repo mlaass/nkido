@@ -438,6 +438,22 @@ Token Lexer::lex_identifier() {
         }
     }
 
+    // PRD prd-patterns-as-scalar-values §5.1: typed pattern prefixes.
+    // v"…" / n"…" / s"…" / c"…" — only when the letter is exactly one
+    // character at this position and the next char is a quote/backtick.
+    if (current_ == start_ + 1) {
+        char next = peek();
+        if (next == '"' || next == '`') {
+            switch (source_[start_]) {
+                case 'v': return make_token(TokenType::ValuePat);
+                case 'n': return make_token(TokenType::NotePat);
+                case 's': return make_token(TokenType::SamplePat);
+                case 'c': return make_token(TokenType::ChordPat);
+                default: break;
+            }
+        }
+    }
+
     while (is_alphanumeric(peek())) {
         advance();
     }

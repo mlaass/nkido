@@ -4,6 +4,21 @@
 
 This document provides a comprehensive reference for Akkado's mini-notation syntax, used in pattern functions like `pat()` and `timeline()`.
 
+## Typed Prefixes
+
+Pattern strings carry a parse-mode prefix that selects per-atom rules:
+
+| Prefix  | Mode    | Atom rules                                         | Result type           |
+|---------|---------|----------------------------------------------------|-----------------------|
+| `v"…"`  | Value   | Numeric only — `0`, `0.5`, `-0.5`, `1e3`           | Raw scalars (no mtof) |
+| `n"…"`  | Note    | Note names + bare MIDI ints (both → Hz)            | mtof'd freq           |
+| `s"…"`  | Sample  | Sample names — `bd`, `sd`, `kick:2`                | Sample IDs            |
+| `c"…"`  | Chord   | Chord symbols — `Am`, `C7`, `F#m7b5`               | Multi-voice chord     |
+| `p"…"`  | Auto    | Detect per-atom (legacy, backwards compatible)     | Inherits              |
+| `t"…"`  | Curve   | `_`, `.`, `-`, `^`, `'` for breakpoints; `~` smooth| Timeline curve        |
+
+The Value mode adds a numeric-atom path to the lexer: signed decimals, scientific notation, and finite reals are accepted; note names / sample names / chord symbols error E163.
+
 ## Quick Reference
 
 | Syntax | Name | Example | Description |

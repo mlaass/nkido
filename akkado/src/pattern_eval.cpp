@@ -249,6 +249,10 @@ void PatternEvaluator::eval_atom(NodeIndex node, const PatternEvalContext& ctx,
         case Node::MiniAtomKind::CurveRamp:
             event.type = PatternEventType::CurveRamp;
             break;
+        case Node::MiniAtomKind::Value:
+            event.type = PatternEventType::Value;
+            event.scalar_value = atom_data.scalar_value;
+            break;
     }
 
     stream.add(std::move(event));

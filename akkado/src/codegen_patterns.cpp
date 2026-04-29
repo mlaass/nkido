@@ -417,7 +417,11 @@ private:
         }
 
         std::optional<voicing::ChordSpec> chord_ctx;
-        if (atom_data.kind == Node::MiniAtomKind::Pitch) {
+        if (atom_data.kind == Node::MiniAtomKind::Value) {
+            // PRD prd-patterns-as-scalar-values: v"…" raw numeric atoms.
+            // Bypass mtof — the user wrote the literal number they want.
+            e.values[0] = atom_data.scalar_value;
+        } else if (atom_data.kind == Node::MiniAtomKind::Pitch) {
             // Convert MIDI note + micro_offset to frequency using tuning context
             float freq = tuning_.resolve_hz(atom_data.midi_note, atom_data.micro_offset);
             e.values[0] = freq;
@@ -1397,6 +1401,8 @@ std::shared_ptr<PatternPayload> CodeGenerator::emit_per_voice_seqpat(NodeIndex n
     payload->fields[PatternPayload::TRIG] = trigger_buf;
     payload->fields[PatternPayload::GATE] = gate_buf;
     payload->fields[PatternPayload::TYPE] = type_buf;
+    payload->is_sample_pattern = is_sample_pattern;
+    payload->max_voices = max_voices;
     return payload;
 }
 
@@ -1700,6 +1706,8 @@ TypedValue CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
     // TYPE stays 0xFFFF
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+    payload->is_sample_pattern = false;
+    payload->max_voices = max_voices;
 
     // Phase 2.1 PRD §11: chord patterns can carry record-suffix properties too
     // (e.g. `chord("Am{velmod:0.5}")`). Surface them via SEQPAT_PROP.
@@ -1711,6 +1719,109 @@ TypedValue CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
 
     pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
+}
+
+// PRD prd-patterns-as-scalar-values §5.4–5.6: explicit call forms.
+// value("…") and note("…") parse the string in the requested mode and emit
+// the same SEQPAT machinery as `pat()`. Sharing one implementation keeps the
+// behaviour identical between prefix forms (parsed in parser.cpp) and call
+// forms (which arrive here as Call nodes).
+TypedValue CodeGenerator::compile_typed_pattern_call(NodeIndex node, const Node& n,
+                                                     MiniParseMode mode,
+                                                     std::string_view fn_name) {
+    NodeIndex arg = n.first_child;
+    if (arg == NULL_NODE) {
+        error("E125", std::string(fn_name) + "() requires exactly 1 argument", n.location);
+        return TypedValue::void_val();
+    }
+    const Node& arg_node = ast_->arena[arg];
+    NodeIndex str_node = (arg_node.type == NodeType::Argument) ? arg_node.first_child : arg;
+    if (str_node == NULL_NODE) {
+        error("E125", std::string(fn_name) + "() requires a string argument", n.location);
+        return TypedValue::void_val();
+    }
+    const Node& str_n = ast_->arena[str_node];
+    if (str_n.type != NodeType::StringLit) {
+        error("E126", std::string(fn_name) + "() argument must be a string literal",
+              str_n.location);
+        return TypedValue::void_val();
+    }
+
+    std::string body = str_n.as_string();
+    auto& arena = const_cast<AstArena&>(ast_->arena);
+    auto [pattern_root, diags] = parse_mini(body, arena, str_n.location, mode);
+    for (auto& d : diags) {
+        if (d.severity == Severity::Error) diagnostics_.push_back(d);
+    }
+    if (pattern_root == NULL_NODE) {
+        error("E127", std::string(fn_name) + "() failed to parse pattern: \"" + body + "\"",
+              str_n.location);
+        return TypedValue::void_val();
+    }
+
+    // Synthesize a MiniLiteral node so we can route through handle_mini_literal,
+    // which already handles SEQPAT emission, polyphony, custom properties, etc.
+    NodeIndex lit = arena.alloc(NodeType::MiniLiteral, n.location);
+    arena.add_child(lit, pattern_root);
+    return handle_mini_literal(lit, arena[lit]);
+}
+
+TypedValue CodeGenerator::handle_value_call(NodeIndex node, const Node& n) {
+    return compile_typed_pattern_call(node, n, MiniParseMode::Value, "value");
+}
+
+TypedValue CodeGenerator::handle_note_call(NodeIndex node, const Node& n) {
+    return compile_typed_pattern_call(node, n, MiniParseMode::Note, "note");
+}
+
+// PRD prd-patterns-as-scalar-values §5.6: explicit Pattern→Signal cast.
+// scalar(p) returns p.freq for monophonic non-sample patterns; idempotent
+// on a Signal arg. Sample / polyphonic patterns error E161.
+TypedValue CodeGenerator::handle_scalar_call(NodeIndex node, const Node& n) {
+    NodeIndex arg = n.first_child;
+    if (arg == NULL_NODE) {
+        error("E125", "scalar() takes exactly one argument", n.location);
+        return TypedValue::error_val();
+    }
+    const Node& arg_n = ast_->arena[arg];
+    NodeIndex inner = (arg_n.type == NodeType::Argument) ? arg_n.first_child : arg;
+    if (inner == NULL_NODE) {
+        error("E125", "scalar() takes exactly one argument", n.location);
+        return TypedValue::error_val();
+    }
+
+    TypedValue tv = visit(inner);
+    if (tv.error) return tv;
+
+    // Idempotent on Signal/Number — return as-is so scalar(scalar(p)) is safe.
+    if (tv.type == ValueType::Signal || tv.type == ValueType::Number) {
+        return cache_and_return(node, tv);
+    }
+
+    if (tv.type != ValueType::Pattern || !tv.pattern) {
+        error("E161", std::string("scalar() expects a Pattern or Signal, got ") +
+                          value_type_name(tv.type),
+              n.location);
+        return TypedValue::error_val();
+    }
+    if (tv.pattern->is_sample_pattern) {
+        error("E161",
+              "scalar() cannot cast a sample pattern; pick a field explicitly (e.g. p.type)",
+              n.location);
+        return TypedValue::error_val();
+    }
+    if (tv.pattern->max_voices > 1) {
+        error("E161",
+              "scalar() cannot cast a polyphonic pattern; use poly() or pick a voice explicitly",
+              n.location);
+        return TypedValue::error_val();
+    }
+    std::uint16_t buf = tv.pattern->fields[PatternPayload::FREQ];
+    if (buf == 0xFFFF) {
+        error("E161", "scalar() pattern has no value buffer", n.location);
+        return TypedValue::error_val();
+    }
+    return cache_and_return(node, TypedValue::signal(buf));
 }
 
 // ============================================================================
@@ -1770,6 +1881,8 @@ static bool is_pattern_call(const Node& n) {
     const std::string& func_name = n.as_identifier();
     return func_name == "pat" || func_name == "timeline" ||
            func_name == "chord" ||
+           // PRD prd-patterns-as-scalar-values: typed-prefix call forms
+           func_name == "value" || func_name == "note" ||
            func_name == "slow" || func_name == "fast" ||
            func_name == "rev" || func_name == "transpose" || func_name == "velocity" ||
            func_name == "bank" || func_name == "variant" || func_name == "transport" ||
@@ -2571,6 +2684,8 @@ static TypedValue emit_pattern_with_state(
     payload->fields[PatternPayload::TYPE] = type_buf;
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+    payload->is_sample_pattern = is_sample_pattern;
+    payload->max_voices = max_voices;
 
     // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties
     // collected by SequenceCompiler. Covers all transforms going through this
@@ -3160,6 +3275,8 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     // GATE and TYPE stay 0xFFFF
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+    payload->is_sample_pattern = is_sample_pattern;
+    payload->max_voices = compiler.max_voices();
 
     // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties.
     if (!emit_custom_property_buffers(compiler, *payload, state_id)) {
@@ -3178,14 +3295,21 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
 TypedValue CodeGenerator::handle_property_transform_call(
     NodeIndex node, const Node& n, const std::string& key) {
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    NodeIndex value_arg = get_pattern_arg(*ast_, n, 1);
     auto value = get_number_arg(*ast_, n, 1);
 
     if (pattern_arg == NULL_NODE) {
         error("E130", key + "() requires a pattern as first argument", n.location);
         return TypedValue::void_val();
     }
-    if (!value.has_value()) {
-        error("E131", key + "() requires a number as second argument", n.location);
+    // PRD prd-patterns-as-scalar-values §5.7.2 / §11.2: second arg may be a
+    // constant Number or a Pattern (sample-and-held at each host event).
+    bool value_is_pattern = (value_arg != NULL_NODE) &&
+                            is_pattern_node(*ast_, *symbols_, value_arg) &&
+                            !value.has_value();
+    if (!value.has_value() && !value_is_pattern) {
+        error("E131", key + "() requires a number or pattern as second argument",
+              n.location);
         return TypedValue::void_val();
     }
     if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
@@ -3213,9 +3337,63 @@ TypedValue CodeGenerator::handle_property_transform_call(
               " custom properties; cannot add '" + key + "'", n.location);
         return TypedValue::void_val();
     }
-    for (auto& seq_events : sequence_events) {
-        for (auto& event : seq_events) {
-            event.prop_vals[slot] = *value;
+    if (value_is_pattern) {
+        // Compile the value pattern separately and align its events to the
+        // host pattern's events. For each host event index, look up the
+        // corresponding value-pattern event (cycle through if shorter).
+        // Sample / polyphonic value patterns are rejected so the user
+        // doesn't accidentally bind chord voices to a single property.
+        SequenceCompiler val_compiler(ast_->arena, sample_registry_);
+        NodeIndex val_pattern_node = NULL_NODE;
+        std::uint32_t val_num_elements = 1;
+        std::vector<std::vector<cedar::Event>> val_events;
+        float val_cycle_length = 1.0f;
+        if (!compile_pattern_for_transform(*this, *ast_, value_arg, sample_registry_,
+                                            val_compiler, val_pattern_node,
+                                            val_num_elements, val_events,
+                                            val_cycle_length)) {
+            error("E130", key + "() failed to compile value pattern", n.location);
+            return TypedValue::void_val();
+        }
+        if (val_compiler.is_sample_pattern()) {
+            error("E160",
+                  key + "() cannot use a sample pattern as the value argument; "
+                  "use a v\"…\" or n\"…\" pattern instead",
+                  ast_->arena[value_arg].location);
+            return TypedValue::void_val();
+        }
+        if (val_compiler.max_voices() > 1) {
+            error("E160",
+                  key + "() cannot use a polyphonic pattern as the value argument; "
+                  "pick a voice or use a monophonic pattern",
+                  ast_->arena[value_arg].location);
+            return TypedValue::void_val();
+        }
+        if (val_events.empty() || val_events[0].empty()) {
+            // No events — fall back to 0 on every host event.
+            for (auto& seq_events : sequence_events) {
+                for (auto& event : seq_events) {
+                    event.prop_vals[slot] = 0.0f;
+                }
+            }
+        } else {
+            const auto& vseq = val_events[0];
+            const std::size_t vcount = vseq.size();
+            for (auto& seq_events : sequence_events) {
+                std::size_t hidx = 0;
+                for (auto& event : seq_events) {
+                    const auto& vevt = vseq[hidx % vcount];
+                    float v = (vevt.num_values > 0) ? vevt.values[0] : 0.0f;
+                    event.prop_vals[slot] = v;
+                    ++hidx;
+                }
+            }
+        }
+    } else {
+        for (auto& seq_events : sequence_events) {
+            for (auto& event : seq_events) {
+                event.prop_vals[slot] = *value;
+            }
         }
     }
 
@@ -3250,13 +3428,22 @@ TypedValue CodeGenerator::handle_dur_call(NodeIndex node, const Node& n) {
     // dur(pattern, factor) — multiply event durations by factor. Pure
     // compile-time, no SEQPAT_PROP needed (cedar::Event.duration exists).
     NodeIndex pattern_arg = get_pattern_arg(*ast_, n, 0);
+    NodeIndex factor_arg = get_pattern_arg(*ast_, n, 1);
     auto factor = get_number_arg(*ast_, n, 1);
+    bool factor_is_pattern = (factor_arg != NULL_NODE) &&
+                             is_pattern_node(*ast_, *symbols_, factor_arg) &&
+                             !factor.has_value();
     if (pattern_arg == NULL_NODE) {
         error("E130", "dur() requires a pattern as first argument", n.location);
         return TypedValue::void_val();
     }
-    if (!factor.has_value() || *factor <= 0) {
-        error("E131", "dur() requires a positive number as second argument", n.location);
+    if (!factor.has_value() && !factor_is_pattern) {
+        error("E131", "dur() requires a positive number or pattern as second argument",
+              n.location);
+        return TypedValue::void_val();
+    }
+    if (factor.has_value() && *factor <= 0) {
+        error("E131", "dur() factor must be positive", n.location);
         return TypedValue::void_val();
     }
     if (!is_pattern_node(*ast_, *symbols_, pattern_arg)) {
@@ -3277,9 +3464,45 @@ TypedValue CodeGenerator::handle_dur_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
-    for (auto& seq_events : sequence_events) {
-        for (auto& event : seq_events) {
-            event.duration *= *factor;
+    if (factor_is_pattern) {
+        // Pattern-driven dur: per-event factor sampled from the value pattern.
+        SequenceCompiler val_compiler(ast_->arena, sample_registry_);
+        NodeIndex val_pattern_node = NULL_NODE;
+        std::uint32_t val_num_elements = 1;
+        std::vector<std::vector<cedar::Event>> val_events;
+        float val_cycle_length = 1.0f;
+        if (!compile_pattern_for_transform(*this, *ast_, factor_arg, sample_registry_,
+                                            val_compiler, val_pattern_node,
+                                            val_num_elements, val_events,
+                                            val_cycle_length)) {
+            error("E130", "dur() failed to compile factor pattern", n.location);
+            return TypedValue::void_val();
+        }
+        if (val_compiler.is_sample_pattern() || val_compiler.max_voices() > 1) {
+            error("E160",
+                  "dur() cannot use a sample or polyphonic pattern as factor; "
+                  "use a v\"…\" or n\"…\" pattern instead",
+                  ast_->arena[factor_arg].location);
+            return TypedValue::void_val();
+        }
+        if (!val_events.empty() && !val_events[0].empty()) {
+            const auto& vseq = val_events[0];
+            const std::size_t vcount = vseq.size();
+            for (auto& seq_events : sequence_events) {
+                std::size_t hidx = 0;
+                for (auto& event : seq_events) {
+                    const auto& vevt = vseq[hidx % vcount];
+                    float v = (vevt.num_values > 0) ? vevt.values[0] : 1.0f;
+                    if (v > 0.0f) event.duration *= v;
+                    ++hidx;
+                }
+            }
+        }
+    } else {
+        for (auto& seq_events : sequence_events) {
+            for (auto& event : seq_events) {
+                event.duration *= *factor;
+            }
         }
     }
 
@@ -3427,6 +3650,8 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     payload->fields[PatternPayload::TRIG] = trigger_buf;
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+    payload->is_sample_pattern = is_sample_pattern;
+    payload->max_voices = compiler.max_voices();
 
     // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties.
     if (!emit_custom_property_buffers(compiler, *payload, state_id)) {
@@ -3618,6 +3843,8 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
     payload->fields[PatternPayload::TRIG] = trigger_buf;
     payload->state_id = state_id;
     payload->cycle_length = cycle_length;
+    payload->is_sample_pattern = is_sample_pattern;
+    payload->max_voices = compiler.max_voices();
 
     // Phase 2.1 PRD §11: emit per-key SEQPAT_PROP buffers for custom properties.
     if (!emit_custom_property_buffers(compiler, *payload, state_id)) {

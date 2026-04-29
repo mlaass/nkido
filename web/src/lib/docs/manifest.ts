@@ -5,11 +5,13 @@ export const slugToPath: Record<string, string> = {
 	"signals": "concepts/signals.md",
 	"05-testing-progression": "tutorials/05-testing-progression.md",
 	"03-synthesis": "tutorials/03-synthesis.md",
+	"06-pattern-modulation": "tutorials/06-pattern-modulation.md",
 	"02-filters": "tutorials/02-filters.md",
 	"04-rhythm": "tutorials/04-rhythm.md",
 	"01-hello-sine": "tutorials/01-hello-sine.md",
 	"microtonal": "reference/mini-notation/microtonal.md",
 	"basics": "reference/mini-notation/basics.md",
+	"literals": "reference/pattern/literals.md",
 	"methods": "reference/language/methods.md",
 	"conditionals": "reference/language/conditionals.md",
 	"pipes": "reference/language/pipes.md",
@@ -57,6 +59,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "05-testing-progression",
 			"title": "Testing Progression"
+		},
+		{
+			"slug": "06-pattern-modulation",
+			"title": "Pattern Modulation"
 		}
 	],
 	"builtins": [
@@ -456,6 +462,61 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "tutorials",
 		"title": "Building Synth Voices"
 	},
+	"pattern": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"modulation": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"value pattern": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"v\"…\"": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"bend": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"aftertouch": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"dur": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"custom property": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"cutoff": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"scalar": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
+	"coerce": {
+		"slug": "06-pattern-modulation",
+		"category": "tutorials",
+		"title": "Pattern Modulation"
+	},
 	"filter": {
 		"slug": "02-filters",
 		"category": "tutorials",
@@ -467,11 +528,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Shaping Sound with Filters"
 	},
 	"highpass": {
-		"slug": "02-filters",
-		"category": "tutorials",
-		"title": "Shaping Sound with Filters"
-	},
-	"cutoff": {
 		"slug": "02-filters",
 		"category": "tutorials",
 		"title": "Shaping Sound with Filters"
@@ -494,11 +550,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"anchor": "hp"
 	},
 	"rhythm": {
-		"slug": "04-rhythm",
-		"category": "tutorials",
-		"title": "Rhythm & Patterns"
-	},
-	"pattern": {
 		"slug": "04-rhythm",
 		"category": "tutorials",
 		"title": "Rhythm & Patterns"
@@ -732,6 +783,56 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "basics",
 		"category": "mini-notation",
 		"title": "Mini-Notation Basics"
+	},
+	"literal": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"prefix": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"value": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"note": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"sample": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"n\"…\"": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"s\"…\"": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"c\"…\"": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"p\"…\"": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
+	},
+	"typed prefix": {
+		"slug": "literals",
+		"category": "pattern",
+		"title": "Pattern Literals"
 	},
 	"method": {
 		"slug": "methods",
@@ -1669,11 +1770,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Utility"
 	},
-	"sample": {
-		"slug": "utility",
-		"category": "builtins",
-		"title": "Utility"
-	},
 	"hold": {
 		"slug": "utility",
 		"category": "builtins",
@@ -1698,11 +1794,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "envelopes",
 		"category": "builtins",
 		"title": "Envelopes"
-	},
-	"modulation": {
-		"slug": "modulation",
-		"category": "builtins",
-		"title": "Modulation Effects"
 	},
 	"rate": {
 		"slug": "modulation",
@@ -2232,11 +2323,13 @@ export const previews: Record<string, string> = {
 	"signals": "Akkado has two kinds of audio signals: Mono (one channel) and Stereo (two channels, L and R). Every expression the compiler sees has a known...",
 	"05-testing-progression": "Work through each level in order. Report back which levels work, fail, or have issues.",
 	"03-synthesis": "Now that you know oscillators and filters, let's combine them into complete synthesizer voices with amplitude envelopes.",
+	"06-pattern-modulation": "So far you've used patterns to drive note pitches. This chapter shows how to use patterns as values — feeding any DSP slot from a pattern,...",
 	"02-filters": "Filters are essential tools for sculpting your sounds. They remove or emphasize certain frequencies, transforming raw oscillators into musical...",
 	"04-rhythm": "Music is about time. In this tutorial, you'll learn to create rhythmic patterns, from basic beats to complex polyrhythms.",
 	"01-hello-sine": "Welcome to Akkado! In this tutorial, you'll make your first sound and learn the basics of how the language works.",
 	"microtonal": "Akkado supports microtonal pitch notation through micro-step operators (, , ) and the  function, which selects how those operators map to frequency.",
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
+	"literals": "Patterns can be written as typed string prefixes that disambiguate parse semantics at the literal site:",
 	"methods": "Akkado supports method-call syntax for any callable in scope — built-in or user-defined. The form",
 	"conditionals": "Signal-rate decision-making: compare signals, combine boolean signals with AND/OR/NOT, and pick between two signals based on a condition. Every...",
 	"pipes": "The pipe operator () and hole () are the foundation of Akkado's signal flow model.",

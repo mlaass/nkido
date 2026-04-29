@@ -44,6 +44,7 @@ const char* atom_kind_str(Node::MiniAtomKind kind) {
         case Node::MiniAtomKind::Chord: return "Chord";
         case Node::MiniAtomKind::CurveLevel: return "CurveLevel";
         case Node::MiniAtomKind::CurveRamp: return "CurveRamp";
+        case Node::MiniAtomKind::Value: return "Value";
     }
     return "Unknown";
 }
@@ -113,6 +114,10 @@ void serialize_node(std::string& json, NodeIndex idx, const AstArena& arena) {
                 if (data.curve_smooth) {
                     json += ",\"smooth\":true";
                 }
+            } else if (data.kind == Node::MiniAtomKind::Value) {
+                json += ",\"value\":";
+                std::snprintf(num_buf, sizeof(num_buf), "%g", static_cast<double>(data.scalar_value));
+                json += num_buf;
             }
             // CurveRamp has no additional data fields
             break;

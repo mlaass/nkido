@@ -9,6 +9,30 @@
 
 namespace akkado {
 
+/// Mini-notation parse mode (PRD prd-patterns-as-scalar-values §5.2).
+/// Selects per-atom rules for mini-notation parsing. Subsumes the legacy
+/// `sample_only` and `curve_mode` boolean flags into a single enum.
+enum class MiniParseMode : std::uint8_t {
+    Auto,    // p"…" — current behavior, detect per atom
+    Note,    // n"…" — note names + bare MIDI ints both → mtof
+    Sample,  // s"…" — atom = sample name (replaces `sample_only = true`)
+    Chord,   // c"…" — atom = chord symbol
+    Value,   // v"…" — atom must be numeric literal; raw value, no mtof
+    Curve,   // t"…" — timeline / breakpoint mode (replaces `curve_mode = true`)
+};
+
+constexpr const char* mini_parse_mode_name(MiniParseMode m) {
+    switch (m) {
+        case MiniParseMode::Auto:   return "auto";
+        case MiniParseMode::Note:   return "note";
+        case MiniParseMode::Sample: return "sample";
+        case MiniParseMode::Chord:  return "chord";
+        case MiniParseMode::Value:  return "value";
+        case MiniParseMode::Curve:  return "curve";
+    }
+    return "?";
+}
+
 /// Token types for mini-notation patterns
 /// These are distinct from main language tokens as mini-notation has different rules
 enum class MiniTokenType : std::uint8_t {
@@ -24,6 +48,7 @@ enum class MiniTokenType : std::uint8_t {
     CurveLevel,     // _, ., -, ^, ' (value level atom in curve mode)
     CurveRamp,      // /, \ (ramp atom in curve mode)
     CurveSmooth,    // ~ (smooth modifier prefix in curve mode)
+    ValueAtom,      // 0, 0.5, -0.5, 1e3 (for v"…" value-mode atoms)
     Number,         // 0.5, 3, 4.0 (for modifiers and euclidean)
 
     // Groupings
@@ -65,6 +90,7 @@ constexpr std::string_view mini_token_type_name(MiniTokenType type) {
         case MiniTokenType::CurveLevel:  return "CurveLevel";
         case MiniTokenType::CurveRamp:   return "CurveRamp";
         case MiniTokenType::CurveSmooth: return "CurveSmooth";
+        case MiniTokenType::ValueAtom:   return "ValueAtom";
         case MiniTokenType::Number:      return "Number";
         case MiniTokenType::LBracket:    return "LBracket";
         case MiniTokenType::RBracket:    return "RBracket";

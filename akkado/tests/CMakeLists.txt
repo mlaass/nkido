@@ -41,6 +41,7 @@ add_executable(akkado_tests
     test_import.cpp
     test_methods.cpp
     test_state.cpp
+    test_pattern_scalar.cpp
 )
 
 target_link_libraries(akkado_tests
