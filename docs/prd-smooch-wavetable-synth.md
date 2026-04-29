@@ -151,6 +151,18 @@ This is compatible with wavetables exported from Serum, Surge XT, Vital (after W
 
 Cedar's `MAX_ARENA_SIZE = 128 MB` for audio buffers; wavetable banks live in their own host-side allocation outside the arena and are pointed to from `ExecutionContext`. Recommended max bank size: **32 MB** (~360 frames at 88 KB each), enforced as a soft limit at load time. WASM heap planning should reserve at least 64 MB above baseline for wavetable banks.
 
+### 4.5 Alternative mip-pyramid spacings (follow-up exploration)
+
+Octave spacing with 11 levels is the standard wavetable layout (Serum, Surge XT, Vital all use it) and is the right v1 default — predictable memory budget, simple `log2` mip selection, well-understood crossfade behavior. But spacing is a tradeoff knob between memory, crossfade-region width, and the audibility of spectral steps during pitch sweeps. Alternatives worth exploring once the v1 baseline is in place:
+
+- **Half-octave spacing (~22 levels).** Halves the spectral gap between adjacent mips, so the crossfade region in §6.3 step 2 carries less perceptual load. Doubles bank size (~11 MB for a 64-frame bank instead of 5.6 MB) — still well under the 32 MB soft cap.
+- **Logarithmic with finer resolution at the top.** Use octave spacing in the lower mips (where the ear is less sensitive to small bandwidth differences) and quarter-octave at the top (where alias artifacts are most exposed). Modest memory increase, biggest perceptual win.
+- **Adaptive / content-driven spacing.** Choose mip cutoffs per-frame based on where the source's harmonic energy lives. A frame with content concentrated below the 8th harmonic doesn't need a high-resolution top mip.
+- **Single-table with on-the-fly oversampling.** Skip the pyramid entirely; oversample 2× or 4× at runtime and lowpass-filter. Simpler memory model and zero crossfade artifacts, but moves cost from preprocessor to audio thread — likely a non-starter for polyphonic use.
+- **Fewer levels with wider per-level bandwidth.** 6–7 levels at 1.5–2 octave spacing, leaning more heavily on the runtime crossfade. Smaller banks at the cost of more aggressive crossfade work.
+
+This is **deliberately deferred**. v1 ships with octave spacing × 11 levels. The §12 tests (#2 aliasing sweep, #4 mip-boundary crossfade) measure how aggressive the crossfade has to work; if those tests show audible artifacts at boundaries, half-octave or top-weighted spacing is the obvious next step.
+
 ---
 
 ## 5. Algorithm 1: Pre-Processing (offline, host thread)
@@ -250,6 +262,20 @@ Raised-cosine over 4 bins is a reasonable v1 default — well-understood, cheap,
 
 This is **deliberately deferred**. v1 ships with raised-cosine; the test in §12 (#2 aliasing sweep, #4 mip-boundary crossfade) gives us an objective baseline, and subjective listening tests on a curated wavetable set will guide the choice of which alternatives to integrate.
 
+### 5.4 Alternative amplitude-preservation strategies (follow-up exploration)
+
+Peak-matching to the source frame (§5.1 step 6) is a reasonable v1 default — it prevents the obvious failure mode of audibly dropping level as pitch sweeps upward through octave boundaries — but it isn't the only normalization choice, and it can over-boost mips whose surviving harmonics happen to align constructively. Because normalization runs offline alongside the FFT, we have headroom to experiment. Candidates worth A/B'ing once a baseline test corpus exists:
+
+- **RMS normalization.** Match each mip's RMS to the source RMS. Preserves *perceived loudness* better than peak, since the ear integrates over time. Risk: peaks in heavily-band-limited mips can clip if the source had a low crest factor and the filtered signal develops new peaks.
+- **Loudness-weighted (LUFS / ITU-R BS.1770).** Apply a K-weighting filter before measuring level. Closest to "matches the way humans hear loudness," but adds a perceptual filter to every mip generation — overkill for v1.
+- **Energy preservation (Parseval).** Scale each mip so the sum of squared spectral magnitudes equals the source's, before IFFT. Theoretically elegant; in practice often equivalent to RMS with extra steps.
+- **Per-harmonic compensation.** Instead of normalizing the whole mip, individually scale surviving harmonics so each one's amplitude matches the source. Avoids the constructive-alignment over-boost of peak normalization. Requires interleaving normalization with the spectral filter from §5.1.3.
+- **No normalization (preserve source dynamics).** Skip the rescale; accept the gradual level drop as harmonics roll off. Simplest; some users may actually prefer it as it preserves the source's spectral character verbatim.
+- **Bank-wide normalization.** Normalize all mips to a single reference (e.g., the brightest frame's peak) rather than per-frame. Avoids morph-induced level jumps when adjacent frames have very different harmonic content.
+- **Pre-FFT source conditioning.** Detect and remove DC offset, optionally high-pass at the fundamental, and align the fundamental phase across frames before FFT. Reduces the work the spectral filter has to do and improves frame-morph behavior (see §6.5.3).
+
+This is **deliberately deferred**. v1 ships with peak-normalization. The §12 tests (#1 sine round-trip, #4 mip-boundary crossfade, #5 frame morph continuity) give us baselines for level matching; subjective listening on a curated bank will guide which alternative — most likely RMS or per-harmonic — replaces peak.
+
 ---
 
 ## 6. Algorithm 2: Runtime Opcode (`OSC_WAVETABLE`)
@@ -344,6 +370,45 @@ All three primary inputs are full audio-rate buffers; scalars are passed by Ceda
 ### 6.4 State struct (rename from clashing `OscState`)
 
 The original PRD reused the name `OscState`, but Cedar already has `OscState` in `cedar/include/cedar/opcodes/dsp_state.hpp`, used by every existing oscillator (`OSC_SIN`, `OSC_SAW`, etc.). The wavetable opcode uses a distinct `SmoochState` (defined in §4.2).
+
+### 6.5 Alternative runtime techniques (follow-up exploration)
+
+The audio-thread reader has three independent quality knobs that v1 fixes to reasonable defaults: the per-sample interpolation kernel, the mip-boundary crossfade curve, and the inter-frame morph blend. Each is a candidate for a follow-up DSP-quality pass once §12 baselines are in place. Unlike the offline alternatives in §5.3/§5.4, runtime alternatives have a CPU cost — listening tests must weigh quality against polyphony budget.
+
+#### 6.5.1 Interpolation kernel
+
+4-point Hermite (§6.3 step 4) is a clear step up from the linear interpolation used by cedar's existing samplers (`cedar/include/cedar/vm/sample_bank.hpp`) and is the standard wavetable choice. Alternatives, roughly in order of cost:
+
+- **Linear (2-point).** Cheaper but visibly worse: drops ~20 dB of high-frequency response by the top of each mip's bandwidth. Useful only as a quality fallback for extreme polyphony.
+- **4-point Lagrange.** Slightly different coefficient set than Hermite. Marginal sonic difference; worth measuring rather than presupposing.
+- **6-point, 5th-order Hermite/Lagrange.** Two more taps per sample (8 reads instead of 4 across both mips). Audible improvement at large transposition ratios.
+- **Olli Niemitalo's optimal polynomial interpolators** ("Polynomial Interpolators for High-Quality Resampling of Oversampled Audio"). Same arithmetic structure as Hermite but with coefficients tuned for minimal aliasing rather than maximal smoothness. Same cost as Hermite; strictly better aliasing behavior. Likely the highest-value swap if v1's aliasing tests reveal headroom.
+- **Cubic B-spline.** Smoother but introduces measurable amplitude attenuation at high frequencies. Useful when smoothness is the priority over fidelity (e.g., morphing slow LFO-style wavetables).
+- **Windowed sinc (e.g., Lanczos-3 or -5).** Closest to ideal reconstruction. 6–10 taps per sample; a real CPU hit for polyphonic use, but viable for solo voices.
+- **All-pass fractional delay.** Very flat magnitude response; introduces phase distortion that's typically inaudible on wavetable signals.
+
+#### 6.5.2 Mip-boundary crossfade
+
+§6.3 step 5 currently uses *linear* `mipFrac` blending: `output = low + (high - low) * mipFrac`. Cedar's house style for crossfade elsewhere is **equal-power** (`cedar/include/cedar/vm/crossfade_state.hpp`), so even the v1 default deserves scrutiny. Candidates:
+
+- **Equal-power crossfade** (`cos(t * π/2)` / `sin(t * π/2)`). Matches cedar's convention; avoids the ~3 dB dip of linear crossfade at the midpoint when the two mips are uncorrelated.
+- **Smoothstep / S-curve crossfade.** Slower transition near the boundaries, faster in the middle. Reduces perceptual edge artifacts but slightly widens the audible blend region.
+- **Hysteresis on mip selection.** When `freq` jitters around an octave boundary, the fractional mip can chatter. Adding ~5% hysteresis (use `mipFractional - 0.05` going up, `+0.05` going down) eliminates the chatter at the cost of a slightly delayed transition.
+- **Oversampled boundary blend.** Run interpolation at 2× internally, then downsample, only across the actual blend region. Eliminates intermodulation between the two mips at the cost of a brief CPU spike.
+- **Adaptive blend width.** Currently `mipFrac` ramps over a full octave; narrowing the blend region (e.g., only the inner 30% of each octave) lets each mip play full-bandwidth most of the time. Better quality at boundaries when band-limiting is the bottleneck; worse if mips have audibly different character.
+
+#### 6.5.3 Frame morphing
+
+Linear time-domain blend between adjacent frames (§6.3 step 5) is the simplest morph, but it's also the source of the classic wavetable artifact: when two frames have similar spectra at slightly different phases, the morph produces comb-filter cancellation that audibly thins the sound. This is the single largest perceived-quality difference between v1 and high-end wavetable synths (Serum, Vital, Phase Plant). Candidates, increasingly ambitious:
+
+- **Equal-power morph** (`cos`/`sin` weighting). Same fix as §6.5.2 — avoids the level dip when adjacent frames are uncorrelated. Cheapest possible improvement.
+- **Phase-aligned morph.** During preprocessing, FFT-rotate each frame so its fundamental crosses zero at index 0. Time-domain blends between phase-aligned frames have far less cancellation. Costs nothing at runtime; modest preprocessor work; this is what "well-behaved" Serum-style wavetables already do implicitly via authoring convention.
+- **Spectral magnitude/phase interpolation.** Already listed as a v2 non-goal in §2.2 — the brief is: store frames in the frequency domain and interpolate magnitudes (and unwrapped phases) between them, then IFFT once per block. Eliminates cancellation entirely at the cost of a per-block (or per-N-samples) FFT and a much more complex audio path. Listed here for completeness; deferral rationale belongs in §2.2 where it already is.
+- **Cosine / smoothstep crossfade curve** (independent of the preceding two — pick a curve, then pick a domain). Same considerations as §6.5.2.
+- **Zero-crossing-aligned morph.** Only allow the morph index to advance at zero crossings of either frame. Reduces clicks but introduces aliasing-like quantization on the morph axis.
+- **Per-harmonic morph.** Decompose each frame into harmonics offline; at runtime, interpolate harmonic amplitudes and resynthesize. Equivalent in spirit to spectral morph but cheaper if the harmonic count is small. Loses inharmonic content (same caveat as §5.3's additive option).
+
+This whole subsection is **deliberately deferred**. v1 ships with linear-on-everything (interpolation kernel: 4-point Hermite; mip crossfade: linear; frame morph: linear time-domain blend). The §12 tests give us baselines (#3/#4 for interpolation+aliasing, #4 for mip crossfade, #5 for frame morph continuity). Subjective listening on Serum-format banks — particularly ones with rich morph trajectories — will guide which subsection to attack first. The most likely high-impact pickups, ordered by expected return on engineering effort: equal-power weighting on both crossfade and morph (cheap), Niemitalo-optimal interpolation kernel (drop-in), phase-aligned morph (preprocessor-only), then spectral morph (v2).
 
 ---
 
