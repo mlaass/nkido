@@ -143,6 +143,12 @@ interface RequiredSoundFont {
 	preset: number;
 }
 
+interface RequiredWavetable {
+	name: string;  // bank name (matches the smooch("...") string arg)
+	path: string;  // path/URL to fetch the WAV from
+	id: number;    // sequential slot ID assigned by the compiler
+}
+
 interface CompileResult {
 	success: boolean;
 	bytecodeSize?: number;
@@ -150,6 +156,7 @@ interface CompileResult {
 	requiredSamples?: string[]; // Legacy: simple sample names
 	requiredSamplesExtended?: RequiredSampleExtended[]; // Extended: with bank/variant info
 	requiredSoundfonts?: RequiredSoundFont[]; // SF2 files needed
+	requiredWavetables?: RequiredWavetable[]; // Wavetable banks needed (Smooch)
 	// Source strings collected from in() calls (one per call, "" = UI default).
 	// Populated by audio-input PRD §4.4. Empty array when in() is not used.
 	requiredInputSources?: string[];
@@ -354,6 +361,11 @@ function createAudioEngine() {
 	const pendingSampleLoads = new Map<string, { resolve: (success: boolean) => void }>();
 	// Pending SoundFont load promises
 	const pendingSoundFontLoads = new Map<string, { resolve: (info: SoundFontInfo | null) => void }>();
+	// Pending wavetable bank load promises (resolves to assigned bank ID, -1 on failure)
+	const pendingWavetableLoads = new Map<string, { resolve: (bankId: number) => void }>();
+	// Track which wavetable bank IDs are currently registered in the worklet
+	// (kept in sync via clearWavetables / loadWavetable). Map: name → bankId.
+	const loadedWavetables = new Map<string, number>();
 
 	async function initialize() {
 		if (state.isInitialized || state.isLoading) return;
@@ -441,6 +453,7 @@ function createAudioEngine() {
 					requiredSamples: msg.requiredSamples as string[] | undefined,
 					requiredSamplesExtended: msg.requiredSamplesExtended as RequiredSampleExtended[] | undefined,
 					requiredSoundfonts: msg.requiredSoundfonts as RequiredSoundFont[] | undefined,
+					requiredWavetables: msg.requiredWavetables as RequiredWavetable[] | undefined,
 					requiredInputSources: msg.requiredInputSources as string[] | undefined,
 					paramDecls: msg.paramDecls as ParamDecl[] | undefined,
 					vizDecls: msg.vizDecls as VizDecl[] | undefined,
@@ -529,6 +542,27 @@ function createAudioEngine() {
 					if (pendingSf) {
 						pendingSf.resolve(null);
 						pendingSoundFontLoads.delete(sfName);
+					}
+				}
+				break;
+			}
+			case 'wavetableLoaded': {
+				const wtName = msg.name as string;
+				if (msg.success) {
+					const bankId = msg.bankId as number;
+					console.log('[AudioEngine] Wavetable loaded:', wtName, 'bankId:', bankId);
+					loadedWavetables.set(wtName, bankId);
+					const pendingWt = pendingWavetableLoads.get(wtName);
+					if (pendingWt) {
+						pendingWt.resolve(bankId);
+						pendingWavetableLoads.delete(wtName);
+					}
+				} else {
+					console.error('[AudioEngine] Wavetable load failed:', wtName, msg.error);
+					const pendingWt = pendingWavetableLoads.get(wtName);
+					if (pendingWt) {
+						pendingWt.resolve(-1);
+						pendingWavetableLoads.delete(wtName);
 					}
 				}
 				break;
@@ -1019,6 +1053,46 @@ function createAudioEngine() {
 				};
 			}
 
+			// Step 2c: Load any required wavetable banks (Smooch).
+			// Order matters: the compiler assigns sequential slot IDs in
+			// source order, so we clear the runtime registry first and
+			// then load each bank in compile order — the runtime IDs match
+			// inst.rate values embedded in the bytecode.
+			const requiredWavetables = compileResult.requiredWavetables || [];
+			if (requiredWavetables.length > 0) {
+				clearWavetables();
+				for (const wt of requiredWavetables) {
+					// Resolve the path relative to the static dir if it has
+					// no scheme. Mirrors how soundfont paths are passed
+					// straight through.
+					const url = wt.path.startsWith('http://') ||
+					            wt.path.startsWith('https://') ||
+					            wt.path.startsWith('/')
+						? wt.path
+						: `/${wt.path}`;
+					const bankId = await loadWavetableFromUrl(wt.name, url);
+					if (bankId < 0) {
+						return {
+							success: false,
+							diagnostics: [
+								{
+									severity: 2,
+									message: `Wavetable bank '${wt.name}' (${wt.path}) failed to load`,
+									line: 1,
+									column: 1
+								}
+							]
+						};
+					}
+					if (bankId !== wt.id) {
+						console.warn(
+							`[AudioEngine] Wavetable '${wt.name}' assigned bank ID ${bankId}` +
+							` but compiler expected ${wt.id} — bytecode may reference the wrong bank`
+						);
+					}
+				}
+			}
+
 			// Step 2b: Load any required SoundFonts
 			const requiredSoundfonts = compileResult.requiredSoundfonts || [];
 			for (const sf of requiredSoundfonts) {
@@ -1443,6 +1517,57 @@ function createAudioEngine() {
 		} catch (err) {
 			console.error('[AudioEngine] Failed to fetch SoundFont:', err);
 			return null;
+		}
+	}
+
+	/**
+	 * Send a clear-wavetables message to the worklet. Use this before
+	 * loading a new program's required_wavetables to reset the runtime
+	 * registry's slot IDs so they match the compiler's source-order
+	 * assignments.
+	 */
+	function clearWavetables() {
+		if (!workletNode) return;
+		workletNode.port.postMessage({ type: 'clearWavetables' });
+		loadedWavetables.clear();
+	}
+
+	/**
+	 * Load a wavetable bank from raw WAV bytes into the worklet. Resolves
+	 * to the assigned bank ID, or -1 on failure.
+	 */
+	async function loadWavetable(name: string, data: ArrayBuffer): Promise<number> {
+		if (!workletNode) {
+			console.warn('[AudioEngine] Cannot load wavetable - worklet not initialized');
+			return -1;
+		}
+		const loadPromise = new Promise<number>((resolve) => {
+			pendingWavetableLoads.set(name, { resolve });
+			setTimeout(() => {
+				if (pendingWavetableLoads.has(name)) {
+					console.error('[AudioEngine] Wavetable load timeout:', name);
+					pendingWavetableLoads.delete(name);
+					resolve(-1);
+				}
+			}, 30000);
+		});
+		workletNode.port.postMessage(
+			{ type: 'loadWavetable', name, data },
+			[data]
+		);
+		return await loadPromise;
+	}
+
+	/**
+	 * Fetch a wavetable WAV from a URL and load it into the worklet.
+	 */
+	async function loadWavetableFromUrl(name: string, url: string): Promise<number> {
+		try {
+			const result = await loadFile({ type: 'url', url }, { cache: true });
+			return await loadWavetable(name, result.data);
+		} catch (err) {
+			console.error('[AudioEngine] Failed to fetch wavetable:', err);
+			return -1;
 		}
 	}
 
@@ -1974,6 +2099,10 @@ function createAudioEngine() {
 		// SoundFont API
 		loadSoundFont,
 		loadSoundFontFromUrl,
+		// Wavetable API (Smooch)
+		loadWavetable,
+		loadWavetableFromUrl,
+		clearWavetables,
 		getBankSampleNames,
 		getBankSampleVariantCount,
 		hasBank,

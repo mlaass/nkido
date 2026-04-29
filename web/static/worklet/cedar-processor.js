@@ -191,6 +191,16 @@ class CedarProcessor extends AudioWorkletProcessor {
 				this.loadSoundFont(msg.name, msg.data);
 				break;
 
+			case 'loadWavetable':
+				this.loadWavetable(msg.name, msg.data);
+				break;
+
+			case 'clearWavetables':
+				if (this.module) {
+					this.module._cedar_clear_wavetables();
+				}
+				break;
+
 			case 'getBuiltins':
 				this.getBuiltins();
 				break;
@@ -334,6 +344,29 @@ class CedarProcessor extends AudioWorkletProcessor {
 			soundfonts.push({ filename, preset });
 		}
 		return soundfonts;
+	}
+
+	/**
+	 * Get required wavetable banks from the compile result. The compiler
+	 * assigns sequential bank IDs in source order (the index here matches
+	 * the runtime registry's slot ID after the host loads them in this
+	 * same order).
+	 * @returns {Array<{name: string, path: string, id: number}>}
+	 */
+	getRequiredWavetables() {
+		if (!this.module._akkado_get_required_wavetables_count) {
+			return [];
+		}
+		const count = this.module._akkado_get_required_wavetables_count();
+		const wavetables = [];
+		for (let i = 0; i < count; i++) {
+			const namePtr = this.module._akkado_get_required_wavetable_name(i);
+			const name = namePtr ? this.module.UTF8ToString(namePtr) : '';
+			const pathPtr = this.module._akkado_get_required_wavetable_path(i);
+			const path = pathPtr ? this.module.UTF8ToString(pathPtr) : '';
+			wavetables.push({ name, path, id: i });
+		}
+		return wavetables;
 	}
 
 	/**
@@ -616,6 +649,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 					const requiredSamples = this.getRequiredSamples();
 					const requiredSamplesExtended = this.getRequiredSamplesExtended();
 					const requiredSoundfonts = this.getRequiredSoundFonts();
+					const requiredWavetables = this.getRequiredWavetables();
 					const requiredInputSources = this.getRequiredInputSources();
 
 					// Extract all state initialization data
@@ -664,6 +698,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 					console.log('[CedarProcessor] Compiled successfully, bytecode size:', bytecodeSize,
 						'required samples:', requiredSamples, 'extended samples:', requiredSamplesExtended.length,
 						'required soundfonts:', requiredSoundfonts.length,
+						'required wavetables:', requiredWavetables.length,
 						'state inits:', stateInits.length,
 						'param decls:', paramDecls.length, 'viz decls:', vizDecls.length,
 						'unique states:', disassembly?.summary?.uniqueStateIds ?? 'N/A');
@@ -675,6 +710,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 						requiredSamples,
 						requiredSamplesExtended,
 						requiredSoundfonts,
+						requiredWavetables,
 						requiredInputSources,
 						paramDecls,
 						vizDecls,
@@ -1029,6 +1065,64 @@ class CedarProcessor extends AudioWorkletProcessor {
 					name,
 					success: false,
 					error: 'SF2 parsing failed'
+				});
+			}
+		} finally {
+			this.module._nkido_free(namePtr);
+			this.module._nkido_free(dataPtr);
+		}
+	}
+
+	/**
+	 * Load a wavetable bank from WAV file bytes. The bank is preprocessed
+	 * (FFT mip pyramid, fundamental-phase alignment, RMS normalization)
+	 * inside the WASM call. The returned bankId equals the registry slot,
+	 * which matches the compiler's source-order ID provided the host
+	 * called clearWavetables before loading required_wavetables in order.
+	 */
+	loadWavetable(name, wavData) {
+		if (!this.module) {
+			this.port.postMessage({ type: 'wavetableLoaded', name, success: false, error: 'Module not initialized' });
+			return;
+		}
+
+		const nameLen = this.module.lengthBytesUTF8(name) + 1;
+		const namePtr = this.module._nkido_malloc(nameLen);
+		if (namePtr === 0) {
+			this.port.postMessage({ type: 'wavetableLoaded', name, success: false, error: 'Failed to allocate name' });
+			return;
+		}
+
+		const dataArray = new Uint8Array(wavData);
+		const dataPtr = this.module._nkido_malloc(dataArray.length);
+		if (dataPtr === 0) {
+			const needKB = (dataArray.length / 1024).toFixed(0);
+			this.module._nkido_free(namePtr);
+			this.port.postMessage({ type: 'wavetableLoaded', name, success: false, error: `Out of memory: could not allocate ${needKB} KB for wavetable data` });
+			return;
+		}
+
+		try {
+			this.module.stringToUTF8(name, namePtr, nameLen);
+			this.writeByteArray(dataPtr, dataArray);
+
+			const bankId = this.module._cedar_load_wavetable_wav(namePtr, dataPtr, dataArray.length);
+
+			if (bankId >= 0) {
+				console.log('[CedarProcessor] Wavetable loaded:', name, 'ID:', bankId);
+				this.port.postMessage({
+					type: 'wavetableLoaded',
+					name,
+					success: true,
+					bankId
+				});
+			} else {
+				console.error('[CedarProcessor] Failed to load wavetable:', name);
+				this.port.postMessage({
+					type: 'wavetableLoaded',
+					name,
+					success: false,
+					error: 'Wavetable preprocessing failed (must be mono, length multiple of 2048)'
 				});
 			}
 		} finally {

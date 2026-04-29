@@ -401,6 +401,75 @@ WASM_EXPORT void cedar_clear_samples() {
 }
 
 /**
+ * Load a wavetable bank from WAV file data in memory and register it
+ * under `name`. Mirrors cedar_load_sample_wav. The bank is preprocessed
+ * (FFT mip pyramid, RMS-normalized, fundamental-phase aligned) inside
+ * this call.
+ *
+ * Multi-bank: each call appends to the registry. To match the compiler's
+ * sequential bank IDs, the host should call cedar_clear_wavetables() once
+ * before loading the program's required_wavetables in source order.
+ *
+ * @param name Bank name (null-terminated). Must match the first arg of
+ *             wt_load() in the Akkado source.
+ * @param wav_data Pointer to WAV file data (mono, length multiple of 2048)
+ * @param wav_size Size of WAV data in bytes
+ * @return Assigned bank ID (>= 0) on success, -1 on failure
+ */
+WASM_EXPORT int32_t cedar_load_wavetable_wav(const char* name,
+                                              const uint8_t* wav_data,
+                                              uint32_t wav_size) {
+    if (!g_vm || !name || !wav_data || wav_size == 0) {
+        return -1;
+    }
+    std::string err;
+    const int id = g_vm->wavetable_registry().load_from_memory(
+        name, wav_data, wav_size, &err);
+    if (id < 0) {
+        std::printf("[Wavetable] Load failed for '%s': %s\n", name, err.c_str());
+        return -1;
+    }
+    return static_cast<int32_t>(id);
+}
+
+/**
+ * Drop all registered wavetable banks. Call this before loading a new
+ * program's required wavetables to keep the runtime registry's IDs in
+ * sync with the compiler's source-order assignments.
+ */
+WASM_EXPORT void cedar_clear_wavetables() {
+    if (g_vm) {
+        g_vm->wavetable_registry().clear();
+    }
+}
+
+/**
+ * Check if a wavetable bank with this name is registered.
+ * @return 1 if present, 0 otherwise.
+ */
+WASM_EXPORT int cedar_has_wavetable(const char* name) {
+    if (!g_vm || !name) return 0;
+    return g_vm->wavetable_registry().has(name) ? 1 : 0;
+}
+
+/**
+ * Look up the bank ID for `name`. Returns -1 if not registered.
+ * Useful for sanity checks from the JS host.
+ */
+WASM_EXPORT int32_t cedar_wavetable_find_id(const char* name) {
+    if (!g_vm || !name) return -1;
+    return static_cast<int32_t>(g_vm->wavetable_registry().find_id(name));
+}
+
+/**
+ * Number of currently registered wavetable banks.
+ */
+WASM_EXPORT uint32_t cedar_wavetable_count() {
+    if (!g_vm) return 0;
+    return static_cast<uint32_t>(g_vm->wavetable_registry().size());
+}
+
+/**
  * Get number of loaded samples
  * @return Number of samples in the bank
  */
@@ -617,6 +686,43 @@ WASM_EXPORT const char* akkado_get_required_soundfont_filename(uint32_t index) {
 WASM_EXPORT int32_t akkado_get_required_soundfont_preset(uint32_t index) {
     if (index >= g_compile_result.required_soundfonts.size()) return -1;
     return g_compile_result.required_soundfonts[index].preset_index;
+}
+
+// ============================================================================
+// Required Wavetables API
+// ============================================================================
+//
+// The Akkado compiler records every wt_load("name", "path") call in the
+// program's compile result. The JS host should iterate these after compile,
+// fetch each file from its source (URL, IndexedDB, etc.), and feed the
+// bytes back through cedar_load_wavetable_wav(name, ...). v1 keeps one
+// active bank, so the LAST entry in this list determines the audible bank.
+
+/**
+ * Get number of wt_load() calls from the compile result.
+ */
+WASM_EXPORT uint32_t akkado_get_required_wavetables_count() {
+    return static_cast<uint32_t>(g_compile_result.required_wavetables.size());
+}
+
+/**
+ * Get the bank name for the wt_load() call at `index`.
+ * @return Pointer to null-terminated name, or nullptr if index out of range.
+ */
+WASM_EXPORT const char* akkado_get_required_wavetable_name(uint32_t index) {
+    if (index >= g_compile_result.required_wavetables.size()) return nullptr;
+    return g_compile_result.required_wavetables[index].name.c_str();
+}
+
+/**
+ * Get the file path for the wt_load() call at `index`.
+ * The path is whatever the user wrote in source; the JS host is expected
+ * to resolve it (relative paths, URLs, etc.).
+ * @return Pointer to null-terminated path, or nullptr if index out of range.
+ */
+WASM_EXPORT const char* akkado_get_required_wavetable_path(uint32_t index) {
+    if (index >= g_compile_result.required_wavetables.size()) return nullptr;
+    return g_compile_result.required_wavetables[index].path.c_str();
 }
 
 /**

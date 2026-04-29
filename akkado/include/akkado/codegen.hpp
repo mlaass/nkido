@@ -192,6 +192,23 @@ struct RequiredSoundFont {
     int preset_index = 0;    // Preset index within the SF2
 };
 
+/// Required wavetable bank from a compile-time wt_load(...) directive.
+/// The host iterates these after compilation in order: native loads each
+/// via `VM::wavetable_registry().load_from_file(name, path)`; WASM fetches
+/// each WAV and feeds it through cedar_load_wavetable_wav(name, bytes).
+///
+/// The compiler assigns slot IDs by source order (first wt_load = 0,
+/// second = 1, …). The runtime registry MUST be cleared before loading
+/// these in order so its sequential IDs match. Each `smooch("name", ...)`
+/// call resolves its bank ID at compile time via name lookup against this
+/// list, and the assigned ID is encoded into the OSC_WAVETABLE
+/// instruction's rate field.
+struct RequiredWavetable {
+    std::string name;     // Bank identifier referenced by smooch("...")
+    std::string path;     // Filesystem path (ignored on WASM)
+    int         id = 0;   // Slot ID assigned by the compiler (== index in this vector)
+};
+
 /// Result of code generation
 struct CodeGenResult {
     std::vector<cedar::Instruction> instructions;
@@ -208,6 +225,7 @@ struct CodeGenResult {
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
     std::vector<BuiltinVarOverride> builtin_var_overrides;  // Builtin variable overrides (bpm, sr)
+    std::vector<RequiredWavetable> required_wavetables;  // Wavetable banks from wt_load()
     bool success = false;
 };
 
@@ -520,6 +538,18 @@ private:
     /// Special-cased: extracts filename/preset at compile time, emits SOUNDFONT_VOICE
     TypedValue handle_soundfont_call(NodeIndex node, const Node& n);
 
+    /// Handle wt_load("name", "path") - register a wavetable bank.
+    /// Compile-time directive only — emits no instruction. Both args must
+    /// be string literals. The (name, path, id) tuple is recorded in
+    /// `required_wavetables_`; the host loads it after compilation.
+    TypedValue handle_wt_load_call(NodeIndex node, const Node& n);
+
+    /// Handle smooch("bank", freq, phase?, tablePos?) - wavetable oscillator.
+    /// First arg must be a string literal naming a previously declared
+    /// wt_load bank. The bank ID is resolved at compile time and packed
+    /// into inst.rate; freq/phase/tablePos lower as audio-rate signals.
+    TypedValue handle_smooch_call(NodeIndex node, const Node& n);
+
     /// Handle in() / in(source) - live audio input
     /// Allocates an adjacent buffer pair and emits INPUT. Optional source string
     /// literal is recorded in required_input_sources_ for host metadata routing.
@@ -640,6 +670,10 @@ private:
     std::vector<RequiredSample> required_samples_extended_;
     // Track required SoundFont files
     std::vector<RequiredSoundFont> required_soundfonts_;
+    // Track required wavetable banks from compile-time wt_load() directives
+    // (per-call order; deduplicated on (name, path) pair to avoid reloading
+    // when the same bank appears in multiple modules).
+    std::vector<RequiredWavetable> required_wavetables_;
     // Track input source strings from in('...') calls (per-call order; not deduplicated)
     std::vector<std::string> required_input_sources_;
 

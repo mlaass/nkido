@@ -189,6 +189,7 @@ CompileResult compile(std::string_view source, std::string_view filename,
     result.required_samples = std::move(gen.required_samples);
     result.required_samples_extended = std::move(gen.required_samples_extended);
     result.required_soundfonts = std::move(gen.required_soundfonts);
+    result.required_wavetables = std::move(gen.required_wavetables);
     result.required_input_sources = std::move(gen.required_input_sources);
 
     // Copy parameter declarations for UI generation

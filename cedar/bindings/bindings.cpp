@@ -4,6 +4,9 @@
 #include <pybind11/numpy.h>
 #include "cedar/cedar.hpp"
 #include "cedar/vm/vm.hpp"
+#ifndef CEDAR_NO_FFT
+#include "cedar/wavetable/preprocessor.hpp"
+#endif
 
 namespace py = pybind11;
 
@@ -122,6 +125,8 @@ PYBIND11_MODULE(cedar_core, m) {
         .value("OSC_TRI_4X", cedar::Opcode::OSC_TRI_4X)
         .value("OSC_SQR_PWM_4X", cedar::Opcode::OSC_SQR_PWM_4X)
         .value("OSC_SAW_PWM_4X", cedar::Opcode::OSC_SAW_PWM_4X)
+        // Wavetable Oscillators (200-209)
+        .value("OSC_WAVETABLE", cedar::Opcode::OSC_WAVETABLE)
         // Polyphony (150-151)
         .value("POLY_BEGIN", cedar::Opcode::POLY_BEGIN)
         .value("POLY_END", cedar::Opcode::POLY_END)
@@ -228,5 +233,68 @@ PYBIND11_MODULE(cedar_core, m) {
             auto r = data.unchecked<1>();
             std::size_t num_samples = r.size();
             return vm.load_sample(name, r.data(0), num_samples, channels, sample_rate);
-        }, py::arg("name"), py::arg("data"), py::arg("channels") = 1, py::arg("sample_rate") = 48000.0f);
+        }, py::arg("name"), py::arg("data"), py::arg("channels") = 1, py::arg("sample_rate") = 48000.0f)
+
+#ifndef CEDAR_NO_FFT
+        // Load a wavetable bank from a WAV file (native only). Returns the
+        // assigned bank ID (>= 0). On failure raises RuntimeError.
+        .def("wavetable_load_wav", [](cedar::VM& vm, const std::string& name,
+                                       const std::string& path) {
+            std::string err;
+            const int id = vm.wavetable_registry().load_from_file(name, path, &err);
+            if (id < 0) throw std::runtime_error(err);
+            return id;
+        }, py::arg("name"), py::arg("path"))
+
+        // Register a synthetic wavetable bank from a 2-D numpy array shaped
+        // (num_frames, 2048). Each row becomes one source frame. Returns
+        // the assigned bank ID.
+        .def("wavetable_register_synthetic", [](cedar::VM& vm,
+                                                  const std::string& name,
+                                                  py::array_t<float, py::array::c_style |
+                                                                      py::array::forcecast> frames) {
+            const auto buf = frames.request();
+            if (buf.ndim != 2) {
+                throw std::invalid_argument("frames must be 2-D (num_frames, 2048)");
+            }
+            const std::size_t num_frames  = static_cast<std::size_t>(buf.shape[0]);
+            const std::size_t frame_size  = static_cast<std::size_t>(buf.shape[1]);
+            if (frame_size != static_cast<std::size_t>(cedar::WAVETABLE_SIZE)) {
+                throw std::invalid_argument(
+                    "frame width must equal WAVETABLE_SIZE (2048), got "
+                    + std::to_string(frame_size));
+            }
+            const std::size_t total = num_frames * frame_size;
+            const float* data = static_cast<const float*>(buf.ptr);
+            std::string err;
+            auto bank = cedar::build_bank_from_samples(name, data, total, &err);
+            if (!bank) throw std::runtime_error(err);
+            return vm.wavetable_registry().set_named(name, std::move(bank));
+        }, py::arg("name"), py::arg("frames"))
+
+        // Drop all registered wavetable banks.
+        .def("wavetable_clear", [](cedar::VM& vm) {
+            vm.wavetable_registry().clear();
+        })
+
+        // True if a bank with this name is registered.
+        .def("wavetable_has", [](cedar::VM& vm, const std::string& name) {
+            return vm.wavetable_registry().has(name);
+        }, py::arg("name"))
+
+        // Look up the bank ID for a name; returns -1 if not registered.
+        .def("wavetable_find_id", [](cedar::VM& vm, const std::string& name) {
+            return vm.wavetable_registry().find_id(name);
+        }, py::arg("name"))
+
+        // Number of registered wavetable banks.
+        .def("wavetable_count", [](cedar::VM& vm) {
+            return vm.wavetable_registry().size();
+        })
+
+        // Expose the maximum bank count constant for tests / UI.
+        .def_readonly_static("MAX_WAVETABLE_BANKS",
+                             new std::size_t(cedar::MAX_WAVETABLE_BANKS))
+#endif
+        ;
 }

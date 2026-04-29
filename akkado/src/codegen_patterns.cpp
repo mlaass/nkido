@@ -5460,4 +5460,187 @@ TypedValue CodeGenerator::handle_input_call(NodeIndex node, const Node& n) {
     return cache_and_return(node, TypedValue::stereo_signal(left_buf, right_buf));
 }
 
+TypedValue CodeGenerator::handle_wt_load_call(NodeIndex node, const Node& n) {
+    // wt_load("name", "path") — register a wavetable bank for the host to
+    // load. Compile-time directive only (emits no audio-time instruction).
+    // Bank IDs are assigned in source order: first wt_load = 0, second = 1,
+    // etc. The runtime registry MUST be cleared before loading these in
+    // the same order so the IDs match.
+    (void)node;
+
+    std::size_t arg_count = 0;
+    NodeIndex arg = n.first_child;
+    while (arg != NULL_NODE) {
+        ++arg_count;
+        arg = ast_->arena[arg].next_sibling;
+    }
+    if (arg_count != 2) {
+        error("E193",
+              "wt_load() takes 2 arguments (name, path) — got "
+              + std::to_string(arg_count),
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    auto name_opt = get_string_arg(*ast_, n, 0);
+    if (!name_opt.has_value()) {
+        error("E194",
+              "wt_load() first argument must be a string literal "
+              "(bank name, e.g. \"Basic Shapes\")",
+              n.location);
+        return TypedValue::error_val();
+    }
+    auto path_opt = get_string_arg(*ast_, n, 1);
+    if (!path_opt.has_value()) {
+        error("E195",
+              "wt_load() second argument must be a string literal "
+              "(file path, e.g. \"wavetables/basic.wav\")",
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    // Dedup on name. If the user repeats wt_load("foo", ...) we keep the
+    // first declaration (and reuse its ID for subsequent smooch references).
+    // A path mismatch is a warning-worthy event but for now we accept the
+    // first entry silently; multi-source-file imports are the typical
+    // reason for the duplicate.
+    for (const auto& w : required_wavetables_) {
+        if (w.name == *name_opt) {
+            return TypedValue::void_val();
+        }
+    }
+
+    if (required_wavetables_.size() >= 64) {
+        error("E196",
+              "wt_load: too many wavetable banks (max 64 per program)",
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    RequiredWavetable rw;
+    rw.name = *name_opt;
+    rw.path = *path_opt;
+    rw.id   = static_cast<int>(required_wavetables_.size());
+    required_wavetables_.push_back(std::move(rw));
+    return TypedValue::void_val();
+}
+
+TypedValue CodeGenerator::handle_smooch_call(NodeIndex node, const Node& n) {
+    // smooch("bank_name", freq, phase?, tablePos?) — wavetable oscillator.
+    // First arg is a string literal naming a bank previously declared via
+    // wt_load(). The bank ID is resolved at compile time and packed into
+    // inst.rate. Remaining args are audio-rate signals (phase and tablePos
+    // default to BUFFER_UNUSED → 0 via get_input_or_zero in the opcode).
+
+    // Count args
+    std::size_t arg_count = 0;
+    NodeIndex arg = n.first_child;
+    while (arg != NULL_NODE) {
+        ++arg_count;
+        arg = ast_->arena[arg].next_sibling;
+    }
+    if (arg_count < 2 || arg_count > 4) {
+        error("E197",
+              "smooch() takes 2-4 arguments (\"bank\", freq, phase?, tablePos?) — got "
+              + std::to_string(arg_count),
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    auto bank_name = get_string_arg(*ast_, n, 0);
+    if (!bank_name.has_value()) {
+        error("E198",
+              "smooch() first argument must be a string literal (bank name "
+              "from a wt_load() call, e.g. smooch(\"morph\", freq))",
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    // Resolve bank name → ID via the required_wavetables_ list. The user
+    // must call wt_load("name", "path") earlier in source.
+    int bank_id = -1;
+    for (const auto& w : required_wavetables_) {
+        if (w.name == *bank_name) {
+            bank_id = w.id;
+            break;
+        }
+    }
+    if (bank_id < 0) {
+        error("E199",
+              "smooch(\"" + *bank_name + "\", ...) references an unknown wavetable. "
+              "Add wt_load(\"" + *bank_name + "\", \"path/to/wavetable.wav\") "
+              "before this call.",
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    // Compile each signal arg via the generic visit() pipeline. Position 0
+    // was the bank-name string and is skipped.
+    auto compile_signal = [&](std::size_t arg_index, std::uint16_t& out_buf,
+                                bool required) -> bool {
+        NodeIndex sig_arg = arg_index < arg_count
+                          ? get_pattern_arg(*ast_, n, arg_index)
+                          : NULL_NODE;
+        if (sig_arg == NULL_NODE) {
+            if (required) {
+                error("E197",
+                      "smooch() argument " + std::to_string(arg_index)
+                      + " is required",
+                      n.location);
+                return false;
+            }
+            out_buf = BufferAllocator::BUFFER_UNUSED;
+            return true;
+        }
+        TypedValue tv = visit(sig_arg);
+        if (tv.error) return false;
+        if (tv.type != ValueType::Signal && tv.type != ValueType::Number) {
+            error("E199",
+                  "smooch() argument " + std::to_string(arg_index)
+                  + " must be a signal or number, got "
+                  + value_type_name(tv.type),
+                  n.location);
+            return false;
+        }
+        out_buf = tv.buffer;
+        return true;
+    };
+
+    std::uint16_t freq_buf  = BufferAllocator::BUFFER_UNUSED;
+    std::uint16_t phase_buf = BufferAllocator::BUFFER_UNUSED;
+    std::uint16_t pos_buf   = BufferAllocator::BUFFER_UNUSED;
+    if (!compile_signal(1, freq_buf,  /*required=*/true))  return TypedValue::error_val();
+    if (!compile_signal(2, phase_buf, /*required=*/false)) return TypedValue::error_val();
+    if (!compile_signal(3, pos_buf,   /*required=*/false)) return TypedValue::error_val();
+
+    // Allocate the per-voice state ID using the standard semantic-path
+    // hashing (matches the convention used by every other stateful opcode
+    // — preserves phase across hot-swap when the same smooch call survives
+    // a recompile).
+    std::uint32_t smooch_count = call_counters_["smooch"]++;
+    push_path("smooch#" + std::to_string(smooch_count));
+    std::uint32_t state_id = compute_state_id();
+    pop_path();
+
+    std::uint16_t out_buf = buffers_.allocate();
+    if (out_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", n.location);
+        return TypedValue::error_val();
+    }
+
+    cedar::Instruction inst{};
+    inst.opcode    = cedar::Opcode::OSC_WAVETABLE;
+    inst.out_buffer = out_buf;
+    inst.inputs[0] = freq_buf;
+    inst.inputs[1] = phase_buf;
+    inst.inputs[2] = pos_buf;
+    inst.inputs[3] = BufferAllocator::BUFFER_UNUSED;
+    inst.inputs[4] = BufferAllocator::BUFFER_UNUSED;
+    inst.state_id  = state_id;
+    inst.rate      = static_cast<std::uint8_t>(bank_id);
+    emit(inst);
+
+    return cache_and_return(node, TypedValue::signal(out_buf));
+}
+
 } // namespace akkado

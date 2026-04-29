@@ -355,6 +355,25 @@ int handle_render_mode(const nkido::Options& opts) {
     auto vm = std::make_unique<cedar::VM>();
     vm->set_sample_rate(static_cast<float>(opts.sample_rate));
     vm->set_bpm(opts.render_bpm);
+
+    // Load any wavetable banks declared via wt_load() in source order, so
+    // their runtime slot IDs match the inst.rate values the compiler baked
+    // into the bytecode. Path is interpreted relative to CWD if not absolute.
+    for (const auto& wt : cr.required_wavetables) {
+        std::string err;
+        const int id = vm->wavetable_registry().load_from_file(
+            wt.name, wt.path, &err);
+        if (id < 0) {
+            std::cerr << "error: " << err << "\n";
+            return EXIT_FAILURE;
+        }
+        if (id != wt.id) {
+            std::cerr << "warning: wavetable '" << wt.name
+                      << "' got runtime slot " << id
+                      << " but compiler expected " << wt.id << "\n";
+        }
+    }
+
     if (!vm->load_program_immediate(std::span<const cedar::Instruction>(instructions))) {
         std::cerr << "error: failed to load program into VM\n";
         return EXIT_FAILURE;

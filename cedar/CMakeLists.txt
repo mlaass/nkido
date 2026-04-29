@@ -68,6 +68,11 @@ endif()
 
 if(CEDAR_ENABLE_FFT)
     list(APPEND CEDAR_SOURCES src/dsp/fft.cpp)
+    # Wavetable preprocessor + registry depend on kissfft for offline FFT
+    list(APPEND CEDAR_SOURCES
+        src/wavetable/preprocessor.cpp
+        src/wavetable/registry.cpp
+    )
 endif()
 
 if(CEDAR_ENABLE_MINBLEP)

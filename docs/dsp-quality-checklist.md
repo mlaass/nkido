@@ -56,6 +56,7 @@ This document tracks the quality verification status of Cedar DSP opcodes. Each 
 | `OSC_SQR_PWM_MINBLEP` | ✅ Tested | Duty cycle sweep, aliasing vs PolyBLEP, high-frequency quality | MinBLEP sub-sample accuracy |
 | `OSC_RAMP` | ✅ Tested | Waveform shape, frequency accuracy, DC offset, PolyBLEP aliasing, inverted-SAW equivalence | Descending ramp with PolyBLEP |
 | `OSC_PHASOR` | ✅ Tested | Range [0,1), linearity (R²=1.0), frequency accuracy, phase increment, waveshaping | Raw phase output |
+| `OSC_WAVETABLE` | ✅ Tested | THD (-101 dB at 440 Hz sine), alias floor (-103 dB at 10 kHz saw), mip-boundary crossfade, frame morph continuity, NaN/OOR tablePos, empty-registry silence, single-frame bank, 305 s long-run stability, 256-frame bank memory | Smooch — Niemitalo-4 + equal-power mip/frame crossfade. Hot-swap tests #10/#11 pending CLI smoke harness. |
 
 ### Untested
 

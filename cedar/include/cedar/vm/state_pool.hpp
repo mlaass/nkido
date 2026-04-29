@@ -270,6 +270,12 @@ public:
                 json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
                 json << "}";
             }
+            else if constexpr (std::is_same_v<T, SmoochState>) {
+                json << R"({"type":"SmoochState")";
+                json << R"(,"phase":)" << state.phase;
+                json << R"(,"initialized":)" << (state.initialized ? "true" : "false");
+                json << "}";
+            }
 #ifndef CEDAR_NO_MINBLEP
             else if constexpr (std::is_same_v<T, MinBLEPOscState>) {
                 json << R"({"type":"MinBLEPOscState")";

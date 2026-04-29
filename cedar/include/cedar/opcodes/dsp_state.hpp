@@ -20,6 +20,14 @@ struct OscState {
     bool initialized = false; // Skip anti-aliasing on first sample
 };
 
+// Wavetable oscillator state (Smooch). Phase kept in double for cleanly
+// accumulating drift over long renders and across hot-swap boundaries; the
+// per-sample read still does float math via narrowing once per sample.
+struct SmoochState {
+    double phase = 0.0;       // [0, 1) phase accumulator
+    bool   initialized = false;
+};
+
 #ifndef CEDAR_NO_MINBLEP
 // MinBLEP oscillator state with residual buffer
 struct MinBLEPOscState {
@@ -1231,6 +1239,7 @@ struct FFTProbeState {
 using DSPState = std::variant<
     std::monostate,
     OscState,
+    SmoochState,
 #ifndef CEDAR_NO_MINBLEP
     MinBLEPOscState,
 #endif

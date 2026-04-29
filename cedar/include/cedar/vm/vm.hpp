@@ -9,9 +9,13 @@
 #ifndef CEDAR_NO_SOUNDFONT
 #include "../audio/soundfont.hpp"
 #endif
+#ifndef CEDAR_NO_FFT
+#include "../wavetable/registry.hpp"
+#endif
 #include "swap_controller.hpp"
 #include "crossfade_state.hpp"
 #include "../opcodes/dsp_state.hpp"
+#include <memory>
 #include <span>
 
 namespace cedar {
@@ -147,6 +151,12 @@ public:
     [[nodiscard]] const SoundFontRegistry& soundfont_registry() const { return soundfont_registry_; }
 #endif
 
+#ifndef CEDAR_NO_FFT
+    // Get wavetable registry (for wt_load / smooch).
+    [[nodiscard]] WavetableBankRegistry& wavetable_registry() { return wavetable_registry_; }
+    [[nodiscard]] const WavetableBankRegistry& wavetable_registry() const { return wavetable_registry_; }
+#endif
+
     // Initialize a SequenceState with compiled sequences (arena-allocated)
     // Used by compiler to set up the simplified sequence-based patterns
     // @param total_events Total event count across all sequences (for output buffer sizing)
@@ -246,6 +256,14 @@ private:
     SampleBank sample_bank_;
 #ifndef CEDAR_NO_SOUNDFONT
     SoundFontRegistry soundfont_registry_;
+#endif
+#ifndef CEDAR_NO_FFT
+    WavetableBankRegistry wavetable_registry_;
+    // Per-block snapshot of all registered banks. Pinning shared_ptrs here
+    // keeps banks alive through process_block() even if the host thread
+    // swaps the registry. Refreshed each block in process_block().
+    std::array<std::shared_ptr<const WavetableBank>,
+                MAX_WAVETABLE_BANKS> wavetable_pins_{};
 #endif
     AudioArena audio_arena_;
 };

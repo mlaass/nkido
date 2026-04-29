@@ -7,9 +7,11 @@
 #include <cmath>
 #include <cstdint>
 
+#include "../wavetable/registry.hpp"  // for WavetableBankSnapshot
+
 namespace cedar {
 
-// Forward declaration
+// Forward declarations
 class EnvMap;
 
 // Execution context passed to every opcode
@@ -36,6 +38,14 @@ struct ExecutionContext {
     // capture device is available, permission not yet granted, etc.
     float* input_left = nullptr;
     float* input_right = nullptr;
+
+    // Per-block snapshot of the wavetable registry — refreshed by VM at
+    // block start. OSC_WAVETABLE looks up its bank by ID via
+    // wavetable_banks.banks[inst.rate]. Slots beyond `count` are nullptr.
+    // Lifetime: the VM pins shared_ptrs for the duration of the block,
+    // so the raw pointers in this snapshot remain valid through
+    // process_block().
+    WavetableBankSnapshot wavetable_banks;
 
     // Audio parameters
     float sample_rate = DEFAULT_SAMPLE_RATE;

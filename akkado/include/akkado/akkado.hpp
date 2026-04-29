@@ -54,6 +54,9 @@ struct CompileResult {
     std::vector<ParamDecl> param_decls;  // Declared parameters for UI generation
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
     std::vector<BuiltinVarOverride> builtin_var_overrides;  // Builtin variable overrides (bpm, sr)
+    // Wavetable banks declared via wt_load(). v1 keeps the *last* loaded bank
+    // active; multi-bank routing is a v2 follow-up.
+    std::vector<RequiredWavetable> required_wavetables;
 };
 
 /// Compile Akkado source code to Cedar bytecode

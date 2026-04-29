@@ -85,6 +85,12 @@ if(EMSCRIPTEN)
         _cedar_get_sample_id
         _cedar_clear_samples
         _cedar_get_sample_count
+        # Wavetable management (Smooch)
+        _cedar_load_wavetable_wav
+        _cedar_clear_wavetables
+        _cedar_has_wavetable
+        _cedar_wavetable_find_id
+        _cedar_wavetable_count
         # State initialization
         _cedar_apply_state_inits
         # Akkado compiler
@@ -105,6 +111,10 @@ if(EMSCRIPTEN)
         _akkado_get_required_soundfonts_count
         _akkado_get_required_soundfont_filename
         _akkado_get_required_soundfont_preset
+        # Required wavetables (Smooch)
+        _akkado_get_required_wavetables_count
+        _akkado_get_required_wavetable_name
+        _akkado_get_required_wavetable_path
         # Required input sources (audio-input PRD §4.4)
         _akkado_get_required_input_sources_count
         _akkado_get_required_input_source

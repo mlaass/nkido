@@ -209,6 +209,39 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                  {NAN, NAN, NAN, NAN, NAN},
                  "4x oversampled PWM sawtooth"}},
 
+    // Wavetable oscillator (Smooch).
+    //   smooch("bank_name", freq)
+    //   smooch("bank_name", freq, phase)
+    //   smooch("bank_name", freq, phase, tablePos)
+    // The bank must have been declared earlier via wt_load("bank_name", "path").
+    // All three names (smooch / wt / wavetable) are special-handled in
+    // codegen — the entries here exist so the analyzer recognizes the
+    // identifier and reports unknown-function errors correctly. The PRD
+    // also listed "wave" as an alias but that collides with a common
+    // variable name (existing tests use `wave = ...`), so we ship three.
+    {"smooch",    {cedar::Opcode::OSC_WAVETABLE, 2, 2, true,
+                   {"bank", "freq", "phase", "tablePos", "", ""},
+                   {0.0f, 0.0f, NAN, NAN, NAN},
+                   "Wavetable oscillator (Smooch). smooch(\"bank\", freq, phase?, tablePos?)."}},
+    {"wt",        {cedar::Opcode::OSC_WAVETABLE, 2, 2, true,
+                   {"bank", "freq", "phase", "tablePos", "", ""},
+                   {0.0f, 0.0f, NAN, NAN, NAN},
+                   "Wavetable oscillator (alias for smooch)."}},
+    {"wavetable", {cedar::Opcode::OSC_WAVETABLE, 2, 2, true,
+                   {"bank", "freq", "phase", "tablePos", "", ""},
+                   {0.0f, 0.0f, NAN, NAN, NAN},
+                   "Wavetable oscillator (alias for smooch)."}},
+
+    // wt_load — compile-time directive that registers a wavetable bank for
+    // the host to load. Mirrors `soundfont` in shape: opcode = NOP because
+    // there is no audio-time instruction; codegen special-handles it (see
+    // codegen.cpp special_handlers table) to extract the string-literal args
+    // into result.required_wavetables. The host loads the bank after compile.
+    {"wt_load",   {cedar::Opcode::NOP, 2, 0, false,
+                   {"name", "path", "", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Load a wavetable bank (compile-time): wt_load(\"name\", \"path\")."}},
+
     // Filters (signal, cutoff required; q optional with default 0.707)
     // SVF (State Variable Filter) - stable under modulation
     {"lp",      {cedar::Opcode::FILTER_SVF_LP, 2, 1, true,

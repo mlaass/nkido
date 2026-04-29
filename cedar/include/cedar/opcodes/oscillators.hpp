@@ -7,6 +7,9 @@
 #ifndef CEDAR_NO_MINBLEP
 #include "minblep.hpp"
 #endif
+#ifndef CEDAR_NO_FFT
+#include "../wavetable/bank.hpp"
+#endif
 #include <cmath>
 #include <algorithm>
 
@@ -963,5 +966,147 @@ inline void op_osc_saw_pwm_4x(ExecutionContext& ctx, const Instruction& inst) {
         out[i] = state.downsample(samples[0], samples[1], samples[2], samples[3]);
     }
 }
+
+#ifndef CEDAR_NO_FFT
+// ============================================================================
+// Wavetable Oscillator (Smooch)
+// ============================================================================
+
+// 4-point Niemitalo-optimal interpolation kernel ("Optimal 2x (4-point,
+// 3rd-order) z-form"). Coefficients tuned for minimal aliasing on
+// oversampled material — see Olli Niemitalo, "Polynomial Interpolators for
+// High-Quality Resampling of Oversampled Audio" (deip.pdf, 2001). Same
+// arithmetic shape and per-sample cost as 4-point Hermite/Lagrange.
+[[gnu::always_inline]]
+inline float niemitalo4(float x, float y0, float y1, float y2, float y3) {
+    const float z = x - 0.5f;
+    const float even1 = y2 + y1, odd1 = y2 - y1;
+    const float even2 = y3 + y0, odd2 = y3 - y0;
+    const float c0 = even1 *  0.45645918406487612f + even2 *  0.04354173901996461f;
+    const float c1 = odd1  *  0.47236675362442071f + odd2  *  0.17686613581136501f;
+    const float c2 = even1 * -0.25367479420455852f + even2 *  0.25371918651882464f;
+    const float c3 = odd1  * -0.37917091811631082f + odd2  *  0.11952965755786543f;
+    return ((c3 * z + c2) * z + c1) * z + c0;
+}
+
+// Single (frame, mip) read with Niemitalo-4 + bitmask wrap.
+[[gnu::always_inline]]
+inline float wt_sample_at(const WavetableFrame& frame,
+                          std::size_t mip_idx,
+                          int int_pos,
+                          float frac_pos) {
+    constexpr int MASK = WAVETABLE_SIZE - 1;
+    const auto& tbl = frame.mipMaps[mip_idx];
+    const float y0 = tbl[(int_pos - 1) & MASK];
+    const float y1 = tbl[ int_pos      & MASK];
+    const float y2 = tbl[(int_pos + 1) & MASK];
+    const float y3 = tbl[(int_pos + 2) & MASK];
+    return niemitalo4(frac_pos, y0, y1, y2, y3);
+}
+
+// OSC_WAVETABLE: mip-mapped wavetable oscillator with 4-point Niemitalo
+// interpolation, equal-power crossfade across mip-pyramid octave boundaries,
+// and equal-power morph between phase-aligned adjacent frames.
+// inst.rate: bank ID (0..MAX_WAVETABLE_BANKS-1) — assigned at compile time
+//            by the codegen handler from the smooch("name", ...) string arg.
+// in0: freq (Hz)
+// in1: phase offset ([0, 1) — added to phase before the read)
+// in2: tablePos (frame morph index, 0..frames.size()-1)
+[[gnu::always_inline]]
+inline void op_osc_wavetable(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    const float* freq         = ctx.buffers->get(inst.inputs[0]);
+    // Phase and tablePos default to silence (0) when unused — get_input_or_zero
+    // routes BUFFER_UNUSED to BUFFER_ZERO so the codegen can emit smooch("name",
+    // freq) without manually wiring a zero buffer.
+    const float* phase_offset = get_input_or_zero(ctx, inst.inputs[1]);
+    const float* tablePos     = get_input_or_zero(ctx, inst.inputs[2]);
+    auto& state = ctx.states->get_or_create<SmoochState>(inst.state_id);
+
+    const std::uint8_t bank_id = inst.rate;
+    const WavetableBank* bank = (bank_id < MAX_WAVETABLE_BANKS)
+                                ? ctx.wavetable_banks.banks[bank_id]
+                                : nullptr;
+    if (bank == nullptr || bank->frames.empty()) {
+        // Bank not loaded (or out-of-range ID) — emit silence per PRD §8.c.
+        std::fill_n(out, BLOCK_SIZE, 0.0f);
+        return;
+    }
+
+    const std::size_t frame_count = bank->frames.size();
+    const std::size_t last_frame  = frame_count - 1;
+    const float nyquist           = ctx.sample_rate * 0.5f;
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        // Per PRD §8.a/b: clamp out-of-range frequencies.
+        float f = freq[i];
+        if (f <= 0.0f)        f = 0.01f;
+        else if (f >= nyquist) f = nyquist - 1.0f;
+
+        // 1. Phase accumulation (double for long-run stability).
+        const double inc = static_cast<double>(f) *
+                            static_cast<double>(ctx.inv_sample_rate);
+        state.phase += inc;
+        // Normal use rarely overshoots by more than 1, but keep loops to be safe.
+        while (state.phase >= 1.0) state.phase -= 1.0;
+        while (state.phase <  0.0) state.phase += 1.0;
+
+        double finalPhase = state.phase + static_cast<double>(phase_offset[i]);
+        finalPhase -= std::floor(finalPhase);
+
+        // 2. Fractional mip selection. We want the LOWEST mip k such that
+        // mip k's harmonic budget (1024>>k) is sufficient for frequency f
+        // without aliasing. Mip k is safe up to f_max(k) = nyquist*2^k/1024.
+        // The conservative formula `log2(2048 / max_harmonic)` (where
+        // max_harmonic = nyquist/f) ensures `floor(mip_fractional)` lands
+        // on a safe mip. The PRD §6.3 step 2 pseudocode had `1024 / ...`
+        // which biases one octave too aggressive (would alias near the top
+        // of each mip's nominal range).
+        const float max_harmonic = nyquist / f;
+        float mip_fractional = std::log2(2048.0f / std::max(max_harmonic, 1.0f));
+        if (mip_fractional < 0.0f) mip_fractional = 0.0f;
+        const float top_mip = static_cast<float>(MAX_MIP_LEVELS - 1);
+        if (mip_fractional > top_mip) mip_fractional = top_mip;
+        const std::size_t mip_low  = static_cast<std::size_t>(mip_fractional);
+        const std::size_t mip_high = std::min(mip_low + 1,
+                                              static_cast<std::size_t>(MAX_MIP_LEVELS - 1));
+        const float mip_frac = mip_fractional - static_cast<float>(mip_low);
+
+        // 3. Frame selection. NaN tablePos → frame 0 (PRD §8.g).
+        float pos = tablePos[i];
+        if (!(pos == pos)) pos = 0.0f;  // NaN check
+        if (pos < 0.0f) pos = 0.0f;
+        if (pos > static_cast<float>(last_frame)) pos = static_cast<float>(last_frame);
+        const std::size_t frame_a = static_cast<std::size_t>(std::floor(pos));
+        const std::size_t frame_b = std::min(frame_a + 1, last_frame);
+        const float morph_frac = pos - static_cast<float>(frame_a);
+
+        // 4. Per-sample read position — same for all four (frame, mip)
+        // combos since the table size is constant across the pyramid.
+        const float read_pos = static_cast<float>(finalPhase) *
+                                static_cast<float>(WAVETABLE_SIZE);
+        const int   int_pos  = static_cast<int>(read_pos);
+        const float frac_pos = read_pos - static_cast<float>(int_pos);
+
+        // 5. Equal-power weights for both axes (one cos/sin pair each).
+        const float fw_a = std::cos(morph_frac * cedar::HALF_PI);
+        const float fw_b = std::sin(morph_frac * cedar::HALF_PI);
+        const float mw_l = std::cos(mip_frac   * cedar::HALF_PI);
+        const float mw_h = std::sin(mip_frac   * cedar::HALF_PI);
+
+        // 6. Four Niemitalo-4 reads → frame-morph blend → mip crossfade.
+        const float sa_low  = wt_sample_at(bank->frames[frame_a], mip_low,  int_pos, frac_pos);
+        const float sb_low  = wt_sample_at(bank->frames[frame_b], mip_low,  int_pos, frac_pos);
+        const float low     = sa_low * fw_a + sb_low * fw_b;
+
+        const float sa_high = wt_sample_at(bank->frames[frame_a], mip_high, int_pos, frac_pos);
+        const float sb_high = wt_sample_at(bank->frames[frame_b], mip_high, int_pos, frac_pos);
+        const float high    = sa_high * fw_a + sb_high * fw_b;
+
+        out[i] = low * mw_l + high * mw_h;
+        state.initialized = true;
+    }
+}
+#endif  // CEDAR_NO_FFT
 
 }  // namespace cedar

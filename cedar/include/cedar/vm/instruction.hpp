@@ -195,6 +195,12 @@ enum class Opcode : std::uint8_t {
                              // out=passthrough, in0=signal, rate=fft_size_log2 (8=256..11=2048)
     IFFT = 182,              // Inverse FFT (reserved for Revision 2+)
 
+    // Wavetable Oscillators (200-209)
+    // Mip-mapped wavetable oscillator (Smooch). Reads from active bank in
+    // VM's WavetableBankRegistry, cached on ctx.wavetable_bank at block start.
+    // Inputs: in0=freq, in1=phaseOffset, in2=tablePos. State: SmoochState.
+    OSC_WAVETABLE = 200,
+
     INVALID = 255
 };
 

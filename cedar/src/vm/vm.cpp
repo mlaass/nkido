@@ -79,6 +79,14 @@ void VM::process_block(float* output_left, float* output_right) {
     // Update timing
     ctx_.update_timing();
 
+#ifndef CEDAR_NO_FFT
+    // Snapshot all registered wavetable banks for the duration of this
+    // block. wavetable_pins_ pins shared_ptrs (allocation-free — just
+    // refcount bumps); ctx_.wavetable_banks gets raw pointers indexable
+    // by inst.rate.
+    wavetable_registry_.snapshot(ctx_.wavetable_banks, wavetable_pins_);
+#endif
+
     // Check if crossfading
     if (crossfade_state_.is_active()) {
         perform_crossfade(output_left, output_right);
@@ -622,6 +630,11 @@ void VM::execute(const Instruction& inst) {
 
         case Opcode::OSC_SAW_PWM_4X:
             op_osc_saw_pwm_4x(ctx_, inst);
+            break;
+
+        // === Wavetable Oscillator ===
+        case Opcode::OSC_WAVETABLE:
+            op_osc_wavetable(ctx_, inst);
             break;
 
         // === Filters (SVF only) ===
