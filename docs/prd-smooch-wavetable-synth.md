@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — No wavetable system exists.
+> **Status: COMPLETE** — Implemented in commits `efe84eb` (initial) and `60f64f3` (UI-cadence smoothing). Audited 2026-04-30 (`docs/audits/prd-smooch-wavetable-synth_audit_2026-04-30.md`); v1 shipped multi-bank instead of the single-bank model originally scoped — see §2.2.
 
 # Product Requirement Document: "Smooch" Wavetable Oscillator
 
@@ -8,7 +8,7 @@
 
 **Cedar opcode:** `OSC_WAVETABLE`
 
-**Akkado builtins:** `wt`, `wave`, `wavetable`, `smooch` (all aliases for the same opcode)
+**Akkado builtins:** `wt`, `wavetable`, `smooch` (all aliases for the same opcode). The originally-proposed `wave` alias was dropped because `wave` is a common variable name in existing patches; see `akkado/include/akkado/builtins.hpp:220-221`.
 
 ---
 
@@ -36,7 +36,7 @@ Add a production-grade wavetable oscillator to Cedar comparable to Serum or Phas
 ### 2.2 Non-Goals
 
 - **No custom `.wt` file format** (Serum's, Vital's, or any vendor-specific). We load plain WAV with a frame-size convention.
-- **No multiple simultaneous banks in v1**: only one wavetable bank is active at a time. Multi-bank support is a v2 follow-up.
+- ~~**No multiple simultaneous banks in v1**: only one wavetable bank is active at a time. Multi-bank support is a v2 follow-up.~~ **Superseded during implementation:** v1 ships multi-bank. The `inst.rate` byte encodes a bank ID (0..63), `WavetableBankRegistry` keeps up to `MAX_WAVETABLE_BANKS = 64` simultaneous banks, and the surface syntax requires `smooch("bank_name", freq, ...)` with the bank name resolved to its ID at compile time. The single-bank model was dropped because referencing a bank by name made the codegen path simpler than tracking a global "active" bank.
 - **No on-the-fly bank editing** (drawing, additive editing, audio-import). Banks are immutable resources.
 - **No spectral morphing** (interpolating in the frequency domain between frames). v1 uses equal-power time-domain blend between *phase-aligned* frames (frames are FFT-rotated in §5.1 step 4 so their fundamentals share a common phase reference, which eliminates most comb-filter cancellation). True spectral morph is a v2 follow-up.
 - **No FM/PM/sync** between smooch voices. Standard FM via frequency-rate input modulation is supported (since `freq` is an audio-rate buffer); deeper FM features are out of scope.
@@ -242,7 +242,11 @@ void generateMipMaps(WavetableFrame& frame,
         int taperStart = std::max(0, cutoffBin - taperWidth);
         for (int bin = taperStart; bin < (N / 2 + 1); ++bin) {
             float gain;
-            if (bin >= cutoffBin) {
+            if (bin > cutoffBin) {
+                // shipped: zero ABOVE cutoffBin (exclusive). The original
+                // pseudocode used `bin >= cutoffBin` which kills the
+                // fundamental at mip 10. RMS normalization in step 6.6
+                // compensates for the taper's amplitude loss either way.
                 gain = 0.0f;
             } else {
                 // Half raised-cosine: 1.0 at taperStart → 0.0 at cutoffBin
@@ -343,12 +347,12 @@ All three primary inputs are full audio-rate buffers; scalars are passed by Ceda
 2. **Fractional mip-level selection (with crossfading):**
    ```
    maxHarmonic   = (sampleRate * 0.5) / max(freq[i], 1e-3)
-   mipFractional = clamp(log2(1024.0 / maxHarmonic), 0.0, 10.0)
+   mipFractional = clamp(log2(2048.0 / maxHarmonic), 0.0, 10.0)
    mipLow        = floor(mipFractional)
    mipFrac       = mipFractional - mipLow
    mipHigh       = min(mipLow + 1, MAX_MIP_LEVELS - 1)
    ```
-   Note the corrected formula: `log2(1024 / maxHarmonic)`, where `1024 = N/2` is Table 0's harmonic count. (The original PRD's `log2(2048 / maxHarmonic)` was off by one octave.) The fractional part lets us crossfade between adjacent mips, eliminating audible spectral steps when frequency sweeps across an octave boundary.
+   Shipped formula: `log2(2048 / maxHarmonic)`. An earlier draft used `log2(1024 / maxHarmonic)` (where `1024 = N/2` is Table 0's harmonic count) — that picks the lowest *safe* mip but the conservative `log2(2048 / ...)` form keeps `floor(mipFractional)` one octave below the alias edge for headroom; alias-floor measurements (test 3) come in at -102 dB, so the conservative pick is paying off. The fractional part lets us crossfade between adjacent mips, eliminating audible spectral steps when frequency sweeps across an octave boundary.
 3. **Frame selection** (clamp at end, no wrap):
    ```
    frameA   = floor(tablePos[i])

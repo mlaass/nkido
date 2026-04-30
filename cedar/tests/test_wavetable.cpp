@@ -1,12 +1,19 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include "cedar/audio/wav_loader.hpp"
+#include "cedar/dsp/constants.hpp"
+#include "cedar/opcodes/dsp_state.hpp"
+#include "cedar/opcodes/utility.hpp"
+#include "cedar/vm/instruction.hpp"
+#include "cedar/vm/vm.hpp"
 #include "cedar/wavetable/bank.hpp"
 #include "cedar/wavetable/preprocessor.hpp"
 #include "cedar/wavetable/registry.hpp"
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 using Catch::Matchers::WithinAbs;
@@ -200,6 +207,135 @@ TEST_CASE("Wavetable: multi-bank registry assigns sequential IDs", "[wavetable]"
     CHECK(reg.size() == 0);
     CHECK_FALSE(reg.has("A"));
     CHECK(reg.find_id("A") == -1);
+}
+
+TEST_CASE("Wavetable: stereo WAV is rejected", "[wavetable]") {
+    // Audit follow-up: PRD §8.n requires stereo input to fail loudly.
+    cedar::WavData wav{};
+    wav.success = true;
+    wav.channels = 2;
+    wav.num_frames = N;
+    wav.sample_rate = 48000;
+    wav.samples.assign(static_cast<std::size_t>(N) * 2, 0.0f);
+
+    std::string err;
+    auto bank = cedar::build_bank_from_wav("stereo_in", wav, &err);
+    REQUIRE(bank == nullptr);
+    REQUIRE(err.find("mono") != std::string::npos);
+}
+
+TEST_CASE("Wavetable: in-place bank replace keeps ID and old shared_ptr alive",
+          "[wavetable]") {
+    // Audit follow-up: covers the lifetime invariant the original PRD §12 #11
+    // ("hot-swap: wt_load swaps bank — existing voices continue with old bank")
+    // expressed in the v1 single-bank model. Multi-bank shipped instead, but
+    // the same invariant applies when set_named replaces a bank under an
+    // existing name: the previously-issued shared_ptr must keep the old bank
+    // alive even after the registry has replaced it.
+    cedar::WavetableBankRegistry reg;
+
+    std::vector<float> samples_a(N, 0.0f);
+    std::vector<float> samples_b(N, 0.0f);
+    for (int i = 0; i < N; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(N);
+        samples_a[i] = std::sin(2.0f * PI_F * t);
+        samples_b[i] = std::sin(2.0f * PI_F * 2.0f * t);
+    }
+    auto bank_a = cedar::build_bank_from_samples("morph", samples_a.data(),
+                                                  samples_a.size());
+    auto bank_b = cedar::build_bank_from_samples("morph", samples_b.data(),
+                                                  samples_b.size());
+    REQUIRE(bank_a != nullptr);
+    REQUIRE(bank_b != nullptr);
+    REQUIRE(bank_a.get() != bank_b.get());
+
+    // Pre-replace: register A and grab a reader-side strong ref (mirrors
+    // what an audio-thread snapshot pin does).
+    const int id_a = reg.set_named("morph", bank_a);
+    REQUIRE(id_a >= 0);
+    auto pinned_old = reg.get(id_a);
+    REQUIRE(pinned_old.get() == bank_a.get());
+
+    // Replace bank under same name. ID is preserved; registry now resolves
+    // to the new bank.
+    const int id_b = reg.set_named("morph", bank_b);
+    CHECK(id_b == id_a);
+    CHECK(reg.get(id_a).get() == bank_b.get());
+
+    // The previously-pinned shared_ptr keeps bank_a alive even after the
+    // local `bank_a` ref is dropped — this is the audio-thread invariant.
+    bank_a.reset();
+    CHECK(pinned_old != nullptr);
+    CHECK(pinned_old->frames.size() == 1);
+}
+
+TEST_CASE("Wavetable: SmoochState phase is preserved across process_block calls "
+          "for the same state_id",
+          "[wavetable][hot_swap]") {
+    // Audit follow-up. The full hot-swap-with-program-reload path is
+    // exercised by the shared semantic-id infrastructure (test_hot_swap.cpp
+    // covers the swap controller; PolyAlloc / Filter / Osc tests cover state
+    // pool reuse). What is *smooch-specific* and worth pinning here is that
+    // SmoochState (a) is registered as a DSPState variant alternative and
+    // (b) its `phase` field genuinely accumulates across blocks when looked
+    // up via the same state_id — i.e. the opcode is reading and writing the
+    // same state slot the StatePool returns, not a fresh copy each block.
+    //
+    // Without this, the codegen's push_path("smooch#N") + compute_state_id()
+    // (codegen_patterns.cpp:5620-5622) — the exact pattern every other
+    // stateful pattern op uses — would still wire up correctly but the
+    // opcode could fail to honor it.
+    using namespace cedar;
+
+    VM vm;
+    vm.set_sample_rate(48000.0f);
+
+    std::vector<float> samples(N, 0.0f);
+    for (int i = 0; i < N; ++i) {
+        samples[i] = std::sin(2.0f * PI_F * static_cast<float>(i) /
+                               static_cast<float>(N));
+    }
+    auto bank = build_bank_from_samples("sine", samples.data(), samples.size());
+    REQUIRE(bank != nullptr);
+    const int bank_id = vm.wavetable_registry().set_named("sine", bank);
+    REQUIRE(bank_id == 0);
+
+    constexpr std::uint16_t BUF_FREQ = 0;
+    constexpr std::uint16_t BUF_OSC  = 1;
+    constexpr std::uint32_t SMOOCH_STATE_ID = 0xDEADBEEF;
+    constexpr float FREQ_HZ = 220.0f;
+
+    std::array<Instruction, 3> prog{};
+    prog[0] = make_const_instruction(Opcode::PUSH_CONST, BUF_FREQ, FREQ_HZ);
+    prog[1] = Instruction::make_ternary(
+        Opcode::OSC_WAVETABLE, BUF_OSC,
+        BUF_FREQ, BUFFER_UNUSED, BUFFER_UNUSED, SMOOCH_STATE_ID);
+    prog[1].rate = 0;
+    prog[2] = Instruction::make_unary(Opcode::OUTPUT, 0, BUF_OSC);
+
+    REQUIRE(vm.load_program_immediate(prog));
+
+    std::array<float, BLOCK_SIZE> left{}, right{};
+
+    // First processed block advances phase from 0.
+    vm.process_block(left.data(), right.data());
+    const double phase_after_one_block =
+        vm.states().get_or_create<SmoochState>(SMOOCH_STATE_ID).phase;
+    const double expected_one_block =
+        static_cast<double>(BLOCK_SIZE) * FREQ_HZ / 48000.0;
+    double expected_one = expected_one_block - std::floor(expected_one_block);
+    CHECK(std::abs(phase_after_one_block - expected_one) < 1e-6);
+
+    // Second block must continue from there — if the opcode were reading a
+    // fresh SmoochState every block (i.e. ignoring state_id), phase would
+    // again equal expected_one.
+    vm.process_block(left.data(), right.data());
+    const double phase_after_two_blocks =
+        vm.states().get_or_create<SmoochState>(SMOOCH_STATE_ID).phase;
+    double expected_two = 2.0 * expected_one_block;
+    expected_two -= std::floor(expected_two);
+    CHECK(std::abs(phase_after_two_blocks - expected_two) < 1e-6);
+    CHECK(phase_after_two_blocks != phase_after_one_block);
 }
 
 TEST_CASE("Wavetable: snapshot pins lifetime and indexes by ID", "[wavetable]") {

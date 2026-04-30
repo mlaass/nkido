@@ -511,6 +511,72 @@ def test_8_nan_and_oor_tablepos():
         print("  ✓ PASS: edge-case tablePos values handled cleanly")
 
 
+def test_8b_freq_edge_cases():
+    """PRD §8.a/8.b: out-of-range freq is clamped, not propagated to the
+    phase accumulator as garbage.
+
+    Audit follow-up — fills the gap left by test_2 only sweeping to 0.49*sr.
+    Drives three explicit cases: f = 0, f = -1, f = exactly Nyquist. All
+    should produce finite output (no NaN/Inf), and the Nyquist case should
+    fall back to the highest-mip (fundamental-only) sinusoidal output rather
+    than aliasing.
+    """
+    print("Test 8b: Frequency edge cases (zero, negative, exact Nyquist)")
+    sr = 48000
+    host = CedarTestHost(sr)
+    host.vm.wavetable_register_synthetic("saw", make_saw_bank())
+
+    smooch_out = 100
+    state_id = cedar.hash("smooch.t8b")
+    phase_buf = host.set_param("phase", 0.0)
+    pos_buf   = host.set_param("pos",   0.0)
+    host.load_instruction(cedar.Instruction.make_ternary(
+        cedar.Opcode.OSC_WAVETABLE,
+        smooch_out, 0, phase_buf, pos_buf, state_id))
+    host.load_instruction(cedar.Instruction.make_unary(
+        cedar.Opcode.OUTPUT, 0, smooch_out))
+    host.vm.load_program(host.program)
+
+    BLOCK = cedar.BLOCK_SIZE
+    seg_n = sr // 2  # 0.5 s per case → 1.5 s total
+    f0 = np.zeros(seg_n, dtype=np.float32)              # f = 0 → clamped
+    fneg = np.full(seg_n, -1.0, dtype=np.float32)       # f < 0 → clamped
+    fnyq = np.full(seg_n, float(sr) * 0.5, dtype=np.float32)  # f = Nyquist
+    freq_curve = np.concatenate([f0, fneg, fnyq])
+
+    n = len(freq_curve)
+    n_blocks = (n + BLOCK - 1) // BLOCK
+    pad = n_blocks * BLOCK - n
+    if pad > 0:
+        freq_curve = np.concatenate([freq_curve, np.zeros(pad, dtype=np.float32)])
+    output = np.zeros(n_blocks * BLOCK, dtype=np.float32)
+    for i in range(n_blocks):
+        s = i * BLOCK
+        host.vm.set_buffer(0, freq_curve[s:s + BLOCK])
+        l, _ = host.vm.process()
+        output[s:s + BLOCK] = np.asarray(l)
+    output = output[:n]
+    save_wav(os.path.join(OUT, "8b_freq_edge.wav"), output, sr)
+
+    has_bad = bool(np.any(~np.isfinite(output)))
+    print(f"  finite output across all three segments: {not has_bad}")
+    if has_bad:
+        print("  ✗ FAIL: NaN/Inf observed — clamp logic broken")
+        return
+
+    # Each segment should be bounded — opcode must not divergence-explode
+    # at extreme frequencies.
+    for label, seg in [("f=0", output[0:seg_n]),
+                       ("f=-1", output[seg_n:2 * seg_n]),
+                       ("f=Nyquist", output[2 * seg_n:3 * seg_n])]:
+        peak = float(np.max(np.abs(seg)))
+        print(f"  {label}: peak={peak:.4f}")
+        if peak > 5.0:
+            print(f"  ✗ FAIL ({label}): peak {peak:.2f} suggests numerical blow-up")
+            return
+    print("  ✓ PASS: all out-of-range frequencies handled cleanly")
+
+
 def test_9_long_pattern_run():
     """PRD §12 #9: 300+ s of stable output, no allocations, no drift.
 
@@ -682,6 +748,7 @@ if __name__ == "__main__":
         test_6_single_frame_bank,
         test_7_empty_registry,
         test_8_nan_and_oor_tablepos,
+        test_8b_freq_edge_cases,
         test_9_long_pattern_run,  # >= 300s simulated audio per CLAUDE.md
         test_11_multi_bank,
         test_12_memory_budget,
