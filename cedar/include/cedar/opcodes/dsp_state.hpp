@@ -23,9 +23,17 @@ struct OscState {
 // Wavetable oscillator state (Smooch). Phase kept in double for cleanly
 // accumulating drift over long renders and across hot-swap boundaries; the
 // per-sample read still does float math via narrowing once per sample.
+//
+// Two cascaded 1-pole filters on the tablePos input give -12 dB/octave
+// rolloff so the stair-step output of the EnvMap (param-system slew) at
+// the UI's per-tick rate (~60 Hz) doesn't bleed audible sidebands into
+// the morph crossfade. See op_osc_wavetable for the exact tuning.
 struct SmoochState {
     double phase = 0.0;       // [0, 1) phase accumulator
+    float  pos_smoothed_1 = 0.0f;
+    float  pos_smoothed_2 = 0.0f;
     bool   initialized = false;
+    bool   pos_initialized = false;
 };
 
 #ifndef CEDAR_NO_MINBLEP

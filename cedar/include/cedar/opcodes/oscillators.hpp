@@ -1037,6 +1037,20 @@ inline void op_osc_wavetable(ExecutionContext& ctx, const Instruction& inst) {
     const std::size_t last_frame  = frame_count - 1;
     const float nyquist           = ctx.sample_rate * 0.5f;
 
+    // Two cascaded 1-pole lowpasses on the pos input. The EnvMap already
+    // slews param values once at ~5 ms, but at typical 60 Hz UI cadence a
+    // single 5 ms pole only buys ~6 dB rejection — the stair-step train
+    // still leaks audible sidebands around the carrier (measured -46 dB
+    // before this fix; target < -60 dB). Two 1-poles at 8 ms each give
+    // -12 dB/octave rolloff and brought the measured sideband at 60 Hz
+    // to -60 dB in scenario B of test_smooch_pos_artifact.py while
+    // staying well under one block of perceptual lag on slider sweeps.
+    constexpr float POS_SMOOTH_MS = 8.0f;
+    const float pos_smooth_samples = POS_SMOOTH_MS * ctx.sample_rate * 0.001f;
+    const float pos_smooth_coeff = (pos_smooth_samples > 1.0f)
+                                    ? 1.0f / pos_smooth_samples
+                                    : 1.0f;
+
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         // Per PRD §8.a/b: clamp out-of-range frequencies.
         float f = freq[i];
@@ -1072,9 +1086,21 @@ inline void op_osc_wavetable(ExecutionContext& ctx, const Instruction& inst) {
                                               static_cast<std::size_t>(MAX_MIP_LEVELS - 1));
         const float mip_frac = mip_fractional - static_cast<float>(mip_low);
 
-        // 3. Frame selection. NaN tablePos → frame 0 (PRD §8.g).
-        float pos = tablePos[i];
-        if (!(pos == pos)) pos = 0.0f;  // NaN check
+        // 3. Frame selection. NaN tablePos → frame 0 (PRD §8.g). Two
+        // cascaded 1-pole filters smooth the input so UI-cadence
+        // stair-stepping in the EnvMap doesn't bleed sidebands into the
+        // morph crossfade.
+        float pos_target = tablePos[i];
+        if (!(pos_target == pos_target)) pos_target = 0.0f;  // NaN check
+        if (!state.pos_initialized) {
+            state.pos_smoothed_1 = pos_target;
+            state.pos_smoothed_2 = pos_target;
+            state.pos_initialized = true;
+        } else {
+            state.pos_smoothed_1 += (pos_target - state.pos_smoothed_1) * pos_smooth_coeff;
+            state.pos_smoothed_2 += (state.pos_smoothed_1 - state.pos_smoothed_2) * pos_smooth_coeff;
+        }
+        float pos = state.pos_smoothed_2;
         if (pos < 0.0f) pos = 0.0f;
         if (pos > static_cast<float>(last_frame)) pos = static_cast<float>(last_frame);
         const std::size_t frame_a = static_cast<std::size_t>(std::floor(pos));

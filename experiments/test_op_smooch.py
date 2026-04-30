@@ -288,7 +288,20 @@ def test_4_mip_boundary_crossfade():
 
 
 def test_5_frame_morph_continuity():
-    """PRD §12 #5: tablePos sweep is glitch-free."""
+    """PRD §12 #5: tablePos sweep is glitch-free.
+
+    Three orthogonal checks. Earlier versions only had (a); we added (b)
+    and (c) after a 2026-04 web smoketest revealed UI-cadence stair-stepping
+    leaking sidebands at -46 dB even though (a) reported clean output. See
+    test_smooch_pos_artifact.py for the full diagnostic; this is the
+    permanent regression guard.
+
+    a) Sample-to-sample max-jump (catches gross discontinuities).
+    b) STFT cosine-distance peak across the morph (catches per-frame
+       discontinuities below the sample-jump threshold).
+    c) Sideband energy at the UI-cadence rate when pos is driven via
+       set_param at 60 Hz (catches the param-cadence aliasing class).
+    """
     print("Test 5: Frame morph continuity")
     sr = 48000
     host = CedarTestHost(sr)
@@ -326,16 +339,95 @@ def test_5_frame_morph_continuity():
     save_wav(os.path.join(OUT, "5_frame_morph.wav"), output, sr)
     print(f"  Saved 5_frame_morph.wav - listen for sine→triangle morph, no zipper")
 
-    # Sample-to-sample max abs delta — a zipper would show up as huge jumps.
+    # (a) Sample-to-sample max abs delta — a zipper would show up as huge jumps.
     deltas = np.abs(np.diff(output))
     max_jump = float(np.max(deltas))
-    print(f"  Max sample-to-sample delta: {max_jump:.4f}")
+    print(f"  (a) Max sample-to-sample delta: {max_jump:.4f}")
     # 220 Hz sine has max 1-sample slope of 2π·220/48000 ≈ 0.029. Max for
     # triangle is similar. Allow 4× headroom for fade boost.
-    if max_jump < 0.15:
-        print("  ✓ PASS: continuous frame-morph output")
+    if max_jump >= 0.15:
+        print(f"  ✗ FAIL (a): jump of {max_jump:.4f} suggests a discontinuity")
+        return
+
+    # (b) STFT cosine-distance peak. A smooth audio-rate ramp through the
+    # bank should produce gentle spectral evolution, not sudden jumps. This
+    # would catch e.g. a comb-filter cancellation at one specific frame
+    # boundary that the max-delta check would miss because it's spread
+    # over a few cycles. Threshold calibrated from the post-fix baseline
+    # of test_smooch_pos_artifact.py scenario A (peak ≈ 0.0002 on the
+    # real sine_to_saw bank); 0.005 leaves 25× headroom.
+    win = 1024
+    hop = 256
+    nframes = (len(output) - win) // hop
+    window = np.hanning(win).astype(np.float32)
+    mags = np.zeros((nframes, win // 2 + 1), dtype=np.float32)
+    for i in range(nframes):
+        s = i * hop
+        mags[i] = np.abs(np.fft.rfft(output[s:s + win] * window))
+    norms = np.linalg.norm(mags, axis=1) + 1e-12
+    mags /= norms[:, None]
+    dist_max = float(np.max([
+        1.0 - float(np.dot(mags[i], mags[i + 1])) for i in range(nframes - 1)
+    ]))
+    print(f"  (b) STFT cosine-distance peak: {dist_max:.4f}")
+    if dist_max >= 0.005:
+        print(f"  ✗ FAIL (b): spectral peak {dist_max:.4f} exceeds 0.005 — morph has jump")
+        return
+
+    # (c) UI-cadence sideband test: drive pos via set_param at 60 Hz and
+    # measure energy at fundamental ± multiples of 60 Hz. Pre-fix this
+    # was -46 dB; the 2-pole tablePos smoother in the opcode brings it
+    # to -60 dB on this synthetic bank. Threshold: <= -55 dB to leave
+    # 5 dB margin for measurement noise.
+    host2 = CedarTestHost(sr)
+    host2.vm.wavetable_register_synthetic("morph2", bank)
+    fb  = host2.set_param("freq",  220.0)
+    pb  = host2.set_param("phase",   0.0)
+    pos = host2.set_param("pos",     0.0)
+    state_id2 = cedar.hash("smooch.t5_ui")
+    inst = cedar.Instruction.make_ternary(
+        cedar.Opcode.OSC_WAVETABLE, 100, fb, pb, pos, state_id2)
+    host2.load_instruction(inst)
+    host2.load_instruction(cedar.Instruction.make_unary(cedar.Opcode.OUTPUT, 0, 100))
+    host2.vm.load_program(host2.program)
+
+    ui_rate_hz = 60.0
+    blocks_per_step = max(1, int(round((sr / ui_rate_hz) / BLOCK)))
+    n_blocks_ui = int(4.0 * sr / BLOCK)
+    n_steps = n_blocks_ui // blocks_per_step + 1
+    out_ui = np.zeros(n_blocks_ui * BLOCK, dtype=np.float32)
+    for b in range(n_blocks_ui):
+        if b % blocks_per_step == 0:
+            step_idx = b // blocks_per_step
+            v = round(31.0 * step_idx / max(1, n_steps - 1))
+            host2.vm.set_param("pos", float(min(31, max(0, v))))
+        l, _ = host2.vm.process()
+        s = b * BLOCK
+        out_ui[s:s + BLOCK] = np.asarray(l)
+
+    fft_size = 1 << 17
+    if len(out_ui) >= fft_size:
+        chunk_start = (len(out_ui) - fft_size) // 2
+        chunk = out_ui[chunk_start:chunk_start + fft_size] * np.hanning(fft_size)
+        spec = np.abs(np.fft.rfft(chunk))
+        bin_hz = sr / fft_size
+        fund_bin = int(round(220.0 / bin_hz))
+        fund_e = float(np.sum(spec[max(0, fund_bin - 2):fund_bin + 3] ** 2))
+        sb_e = 0.0
+        for k in range(1, 7):
+            for sign in (-1, +1):
+                tb = int(round((220.0 + sign * k * ui_rate_hz) / bin_hz))
+                if 0 <= tb < len(spec):
+                    sb_e += float(np.sum(spec[max(0, tb - 1):tb + 2] ** 2))
+        sb_db = 10.0 * math.log10(sb_e / max(fund_e, 1e-20) + 1e-20)
     else:
-        print(f"  ⚠ jump of {max_jump:.4f} suggests a discontinuity")
+        sb_db = -200.0
+    print(f"  (c) UI-cadence sidebands @ {ui_rate_hz:g} Hz: {sb_db:+.1f} dB")
+    if sb_db > -55.0:
+        print(f"  ✗ FAIL (c): UI-cadence sidebands {sb_db:+.1f} dB > -55 dB")
+        return
+
+    print("  ✓ PASS: continuous frame-morph output (a/b/c all green)")
 
 
 def test_6_single_frame_bank():
