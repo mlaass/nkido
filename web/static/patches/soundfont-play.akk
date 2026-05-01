@@ -11,4 +11,10 @@ melody = n"c4 eb4 g4 c5 ~ g4 eb4 c4 d4 f#4 a4 d5 ~ a4 f#4 d4 eb4 g4 b4 eb5 ~ b4 
 melody
     |> soundfont(@, "gm", 0)
     |> @ + freeverb(@, 0.65, 0.4) * 0.2
-    |> out(@)
+    |> out(@*.5,@)
+
+melody 
+    |> transpose(@, -12).late(.25)
+    |> soundfont(@, "gm", 1)
+    |> dattorro(@) +@
+    |> out(@, @*.5)
