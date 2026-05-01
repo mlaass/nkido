@@ -1,4 +1,4 @@
-// Drums — a full pattern using nested mini-notation, rests, and choice.
+// Drum Machine: a full pattern using nested mini-notation, rests, and choice.
 // Square-bracket groups subdivide a beat; commas stack hits in parallel;
 // angle-brackets cycle one of their alternatives every bar.
 //
@@ -8,14 +8,14 @@
 bpm = 124
 
 // Drum kit
-s"[bd cp] hh [bd,sd] [hh ~ <rim oh>] bd [bd cp] [bd,sd] [hh*4]"
-    |> out(%, %)
+s"[bd cp] hh [bd,sd] [hh ~ <rim*3 oh>] bd [bd cp] [bd,sd] [hh*4]"
+    |> out(@, @)
 
 // Hi-hat shuffle on top
-s"~ hh ~ hh ~ hh ~ <hh oh>" |> out(% * 0.5, % * 0.5)
+s"~ hh ~ hh ~ hh ~ <hh oh>" |> out(@)
 
-// Sub-bass on a Euclidean (3,8) tresillo, fattened with saturation
-osc("sin", 55) * ar(euclid(3, 8), 0.005, 0.18) * 1.2
-    |> saturate(%, 2)
-    |> lp(%, 220)
-    |> out(% * 0.5, % * 0.5)
+// Sub-bass cycling three (3,8) tresillos and one (5,8) cinquillo, fattened with saturation
+osc("sin", 55.555) * ar(euclid(v"<3 3 3 5>".slow(4), 8), 0.02, 0.45) * 1.2
+    |> saturate(@, 5)
+    |> lp(@, 420.69)
+    |> out(@ * 0.5)
