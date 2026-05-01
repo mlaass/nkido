@@ -8,6 +8,9 @@
 #include "cedar/wavetable/preprocessor.hpp"
 #endif
 
+#include <cstdio>
+#include <vector>
+
 namespace py = pybind11;
 
 // Helper to hash strings for state IDs from Python
@@ -86,6 +89,8 @@ PYBIND11_MODULE(cedar_core, m) {
         // Samplers (63-64)
         .value("SAMPLE_PLAY", cedar::Opcode::SAMPLE_PLAY)
         .value("SAMPLE_PLAY_LOOP", cedar::Opcode::SAMPLE_PLAY_LOOP)
+        // SoundFont (65)
+        .value("SOUNDFONT_VOICE", cedar::Opcode::SOUNDFONT_VOICE)
         // Delays & Reverbs (70-79)
         .value("DELAY", cedar::Opcode::DELAY)
         .value("REVERB_FREEVERB", cedar::Opcode::REVERB_FREEVERB)
@@ -234,6 +239,58 @@ PYBIND11_MODULE(cedar_core, m) {
             std::size_t num_samples = r.size();
             return vm.load_sample(name, r.data(0), num_samples, channels, sample_rate);
         }, py::arg("name"), py::arg("data"), py::arg("channels") = 1, py::arg("sample_rate") = 48000.0f)
+
+#ifndef CEDAR_NO_SOUNDFONT
+        // Load a SoundFont (SF2/SF3) from a file on disk. Reads the file into
+        // memory and registers it with the VM's SoundFontRegistry. Returns the
+        // assigned SoundFont ID (>= 0). Same-name re-loads dedup to the same
+        // ID. Raises RuntimeError if the file cannot be read; returns -1 if
+        // the data is rejected as invalid SF2.
+        .def("soundfont_load_from_file", [](cedar::VM& vm, const std::string& name,
+                                            const std::string& path) {
+            std::FILE* f = std::fopen(path.c_str(), "rb");
+            if (!f) {
+                throw std::runtime_error("Failed to open SoundFont file: " + path);
+            }
+            std::fseek(f, 0, SEEK_END);
+            long sz = std::ftell(f);
+            std::fseek(f, 0, SEEK_SET);
+            if (sz <= 0) {
+                std::fclose(f);
+                throw std::runtime_error("SoundFont file is empty: " + path);
+            }
+            std::vector<unsigned char> buf(static_cast<std::size_t>(sz));
+            std::size_t read = std::fread(buf.data(), 1, buf.size(), f);
+            std::fclose(f);
+            if (read != buf.size()) {
+                throw std::runtime_error("Short read on SoundFont file: " + path);
+            }
+            return vm.soundfont_registry().load_from_memory(
+                buf.data(), static_cast<int>(buf.size()),
+                name, vm.sample_bank());
+        }, py::arg("name"), py::arg("path"))
+
+        // Load a SoundFont from raw bytes already in memory. Useful for tests
+        // that want to drive the dedup / invalid-data paths without touching
+        // the filesystem.
+        .def("soundfont_load_from_memory", [](cedar::VM& vm, const std::string& name,
+                                              py::bytes data) {
+            std::string raw = data;  // implicit conversion to std::string
+            return vm.soundfont_registry().load_from_memory(
+                raw.data(), static_cast<int>(raw.size()),
+                name, vm.sample_bank());
+        }, py::arg("name"), py::arg("data"))
+
+        // Number of currently registered SoundFonts.
+        .def("soundfont_count", [](cedar::VM& vm) {
+            return vm.soundfont_registry().size();
+        })
+
+        // JSON list of presets in a loaded SoundFont (matches the web UI format).
+        .def("soundfont_presets_json", [](cedar::VM& vm, int sf_id) {
+            return vm.soundfont_registry().get_presets_json(sf_id);
+        }, py::arg("sf_id"))
+#endif
 
 #ifndef CEDAR_NO_FFT
         // Load a wavetable bank from a WAV file (native only). Returns the

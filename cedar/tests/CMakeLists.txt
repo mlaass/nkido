@@ -39,6 +39,7 @@ add_executable(cedar_tests
     test_edge_op.cpp
     test_state_op.cpp
     test_phaser.cpp
+    test_soundfont_registry.cpp
 )
 
 # Add concurrency tests if enabled

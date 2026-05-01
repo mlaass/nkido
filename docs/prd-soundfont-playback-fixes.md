@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — Fix SoundFont retrigger and web loading bugs
+> **Status: COMPLETE** — Fix SoundFont retrigger and web loading bugs
 
 **Author:** Claude
 **Date:** 2026-04-01
