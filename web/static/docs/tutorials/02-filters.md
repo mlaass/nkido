@@ -7,13 +7,9 @@ keywords: [filter, lowpass, highpass, cutoff, resonance, tutorial, lp, hp, moog]
 
 # Shaping Sound with Filters
 
-Filters are essential tools for sculpting your sounds. They remove or emphasize certain frequencies, transforming raw oscillators into musical timbres.
+Filters remove or emphasize certain frequencies, turning raw oscillators into something more musical.
 
-## What Filters Do
-
-Imagine sound as a mix of many frequencies. A filter acts like a gate that lets some frequencies through while blocking others.
-
-## Your First Lowpass Filter
+## Your first lowpass filter
 
 The lowpass filter (`lp`) is the most common. It passes low frequencies and cuts high ones:
 
@@ -27,9 +23,9 @@ osc("saw", 110) |> out(%, %)
 osc("saw", 110) |> lp(%, 800) |> out(%, %)
 ```
 
-The `800` is the **cutoff frequency** - frequencies above this get quieter.
+The `800` is the **cutoff frequency**: frequencies above this get quieter.
 
-## The Pipe and Hole Pattern
+## The pipe and hole pattern
 
 Notice the pattern: `|> lp(%, 800)`
 
@@ -37,9 +33,9 @@ Notice the pattern: `|> lp(%, 800)`
 - The hole (`%`) receives that signal
 - `800` sets the cutoff frequency
 
-This pattern is how all signal processing works in Akkado.
+All signal processing in Akkado uses this shape.
 
-## Moving the Cutoff
+## Moving the cutoff
 
 Lower cutoffs make darker sounds, higher cutoffs brighter:
 
@@ -53,9 +49,9 @@ osc("saw", 110) |> lp(%, 200) |> out(%, %)
 osc("saw", 110) |> lp(%, 2000) |> out(%, %)
 ```
 
-## Adding Resonance
+## Adding resonance
 
-The third parameter adds **resonance** - a boost at the cutoff frequency:
+The third parameter adds **resonance**, a boost at the cutoff frequency:
 
 ```akk
 // Q of 0.707 (default) - no resonance
@@ -72,7 +68,7 @@ osc("saw", 110) |> lp(%, 800, 4) |> out(%, %)
 osc("saw", 110) |> lp(%, 800, 10) |> out(%, %)
 ```
 
-## Filter Sweeps
+## Filter sweeps
 
 Make the cutoff change over time for classic synth sounds:
 
@@ -83,7 +79,7 @@ osc("saw", 110) |> lp(%, 400 + osc("sin", 0.5) * 800) |> out(%, %)
 
 The cutoff moves between 400 and 1200 Hz following a sine wave.
 
-## Envelope-Controlled Filter
+## Envelope-controlled filter
 
 For percussive sounds, use an envelope to control the filter:
 
@@ -92,25 +88,25 @@ For percussive sounds, use an envelope to control the filter:
 osc("saw", 110) |> lp(%, 200 + ar(trigger(2)) * 2000) |> out(%, %)
 ```
 
-## Highpass Filter
+## Highpass filter
 
-The highpass (`hp`) does the opposite - it removes low frequencies:
+The highpass (`hp`) does the opposite: it removes low frequencies:
 
 ```akk
 // Remove the bass
 osc("saw", 110) |> hp(%, 500) |> out(%, %)
 ```
 
-Great for hi-hats and making sounds thinner:
+Useful for hi-hats and thinning out sounds:
 
 ```akk
 // Hi-hat from filtered noise
 osc("noise") |> hp(%, 8000) * ar(trigger(8), 0.001, 0.05) |> out(%, %)
 ```
 
-## The Moog Filter
+## The Moog filter
 
-For a classic, creamy analog sound, use the Moog ladder filter:
+For a classic analog sound, use the Moog ladder filter:
 
 ```akk
 // Classic Moog bass
@@ -118,23 +114,20 @@ osc("saw", 55) |> moog(%, 400, 2) |> out(%, %)
 ```
 
 ```akk
-// Self-oscillating filter - acts as an oscillator!
+// Self-oscillating filter - acts as an oscillator
 osc("noise") * 0.01 |> moog(%, 440, 3.9) |> out(%, %)
 ```
 
-## Chaining Filters
+## Chaining filters
 
-You can use multiple filters in series:
+Multiple filters in series:
 
 ```akk
 // Remove lows and highs
 osc("saw", 110) |> hp(%, 200) |> lp(%, 2000) |> out(%, %)
 ```
 
-## Next Steps
+## Next steps
 
-Now that you can shape your sounds with filters, move on to:
-- [Building Synths](03-synthesis.md) to combine oscillators and envelopes
-- Try the [Moog filter reference](../builtins/filters.md#moog) for more details
-
-You're on your way to making real music with Akkado!
+- [Building Synths](03-synthesis.md): combine oscillators, filters, and envelopes
+- [Moog filter reference](../builtins/filters.md#moog) for parameter details

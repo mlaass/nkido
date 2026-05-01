@@ -149,7 +149,7 @@ Related: [lfo](#lfo), [trigger](#trigger)
 
 `poly()` reads pattern events at runtime and assigns each note to its own voice slot. The instrument function receives per-voice frequency, gate, and velocity, and the outputs of all active voices are summed. When the same note appears in consecutive events, the voice slot is reused (preserving phase continuity); when all voices are busy, the oldest is stolen.
 
-The instrument must be a 3-parameter function — the names don't matter but the order is fixed: `(freq, gate, vel)`.
+The instrument must be a 3-parameter function; the names don't matter but the order is fixed: `(freq, gate, vel)`.
 
 ```akk
 // Polyphonic chord progression with the default 64 voices
@@ -183,7 +183,7 @@ Related: [mono](#mono), [legato](#legato), [spread](#spread), [chord](pattern-mi
 | input      | pattern  | -       | Pattern producing events |
 | instrument | function | -       | A function `(freq, gate, vel) -> signal` |
 
-`mono()` is `poly()` with one voice and last-note priority. Every new note retriggers the gate, so envelopes restart cleanly — the classic hardware-mono behavior.
+`mono()` is `poly()` with one voice and last-note priority. Every new note retriggers the gate, so envelopes restart cleanly: the classic hardware-mono behavior.
 
 `mono(stereo_signal)` is a different builtin (stereo-to-mono downmix). The compiler routes based on argument type: a function instrument gets the voice manager; a stereo signal gets the downmix.
 
@@ -208,7 +208,7 @@ Related: [poly](#poly), [legato](#legato)
 Like `mono()`, but the gate stays high while notes overlap, so envelopes don't restart on every note. Frequency and velocity update but the AR/ADSR keeps decaying through the phrase. Best for legato leads and bass lines.
 
 ```akk
-// Smooth bassline — gate stays high across notes
+// Smooth bassline, gate stays high across notes
 pat("c2 e2 g2 c3") |> legato((f, g, v) -> saw(f) * adsr(g, 0.01, 0.2, 0.8, 0.4)) |> out(@)
 ```
 
@@ -228,7 +228,7 @@ Related: [poly](#poly), [mono](#mono)
 `spread()` is a compile-time helper that takes an array and distributes its values across `n` slots, repeating or reducing as needed. Useful for unison voices and detuned stacks.
 
 ```akk
-// Detuned saw stack — 5 oscillators across the array
+// Detuned saw stack, 5 oscillators across the array
 osc("saw", spread(5, [220, 220.7, 219.3, 221.4, 218.6])) |> out(@)
 ```
 
@@ -303,7 +303,7 @@ pat("bd hh sd hh").swingBy(0.5, 8)   // half-amount on 8 slices
 
 `iter(pattern, n)` rotates the pattern's start by `1/n` per cycle (forward);
 `iterBack` rotates the opposite way. Implemented as a runtime rotation on
-the SequenceState — no compile-time event explosion.
+the SequenceState; no compile-time event explosion.
 
 ```akk
 pat("c4 e4 g4 b4").iter(4)  // advance start by 1/4 each cycle
@@ -356,10 +356,10 @@ names accept letter + optional accidental (`#` / `b`) + octave (`c4`,
 ### mode
 
 `mode(pattern, "below")` sets the chord voicing mode:
-- `below` — all chord notes ≤ anchor
-- `above` — all chord notes ≥ anchor
-- `duck` — closest to anchor avoiding the anchor itself
-- `root` — root in bass octave near anchor, rest stacked near anchor
+- `below`: all chord notes ≤ anchor
+- `above`: all chord notes ≥ anchor
+- `duck`: closest to anchor avoiding the anchor itself
+- `root`: root in bass octave near anchor, rest stacked near anchor
 
 ### voicing
 

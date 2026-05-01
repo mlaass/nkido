@@ -6,11 +6,11 @@ keywords: [curve, timeline, automation, envelope, LFO, t", breakpoint]
 
 # Curve Notation
 
-Curve notation provides a compact, visual ASCII-art syntax for defining automation curves that compile to Cedar's `TIMELINE` opcode breakpoints.
+Curve notation is an ASCII-art syntax for defining automation curves that compile to Cedar's `TIMELINE` opcode breakpoints.
 
-Accessed via `timeline("...")` or the `t"..."` string prefix, curve notation integrates fully with the existing mini-notation system — all grouping, subdivision, alternation, and modifier features work identically.
+Accessed via `timeline("...")` or the `t"..."` string prefix, curve notation integrates with the existing mini-notation system. All grouping, subdivision, alternation, and modifier features work identically.
 
-## Value Levels
+## Value levels
 
 Five characters map to fixed values in the 0.0–1.0 range:
 
@@ -24,7 +24,7 @@ Five characters map to fixed values in the 0.0–1.0 range:
 
 Each character occupies one equal-time slot within its containing group. Adjacent same-value characters extend the hold duration.
 
-## Ramp Characters
+## Ramp characters
 
 Two characters express linear interpolation between adjacent levels:
 
@@ -33,7 +33,7 @@ Two characters express linear interpolation between adjacent levels:
 | `/`  | Up     | Linear ramp from preceding level to following level |
 | `\`  | Down   | Linear ramp from preceding level to following level |
 
-Both `/` and `\` produce identical interpolation behavior — they ramp linearly from the value of the preceding atom to the value of the following atom. The visual distinction serves readability only.
+Both `/` and `\` produce identical interpolation behavior. They ramp linearly from the value of the preceding atom to the value of the following atom. The visual distinction serves readability only.
 
 **Multiple consecutive ramps** spread the transition over more time slots:
 
@@ -42,7 +42,7 @@ t"__/'''"    // quick ramp: _ to ' over 1 slot
 t"__///'''"  // slow ramp: _ to ' over 3 slots
 ```
 
-## Smooth Modifier `~`
+## Smooth modifier `~`
 
 The `~` prefix converts a hard level change into a smooth (linear) interpolation:
 
@@ -54,15 +54,15 @@ t"__~-~^''"  // smooth ramp through 0.5, 0.75, then hard step to 1.0
 
 Without `~`, a level character holds its value for the entire slot (type = hold). With `~`, the slot linearly interpolates from the previous value to the new value (type = linear).
 
-## Integration Syntax
+## Integration syntax
 
-**Function call** — extends existing `timeline()`:
+**Function call**: extends existing `timeline()`:
 
 ```akkado
 timeline("___/''''\\___")
 ```
 
-**String prefix** — syntactic sugar (like `p"..."` for `pat()`):
+**String prefix**: syntactic sugar (like `p"..."` for `pat()`):
 
 ```akkado
 t"___/''''\\___"
@@ -75,9 +75,9 @@ t"__/''\\__" * 1800 + 200  // ramp from 200 to 2000 Hz
 t"_/'\\_" * 0.8 + 0.1      // ramp from 0.1 to 0.9
 ```
 
-## Mini-Notation Compatibility
+## Mini-notation compatibility
 
-All existing mini-notation modifiers and grouping work identically with curve atoms:
+All mini-notation modifiers and grouping work identically with curve atoms:
 
 | Feature | Syntax | Effect |
 |---------|--------|--------|
@@ -89,7 +89,7 @@ All existing mini-notation modifiers and grouping work identically with curve at
 | Replicate | `t"'!4"` | Equivalent to `t"'''''"` |
 | Chance | `t"_?0.5 '"` | 50% probability of this segment vs holding previous value |
 
-## `/` Ambiguity Resolution
+## `/` ambiguity resolution
 
 `/` is both a ramp atom and the slow modifier prefix. The disambiguation rule:
 
@@ -100,7 +100,7 @@ The mini-notation parser already performs lookahead for modifier detection, so t
 
 ## Examples
 
-### Basic Curves
+### Basic curves
 
 ```akkado
 t"''''"           // hold at 1.0 for entire cycle
@@ -111,7 +111,7 @@ t"'//_"           // slow ramp down
 t"__~.~-~^''"     // gradual ramp through 0.25, 0.5, 0.75
 ```
 
-### Musical Use Cases
+### Musical use cases
 
 ```akkado
 // Filter sweep on a pad
@@ -134,7 +134,7 @@ pat("c4 e4 g4") as e |>
     out(%, %)
 ```
 
-### With Mini-Notation Features
+### With mini-notation features
 
 ```akkado
 t"<_/'' ''\\_ >"       // up on odd cycles, down on even
@@ -144,19 +144,19 @@ t"____/''''\\____/4"    // entire curve stretches over 4 cycles
 t"_@3 /"                // hold at 0 for 3/4, ramp for 1/4
 ```
 
-## Edge Cases
+## Edge cases
 
-- **Empty string** `t""` — compiles to empty timeline (no breakpoints)
-- **Single character** `t"'"` or `t"_"` — constant value for entire cycle
-- **Ramp at start** `t"/''"` — no preceding level defaults to 0.0
-- **Ramp at end** `t"___/"` — no following level defaults to 0.0 (wraps if looping)
-- **`~` on first character** `t"~'"` — smooth ramp from 0.0 to 1.0
-- **`~` on ramp** `t"~/"` — compile error (`~` only applies to level characters)
-- **Breakpoint limit** — `TimelineState::MAX_BREAKPOINTS = 64`. If exceeded, emits compile warning and truncates
+- **Empty string** `t""`: compiles to empty timeline (no breakpoints)
+- **Single character** `t"'"` or `t"_"`: constant value for entire cycle
+- **Ramp at start** `t"/''"`: no preceding level defaults to 0.0
+- **Ramp at end** `t"___/"`: no following level defaults to 0.0 (wraps if looping)
+- **`~` on first character** `t"~'"`: smooth ramp from 0.0 to 1.0
+- **`~` on ramp** `t"~/"`: compile error (`~` only applies to level characters)
+- **Breakpoint limit**: `TimelineState::MAX_BREAKPOINTS = 64`. If exceeded, emits compile warning and truncates
 
-## Implementation Details
+## Implementation details
 
 - Curve notation compiles to `TIMELINE` opcode breakpoints at compile time
 - Integrates with existing mini-notation features (grouping, alternation, modifiers)
 - Always outputs 0.0–1.0 (user scales with math)
-- Feels natural alongside existing `pat()` and `seq()` patterns
+- Works alongside existing `pat()` and `seq()` patterns

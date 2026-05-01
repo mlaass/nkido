@@ -98,7 +98,7 @@ pow(lfo(0.5), 2) |> out(%, %)
 
 ---
 
-## Unary Math
+## Unary math
 
 ### neg
 
@@ -117,7 +117,7 @@ neg(osc("sin", 220)) |> out(%, %)
 
 ### abs
 
-**Absolute Value** - Returns the absolute value.
+**Absolute value** - Returns the absolute value.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -134,7 +134,7 @@ abs(osc("sin", 110)) |> lp(%, 50) |> out(%, %)
 
 ### sqrt
 
-**Square Root** - Returns the square root.
+**Square root** - Returns the square root.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -144,7 +144,7 @@ abs(osc("sin", 110)) |> lp(%, 50) |> out(%, %)
 
 ### log
 
-**Natural Logarithm** - Returns ln(x).
+**Natural logarithm** - Returns ln(x).
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -189,7 +189,7 @@ floor(lfo(0.5) * 8) / 8 |> out(%, %)
 
 ---
 
-## Binary Math
+## Binary math
 
 ### min
 
@@ -223,7 +223,7 @@ max(osc("sin", 220), 0) |> out(%, %)
 
 ---
 
-## Ternary Math
+## Ternary math
 
 ### clamp
 
@@ -261,7 +261,7 @@ wrap(osc("phasor", 1) * 3, 0, 1) |> out(%, %)
 
 ---
 
-## Trigonometric Functions
+## Trigonometric functions
 
 These functions operate on values in **radians**. They are pure math functions, not audio oscillators.
 
@@ -356,7 +356,7 @@ osc("saw", 110) * 3 |> atan(%) / 1.57 |> out(%, %)
 
 ### atan2
 
-**Two-argument Arctangent** - Returns the angle between the positive x-axis and the point (x, y).
+**Two-argument arctangent** - Returns the angle between the positive x-axis and the point (x, y).
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -367,11 +367,11 @@ Useful for phase calculations and coordinate conversions.
 
 ---
 
-## Hyperbolic Functions
+## Hyperbolic functions
 
 ### sinh
 
-**Hyperbolic Sine** - Returns the hyperbolic sine.
+**Hyperbolic sine** - Returns the hyperbolic sine.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -381,7 +381,7 @@ Useful for phase calculations and coordinate conversions.
 
 ### cosh
 
-**Hyperbolic Cosine** - Returns the hyperbolic cosine.
+**Hyperbolic cosine** - Returns the hyperbolic cosine.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -391,7 +391,7 @@ Useful for phase calculations and coordinate conversions.
 
 ### tanh
 
-**Hyperbolic Tangent** - Returns the hyperbolic tangent.
+**Hyperbolic tangent** - Returns the hyperbolic tangent.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|

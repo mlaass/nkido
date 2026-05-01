@@ -7,11 +7,9 @@ keywords: [getting started, first sound, sine, oscillator, output, beginner, tut
 
 # Your First Sound
 
-Welcome to Akkado! In this tutorial, you'll make your first sound and learn the basics of how the language works.
+## The simplest patch
 
-## The Simplest Patch
-
-Every Akkado program is a signal flow graph. Let's start with the simplest possible patch - a sine wave sent to the output.
+Every Akkado program is a signal flow graph. The smallest one is a sine wave sent to the output:
 
 ```akk
 osc("sin", 440) |> out(%, %)
@@ -19,16 +17,16 @@ osc("sin", 440) |> out(%, %)
 
 Click **Run** above to hear a 440 Hz sine wave (concert A).
 
-## Understanding the Code
+## Understanding the code
 
-Let's break down what each part means:
+What each part means:
 
-- `osc("sin", 440)` - Creates a sine wave oscillator at 440 Hz
-- `|>` - The **pipe** operator, connecting nodes in the signal flow
-- `%` - The **hole**, representing the signal from the left side of the pipe
-- `out(%, %)` - Sends the signal to both left and right speakers
+- `osc("sin", 440)` - a sine wave oscillator at 440 Hz
+- `|>` - the **pipe** operator, connecting nodes in the signal flow
+- `%` - the **hole**, representing the signal from the left side of the pipe
+- `out(%, %)` - sends the signal to both left and right speakers
 
-## Changing the Frequency
+## Changing the frequency
 
 Try different frequencies by changing the number:
 
@@ -42,9 +40,9 @@ osc("sin", 220) |> out(%, %)
 osc("sin", 880) |> out(%, %)
 ```
 
-## Adding More Oscillators
+## Adding more oscillators
 
-You can combine multiple oscillators with math operators:
+Combine multiple oscillators with math operators:
 
 ```akk
 // Two detuned oscillators for a fatter sound
@@ -53,9 +51,9 @@ osc("sin", 440) + osc("sin", 442) |> out(%, %) * 0.5
 
 The `* 0.5` at the end reduces the volume so it doesn't clip.
 
-## Different Waveforms
+## Different waveforms
 
-Akkado has several oscillator types, all accessible through `osc()`:
+`osc()` covers all the basic waveforms; pass the name as the first argument:
 
 ```akk
 // Sawtooth - rich and buzzy
@@ -72,13 +70,8 @@ osc("tri", 220) |> out(%, %)
 osc("sqr", 220) * 0.3 |> out(%, %)
 ```
 
-**Tip:** The `osc()` function is the standard way to create all oscillator types. Just change the first argument to select the waveform.
+## Next steps
 
-## Next Steps
-
-Now that you can make basic sounds, try:
-- Combining different waveforms
-- Using math to modulate the frequency
-- Moving on to the [Filters tutorial](02-filters.md) to shape your sounds
-
-Congratulations - you've made your first sounds with Akkado!
+- Combine different waveforms
+- Use math to modulate the frequency
+- Move on to the [Filters tutorial](02-filters.md) to shape your sounds

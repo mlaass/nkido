@@ -7,7 +7,7 @@ keywords: [delay, delay_ms, delay_smp, tap_delay, tap_delay_ms, tap_delay_smp, e
 
 # Delays
 
-Delay effects create copies of a signal offset in time, enabling echoes, rhythmic effects, and spatial depth.
+Delay effects create copies of a signal offset in time for echoes, rhythmic effects, and spatial depth.
 
 ## delay
 
@@ -93,7 +93,7 @@ noise() * ar(button("pluck"), 0.001, 0.001) |> delay_smp(%, 109, 0.995) |> out(%
 
 ## tap_delay
 
-**Tap Delay** - Delay with configurable feedback processing chain.
+**Tap delay** - Delay with configurable feedback processing chain.
 
 | Param     | Type    | Default | Description |
 |-----------|---------|---------|-------------|
@@ -104,7 +104,7 @@ noise() * ar(button("pluck"), 0.001, 0.001) |> delay_smp(%, 109, 0.995) |> out(%
 | dry       | number  | 0.0     | Dry signal level |
 | wet       | number  | 1.0     | Wet (delayed) signal level |
 
-Tap delay allows you to process the feedback signal through any DSP chain (filters, distortion, etc.). This enables classic effects like tape delay (high-frequency rolloff), dub delay (filtering + saturation), and shimmer (pitch shifting).
+Tap delay runs the feedback signal through any DSP chain (filters, distortion, etc.). Used for tape delay (high-frequency rolloff), dub delay (filtering + saturation), and shimmer (pitch shifting).
 
 The optional `dry` and `wet` parameters control the output mix. Defaults (dry=0, wet=1) output 100% wet signal for backward compatibility.
 
@@ -128,7 +128,7 @@ osc("saw", 110) |> tap_delay(%, 0.375, 0.7, (x) -> lp(x, 1500), 1.0, 0.5) |> out
 
 ## tap_delay_ms
 
-**Tap Delay (milliseconds)** - Same as tap_delay, but with time in milliseconds.
+**Tap delay (milliseconds)** - Same as tap_delay, but with time in milliseconds.
 
 | Param     | Type    | Default | Description |
 |-----------|---------|---------|-------------|
@@ -151,7 +151,7 @@ osc("saw", 110) |> tap_delay_ms(%, 300, 0.7, (x) -> lp(x, 1000), 0.5, 0.5) |> ou
 
 ## tap_delay_smp
 
-**Tap Delay (samples)** - Same as tap_delay, but with time in samples.
+**Tap delay (samples)** - Same as tap_delay, but with time in samples.
 
 | Param     | Type    | Default | Description |
 |-----------|---------|---------|-------------|

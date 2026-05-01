@@ -11,7 +11,7 @@ Envelopes shape the amplitude or other parameters of a sound over time. They res
 
 ## adsr
 
-**ADSR Envelope** - Attack, Decay, Sustain, Release envelope.
+**ADSR envelope** - Attack, Decay, Sustain, Release envelope.
 
 | Param   | Type    | Default | Description |
 |---------|---------|---------|-------------|
@@ -44,7 +44,7 @@ Related: [ar](#ar), [trigger](#trigger)
 
 ## ar
 
-**AR Envelope** - Attack, Release envelope.
+**AR envelope** - Attack, Release envelope.
 
 | Param   | Type    | Default | Description |
 |---------|---------|---------|-------------|

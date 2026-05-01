@@ -9,7 +9,7 @@ keywords: [mini-notation, pattern, sequence, rhythm, pitch, chord, rest, tidal, 
 
 Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.
 
-## Typed Prefixes
+## Typed prefixes
 
 Mini-notation strings carry a parse-mode prefix that disambiguates atom semantics:
 
@@ -23,7 +23,7 @@ Mini-notation strings carry a parse-mode prefix that disambiguates atom semantic
 
 See [Pattern Literals](../pattern/literals.md) for full coverage of typed prefixes and the `scalar()` cast.
 
-## Pitch Tokens
+## Pitch tokens
 
 Specify notes with letter name and octave:
 
@@ -70,7 +70,7 @@ chord("Am C Dm G")  // One chord per beat
 // m (minor), maj, 7, maj7, m7, dim, aug, sus2, sus4
 ```
 
-## Inline Chords
+## Inline chords
 
 Play multiple notes simultaneously with square brackets:
 
@@ -171,7 +171,7 @@ pat("<c4 e4 g4>")
 pat("<[c4 e4] [g4 b4]>")
 ```
 
-## Modifier Placement
+## Modifier placement
 
 **Critical**: Pattern modifiers must be inside the pattern string:
 
@@ -183,7 +183,7 @@ pat("[bd sn]/2")   // Pattern plays over 2 cycles
 pat("bd sn")/2     // This divides the SIGNAL by 2, not the pattern!
 ```
 
-## Pattern Functions
+## Pattern functions
 
 ### pat()
 
@@ -193,7 +193,7 @@ Basic pattern playback:
 pat("c4 e4 g4") |> ((f) -> osc("sin", f)) |> out(%, %)
 ```
 
-## Practical Examples
+## Practical examples
 
 ```akk
 // Simple melody

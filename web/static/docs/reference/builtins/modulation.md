@@ -7,7 +7,7 @@ keywords: [modulation, chorus, flanger, phaser, comb, effect, rate, depth, sweep
 
 # Modulation Effects
 
-Modulation effects use time-varying delays to create movement and spatial interest in sounds.
+Modulation effects use time-varying delays to add movement and spatial width to sounds.
 
 **Note:** All modulation effects output 100% wet signal. For dry/wet mixing, blend manually:
 
@@ -29,9 +29,9 @@ dry * 0.3 + chorus(dry, 0.5, 0.5) * 0.7 |> out(%, %)
 | base_delay | number | 20.0 | Base chorus delay (ms) |
 | depth_range | number | 10.0 | Modulation depth range (ms) |
 
-Creates a thicker, wider sound by mixing the input with delayed copies that are slightly pitch-shifted by an LFO.
+Mixes the input with delayed copies that are slightly pitch-shifted by an LFO, producing a thicker, wider sound.
 
-The `base_delay` parameter sets the center delay time, while `depth_range` controls how far the modulation sweeps from the base. Larger values create more dramatic detuning effects.
+The `base_delay` parameter sets the center delay time, while `depth_range` controls how far the modulation sweeps from the base. Larger values produce more pronounced detuning.
 
 ```akk
 // Classic chorus
@@ -111,10 +111,10 @@ Related: [chorus](#chorus), [phaser](#phaser), [comb](#comb)
 | stages   | literal int | 4 | Number of allpass stages, 2-12 (compile-time constant) |
 | feedback | literal float | 0.5 | Feedback amount, 0-1 (compile-time constant) |
 
-Sweeps a chain of allpass-derived notches through the spectrum, creating a
-distinctive swirling effect different from chorus or flanger.
+Sweeps a chain of allpass-derived notches through the spectrum, producing a
+swirling effect distinct from chorus or flanger.
 
-`stages` and `feedback` shape the topology and must be **literal constants** —
+`stages` and `feedback` shape the topology and must be **literal constants**;
 they're packed into instruction metadata at compile time, not driven by signals.
 More stages give more notches (each pair of stages = one notch); higher feedback
 sharpens the resonance.

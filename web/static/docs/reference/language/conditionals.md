@@ -10,13 +10,13 @@ keywords: [conditional, conditionals, logic, comparison, select, gt, lt, gte, lt
 
 Signal-rate decision-making: compare signals, combine boolean signals with AND/OR/NOT, and pick between two signals based on a condition. Every operation runs sample-by-sample at audio rate.
 
-## Truth Convention
+## Truth convention
 
 - A signal value is **truthy** when it is greater than `0.0`. Anything `<= 0.0` is **falsy** (including `0`, `-0`, and negative numbers).
 - Comparison and logic operators output exactly `1.0` for true and `0.0` for false.
 - Equality (`eq`, `neq`, `==`, `!=`) uses an epsilon of `1e-6` so floating-point round-off does not produce false negatives.
 
-All operators below are also available as infix syntax — see [Operators](operators.md) for the precedence table.
+All operators below are also available as infix syntax; see [Operators](operators.md) for the precedence table.
 
 ---
 
@@ -26,11 +26,11 @@ All operators below are also available as infix syntax — see [Operators](opera
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
-| cond  | signal | -       | Condition signal — picks `a` when `cond > 0`, otherwise `b` |
+| cond  | signal | -       | Condition signal: picks `a` when `cond > 0`, otherwise `b` |
 | a     | signal | -       | Output when `cond` is truthy |
 | b     | signal | -       | Output when `cond` is falsy |
 
-Sample-by-sample mux. There is no infix ternary syntax — use `select(cond, a, b)`.
+Sample-by-sample mux. There is no infix ternary syntax; use `select(cond, a, b)`.
 
 ```akk
 // Switch oscillators on a gate pattern
@@ -129,7 +129,7 @@ osc("sin", 440) * lte(lfo(0.5), 0) |> out(%, %)
 | a     | signal | -       | First operand |
 | b     | signal | -       | Second operand |
 
-Equivalent to the `==` operator. The epsilon protects against floating-point drift — values like `0.1 + 0.2` and `0.3` compare equal.
+Equivalent to the `==` operator. The epsilon protects against floating-point drift: values like `0.1 + 0.2` and `0.3` compare equal.
 
 ```akk
 // Trigger only on exact step matches
@@ -210,7 +210,7 @@ combined = bor(g1, g2)  // "1 0 1 0"
 Equivalent to the prefix `!` operator.
 
 ```akk
-// Inverse gate — sustain when no trigger
+// Inverse gate, sustain when no trigger
 gate = trigger(4)
 sustain = bnot(gate)
 osc("sin", 220) * sustain |> out(%, %)
@@ -218,8 +218,8 @@ osc("sin", 220) * sustain |> out(%, %)
 
 ---
 
-## See Also
+## See also
 
-- [Operators](operators.md) — infix syntax (`>`, `<`, `&&`, `||`, `!`) and precedence
-- [Math Functions](../builtins/math.md) — arithmetic on signals
-- [Pattern Functions](../builtins/sequencing.md) — generating gates and triggers
+- [Operators](operators.md): infix syntax (`>`, `<`, `&&`, `||`, `!`) and precedence
+- [Math Functions](../builtins/math.md): arithmetic on signals
+- [Pattern Functions](../builtins/sequencing.md): generating gates and triggers

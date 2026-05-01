@@ -9,7 +9,7 @@ keywords: [operators, precedence, arithmetic, plus, minus, multiply, divide, pow
 
 Akkado uses operators for arithmetic, comparison, logic, and signal flow.
 
-## Operator Precedence
+## Operator precedence
 
 From highest to lowest precedence:
 
@@ -26,7 +26,7 @@ From highest to lowest precedence:
 | 1 | `\|\|` | Logical OR | Left | `a \|\| b` |
 | 0 (lowest) | `\|>` | Pipe | Left | `a \|> b` |
 
-## Arithmetic Operators
+## Arithmetic operators
 
 All arithmetic operators work on signals at audio rate:
 
@@ -47,7 +47,7 @@ osc("saw", 110) / 2 |> out(%, %)
 lfo(0.5) ^ 2 |> out(%, %)
 ```
 
-## Comparison Operators
+## Comparison operators
 
 Compare two signals sample-by-sample. Output is `1.0` (true) or `0.0` (false).
 
@@ -65,7 +65,7 @@ in_range = (freq >= 200) && (freq <= 800)
 
 `==` and `!=` use an epsilon of `1e-6`, so floating-point drift does not produce false negatives.
 
-## Logic Operators
+## Logic operators
 
 Combine boolean signals. Inputs are treated as truthy when `> 0`. Outputs are `0.0` or `1.0`.
 
@@ -80,13 +80,13 @@ loud = lfo(0.5) > 0.5
 hit = trigger(4)
 band = loud && hit
 
-// Inverse gate — fires when there's no trigger
+// Inverse gate, fires when there's no trigger
 sustain = !trigger(4)
 ```
 
-## Conditional Selection
+## Conditional selection
 
-There is no infix ternary — use the `select` function:
+There is no infix ternary; use the `select` function:
 
 ```akk
 // Switch oscillators based on a gate
@@ -94,7 +94,7 @@ gate = pat("1 0 1 0")
 select(gate, osc("saw", 440), osc("sqr", 220)) |> out(%, %)
 ```
 
-## Operator Desugaring
+## Operator desugaring
 
 All operators are converted to function calls during parsing:
 
@@ -115,7 +115,7 @@ All operators are converted to function calls during parsing:
 | `a \|\| b` | `bor(a, b)` |
 | `!a`     | `bnot(a)` |
 
-## The Pipe Operator
+## The pipe operator
 
 The `|>` operator defines signal flow. It has the lowest precedence so it always splits an expression at the natural boundary:
 
@@ -126,7 +126,7 @@ osc("saw", 110) |> lp(%, 800) |> out(%, %)
 
 See [Pipes & Holes](pipes) for full details.
 
-## The Hole Operator
+## The hole operator
 
 The `%` symbol is an explicit input port:
 
@@ -135,7 +135,7 @@ The `%` symbol is an explicit input port:
 osc("saw", 110) |> lp(%, 500) |> out(%, %)
 ```
 
-## Combining Operators
+## Combining operators
 
 Operators follow precedence rules:
 
@@ -156,7 +156,7 @@ a + b * c    // equals a + (b * c)
 (a + b) * c
 ```
 
-## Unary Minus
+## Unary minus
 
 Negation works on numbers and signals:
 

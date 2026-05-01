@@ -7,7 +7,7 @@ keywords: [method, dot, ufcs, call, syntax, chain]
 
 # Method Calls (UFCS)
 
-Akkado supports method-call syntax for any callable in scope — built-in or user-defined. The form
+Akkado supports method-call syntax for any callable in scope, built-in or user-defined. The form
 
 ```akk
 x.foo(a, b)
@@ -19,7 +19,7 @@ is equivalent to
 foo(x, a, b)
 ```
 
-This is universal-function-call syntax (UFCS): there is no per-type method table. The dispatch is purely lexical — the same name resolution as a regular call.
+This is universal-function-call syntax (UFCS): there is no per-type method table. The dispatch is purely lexical, the same name resolution as a regular call.
 
 ## With built-ins
 

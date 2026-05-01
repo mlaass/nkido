@@ -62,7 +62,7 @@ ar(release, 0.001, 0.05) * noise() |> out(%, %)
 | start | signal | 0       | Optional reset target value |
 
 ```akk
-// Bare counter — never resets
+// Bare counter, never resets
 n = counter(trigger(1))
 
 // Reset every 4 beats
@@ -76,6 +76,6 @@ notes = [60, 64, 67, 72]
 notes[counter(trigger(4))] |> mtof(%) |> sine(%) |> out(%, %)
 ```
 
-`counter` is the natural pair with [array indexing](../language/arrays.md), since `ARRAY_INDEX` wraps by default — an unbounded counter index always produces an in-range lookup.
+`counter` is the natural pair with [array indexing](../language/arrays.md), since `ARRAY_INDEX` wraps by default: an unbounded counter index always produces an in-range lookup.
 
 Related: [state](state.md), [Method calls](../language/methods.md)

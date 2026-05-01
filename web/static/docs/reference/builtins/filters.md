@@ -11,7 +11,7 @@ Filters shape the frequency content of signals by attenuating or boosting certai
 
 ## lp
 
-**Lowpass Filter** - Passes frequencies below the cutoff, attenuates above.
+**Lowpass filter** - Passes frequencies below the cutoff, attenuates above.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -44,7 +44,7 @@ Related: [hp](#hp), [bp](#bp), [moog](#moog)
 
 ## hp
 
-**Highpass Filter** - Passes frequencies above the cutoff, attenuates below.
+**Highpass filter** - Passes frequencies above the cutoff, attenuates below.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -72,7 +72,7 @@ Related: [lp](#lp), [bp](#bp)
 
 ## bp
 
-**Bandpass Filter** - Passes frequencies around the cutoff, attenuates others.
+**Bandpass filter** - Passes frequencies around the cutoff, attenuates others.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -100,7 +100,7 @@ Related: [lp](#lp), [hp](#hp)
 
 ## moog
 
-**Moog Ladder Filter** - Classic 4-pole resonant lowpass filter.
+**Moog ladder filter** - Classic 4-pole resonant lowpass filter.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -112,7 +112,7 @@ Related: [lp](#lp), [hp](#hp)
 
 Aliases: `moogladder`
 
-The legendary Moog ladder filter with its characteristic warm, creamy sound. At high resonance values, it can self-oscillate.
+The Moog ladder filter, known for its warm, creamy sound. At high resonance values, it can self-oscillate.
 
 ```akk
 // Classic Moog bass
@@ -140,7 +140,7 @@ Related: [lp](#lp)
 
 ## sallenkey
 
-**Sallen-Key Filter** - MS-20 style filter with aggressive resonance.
+**Sallen-Key filter** - MS-20 style filter with aggressive resonance.
 
 | Param | Type   | Default | Description |
 |-------|--------|---------|-------------|
@@ -152,7 +152,7 @@ Related: [lp](#lp)
 
 Aliases: `sk`, `ms20`
 
-Based on the Korg MS-20 filter topology with diode clipping in the feedback path. Creates the characteristic aggressive, screaming resonance.
+Based on the Korg MS-20 filter topology with diode clipping in the feedback path. Produces the aggressive, screaming resonance of that design.
 
 ```akk
 // Classic MS-20 bass

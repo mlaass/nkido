@@ -8,9 +8,9 @@ keywords: [stereo, mono, left, right, pan, width, ms_encode, ms_decode, pingpong
 # Stereo
 
 Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every
-signal; mono DSP ops applied to a stereo signal **auto-lift** — a single
-instruction runs twice at dispatch with independent per-channel state. No more
-manually duplicating a chain for L and R.
+signal; mono DSP ops applied to a stereo signal **auto-lift**: a single
+instruction runs twice at dispatch with independent per-channel state, so you
+don't have to duplicate a chain for L and R.
 
 ## stereo
 
@@ -39,7 +39,7 @@ stereo(osc("saw", 218), osc("saw", 222)) |> out(%)
 |-------|--------|-------------|
 | sig   | stereo | Stereo signal to downmix |
 
-Standard sum-to-mono convention — correlated content stays at 0 dB;
+Standard sum-to-mono convention: correlated content stays at 0 dB;
 uncorrelated content sums at roughly -3 dB RMS.
 
 ```akk
@@ -48,7 +48,7 @@ wet = src |> stereo() |> freeverb(%, 0.8, 0.5)
 env = wet |> mono() |> env_follower(%)
 ```
 
-Calling `mono()` on a mono signal is a compile-time error — call it only on
+Calling `mono()` on a mono signal is a compile-time error; call it only on
 stereo signals. (When passed a function instead of a signal, `mono()` falls
 back to the monophonic voice-manager form: `mono(instrument)`.)
 
@@ -106,7 +106,7 @@ stereo_sig |> width(%, 1.4) |> out(%)
 
 ## ms_encode, ms_decode
 
-**Mid/side processing** — encode stereo to M/S, process, decode back.
+**Mid/side processing**: encode stereo to M/S, process, decode back.
 
 ```akk
 // M/S processing: boost sides (wider stereo) while preserving centre
@@ -143,8 +143,8 @@ osc("saw", 110)
 
 Any mono DSP op (`lp`, `hp`, `delay`, `freeverb`, `saturate`, ...) applied
 to a stereo signal **auto-lifts**: the compiler emits one instruction
-flagged `STEREO_INPUT`, and the VM runs the op twice at dispatch — once per
-channel — with independent per-channel DSP state.
+flagged `STEREO_INPUT`, and the VM runs the op twice at dispatch (once per
+channel) with independent per-channel DSP state.
 
 ```akk
 // One instruction per effect; VM runs each op twice at dispatch.
@@ -157,5 +157,5 @@ osc("saw", 220)
 ```
 
 Scalar / control-rate parameters (cutoff, Q, feedback, ...) are shared
-between the L and R passes — if you want independent parameters per
+between the L and R passes. If you want independent parameters per
 channel, split the chain manually with `stereo(lp(left(s), cutL), lp(right(s), cutR))`.

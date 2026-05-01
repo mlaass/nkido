@@ -7,7 +7,7 @@ keywords: [visualization, viz, oscilloscope, waveform, spectrum, waterfall, pian
 
 # Visualizations
 
-Inline visualizations that render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain — the audio passes through unchanged while being displayed.
+Inline visualizations that render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain; the audio passes through unchanged while being displayed.
 
 All visualization functions accept an optional name string and an options record. Common options shared by all types:
 

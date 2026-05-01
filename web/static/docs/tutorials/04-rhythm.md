@@ -7,9 +7,9 @@ keywords: [rhythm, pattern, beat, trigger, euclidean, sequencer, clock, tutorial
 
 # Rhythm & Patterns
 
-Music is about time. In this tutorial, you'll learn to create rhythmic patterns, from basic beats to complex polyrhythms.
+This tutorial covers rhythmic patterns, from basic beats to polyrhythms.
 
-## The Clock
+## The clock
 
 Everything in Akkado syncs to a global clock. The `trigger` function creates pulses:
 
@@ -25,7 +25,7 @@ Use triggers to control envelopes:
 osc("sin", 55) * ar(trigger(1), 0.01, 0.2) |> out(%, %)
 ```
 
-## Building a Basic Beat
+## Building a basic beat
 
 Combine different trigger rates for drum patterns:
 
@@ -37,9 +37,9 @@ hat = osc("noise") |> hp(%, 8000) * ar(trigger(4), 0.001, 0.03) * 0.3
 kick + hat |> out(%, %)
 ```
 
-## Euclidean Rhythms
+## Euclidean rhythms
 
-The `euclid` function creates mathematically interesting patterns by distributing hits evenly:
+The `euclid` function distributes hits evenly across a number of steps:
 
 ```akk
 // Tresillo (3 hits over 8 steps)
@@ -68,9 +68,9 @@ Rotate patterns to shift the accent:
 osc("sin", 55) * ar(euclid(3, 8, 1), 0.01, 0.15) |> out(%, %)
 ```
 
-## Step Sequencing
+## Step sequencing
 
-Use `pat()` mini-notation to create melodic patterns:
+Use `pat()` mini-notation for melodic patterns:
 
 ```akk
 // 4-note melodic pattern
@@ -79,9 +79,9 @@ pat("c3 e3 g3 c4") |> ((f) ->
 ) |> out(%, %)
 ```
 
-## Combining Rhythm and Melody
+## Combining rhythm and melody
 
-Build a complete sequence:
+A complete sequence:
 
 ```akk
 // Bass line with rhythm
@@ -92,9 +92,9 @@ pat("c2 g2 d#2 a#1") |> ((f) ->
 ) |> out(%, %)
 ```
 
-## LFO for Movement
+## LFO for movement
 
-Add subtle motion with LFOs:
+Add motion with LFOs:
 
 ```akk
 // Rhythmic with filter movement
@@ -104,7 +104,7 @@ osc("saw", 110)
     |> out(%, %)
 ```
 
-## A Complete Drum Pattern
+## A complete drum pattern
 
 ```akk
 // Kick drum
@@ -138,7 +138,7 @@ perc = osc("noise") |> hp(%, 4000) * ar(euclid(4, 12), 0.001, 0.05) * 0.3
 bass + perc |> out(%, %)
 ```
 
-## Mini-Notation Patterns
+## Mini-notation patterns
 
 For melodic sequences, use mini-notation:
 
@@ -149,9 +149,9 @@ pat("c3 e3 g3 c4") |> ((f) ->
 ) |> out(%, %)
 ```
 
-## Conditional Triggers
+## Conditional triggers
 
-So far every gate has come from a pattern function (`trigger`, `euclid`, `pat`). You can also build gates from **conditionals** — comparisons and logic operators that work sample-by-sample.
+So far every gate has come from a pattern function (`trigger`, `euclid`, `pat`). You can also build gates from **conditionals**: comparisons and logic operators that work sample-by-sample.
 
 ### Threshold gates
 
@@ -167,7 +167,7 @@ The `>` operator outputs `1.0` whenever its left-hand side is greater than its r
 
 ### Selecting between two voices
 
-`select(cond, a, b)` is a sample-rate ternary — it outputs `a` whenever `cond > 0`, otherwise `b`:
+`select(cond, a, b)` is a sample-rate ternary: it outputs `a` whenever `cond > 0`, otherwise `b`:
 
 ```akk
 // Alternate timbre on every other beat
@@ -176,7 +176,7 @@ voice = select(flip, osc("saw", 110), osc("sqr", 110))
 voice * ar(trigger(2), 0.005, 0.2) |> out(%, %)
 ```
 
-There's no `?:` ternary in Akkado — `select` is the canonical form.
+There's no `?:` ternary in Akkado. `select` is the canonical form.
 
 ### Combining gates with `&&` and `||`
 
@@ -198,7 +198,7 @@ accent = loud && hit
 osc("noise") * ar(accent, 0.001, 0.05) |> out(%, %)
 ```
 
-The prefix `!` operator inverts a gate — useful for "play during the rests":
+The prefix `!` operator inverts a gate, useful for "play during the rests":
 
 ```akk
 // A pad that fills the space between drum hits
@@ -209,12 +209,9 @@ osc("sin", 220) * sustain * 0.2 |> out(%, %)
 
 For the full operator precedence table and the complete list of comparison/logic builtins, see [Operators](../reference/language/operators.md) and [Conditionals & Logic](../reference/language/conditionals.md).
 
-## Next Steps
+## Next steps
 
-You now have the tools to create complex rhythmic music! Explore further:
 - [Mini-Notation](../mini-notation/basics.md) for pattern syntax
-- [Pattern Modulation](./06-pattern-modulation.md) — patterns as values: `bend(notes, v"<0 0.5 -0.5>")`, `e.cutoff` custom properties, scalar arithmetic.
+- [Pattern Modulation](./06-pattern-modulation.md): patterns as values: `bend(notes, v"<0 0.5 -0.5>")`, `e.cutoff` custom properties, scalar arithmetic
 - [Effects](../builtins/reverbs.md) for space and depth
 - [Dynamics](../builtins/dynamics.md) for polish
-
-Congratulations on completing the tutorial series! You're ready to make music with Akkado.

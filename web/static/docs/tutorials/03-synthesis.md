@@ -7,9 +7,9 @@ keywords: [synthesis, synth, envelope, adsr, ar, subtractive, tutorial, voice]
 
 # Building Synth Voices
 
-Now that you know oscillators and filters, let's combine them into complete synthesizer voices with amplitude envelopes.
+With oscillators and filters in hand, the next step is wrapping them in amplitude envelopes to make actual notes.
 
-## The Problem with Raw Oscillators
+## The problem with raw oscillators
 
 A raw oscillator plays constantly:
 
@@ -17,9 +17,9 @@ A raw oscillator plays constantly:
 osc("saw", 220) |> out(%, %)
 ```
 
-For musical notes, we need the sound to start and stop - that's what envelopes do.
+For musical notes, the sound has to start and stop. That's what envelopes do.
 
-## Attack-Release Envelopes
+## Attack-release envelopes
 
 The `ar` envelope creates a simple shape triggered by a clock:
 
@@ -35,7 +35,7 @@ Multiply your oscillator by the envelope:
 osc("saw", 220) * ar(trigger(2)) |> out(%, %)
 ```
 
-## Shaping the Envelope
+## Shaping the envelope
 
 The `ar` function takes attack and release times:
 
@@ -49,7 +49,7 @@ osc("saw", 220) * ar(trigger(4), 0.001, 0.1) |> out(%, %)
 osc("saw", 220) * ar(trigger(1), 0.3, 1.0) |> out(%, %)
 ```
 
-## A Complete Synth Voice
+## A complete synth voice
 
 Combine oscillator, filter, and envelope:
 
@@ -61,7 +61,7 @@ osc("saw", 110)
     |> out(%, %)
 ```
 
-## Filter Envelope
+## Filter envelope
 
 Make the filter open and close with each note:
 
@@ -73,9 +73,9 @@ osc("saw", 110)
     |> out(%, %)
 ```
 
-## Layering Oscillators
+## Layering oscillators
 
-Combine multiple oscillators for richer sounds:
+Combine multiple oscillators for thicker sounds:
 
 ```akk
 // Two detuned saws
@@ -93,7 +93,7 @@ Combine multiple oscillators for richer sounds:
     |> out(%, %)
 ```
 
-## Adding Sub Bass
+## Adding sub bass
 
 Layer a sine wave an octave below for weight:
 
@@ -103,7 +103,7 @@ osc = osc("saw", 110) + osc("sin", 55) * 0.5
 osc |> lp(%, 800) * ar(trigger(2)) |> out(%, %)
 ```
 
-## ADSR Envelopes
+## ADSR envelopes
 
 For more control, use `adsr` with attack, decay, sustain, and release:
 
@@ -112,9 +112,9 @@ For more control, use `adsr` with attack, decay, sustain, and release:
 osc("saw", 220) * adsr(trigger(0.5), 0.1, 0.2) |> out(%, %)
 ```
 
-## Building a Bass Patch
+## Building a bass patch
 
-Let's build a complete bass sound:
+A complete bass sound:
 
 ```akk
 // Punchy bass
@@ -129,7 +129,7 @@ osc("saw", bass_freq)
     |> out(%, %)
 ```
 
-## Building a Lead Patch
+## Building a lead patch
 
 A bright, cutting lead sound:
 
@@ -142,7 +142,7 @@ lead_freq = 440
     |> out(%, %)
 ```
 
-## Storing Voices as Variables
+## Storing voices as variables
 
 Keep your patches organized:
 
@@ -154,10 +154,7 @@ synth = osc("saw", 220) |> lp(%, 800) * ar(trigger(2))
 synth |> out(%, %)
 ```
 
-## Next Steps
+## Next steps
 
-You now know the fundamentals of synthesis! Continue to:
-- [Rhythm & Patterns](04-rhythm.md) to create beats and sequences
-- Explore [Effects](../builtins/reverbs.md) to add space and character
-
-You're making real synthesizer sounds with Akkado!
+- [Rhythm & Patterns](04-rhythm.md): create beats and sequences
+- [Effects](../builtins/reverbs.md): add space and character

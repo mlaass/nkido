@@ -7,7 +7,7 @@ keywords: [oscillator, osc, sin, sine, tri, triangle, saw, sawtooth, sqr, square
 
 # Oscillators
 
-Oscillators are the fundamental sound sources in synthesis. The `osc()` function is the unified interface for all oscillator types.
+Oscillators are the primary sound sources in synthesis. The `osc()` function is the unified interface for all oscillator types.
 
 ## osc
 
@@ -18,7 +18,7 @@ Oscillators are the fundamental sound sources in synthesis. The `osc()` function
 | type  | string | Waveform type (see below) |
 | freq  | signal | Frequency in Hz (not required for `"noise"`) |
 
-### Waveform Types
+### Waveform types
 
 | Type | Description |
 |------|-------------|
@@ -30,7 +30,7 @@ Oscillators are the fundamental sound sources in synthesis. The `osc()` function
 | `"ramp"` | Alias for phasor |
 | `"noise"` | White noise (freq parameter ignored) |
 
-### Pitched Waveforms
+### Pitched waveforms
 
 ```akk
 // Sine wave (440 Hz)
@@ -85,7 +85,7 @@ osc("noise") |> hp(%, 8000) * ar(trigger(8), 0.001, 0.05) |> out(%, %)
 osc("noise") |> lp(%, 200 + osc("sin", 0.5) * 1000) |> out(%, %)
 ```
 
-### FM Synthesis
+### FM synthesis
 
 ```akk
 // Simple FM

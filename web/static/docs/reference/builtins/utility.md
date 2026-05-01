@@ -92,7 +92,7 @@ osc("sin", 440) * dc(0.5) |> out(%, %)
 | target | signal | Target value |
 | rate   | number | Slew rate (higher = faster) |
 
-Limits how fast a signal can change, creating smooth transitions. Great for portamento or smoothing control signals.
+Limits how fast a signal can change, smoothing transitions. Useful for portamento or smoothing control signals.
 
 ```akk
 // Portamento effect (smooth pitch changes)

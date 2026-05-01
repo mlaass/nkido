@@ -7,9 +7,9 @@ keywords: [pipe, hole, "|>", "%", signal flow, graph, connection, routing]
 
 # Pipes & Holes
 
-The pipe operator (`|>`) and hole (`%`) are the foundation of Akkado's signal flow model.
+The pipe operator (`|>`) and hole (`%`) define Akkado's signal flow model.
 
-## The Pipe Operator |>
+## The pipe operator |>
 
 The pipe operator connects audio processing nodes, creating a signal flow graph.
 
@@ -20,7 +20,7 @@ osc("saw", 220) |> lp(%, 800) |> out(%, %)
 
 This reads as: "Generate a sawtooth at 220 Hz, pipe it through a lowpass filter at 800 Hz, then pipe to the output."
 
-### Why Pipes?
+### Why pipes?
 
 Pipes make signal flow explicit and readable:
 
@@ -32,11 +32,11 @@ out(lp(osc("saw", 220), 800), lp(osc("saw", 220), 800))
 osc("saw", 220) |> lp(%, 800) |> out(%, %)
 ```
 
-## The Hole %
+## The hole %
 
 The hole (`%`) is a placeholder that gets filled with the signal from the left side of the pipe.
 
-### Single Hole
+### Single hole
 
 When you use `%` once, it receives the piped signal:
 
@@ -47,7 +47,7 @@ osc("sin", 440) |> out(%, %)
 //           Both holes filled with osc("sin", 440)
 ```
 
-### Multiple Holes
+### Multiple holes
 
 You can use `%` multiple times in the same expression:
 
@@ -58,7 +58,7 @@ osc("sin", 440) |> lp(%, 1000) + % |> out(%, %)
 //                          Original unfiltered signal mixed back in
 ```
 
-### Hole with Math
+### Hole with math
 
 The hole can be used in calculations:
 
@@ -72,9 +72,9 @@ osc("sin", 440) |> % * 0.5 |> out(%, %)
 osc("sin", 440) |> % + 0.5 |> out(%, %)
 ```
 
-## Chaining Pipes
+## Chaining pipes
 
-Build complex signal chains by connecting multiple pipes:
+Build signal chains by connecting multiple pipes:
 
 ```akk
 // Oscillator -> Filter -> Distortion -> Output
@@ -93,21 +93,21 @@ osc("saw", 110) |> lp(%, 500) * 0.7 + % * 0.3 |> out(%, %)
 
 ## Examples
 
-### Basic Synth Voice
+### Basic synth voice
 
 ```akk
 // Oscillator through filter with envelope
 osc("saw", 220) * adsr(trigger(2), 0.01, 0.2) |> lp(%, 1000) |> out(%, %)
 ```
 
-### Effects Chain
+### Effects chain
 
 ```akk
 // Guitar-like processing
 osc("saw", 110) |> saturate(%, 3) |> lp(%, 2000) |> delay(%, 0.3, 0.4) |> out(%, %)
 ```
 
-### Stereo Processing
+### Stereo processing
 
 ```akk
 // Stereo spread

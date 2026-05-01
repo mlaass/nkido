@@ -7,7 +7,7 @@ keywords: [tutorial, pattern, modulation, value pattern, v"…", bend, aftertouc
 
 # Pattern Modulation
 
-So far you've used patterns to drive note pitches. This chapter shows how to use patterns as **values** — feeding any DSP slot from a pattern, modulating per-event properties, and writing pattern arithmetic.
+So far patterns have driven note pitches. They can also be used as **values**: feeding any DSP slot from a pattern, modulating per-event properties, and combining via arithmetic.
 
 ## Patterns are values
 
@@ -17,14 +17,14 @@ A pattern is a stream of events stepping through values over time. When you writ
 osc("sin", n"c4 e4 g4")
 ```
 
-…the compiler implicitly takes the pattern's frequency buffer and feeds it to `osc`'s freq slot. Patterns coerce to scalar Signals automatically.
+the compiler takes the pattern's frequency buffer and feeds it to `osc`'s freq slot. Patterns coerce to scalar Signals automatically.
 
 ## Numeric patterns with v"…"
 
 Sometimes you want raw numbers, not mtof'd notes. Use `v"…"`:
 
 ```akk
-// Three frequencies — no mtof, just the literal Hz values
+// Three frequencies, no mtof, just the literal Hz values
 osc("sin", v"<220 440 880>") |> out(%, %)
 
 // Filter cutoff sweeping through three values per cycle
@@ -35,11 +35,11 @@ lp(sig, v"<200 800 2000>", 0.7) |> out(%, %)
 osc("saw", 220) * v"<0.2 0.5 1.0 0.5>" |> out(%, %)
 ```
 
-Atoms in `v"…"` must be numeric — `v"c4"` is a parse error.
+Atoms in `v"…"` must be numeric; `v"c4"` is a parse error.
 
-## The flagship: per-event modulation
+## Per-event modulation
 
-Pattern-valued bend depth — each note bends by the corresponding pattern value:
+Pattern-valued bend depth: each note bends by the corresponding pattern value.
 
 ```akk
 n"c4 e4 g4" |> bend(%, v"<0 0.5 -0.5>") as e
@@ -54,7 +54,7 @@ n"c4 e4 g4 b4" |> aftertouch(%, v"<0 0.25 0.5 1.0>")  // crescendo
 n"c4 e4 g4"    |> dur(%, v"<0.25 0.5 1.0>")           // pattern-driven note length
 ```
 
-Constant args still work too — `bend(notes, 0.5)` is unchanged.
+Constant args still work; `bend(notes, 0.5)` is unchanged.
 
 ## Custom-property accessor
 
@@ -84,7 +84,7 @@ n"c4 e4 g4" + v"<0 0 12>"   // Pattern + Pattern (combined)
 Polyphonic chord patterns can't silently degrade to one voice:
 
 ```akk
-osc("sin", c"Am")     // ❌ E160 — chord pattern in scalar slot
+osc("sin", c"Am")     // ❌ E160: chord pattern in scalar slot
 ```
 
 The fix is to consume them with `poly()`, which fans out per voice:
@@ -93,13 +93,13 @@ The fix is to consume them with `poly()`, which fans out per voice:
 c"Am C G Em" |> poly(4, fn (e) -> osc("saw", e.freq) * ar(e.trig)) |> out(%, %)
 ```
 
-Sample patterns route through `SAMPLE_PLAY` and produce audio — pipe them to `out()` directly:
+Sample patterns route through `SAMPLE_PLAY` and produce audio. Pipe them to `out()` directly:
 
 ```akk
 s"bd ~ bd ~" |> out(%, %)
 ```
 
-## scalar() — explicit cast
+## scalar(): explicit cast
 
 `scalar(p)` is the explicit form of auto-coerce. Useful for clarity, or for arithmetic outside a DSP slot:
 

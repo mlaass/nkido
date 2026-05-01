@@ -7,11 +7,11 @@ keywords: [in, input, microphone, mic, tab, file, live, audio, capture, getUserM
 
 # Audio Input
 
-The `in()` builtin exposes external audio as a signal source — microphone, tab/system audio, or an uploaded file — so any Cedar effect can process it. The host populates the input buffer each block.
+The `in()` builtin exposes external audio as a signal source (microphone, tab/system audio, or an uploaded file) so any Cedar effect can process it. The host populates the input buffer each block.
 
 ## in
 
-**Live Audio Input** - Returns a stereo signal from the host's selected input source.
+**Live audio input** - Returns a stereo signal from the host's selected input source.
 
 | Param  | Type   | Default | Description |
 |--------|--------|---------|-------------|
@@ -53,11 +53,11 @@ The argument is a compile-time string. The compiler does not interpret it semant
 
 ### Multiple in() calls
 
-All `in()` calls in a single program share the same input buffer — there is one stereo input source per execution context. Calling `in()` twice does not allocate a second source; it reads the same data.
+All `in()` calls in a single program share the same input buffer. There is one stereo input source per execution context. Calling `in()` twice does not allocate a second source; it reads the same data.
 
 ### Silent fallback
 
-When no input is available — permission denied, device unplugged, file not yet uploaded, host without input support — `in()` silently returns zeros. There is no compile error and no crash. The UI shows the current input status so you can see whether `in()` is actually live.
+When no input is available (permission denied, device unplugged, file not yet uploaded, host without input support), `in()` silently returns zeros. There is no compile error and no crash. The UI shows the current input status so you can see whether `in()` is actually live.
 
 ### Where the audio comes from
 
@@ -73,6 +73,6 @@ Mic-in → speakers-out without headphones causes feedback. Use headphones, or a
 
 ### See also
 
-- [Stereo](stereo) — `stereo()`, `mono()`, `left()`, `right()` for routing the live input.
-- [Filters](filters) — typical first effect for vocal / instrument processing.
-- [Delays](delays) — for live looping and dub effects on the mic.
+- [Stereo](stereo): `stereo()`, `mono()`, `left()`, `right()` for routing the live input.
+- [Filters](filters): typical first effect for vocal / instrument processing.
+- [Delays](delays): for live looping and dub effects on the mic.

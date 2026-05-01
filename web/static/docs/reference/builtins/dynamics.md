@@ -44,7 +44,7 @@ Related: [limiter](#limiter), [gate](#gate)
 
 ## limiter
 
-**Limiter** - Brickwall limiter preventing signal from exceeding ceiling.
+**Limiter** - Brickwall limiter that prevents signal from exceeding ceiling.
 
 | Param   | Type   | Default | Description |
 |---------|--------|---------|-------------|
@@ -54,7 +54,7 @@ Related: [limiter](#limiter), [gate](#gate)
 
 Aliases: `limit`
 
-A limiter is an extreme compressor (infinite ratio) that prevents the signal from ever exceeding the ceiling. Essential for preventing digital clipping.
+A limiter is an extreme compressor (infinite ratio) that prevents the signal from ever exceeding the ceiling. Use to prevent digital clipping.
 
 ```akk
 // Master limiter
@@ -72,7 +72,7 @@ Related: [comp](#comp)
 
 ## gate
 
-**Noise Gate** - Silences signal below threshold.
+**Noise gate** - Silences signal below threshold.
 
 | Param  | Type   | Default | Description |
 |--------|--------|---------|-------------|
