@@ -11,6 +11,7 @@ export const slugToPath: Record<string, string> = {
 	"01-hello-sine": "tutorials/01-hello-sine.md",
 	"microtonal": "reference/mini-notation/microtonal.md",
 	"basics": "reference/mini-notation/basics.md",
+	"curve-notation": "reference/mini-notation/curve-notation.md",
 	"literals": "reference/pattern/literals.md",
 	"methods": "reference/language/methods.md",
 	"conditionals": "reference/language/conditionals.md",
@@ -784,6 +785,32 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "mini-notation",
 		"title": "Mini-Notation Basics"
 	},
+	"curve": {
+		"slug": "curve-notation",
+		"category": "reference",
+		"title": "Curve Notation"
+	},
+	"timeline": {
+		"slug": "sequencing",
+		"category": "builtins",
+		"title": "timeline",
+		"anchor": "timeline"
+	},
+	"automation": {
+		"slug": "curve-notation",
+		"category": "reference",
+		"title": "Curve Notation"
+	},
+	"t\"": {
+		"slug": "curve-notation",
+		"category": "reference",
+		"title": "Curve Notation"
+	},
+	"breakpoint": {
+		"slug": "curve-notation",
+		"category": "reference",
+		"title": "Curve Notation"
+	},
 	"literal": {
 		"slug": "literals",
 		"category": "pattern",
@@ -1446,12 +1473,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "euclid",
 		"anchor": "euclid"
-	},
-	"timeline": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "timeline",
-		"anchor": "timeline"
 	},
 	"poly": {
 		"slug": "sequencing",
@@ -2329,6 +2350,7 @@ export const previews: Record<string, string> = {
 	"01-hello-sine": "Welcome to Akkado! In this tutorial, you'll make your first sound and learn the basics of how the language works.",
 	"microtonal": "Akkado supports microtonal pitch notation through micro-step operators (, , ) and the  function, which selects how those operators map to frequency.",
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
+	"curve-notation": "Curve notation provides a compact, visual ASCII-art syntax for defining automation curves that compile to Cedar's  opcode breakpoints.",
 	"literals": "Patterns can be written as typed string prefixes that disambiguate parse semantics at the literal site:",
 	"methods": "Akkado supports method-call syntax for any callable in scope — built-in or user-defined. The form",
 	"conditionals": "Signal-rate decision-making: compare signals, combine boolean signals with AND/OR/NOT, and pick between two signals based on a condition. Every...",

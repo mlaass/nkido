@@ -6979,3 +6979,90 @@ TEST_CASE("Codegen: in() into mono DSP auto-lifts to stereo", "[codegen][input][
         CHECK(out->inputs[1] == static_cast<std::uint16_t>(in->out_buffer + 1));
     }
 }
+
+// ============================================================================
+// Timeline Edge Case Tests [timeline_edge_cases]
+// ============================================================================
+
+TEST_CASE("Empty curve string produces no breakpoints", "[timeline_edge_cases]") {
+    auto stream = eval_curve("");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    CHECK(breakpoints.empty());
+}
+
+TEST_CASE("Single-character curve ' produces single breakpoint", "[timeline_edge_cases]") {
+    auto stream = eval_curve("'");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    CHECK(breakpoints.size() == 1);
+    CHECK(breakpoints[0].value == Catch::Approx(1.0f));
+    CHECK(breakpoints[0].curve == 2); // hold
+}
+
+TEST_CASE("Single-character curve _ produces single breakpoint", "[timeline_edge_cases]") {
+    auto stream = eval_curve("_");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    CHECK(breakpoints.size() == 1);
+    CHECK(breakpoints[0].value == Catch::Approx(0.0f));
+    CHECK(breakpoints[0].curve == 2); // hold
+}
+
+TEST_CASE("Ramp at start interpolates from 0.0 to next level", "[timeline_edge_cases]") {
+    auto stream = eval_curve("/''");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    CHECK(breakpoints.size() >= 2);
+    CHECK(breakpoints[0].time == Catch::Approx(0.0f));
+    // No preceding level → defaults to 0.0, next level is 1.0
+    // Single ramp: t=0.5, so value = 0.0 + 0.5*(1.0-0.0) = 0.5
+    CHECK(breakpoints[0].value == Catch::Approx(0.5f));
+    CHECK(breakpoints[0].curve == 0); // linear
+}
+
+TEST_CASE("Ramp at end defaults to 0.0", "[timeline_edge_cases]") {
+    auto stream = eval_curve("___/");
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    CHECK(breakpoints.size() >= 2);
+    bool has_linear = false;
+    for (const auto& bp : breakpoints) {
+        if (bp.curve == 0) { has_linear = true; break; }
+    }
+    CHECK(has_linear);
+}
+
+TEST_CASE("~ on ramp produces compile error", "[timeline_edge_cases]") {
+    auto result = akkado::compile("t\"~ /\" |> out(%, %)");
+    CHECK_FALSE(result.success);
+    CHECK_FALSE(result.diagnostics.empty());
+}
+
+TEST_CASE("Many levels produce correct breakpoint count", "[timeline_edge_cases]") {
+    // Create a curve with 65 level characters (alternating _ and ')
+    std::string long_curve;
+    for (int i = 0; i < 65; ++i) {
+        long_curve += (i % 2 == 0) ? "_" : "'";
+    }
+    auto stream = eval_curve(long_curve);
+    auto breakpoints = akkado::events_to_breakpoints(stream.events);
+    // 65 levels → 65 breakpoints (no merge since adjacent values differ)
+    CHECK(breakpoints.size() == 65);
+}
+
+TEST_CASE("Breakpoint limit warns and truncates via codegen", "[timeline_edge_cases]") {
+    // Create a curve with >64 breakpoints and compile it
+    std::string long_curve = "timeline(\"";
+    for (int i = 0; i < 65; ++i) {
+        long_curve += (i % 2 == 0) ? "_" : "'";
+    }
+    long_curve += "\") |> out(%, %)";
+    auto result = akkado::compile(long_curve);
+    // Should succeed with a warning about truncation
+    CHECK(result.success);
+    // Check that a warning was emitted
+    bool has_warning = false;
+    for (const auto& d : result.diagnostics) {
+        if (d.message.find("64 breakpoints") != std::string::npos) {
+            has_warning = true;
+            break;
+        }
+    }
+    CHECK(has_warning);
+}
