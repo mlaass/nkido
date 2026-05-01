@@ -74,14 +74,28 @@
 
 		try {
 			await applyPatch(slug);
+			// Allow the Editor component to remount before evaluating.
+			// The {#key currentSlug} block destroys and recreates the Editor;
+			// without this tick, evaluate() can race with the remount.
+			await new Promise((r) => setTimeout(r, 100));
 			// Recompile so the new patch starts playing immediately, without
 			// requiring the user to press Ctrl+Enter inside the iframe.
-			await editorStore.evaluate();
+			const ok = await editorStore.evaluate();
+			if (!ok) {
+				// evaluate() returns false for compile errors (already logged in store)
+				console.error('[embed] evaluate() returned false for patch:', slug, 'compile error:', editorStore.lastCompileError);
+				(event.source as Window | null)?.postMessage(
+					{ type: 'nkido:patch-error', patch: slug, reason: editorStore.lastCompileError ?? 'Compile failed' },
+					{ targetOrigin: event.origin }
+				);
+				return;
+			}
 			(event.source as Window | null)?.postMessage(
 				{ type: 'nkido:patch-loaded', patch: slug },
 				{ targetOrigin: event.origin }
 			);
 		} catch (err) {
+			console.error('[embed] patch switch failed:', slug, err);
 			(event.source as Window | null)?.postMessage(
 				{
 					type: 'nkido:patch-error',
