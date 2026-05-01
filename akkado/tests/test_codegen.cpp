@@ -6471,6 +6471,59 @@ TEST_CASE("Codegen: multiple bpm assignments both stored", "[codegen][builtins]"
     CHECK(result.builtin_var_overrides[1].value == Catch::Approx(140.0f));
 }
 
+TEST_CASE("Codegen: spb is read-only", "[codegen][builtins]") {
+    auto result = akkado::compile(R"(
+        spb = 0.5
+        saw(220) |> out(%, %)
+    )");
+    REQUIRE_FALSE(result.success);
+    bool found_e170 = false;
+    for (const auto& d : result.diagnostics) {
+        if (d.code == "E170") found_e170 = true;
+    }
+    CHECK(found_e170);
+}
+
+TEST_CASE("Codegen: reading spb emits ENV_GET", "[codegen][builtins]") {
+    auto result = akkado::compile(R"(
+        x = 220 * spb
+        saw(x) |> out(%, %)
+    )");
+    REQUIRE(result.success);
+    std::uint32_t spb_hash = cedar::fnv1a_hash_runtime("__spb", 5);
+    bool found_spb_env_get = false;
+    auto insts = get_instructions(result);
+    for (const auto& inst : insts) {
+        if (inst.opcode == cedar::Opcode::ENV_GET && inst.state_id == spb_hash) {
+            found_spb_env_get = true;
+            break;
+        }
+    }
+    CHECK(found_spb_env_get);
+}
+
+TEST_CASE("Codegen: spb value reflects current bpm", "[codegen][builtins]") {
+    // Default bpm=120: spb = 60/120 = 0.5 seconds per beat
+    {
+        auto result = akkado::compile(R"(
+            x = spb
+            saw(x) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+        // spb is read-only, so it emits ENV_GET(__spb), not a builtin_var_override
+        std::uint32_t spb_hash = cedar::fnv1a_hash_runtime("__spb", 5);
+        bool found_spb_env_get = false;
+        auto insts = get_instructions(result);
+        for (const auto& inst : insts) {
+            if (inst.opcode == cedar::Opcode::ENV_GET && inst.state_id == spb_hash) {
+                found_spb_env_get = true;
+                break;
+            }
+        }
+        CHECK(found_spb_env_get);
+    }
+}
+
 // =============================================================================
 // Conditionals & Logic — Runtime Value Tests
 //

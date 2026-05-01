@@ -1106,9 +1106,25 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                   {NAN, NAN, NAN, NAN, NAN},
                   "Attach spectrum analyzer visualization. Signal passes through unchanged."}},
     {"waterfall", {cedar::Opcode::COPY, 1, 2, true,
-                   {"signal", "name", "options", "", "", ""},
-                   {NAN, NAN, NAN, NAN, NAN},
-                   "Attach scrolling spectrogram visualization. Signal passes through unchanged."}},
+                    {"signal", "name", "options", "", "", ""},
+                    {NAN, NAN, NAN, NAN, NAN},
+                    "Attach scrolling spectrogram visualization. Signal passes through unchanged."}},
+
+    // Builtin variable getters (desugared from identifier reads like `bpm`, `spb`)
+    // These are registered in BUILTIN_FUNCTIONS so the analyzer accepts them as builtins.
+    // The identifier path in codegen.cpp:433 handles the actual desugaring to ENV_GET.
+    {"get_bpm", {cedar::Opcode::ENV_GET, 0, 0, false,
+                  {"", "", "", "", "", ""},
+                  {NAN, NAN, NAN, NAN, NAN},
+                  "Get current BPM (beats per minute)."}},
+    {"get_sr",  {cedar::Opcode::ENV_GET, 0, 0, false,
+                  {"", "", "", "", "", ""},
+                  {NAN, NAN, NAN, NAN, NAN},
+                  "Get current sample rate."}},
+    {"get_spb", {cedar::Opcode::ENV_GET, 0, 0, false,
+                  {"", "", "", "", "", ""},
+                  {NAN, NAN, NAN, NAN, NAN},
+                  "Get seconds per beat = 60.0 / BPM."}},
 };
 
 /// Alias mappings for convenience syntax
@@ -1203,6 +1219,7 @@ struct BuiltinVarDef {
 inline const std::unordered_map<std::string_view, BuiltinVarDef> BUILTIN_VARIABLES = {
     {"bpm", {"get_bpm", "set_bpm", "__bpm", 120.0f, 1.0f, 999.0f}},
     {"sr",  {"get_sr",  "",         "__sr",  48000.0f, 0.0f, 0.0f}},
+    {"spb", {"get_spb", "",         "__spb", 0.5f, 0.0f, 0.0f}},  // seconds per beat = 60.0 / bpm
 };
 
 } // namespace akkado
