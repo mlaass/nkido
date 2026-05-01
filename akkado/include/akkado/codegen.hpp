@@ -422,6 +422,11 @@ public:
         std::uint32_t state_id,
         std::uint16_t clock_override = 0xFFFF);
 
+    /// Read-only access to the symbol table for free helpers in
+    /// codegen_patterns.cpp (e.g. compile_pattern_for_transform resolving
+    /// identifier-bound patterns through PatternInfo.pattern_node).
+    const SymbolTable& symbols() const { return *symbols_; }
+
 private:
 
     // ============================================================================

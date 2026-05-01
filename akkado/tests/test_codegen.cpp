@@ -3241,6 +3241,108 @@ TEST_CASE("Pattern transform: string literal as pattern", "[codegen][patterns]")
 }
 
 // =============================================================================
+// Identifier-bound patterns as transform arguments
+// (Regression: melody = n"…"; melody |> transpose(@, …) used to fail E130
+// because compile_pattern_for_transform had no Identifier case even though
+// is_pattern_node accepted Pattern-kind identifiers.)
+// =============================================================================
+
+TEST_CASE("Pattern transforms accept identifier-bound patterns",
+          "[codegen][patterns]") {
+    SECTION("transpose with n\"…\" identifier compiles") {
+        auto result = akkado::compile(R"(
+            melody = n"c4 e4 g4"
+            transpose(melody, -12)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("transpose with pat() identifier compiles (functional form)") {
+        auto result = akkado::compile(R"(
+            m = pat("c4 e4 g4")
+            transpose(m, 7)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("transpose with c\"…\" chord-pattern identifier compiles") {
+        auto result = akkado::compile(R"(
+            chords = c"Am C G"
+            transpose(chords, 5)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("nested transforms over an identifier compile") {
+        auto result = akkado::compile(R"(
+            m = pat("c4 e4")
+            transpose(slow(m, 2), 12)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("transpose preserves semitone math when applied to identifier") {
+        // C4 = 261.63 Hz; +12 semitones doubles to 523.25 Hz.
+        // Equivalent to the chained-correctness test at L2081 but with the
+        // pattern bound to a name first.
+        auto result = akkado::compile(R"(
+            m = pat("c4 e4")
+            transpose(m, 12)
+        )");
+        REQUIRE(result.success);
+        REQUIRE_FALSE(result.state_inits.empty());
+        const auto& si = result.state_inits[0];
+        REQUIRE_FALSE(si.sequence_events.empty());
+        REQUIRE(si.sequence_events[0].size() >= 1);
+        float c4_freq = 261.6256f;
+        CHECK(si.sequence_events[0][0].values[0]
+              == Catch::Approx(c4_freq * 2.0f).margin(1.0f));
+    }
+
+    SECTION("pipe with @ on identifier — exact form from bug report") {
+        auto result = akkado::compile(R"(
+            melody = n"c4 e4 g4"
+            melody |> transpose(@, -12) |> soundfont(%, "gm", 0) |> out(%, %)
+        )");
+        REQUIRE(result.success);
+    }
+
+    SECTION("rejects identifier bound to a non-pattern (Signal)") {
+        auto result = akkado::compile(R"(
+            x = osc("sin", 440)
+            transpose(x, 5)
+        )");
+        REQUIRE_FALSE(result.success);
+        // Should fail the is_pattern_node precondition (E133), not the
+        // compile_pattern_for_transform fallthrough (E130).
+        bool has_e133 = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E133") { has_e133 = true; break; }
+        }
+        CHECK(has_e133);
+    }
+
+    SECTION("every transform accepts an identifier-bound pattern (smoke)") {
+        // Smoke-cover the transforms routed through compile_pattern_for_transform
+        // so this regression doesn't recur for one of transpose's siblings.
+        const char* transforms[] = {
+            "slow(m, 2)",      "fast(m, 2)",       "rev(m)",
+            "transpose(m, 5)", "velocity(m, 0.5)", "early(m, 0.25)",
+            "late(m, 0.25)",   "palindrome(m)",    "ply(m, 2)",
+            "linger(m, 0.5)",  "compress(m, 0.0, 0.5)",
+            "zoom(m, 0.0, 0.5)", "segment(m, 8)",  "swing(m, 4)",
+            "swingBy(m, 0.5, 4)",
+        };
+        for (const char* t : transforms) {
+            std::string src = std::string("m = pat(\"c4 e4 g4\")\n") + t;
+            INFO("source: " << src);
+            auto result = akkado::compile(src);
+            CHECK(result.success);
+        }
+    }
+}
+
+// =============================================================================
 // Error Path Tests
 // =============================================================================
 

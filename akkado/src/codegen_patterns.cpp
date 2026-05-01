@@ -2035,6 +2035,23 @@ static bool compile_pattern_for_transform(
         return true;
     }
 
+    // Case 1c: Identifier bound to a Pattern — recurse on the bound AST node.
+    // The analyzer records the originating MiniLiteral / pat-call node in
+    // PatternInfo.pattern_node when it sees `name = n"…"` or `name = pat(…)`,
+    // so we follow the binding back to its source. Without this case,
+    // `melody = n"…"; transpose(melody, …)` (or its pipe form `melody |>
+    // transpose(@, …)`) fails E130 even though `is_pattern_node()` accepts
+    // the identifier as a valid pattern argument.
+    if (pat_node.type == NodeType::Identifier) {
+        auto sym = gen.symbols().lookup(pat_node.as_identifier());
+        if (!sym || sym->kind != SymbolKind::Pattern) return false;
+        NodeIndex bound = sym->pattern.pattern_node;
+        if (bound == NULL_NODE || bound == pattern_arg) return false;
+        return compile_pattern_for_transform(gen, ast, bound, sample_registry,
+                                             compiler, out_pattern_node, out_num_elements,
+                                             out_events, out_cycle_length);
+    }
+
     // Handle Call nodes
     if (pat_node.type == NodeType::Call) {
         const std::string& func_name = pat_node.as_identifier();

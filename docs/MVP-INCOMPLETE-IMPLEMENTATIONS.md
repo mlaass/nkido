@@ -22,6 +22,20 @@ Chaining for slow/fast/rev/transpose was already working. Chaining with velocity
 
 `StringLit` nodes are now accepted by both `is_pattern_expr()` and `compile_pattern_for_transform()`. String literals are parsed as mini-notation via `parse_mini()`. `slow("c4 e4 g4", 2)` now works.
 
+### 1.3 Identifier-Bound Patterns As Transform Arguments
+
+**Status:** FIXED
+
+`is_pattern_node()` accepted `Identifier` nodes (resolving via the symbol table to `SymbolKind::Pattern`), but `compile_pattern_for_transform()` had no `Identifier` case — so the precondition passed and then compilation fell through with E130. The user-visible symptom was
+
+```akkado
+melody = n"c4 eb4 g4 …"
+melody |> transpose(@, -12) |> soundfont(%, "gm", 33) |> out(@)
+//        ^^^^^^^^^ E130: transpose() failed to compile pattern argument
+```
+
+Fixed by adding an `Identifier` case to `compile_pattern_for_transform()` that recurses on `Symbol::pattern.pattern_node` (populated by the analyzer when it sees `name = MiniLiteral` / `name = pat()` / etc.). All transforms that route through `compile_pattern_for_transform` (`slow`, `fast`, `rev`, `transpose`, `velocity`, `bank`, `variant`, `tune`, `early`, `late`, `palindrome`, `compress`, `ply`, `linger`, `zoom`, `segment`, `swing`, `swingBy`, `iter`, `iterBack`, `anchor`, `mode`, `voicing`, `bend`, `aftertouch`, `dur`) now accept identifier-bound patterns. Regression test: `test_codegen.cpp` "Pattern transforms accept identifier-bound patterns".
+
 ---
 
 ## Priority 2: Blocked Language Features
