@@ -1,7 +1,11 @@
-// Hello, Sine — the simplest Akkado patch.
-// A 440 Hz sine wave sent to the left and right outputs.
-// Press play (or Ctrl+Enter) to hear it.
+// Oscillators — the smallest possible Akkado patch, plus a touch of
+// vibrato to show how oscillators compose: an LFO modulates the
+// frequency of a sine, and the result goes to both stereo channels.
+//
+// Replace `"sin"` with `"saw"`, `"tri"`, `"sqr"`, or `"noise"` to hear
+// each waveform.
 
 bpm = 120
 
-osc("sin", 440) * 0.3 |> out(%, %)
+vibrato = osc("sin", 5) * 3
+osc("sin", 440 + vibrato) * 0.3 |> out(%, %)

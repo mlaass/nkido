@@ -35,6 +35,61 @@
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : String(err);
 			// Keep patchLoaded false so the editor stays hidden on error.
+			throw err;
+		}
+	}
+
+	// Origin allow-list for cross-frame patch switching. The site embeds this
+	// route via iframe and posts `nkido:switch-patch` to swap demos without a
+	// full WASM reload.
+	const ORIGIN_ALLOWLIST: Array<string | RegExp> = [
+		'https://nkido.cc',
+		'https://www.nkido.cc',
+		/^https:\/\/[a-z0-9-]+--nkido-cc\.netlify\.app$/,
+		/^https:\/\/deploy-preview-\d+--nkido-cc\.netlify\.app$/,
+		/^http:\/\/localhost(:\d+)?$/,
+		/^http:\/\/127\.0\.0\.1(:\d+)?$/
+	];
+
+	function isOriginAllowed(origin: string): boolean {
+		return ORIGIN_ALLOWLIST.some((rule) =>
+			typeof rule === 'string' ? rule === origin : rule.test(origin)
+		);
+	}
+
+	async function handleParentMessage(event: MessageEvent) {
+		if (!isOriginAllowed(event.origin)) return;
+		const data = event.data;
+		if (!data || typeof data !== 'object') return;
+		if (data.type !== 'nkido:switch-patch') return;
+
+		const slug = data.patch;
+		if (typeof slug !== 'string' || !isValidSlug(slug)) {
+			(event.source as Window | null)?.postMessage(
+				{ type: 'nkido:patch-error', patch: String(slug), reason: 'Invalid patch slug' },
+				{ targetOrigin: event.origin }
+			);
+			return;
+		}
+
+		try {
+			await applyPatch(slug);
+			// Recompile so the new patch starts playing immediately, without
+			// requiring the user to press Ctrl+Enter inside the iframe.
+			await editorStore.evaluate();
+			(event.source as Window | null)?.postMessage(
+				{ type: 'nkido:patch-loaded', patch: slug },
+				{ targetOrigin: event.origin }
+			);
+		} catch (err) {
+			(event.source as Window | null)?.postMessage(
+				{
+					type: 'nkido:patch-error',
+					patch: slug,
+					reason: err instanceof Error ? err.message : String(err)
+				},
+				{ targetOrigin: event.origin }
+			);
 		}
 	}
 
@@ -51,11 +106,14 @@
 		// Do not let the embed overwrite the main app's localStorage-saved code.
 		editorStore.setPersistenceEnabled(false);
 
+		// Listen for patch-switch messages from the embedding parent frame.
+		window.addEventListener('message', handleParentMessage);
+
 		// Load the index in parallel with the requested patch.
 		const requestedSlug = slugFromURL();
 		const [indexResult] = await Promise.allSettled([
 			loadPatchIndex(),
-			applyPatch(requestedSlug)
+			applyPatch(requestedSlug).catch(() => undefined)
 		]);
 
 		if (indexResult.status === 'fulfilled') {
@@ -64,9 +122,18 @@
 			// Index failure is non-fatal — the editor still works with the loaded patch.
 			console.warn('Could not load patches index:', indexResult.reason);
 		}
+
+		// Tell the parent we're ready for postMessage commands. Sent only when
+		// embedded — top-level loads have no parent listening.
+		if (window.parent && window.parent !== window) {
+			window.parent.postMessage({ type: 'nkido:embed-ready' }, '*');
+		}
 	});
 
 	onDestroy(() => {
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('message', handleParentMessage);
+		}
 		editorStore.setPersistenceEnabled(true);
 		editorStore.reloadFromPersistence();
 	});

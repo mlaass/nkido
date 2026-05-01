@@ -1,8 +1,63 @@
 [
   {
+    "slug": "fm-piano",
+    "title": "FM Synth",
+    "description": "Rhodes-style electric piano via two-operator FM synthesis with chord progression.",
+    "landing": true
+  },
+  {
+    "slug": "wavetable-scan",
+    "title": "Wavetable",
+    "description": "Smooch wavetable oscillator scanning through a bank of harmonic frames.",
+    "landing": true
+  },
+  {
+    "slug": "microtonal-raga",
+    "title": "Microtonal",
+    "description": "A meditative line in 31-EDO tuning, using micro-step operators to find intervals between the semitones.",
+    "landing": true
+  },
+  {
+    "slug": "poly-chords",
+    "title": "Polyphony",
+    "description": "Jazz progression with rich voicings allocated through poly() with a detuned saw pad.",
+    "landing": true
+  },
+  {
+    "slug": "drum-machine",
+    "title": "Drums",
+    "description": "Layered drum kit with nested mini-notation, plus a Euclidean sub-bass tresillo.",
+    "landing": true
+  },
+  {
+    "slug": "effects-chain",
+    "title": "Effects",
+    "description": "A pluck running through saturation, lowpass, delay, chorus, reverb, and compressor.",
+    "landing": true
+  },
+  {
+    "slug": "interactive-params",
+    "title": "Interactive",
+    "description": "Live UI sliders via param() driving a Moog-filtered saw stack — drag the knobs while it plays.",
+    "landing": true
+  },
+  {
+    "slug": "visualizations",
+    "title": "Visualizations",
+    "description": "Inline oscilloscope, spectrum, and pianoroll views on a single arpeggio.",
+    "landing": true
+  },
+  {
+    "slug": "soundfont-play",
+    "title": "SoundFont",
+    "description": "Melody played through the built-in General MIDI SoundFont (acoustic grand piano).",
+    "landing": true
+  },
+  {
     "slug": "hello-sine",
-    "title": "Hello, Sine",
-    "description": "The simplest oscillator — a single sine wave at 440 Hz."
+    "title": "Oscillators",
+    "description": "The smallest Akkado patch — a sine wave with vibrato. Swap the waveform name to hear saw, tri, square, or noise.",
+    "landing": true
   },
   {
     "slug": "kick-pattern",

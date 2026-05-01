@@ -1,0 +1,26 @@
+// Interactive — `param(name, default, min, max)` exposes named sliders
+// that the IDE turns into live controls. Move them while the patch runs.
+// `button(name)` fires a one-shot trigger on press.
+//
+// The patch is a moogy bass-pad: a saw stack into a Moog ladder filter,
+// with cutoff, resonance, drive, and an LFO controllable from the UI.
+
+bpm = 100
+
+cutoff = param("cutoff", 800, 100, 5000)
+resonance = param("resonance", 0.5, 0.0, 1.0)
+drive = param("drive", 1.5, 1.0, 6.0)
+lfo_rate = param("lfo rate", 0.4, 0.05, 6.0)
+lfo_depth = param("lfo depth", 0.6, 0.0, 1.0)
+note_freq = param("freq", 110, 55, 440)
+
+// Detuned saw stack for body
+voices = saw(note_freq) + saw(note_freq * 1.005) + saw(note_freq * 0.997)
+
+// LFO modulates the cutoff around the slider value
+swept = cutoff + osc("sin", lfo_rate) * cutoff * lfo_depth * 0.6
+
+voices * 0.2
+    |> moog(%, swept, resonance, 1.0, drive)
+    |> @ + freeverb(@, 0.5, 0.5) * 0.35
+    |> out(%, %)

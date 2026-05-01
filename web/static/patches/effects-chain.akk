@@ -1,0 +1,19 @@
+// Effects — a simple motif fed through a long FX chain.
+// Saturation adds harmonics, the filter shapes them, the delay creates
+// rhythmic echoes, the chorus widens, the reverb places it in a room,
+// and the compressor glues the whole thing together.
+
+bpm = 110
+
+// Plucky source: filtered saw with a fast envelope
+src = pat("a3 e4 a4 c#5 e5 c#5 a4 e4")
+    |> ((f) -> saw(f) * ar(trigger(4), 0.001, 0.18))
+    |> lp(%, 2200)
+
+src
+    |> saturate(%, 2.5)            // soft tube-style drive
+    |> delay(%, 0.375, 0.45)       // dotted-eighth feedback
+    |> chorus(%, 0.6, 0.5)         // gentle width
+    |> freeverb(%, 0.7, 0.4)       // medium hall
+    |> comp(%, -16, 3)             // glue
+    |> out(% * 0.5, % * 0.5)
