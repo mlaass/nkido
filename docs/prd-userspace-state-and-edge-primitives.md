@@ -1,6 +1,6 @@
 # PRD: Userspace State Primitives and Edge-Triggered Operators
 
-> **Status: NOT STARTED** — Adds `state` cells, edge-triggered SAH modes, and method-call codegen so users can implement state-bearing operators (e.g. `step`) without C++ changes.
+> **Status: COMPLETE** — Adds `state` cells, edge-triggered SAH modes, and method-call codegen so users can implement state-bearing operators (e.g. `step`) without C++ changes. All four phases shipped 2026-04-26 (Phases 1–4 in commits 4587e05, d6b3abc, 77eb3ba, c2ceb69; STATE_OP store semantics revised in 5941140 — see §5.1). Implementation audit: `docs/audits/prd-userspace-state-and-edge-primitives_audit_2026-05-01.md`.
 
 ## 1. Overview
 
@@ -236,7 +236,7 @@ struct CellState {
 |---|---|---|
 | 0 | `init` | If `!state.initialized`, write `inst.inputs[0]` (init buffer, sample 0) into `state.value` and set `initialized = true`. Otherwise no-op. Output is a buffer broadcast of `state.value`. |
 | 1 | `load` | Output is a buffer broadcast of `state.value`. No reads from inputs. |
-| 2 | `store` | Write the **last sample** of `inst.inputs[0]` into `state.value`. Output is a buffer broadcast of the new `state.value` (so `set()` can be used in expression position). Per-sample writes would be wasteful and not the semantic we want — state cells are scalar registers, not streams. |
+| 2 | `store` | Write the **latest sample whose value differs from `state.value` at the start of the block** into `state.value`. Output is a buffer broadcast of the new `state.value` (so `set()` can be used in expression position). For inputs that vary sample-by-sample (the typical case), this collapses to "last sample" — but for gated writes such as `idx.set(select(gateup(t), idx+dir, idx))`, the rising-edge sample is captured even when later samples reassert the start-of-block value. See `docs/reports/2026-04-26-stepper-demo-array-and-state-bugs.md` for the rationale; the original "write last sample" contract dropped gated edges in ~127/128 blocks at 128-sample block size and broke the §4.4 `step_dir` example. |
 
 **`state(init)` codegen** (named-builtin special case in `codegen.cpp`, in the same family as `len`):
 
@@ -537,7 +537,7 @@ Files to create:
 | Empty array: `[].step(trig)` | `wrap(x, 0, 0)` — runtime divides by zero internally; `ARRAY_INDEX` falls back to `out = 0.0` (`arrays.hpp:44-47`) | `len = 0` is degenerate; user gets silence rather than a crash |
 | `state(init)` called inside a closure called twice in a patch | Each call site gets its own slot (different semantic-ID paths) | Matches existing builtin state_id behavior; multiple steppers don't share state |
 | Same `state(...)` AST position re-visited via recursion | Same slot — recursion shares state | Matches state-pool semantics; if user wants distinct state, they call `state()` from a closure factory |
-| `s.set(stream)` where `stream` varies sample-by-sample | Last sample of the block is written to the slot | State cells are scalar registers; per-sample writes would create a contention model that doesn't match the storage semantic |
+| `s.set(stream)` where `stream` varies sample-by-sample | The latest sample whose value differs from the slot value at the start of the block is written. For uniformly-varying streams this is the last sample (preserving the original "last sample wins" mental model); for gated writes that return to the slot's prior value mid-block (e.g. `select(gateup(t), idx+dir, idx)`), the rising-edge value is captured. | State cells are scalar registers; the start-of-block snapshot ensures gated writes are not silently dropped when the post-edge samples re-assert the prior slot value. See `docs/reports/2026-04-26-stepper-demo-array-and-state-bugs.md`. |
 | `s.get()` before any `set()` | Returns the `init` value passed to `state(...)` | `CellState.initialized` is `false` on first `STATE_OP rate=0`, which writes `init` and flips the flag |
 | Hot-swap: code reloaded with same closure structure | Cell slots preserved by semantic-ID hashing | Same as builtin state preservation |
 | Hot-swap: `step` closure body changes (e.g., new operations) | Existing slot value preserved if the `state(...)` AST position is still the same | Matches existing hot-swap semantics |

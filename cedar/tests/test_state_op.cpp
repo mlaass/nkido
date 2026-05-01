@@ -135,6 +135,98 @@ TEST_CASE("STATE_OP load reads slot value", "[state_op][load]") {
     }
 }
 
+// PRD §9 edge case: hot-swap with `state(0)` edited to `state(5)` at the same
+// AST position. Existing slot value is preserved; the new init literal is
+// ignored because CellState.initialized is already true. This test simulates
+// the hot-swap by queuing a different program with the SAME state_id and a
+// different init buffer value via `load_program` (the production hot-swap
+// path that preserves the state pool), then verifying the slot still holds
+// the value stored before the swap. `load_program_immediate` resets the
+// state pool by design and is *not* the right API to test hot-swap with.
+TEST_CASE("STATE_OP hot-swap preserves slot value when init literal changes",
+          "[state_op][hot_swap][edge_case]") {
+    VM vm;
+    constexpr std::uint32_t SHARED_ID = 0xCAFE0001;
+
+    // Program A: init=0, store=42. After block 1 the slot holds 42.
+    std::array<Instruction, 2> program_a = {
+        make_state(/*mode*/ 0, /*out*/ 0, /*in*/ 1, /*state_id*/ SHARED_ID),
+        make_state(/*mode*/ 2, /*out*/ 2, /*in*/ 3, /*state_id*/ SHARED_ID),
+    };
+    REQUIRE(vm.load_program(std::span(program_a)) == VM::LoadResult::Success);
+
+    std::array<float, BLOCK_SIZE> zeros{};
+    std::array<float, BLOCK_SIZE> store_42{};
+    std::fill(store_42.begin(), store_42.end(), 42.0f);
+    std::copy(zeros.begin(), zeros.end(), vm.buffers().get(1));
+    std::copy(store_42.begin(), store_42.end(), vm.buffers().get(3));
+
+    std::array<float, BLOCK_SIZE> L{}, R{};
+    vm.process_block(L.data(), R.data());
+    REQUIRE(vm.buffers().get(2)[BLOCK_SIZE - 1] == 42.0f);
+
+    // Program B: same shared state_id but a different init literal (5).
+    // Queue via load_program (the hot-swap path) — the swap happens at the
+    // next block boundary and preserves the existing state pool.
+    std::array<Instruction, 2> program_b = {
+        make_state(/*mode*/ 0, /*out*/ 0, /*in*/ 1, /*state_id*/ SHARED_ID),
+        make_state(/*mode*/ 1, /*out*/ 4, /*in*/ BUFFER_UNUSED, /*state_id*/ SHARED_ID),
+    };
+    REQUIRE(vm.load_program(std::span(program_b)) == VM::LoadResult::Success);
+
+    std::array<float, BLOCK_SIZE> init_5{};
+    std::fill(init_5.begin(), init_5.end(), 5.0f);
+    std::copy(init_5.begin(), init_5.end(), vm.buffers().get(1));
+
+    vm.process_block(L.data(), R.data());
+
+    // Load output (buf 4) must be 42, not 5 — slot value survived the swap
+    // and the new init literal was correctly ignored per PRD §9.
+    const float* loaded = vm.buffers().get(4);
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        CHECK_THAT(loaded[i], WithinAbs(42.0f, 1e-6f));
+    }
+}
+
+// PRD §5.1 STATE_OP rate=2 store: the shipped semantics record the latest
+// sample whose value differs from the slot value at the start of the block.
+// This makes `idx.set(select(gateup(t), idx+dir, idx))` advance idx by dir on
+// every rising edge, regardless of which sample carries the edge — the
+// gated-write pattern from `step_dir` in PRD §4.4. The earlier "last sample"
+// contract would silently drop the edge whenever it didn't land on sample
+// BLOCK_SIZE-1. See docs/reports/2026-04-26-stepper-demo-array-and-state-bugs.md.
+TEST_CASE("STATE_OP store records latest sample differing from start-of-block",
+          "[state_op][store][gated_write]") {
+    VM vm;
+    constexpr std::uint32_t SID = 0xDEADBEEF;
+
+    SECTION("a single non-zero sample at index 5 is captured even when "
+            "later samples equal the start-of-block value") {
+        // Slot starts at 0. Input has value -1 at sample 5 and 0 everywhere
+        // else (mimicking `select(gateup(trig), -1, 0)` with the edge at
+        // sample 5).
+        std::array<Instruction, 2> program = {
+            make_state(/*mode*/ 0, /*out*/ 0, /*in*/ 1, /*state_id*/ SID),
+            make_state(/*mode*/ 2, /*out*/ 2, /*in*/ 3, /*state_id*/ SID),
+        };
+        REQUIRE(vm.load_program_immediate(std::span(program)));
+
+        std::array<float, BLOCK_SIZE> zeros{};
+        std::copy(zeros.begin(), zeros.end(), vm.buffers().get(1));
+
+        std::array<float, BLOCK_SIZE> gated{};
+        gated[5] = -1.0f;  // single "interesting" sample
+        std::copy(gated.begin(), gated.end(), vm.buffers().get(3));
+
+        std::array<float, BLOCK_SIZE> L{}, R{};
+        vm.process_block(L.data(), R.data());
+
+        // Slot is now -1 (the latest sample differing from initial 0).
+        const float* store_out = vm.buffers().get(2);
+        CHECK_THAT(store_out[BLOCK_SIZE - 1], WithinAbs(-1.0f, 1e-6f));
+    }
+}
+
 TEST_CASE("STATE_OP distinct state_ids have independent slots", "[state_op][slots]") {
     VM vm;
 

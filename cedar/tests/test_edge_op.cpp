@@ -244,3 +244,35 @@ TEST_CASE("EDGE_OP rate=3 counter increments and resets", "[edge_op][counter]") 
         }
     }
 }
+
+// PRD §9 edge case: `gateup(constant)` where constant is non-zero. The first
+// block sees a 0 → constant rising edge at sample 0 because prev_trigger
+// initializes to 0; subsequent samples and blocks output 0 because there is
+// no further transition.
+TEST_CASE("EDGE_OP gateup of a non-zero constant pulses once on first sample",
+          "[edge_op][gateup][edge_case]") {
+    VM vm;
+    std::array<float, BLOCK_SIZE> sig{};
+    std::fill(sig.begin(), sig.end(), 1.0f);
+
+    Instruction edge = make_edge(/*mode*/ 1, /*out*/ 0, /*sig*/ 1);
+    vm.load_program(std::span{&edge, 1});
+    std::copy(sig.begin(), sig.end(), vm.buffers().get(1));
+
+    std::array<float, BLOCK_SIZE> L{}, R{};
+    vm.process_block(L.data(), R.data());
+
+    const float* out = vm.buffers().get(0);
+    CHECK_THAT(out[0], WithinAbs(1.0f, 1e-6f));
+    for (std::size_t i = 1; i < BLOCK_SIZE; ++i) {
+        CHECK_THAT(out[i], WithinAbs(0.0f, 1e-6f));
+    }
+
+    // Block 2: constant input still 1.0 → no edge → all zeros.
+    std::copy(sig.begin(), sig.end(), vm.buffers().get(1));
+    vm.process_block(L.data(), R.data());
+    out = vm.buffers().get(0);
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        CHECK_THAT(out[i], WithinAbs(0.0f, 1e-6f));
+    }
+}
