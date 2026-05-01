@@ -6626,6 +6626,46 @@ TEST_CASE("Codegen: spb value reflects current bpm", "[codegen][builtins]") {
     }
 }
 
+TEST_CASE("Runtime: spb reflects bpm changes via VM::set_bpm", "[codegen][builtins][runtime]") {
+    using Catch::Matchers::WithinAbs;
+
+    // Compile a program whose last instruction's output buffer holds spb.
+    // `spb * 1.0` emits ENV_GET(__spb) followed by MUL; MUL's buffer carries spb.
+    auto result = akkado::compile("spb * 1.0");
+    REQUIRE(result.success);
+    auto insts = get_instructions(result);
+    REQUIRE_FALSE(insts.empty());
+
+    cedar::VM vm;
+    std::span<const cedar::Instruction> bc(insts.data(), insts.size());
+    REQUIRE(vm.load_program_immediate(bc));
+
+    std::array<float, cedar::BLOCK_SIZE> left{};
+    std::array<float, cedar::BLOCK_SIZE> right{};
+    const std::uint16_t out_idx = insts.back().out_buffer;
+
+    auto run_blocks_and_read = [&](int n) {
+        for (int i = 0; i < n; ++i) {
+            vm.process_block(left.data(), right.data());
+        }
+        const float* buf = vm.buffers().get(out_idx);
+        REQUIRE(buf != nullptr);
+        return buf[cedar::BLOCK_SIZE - 1];
+    };
+
+    // First call seeds __spb directly (no slew on initial set), so a single
+    // block is enough to read the new value.
+    vm.set_bpm(120.0f);
+    CHECK_THAT(run_blocks_and_read(1), WithinAbs(0.5f, 1e-4f));
+
+    // Subsequent set_bpm calls slew via EnvMap; allow a few blocks to settle.
+    vm.set_bpm(60.0f);
+    CHECK_THAT(run_blocks_and_read(64), WithinAbs(1.0f, 1e-3f));
+
+    vm.set_bpm(240.0f);
+    CHECK_THAT(run_blocks_and_read(64), WithinAbs(0.25f, 1e-3f));
+}
+
 // =============================================================================
 // Conditionals & Logic — Runtime Value Tests
 //

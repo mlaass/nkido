@@ -1125,10 +1125,13 @@ void VM::set_crossfade_blocks(std::uint32_t blocks) {
 void VM::set_sample_rate(float rate) {
     ctx_.set_sample_rate(rate);
     env_map_.set_sample_rate(rate);
+    env_map_.set_param("__sr", rate);
 }
 
 void VM::set_bpm(float bpm) {
     ctx_.bpm = bpm;
+    env_map_.set_param("__bpm", bpm);
+    env_map_.set_param("__spb", bpm > 0.0f ? 60.0f / bpm : 0.0f);
 }
 
 void VM::set_input_buffers(float* input_left, float* input_right) {

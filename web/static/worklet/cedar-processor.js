@@ -111,9 +111,6 @@ class CedarProcessor extends AudioWorkletProcessor {
 			this.module._cedar_init();
 			this.module._cedar_set_sample_rate(sampleRate);
 
-			// Write sample rate to EnvMap for `sr` variable reads
-			this.setParam('__sr', sampleRate);
-
 			// Get output buffer pointers
 			this.outputLeftPtr = this.module._cedar_get_output_left();
 			this.outputRightPtr = this.module._cedar_get_output_right();
@@ -158,8 +155,6 @@ class CedarProcessor extends AudioWorkletProcessor {
 			case 'setBpm':
 				if (this.module) {
 					this.module._cedar_set_bpm(msg.bpm);
-					// Also update EnvMap so ENV_GET("__bpm") reflects the new value
-					this.setParam('__bpm', msg.bpm);
 				}
 				break;
 
