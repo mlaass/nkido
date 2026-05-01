@@ -2,6 +2,10 @@
 
 Thanks for your interest in contributing to NKIDO! This guide covers everything you need to get started — from reporting bugs to adding new DSP opcodes.
 
+## Code of Conduct
+
+By participating in this project you agree to follow the [Hippocratic Code of Conduct](CODE_OF_CONDUCT.md). The short version: first, do no harm. Be polite, criticize the code rather than the coder, and assume good faith. If you experience or witness unacceptable behavior, open a GitHub issue or contact the maintainers as described in the [Code of Conduct](CODE_OF_CONDUCT.md#v-resolution-and-enforcement).
+
 ## Getting Started
 
 ### Requirements
