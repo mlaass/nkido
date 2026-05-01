@@ -1,14 +1,14 @@
-// SoundFont: play a melody through the built-in General MIDI bank.
+// SoundFont: plays a melody through the built-in General MIDI bank.
 // `soundfont(pattern, "gm", preset)` routes pattern events into the
 // SF2 synth: gate, freq, and velocity are extracted from the events.
 //
 // Preset 0 is Acoustic Grand Piano in the GM standard.
 
-bpm = 110
+bpm = 100
 
-melody = n"c4 eb4 g4 c5 ~ g4 eb4 c4 d4 f#4 a4 d5 ~ a4 f#4 d4 eb4 g4 b4 eb5 ~ b4 g4@1.25 eb4@2 c4@1.75 ~@4"
+melody = n"c4 eb4 g4 c5 ~ g4 eb4 c4 d4 f#4 a4 d5 ~ a4 f#4 d4 eb4 g4 b4 eb5 ~ b4 g4@1.25 eb4@2 c4@1.75 ~@8"
 
 melody
-    |> soundfont(%, "gm", 0)
+    |> soundfont(@, "gm", 0)
     |> @ + freeverb(@, 0.65, 0.4) * 0.2
     |> out(@)
