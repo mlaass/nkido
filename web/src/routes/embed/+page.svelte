@@ -64,46 +64,13 @@
 		if (data.type !== 'nkido:switch-patch') return;
 
 		const slug = data.patch;
-		if (typeof slug !== 'string' || !isValidSlug(slug)) {
-			(event.source as Window | null)?.postMessage(
-				{ type: 'nkido:patch-error', patch: String(slug), reason: 'Invalid patch slug' },
-				{ targetOrigin: event.origin }
-			);
-			return;
-		}
+		if (typeof slug !== 'string' || !isValidSlug(slug)) return;
 
 		try {
 			await applyPatch(slug);
-			// Allow the Editor component to remount before evaluating.
-			// The {#key currentSlug} block destroys and recreates the Editor;
-			// without this tick, evaluate() can race with the remount.
-			await new Promise((r) => setTimeout(r, 100));
-			// Recompile so the new patch starts playing immediately, without
-			// requiring the user to press Ctrl+Enter inside the iframe.
-			const ok = await editorStore.evaluate();
-			if (!ok) {
-				// evaluate() returns false for compile errors (already logged in store)
-				console.error('[embed] evaluate() returned false for patch:', slug, 'compile error:', editorStore.lastCompileError);
-				(event.source as Window | null)?.postMessage(
-					{ type: 'nkido:patch-error', patch: slug, reason: editorStore.lastCompileError ?? 'Compile failed' },
-					{ targetOrigin: event.origin }
-				);
-				return;
-			}
-			(event.source as Window | null)?.postMessage(
-				{ type: 'nkido:patch-loaded', patch: slug },
-				{ targetOrigin: event.origin }
-			);
+			await editorStore.evaluate();
 		} catch (err) {
 			console.error('[embed] patch switch failed:', slug, err);
-			(event.source as Window | null)?.postMessage(
-				{
-					type: 'nkido:patch-error',
-					patch: slug,
-					reason: err instanceof Error ? err.message : String(err)
-				},
-				{ targetOrigin: event.origin }
-			);
 		}
 	}
 
@@ -125,9 +92,10 @@
 
 		// Load the index in parallel with the requested patch.
 		const requestedSlug = slugFromURL();
-		const [indexResult] = await Promise.allSettled([
+		const autoplay = $page.url.searchParams.get('autoplay') === '1';
+		const [indexResult, patchResult] = await Promise.allSettled([
 			loadPatchIndex(),
-			applyPatch(requestedSlug).catch(() => undefined)
+			applyPatch(requestedSlug)
 		]);
 
 		if (indexResult.status === 'fulfilled') {
@@ -135,6 +103,12 @@
 		} else {
 			// Index failure is non-fatal — the editor still works with the loaded patch.
 			console.warn('Could not load patches index:', indexResult.reason);
+		}
+
+		if (autoplay && patchResult.status === 'fulfilled') {
+			editorStore.evaluate().catch((err) => {
+				console.error('[embed] autoplay evaluate failed:', err);
+			});
 		}
 
 		// Tell the parent we're ready for postMessage commands. Sent only when
