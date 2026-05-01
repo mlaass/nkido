@@ -1,0 +1,715 @@
+> **Status: NOT STARTED** — VS Code extension for Akkado live coding
+
+# PRD: VS Code Extension for Nkido/Akkado
+
+**Date:** 2026-05-01
+
+---
+
+## 1. Overview
+
+### 1.1 Problem Statement
+
+Users who prefer VS Code as their primary editor cannot live code Akkado with the same experience as the web IDE. They must switch contexts between VS Code (for editing) and the web IDE or CLI (for audio playback), breaking workflow continuity. The web IDE has rich features (syntax highlighting, autocomplete, diagnostics) that are unavailable in VS Code.
+
+### 1.2 Proposed Solution
+
+Create a VS Code extension that brings the full web IDE experience to VS Code:
+- Syntax highlighting matching the web IDE's CodeMirror language mode (via TextMate grammar)
+- Autocomplete with function signatures (via VS Code Direct API)
+- Real-time diagnostics with inline squiggly underlines and Problems panel
+- Signature help tooltips when typing function calls
+- Integration with `nkido-cli` for compilation and playback (both per-command and persistent UI mode)
+- User-configurable keyboard shortcuts (defaulting to web IDE conventions: Ctrl+Enter to evaluate, Escape to stop)
+
+### 1.3 Goals (v1)
+
+- **Syntax highlighting**: Akkado language support with colors matching the web IDE (TextMate grammar)
+- **Autocomplete**: Builtin functions, aliases, keywords, user-defined variables/functions (VS Code Direct API)
+- **Diagnostics**: Compilation errors shown as squiggly underlines + Problems panel (VS Code Direct API)
+- **Signature help**: Parameter tooltips when typing function calls (VS Code Direct API)
+- **CLI integration**: Play/stop/compile via `nkido-cli` with both spawn-per-command and persistent UI mode
+- **Configurable shortcuts**: User can customize keyboard bindings, defaults match web IDE
+- **Dedicated output channel**: "Nkido" channel showing compilation status, errors, playback state
+
+### 1.4 Non-Goals (v1)
+
+- **Inline visualizations**: No waveforms, frequency responses, or pattern timelines in the editor
+- **Parameter controls UI**: No sliders, knobs, or buttons for `param()`/`toggle()`/`button()`
+- **Debug panels**: No state inspector, pattern debugger, or instruction highlighting
+- **Multi-file support**: Single file only, no module imports
+- **WASM integration**: No embedded WASM compiler — always use `nkido-cli` as the backend
+
+---
+
+## 2. User Experience
+
+### 2.1 Basic Workflow
+
+1. User opens `.akkado` or `.akk` file in VS Code
+2. Extension activates, providing syntax highlighting
+3. User writes Akkado code with autocomplete assistance
+4. User presses `Ctrl+Enter` (configurable) to compile and play
+5. `nkido-cli` is spawned, compilation errors appear as squiggly underlines
+6. On success, audio plays; status shown in Nkido output channel
+7. User presses `Escape` (configurable) to stop playback
+
+### 2.2 Keyboard Shortcuts (Default)
+
+| Shortcut | Action | Notes |
+|----------|--------|-------|
+| `Ctrl+Enter` (Cmd on Mac) | Evaluate/Play | Compiles current file, starts playback |
+| `Escape` | Stop | Stops audio playback |
+| `Ctrl+Space` | Trigger autocomplete | Standard VS Code shortcut |
+| `Ctrl+Shift+Space` | Signature help | Shows function signature tooltip |
+| `F1` then type "Nkido" | Access commands | Command palette integration |
+
+All shortcuts are user-configurable via VS Code's keyboard shortcuts editor.
+
+### 2.3 Autocomplete Example
+
+```
+User types: l
+Popup shows:
+  lp(in, cut, q?)        - State-variable lowpass filter
+  limiter(in, ceiling?, ...) - Peak limiter
+  lfo(rate, duty?)        - Low frequency oscillator
+  lowpass → lp            - Alias redirect
+  ...
+
+User selects lp, inserts: lp()
+Cursor placed inside parentheses, signature help appears: lp(in, cut, q?)
+```
+
+### 2.4 Error Display Example
+
+When compilation fails:
+- Red squiggly underline on the offending line
+- Hover tooltip shows error message with line/column
+- Problems panel lists all errors with severity
+- Nkido output channel shows full compilation log
+
+### 2.5 CLI Integration Modes
+
+**Spawn-per-command mode** (simple operations):
+- `nkido-cli check file.akkado` — Syntax check
+- `nkido-cli compile -o out.cedar file.akkado` — Compile to bytecode
+- `nkido-cli play file.akkado` — Play once and exit
+
+**Persistent UI mode** (live coding with hot-swap):
+- `nkido-cli ui` — Starts interactive mode with SDL2 UI
+- Extension sends commands via stdin or IPC for hot-swapping
+- Escape or stop command terminates the UI mode process
+
+---
+
+## 3. Architecture
+
+### 3.1 Repository Structure
+
+```
+~/workspace/nkido-vscode/                    # Standalone repository
+├── .vscode/
+│   ├── launch.json
+│   └── tasks.json
+├── src/
+│   ├── extension.ts                          # Extension entry point
+│   ├── providers/
+│   │   ├── completion-provider.ts            # Autocomplete logic (Direct API)
+│   │   ├── diagnostic-provider.ts           # Error reporting (Direct API)
+│   │   ├── signature-help.ts                # Parameter tooltips (Direct API)
+│   │   └── document-symbols.ts             # Document symbols (optional)
+│   ├── syntax/
+│   │   ├── akkado.tmLanguage.json          # TextMate grammar
+│   │   └── grammar-generator.ts            # Generates grammar from web IDE tokens
+│   ├── cli/
+│   │   ├── cli-client.ts                   # nkido-cli wrapper
+│   │   ├── ui-mode-manager.ts              # Persistent UI mode process
+│   │   └── audio-engine.ts                 # Playback state management
+│   ├── commands/
+│   │   ├── evaluate.ts                     # Ctrl+Enter handler
+│   │   ├── stop.ts                        # Escape handler
+│   │   ├── compile.ts                     # Compile command
+│   │   └── show-output.ts                 # Focus output channel
+│   └── utils/
+│       ├── config.ts                       # Extension settings
+│       └── logger.ts                      # Output channel logging
+├── syntaxes/
+│   └── akkado.tmLanguage.json             # Generated TextMate grammar
+├── package.json
+├── tsconfig.json
+├── vsc-extension-quickstart.md
+└── README.md
+```
+
+### 3.2 System Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      VS Code                                │
+│                                                              │
+│  ┌──────────────┐    ┌─────────────────┐    ┌───────────┐  │
+│  │   Editor     │◄──►│ Extension Host  │◄──►│  Output   │  │
+│  │  (TextMate   │    │ (Node.js)        │    │  Channel  │  │
+│  │   Grammar)   │    │                 │    │  "Nkido"  │  │
+│  └──────┬───────┘    └────────┬────────┘    └───────────┘  │
+│         │                      │                                │
+│         │ VS Code API         │ spawns/communicates           │
+│         ▼                      ▼                                │
+│  ┌─────────────────────────────────────────────┐              │
+│  │  - extension.ts (activation, commands)      │              │
+│  │  - providers/*.ts (completion, diagnostics) │              │
+│  │  - cli-client.ts (nkido-cli wrapper)       │              │
+│  │  - ui-mode-manager.ts (persistent process)  │              │
+│  └──────────────────────┬──────────────────────┘              │
+└─────────────────────────┼─────────────────────────────────────┘
+                          │ spawns
+                          ▼
+┌─────────────────────────────────────────────┐
+│            nkido-cli (C++ binary)           │
+│                                             │
+│  Modes:                                     │
+│  - check: Syntax check (spawn, exit)        │
+│  - compile: Compile to bytecode (spawn)     │
+│  - play: Play and exit (spawn)              │
+│  - ui: Persistent UI mode (long-running)    │
+└─────────────────────────────────────────────┘
+```
+
+### 3.3 Extension Architecture (Direct API)
+
+The extension uses VS Code's Direct API for completions, diagnostics, and signature help. No separate LSP server process needed.
+
+```typescript
+// extension.ts - registers providers directly
+import * as vscode from 'vscode';
+import { CompletionProvider } from './providers/completion-provider';
+import { DiagnosticProvider } from './providers/diagnostic-provider';
+import { SignatureHelpProvider } from './providers/signature-help';
+
+export function activate(context: vscode.ExtensionContext) {
+    const completionProvider = new CompletionProvider();
+    const diagnosticProvider = new DiagnosticProvider();
+    const signatureHelpProvider = new SignatureHelpProvider();
+    
+    // Register providers using VS Code API
+    context.subscriptions.push(
+        vscode.languages.registerCompletionItemProvider(
+            'akkado', completionProvider, '.', '"'  // trigger chars
+        ),
+        vscode.languages.registerSignatureHelpProvider(
+            'akkado', signatureHelpProvider, '(', ','
+        )
+    );
+}
+```
+
+### 3.4 TextMate Grammar
+
+Syntax highlighting uses a TextMate grammar (`akkado.tmLanguage.json`) ported from the web IDE's CodeMirror tokenizer (`akkado-language.ts`).
+
+Key tokens to highlight:
+- **Keywords**: `true`, `false`, `fn`, `as`, `match`, `post`
+- **Builtins**: `osc`, `lp`, `adsr`, `delay`, etc. (90+ functions)
+- **Operators**: `|>`, `->`, `==`, `!=`, `+`, `-`, `*`, `/`, `^`, `%`
+- **Strings**: Double-quoted strings with escape support
+- **Numbers**: Integers, floats, scientific notation
+- **Comments**: `//` line comments
+- **Special**: `$directive`, `~rest`, chord notation (`C4'`)
+
+---
+
+## 4. API Reference
+
+### 4.1 Extension Settings
+
+Configurable via VS Code settings (`settings.json`):
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `nkido.cliPath` | string | `""` (search PATH) | Path to `nkido-cli` executable |
+| `nkido.shortcuts.evaluate` | string | `Ctrl+Enter` | Keyboard shortcut for evaluate/play |
+| `nkido.shortcuts.stop` | string | `Escape` | Keyboard shortcut for stop |
+| `nkido.autoCompileOnSave` | boolean | `false` | Auto-compile on save |
+| `nkido.audio.sampleRate` | number | `48000` | Audio sample rate |
+| `nkido.audio.bufferSize` | number | `128` | Audio buffer size |
+| `nkido.diagnostics.enabled` | boolean | `true` | Show squiggly underlines |
+| `nkido.outputChannel.enabled` | boolean | `true` | Enable Nkido output channel |
+
+### 4.2 Commands (Command Palette)
+
+| Command | ID | Description |
+|---------|-----|-------------|
+| `Nkido: Evaluate/Play` | `nkido.evaluate` | Compile and play current file |
+| `Nkido: Stop` | `nkido.stop` | Stop playback |
+| `Nkido: Compile` | `nkido.compile` | Compile to bytecode without playing |
+| `Nkido: Check Syntax` | `nkido.check` | Syntax check only |
+| `Nkido: Show Output` | `nkido.showOutput` | Focus Nkido output channel |
+| `Nkido: Restart CLI` | `nkido.restartCli` | Restart nkido-cli UI mode |
+
+### 4.3 VS Code API Features
+
+| Feature | API | Status |
+|---------|-----|--------|
+| Autocomplete | `registerCompletionItemProvider` | ✅ v1 |
+| Signature help | `registerSignatureHelpProvider` | ✅ v1 |
+| Diagnostics | `createDiagnosticCollection` | ✅ v1 |
+| Document symbols | `registerDocumentSymbolProvider` | ⏳ future |
+| Hover info | `registerHoverProvider` | ⏳ future |
+| Go to definition | `registerDefinitionProvider` | ⏳ future |
+
+---
+
+## 5. Implementation Details
+
+### 5.1 Syntax Highlighting (TextMate Grammar)
+
+The `akkado.tmLanguage.json` is generated from the web IDE's tokenizer logic.
+
+**Pattern mapping from CodeMirror to TextMate:**
+
+```json
+{
+  "scopeName": "source.akkado",
+  "fileTypes": ["akkado", "akk"],
+  "name": "Akkado",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#operators" },
+    { "include": "#special" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [{
+        "match": "//.*$",
+        "name": "comment.line.double-slash.akkado"
+      }]
+    },
+    "strings": {
+      "patterns": [{
+        "begin": "\"",
+        "end": "\"",
+        "name": "string.quoted.double.akkado",
+        "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.akkado" }]
+      }]
+    },
+    "keywords": {
+      "patterns": [{
+        "match": "\\b(true|false|fn|as|match|post)\\b",
+        "name": "keyword.control.akkado"
+      }]
+    },
+    "builtins": {
+      "patterns": [{
+        "match": "\\b(abs|acos|add|adsr|ar|...)\\b",
+        "name": "support.function.builtin.akkado"
+      }]
+    },
+    "operators": {
+      "patterns": [
+        { "match": "\\|>|->|==|!=|<=|>=|&&|\\|\\|", "name": "keyword.operator.akkado" },
+        { "match": "[+\\-*/^=<>!?|.%@~]", "name": "keyword.operator.akkado" }
+      ]
+    },
+    "special": {
+      "patterns": [
+        { "match": "\\$\\w+", "name": "meta.preprocessor.akkado" },
+        { "match": "~", "name": "constant.numeric.akkado" },
+        { "match": "\\b\\w+'(?=\\W|$)", "name": "string.other.chord.akkado" }
+      ]
+    }
+  }
+}
+```
+
+### 5.2 Completion Provider (VS Code Direct API)
+
+Uses VS Code's `CompletionItemProvider` API, reusing logic from web IDE's `akkado-completions.ts`:
+
+```typescript
+// providers/completion-provider.ts
+export class CompletionProvider implements vscode.CompletionItemProvider {
+    triggerCharacters = ['"', '.'];
+    
+    async provideCompletionItems(
+        document: vscode.TextDocument,
+        position: vscode.Position
+    ): Promise<vscode.CompletionItem[]> {
+        const text = document.getText();
+        const wordRange = document.getWordRangeAtPosition(position, /[a-zA-Z_][a-zA-Z0-9_]*/);
+        const word = wordRange ? document.getText(wordRange) : '';
+        
+        if (word.length < 2) return [];
+        
+        const completions: vscode.CompletionItem[] = [];
+        
+        // Add builtins (from generated list, same as web IDE)
+        for (const [name, info] of Object.entries(builtins)) {
+            if (name.startsWith(word)) {
+                const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Function);
+                item.detail = this.formatSignature(name, info);
+                item.documentation = info.description;
+                item.insertText = new vscode.SnippetString(`${name}($0)`);
+                completions.push(item);
+            }
+        }
+        
+        // Add user-defined functions
+        const userFns = this.extractUserFunctions(text);
+        for (const fn of userFns) {
+            if (fn.name.startsWith(word)) {
+                const item = new vscode.CompletionItem(fn.name, vscode.CompletionItemKind.Function);
+                item.detail = `${fn.name}(${fn.params.join(', ')})`;
+                item.documentation = fn.docstring;
+                completions.push(item);
+            }
+        }
+        
+        // Add user-defined variables
+        const userVars = this.extractUserVariables(text);
+        for (const varName of userVars) {
+            if (varName.startsWith(word)) {
+                completions.push(new vscode.CompletionItem(varName, vscode.CompletionItemKind.Variable));
+            }
+        }
+        
+        return completions;
+    }
+}
+```
+
+### 5.3 CLI Client (nkido-cli Wrapper)
+
+```typescript
+// cli-client.ts
+import { spawn, ChildProcess } from 'child_process';
+import * as vscode from 'vscode';
+
+export class CliClient {
+    private cliPath: string;
+    private outputChannel: vscode.OutputChannel;
+    
+    constructor(cliPath: string, outputChannel: vscode.OutputChannel) {
+        this.cliPath = cliPath;
+        this.outputChannel = outputChannel;
+    }
+    
+    async check(sourceFile: string): Promise<vscode.Diagnostic[]> {
+        return this.runCli(['check', sourceFile, '--json']);
+    }
+    
+    async compile(sourceFile: string, outputFile?: string): Promise<vscode.Diagnostic[]> {
+        const args = ['compile', sourceFile];
+        if (outputFile) args.push('-o', outputFile);
+        return this.runCli(args);
+    }
+    
+    async play(sourceFile: string): Promise<void> {
+        return this.runCliAsync(['play', sourceFile]);
+    }
+    
+    private async runCli(args: string[]): Promise<vscode.Diagnostic[]> {
+        return new Promise((resolve, reject) => {
+            const proc = spawn(this.cliPath, args);
+            let stdout = '';
+            let stderr = '';
+            
+            proc.stdout.on('data', (d: Buffer) => stdout += d);
+            proc.stderr.on('data', (d: Buffer) => stderr += d);
+            
+            proc.on('close', (code: number) => {
+                if (code === 0) {
+                    resolve([]);
+                } else {
+                    resolve(this.parseDiagnostics(stderr || stdout));
+                }
+            });
+        });
+    }
+}
+```
+
+### 5.4 UI Mode Manager (Persistent Process)
+
+```typescript
+// ui-mode-manager.ts
+export class UiModeManager {
+    private process: ChildProcess | null = null;
+    private cliPath: string;
+    
+    start(): void {
+        if (this.process) return;
+        
+        this.process = spawn(this.cliPath, ['ui'], {
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
+        
+        this.process.stdout?.on('data', (d: Buffer) => {
+            // Parse UI mode output (status updates, etc.)
+        });
+        
+        this.process.on('exit', () => {
+            this.process = null;
+        });
+    }
+    
+    stop(): void {
+        if (this.process) {
+            this.process.kill();
+            this.process = null;
+        }
+    }
+    
+    sendCommand(command: string): void {
+        if (this.process?.stdin) {
+            this.process.stdin.write(command + '\n');
+        }
+    }
+}
+```
+
+---
+
+## 6. Extension Activation
+
+```typescript
+// extension.ts
+import * as vscode from 'vscode';
+import { CliClient } from './cli/cli-client';
+import { UiModeManager } from './cli/ui-mode-manager';
+import { CompletionProvider } from './providers/completion-provider';
+import { DiagnosticProvider } from './providers/diagnostic-provider';
+import { SignatureHelpProvider } from './providers/signature-help';
+
+export function activate(context: vscode.ExtensionContext) {
+    const config = vscode.workspace.getConfiguration('nkido');
+    const cliPath = config.get<string>('cliPath') || 'nkido-cli';
+    const outputChannel = vscode.window.createOutputChannel('Nkido');
+    
+    const cliClient = new CliClient(cliPath, outputChannel);
+    const uiModeManager = new UiModeManager();
+    const diagnosticCollection = vscode.languages.createDiagnosticCollection('akkado');
+    
+    // Register providers
+    context.subscriptions.push(
+        vscode.languages.registerCompletionItemProvider(
+            'akkado', new CompletionProvider(), '"', '.'
+        ),
+        vscode.languages.registerSignatureHelpProvider(
+            'akkado', new SignatureHelpProvider(), '(', ','
+        )
+    );
+    
+    // Register commands
+    context.subscriptions.push(
+        vscode.commands.registerCommand('nkido.evaluate', async () => {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) return;
+            
+            const doc = editor.document;
+            if (doc.languageId !== 'akkado') return;
+            
+            await doc.save();
+            const diagnostics = await cliClient.check(doc.uri.fsPath);
+            
+            if (diagnostics.length === 0) {
+                uiModeManager.start();
+                outputChannel.appendLine(`Playing: ${doc.uri.fsPath}`);
+            } else {
+                diagnosticCollection.set(doc.uri, diagnostics);
+            }
+        }),
+        
+        vscode.commands.registerCommand('nkido.stop', () => {
+            uiModeManager.stop();
+            outputChannel.appendLine('Playback stopped');
+        })
+    );
+    
+    context.subscriptions.push(outputChannel, diagnosticCollection);
+}
+```
+
+---
+
+## 7. Implementation Phases
+
+### Phase 1: Foundation + Syntax Highlighting
+
+**Goal:** Extension loads in VS Code. `.akkado` and `.akk` files get syntax highlighting.
+
+1. Create `~/workspace/nkido-vscode` with `npm init` and VS Code extension scaffold
+2. Port TextMate grammar from web IDE's `akkado-language.ts` tokenizer
+3. Generate `syntaxes/akkado.tmLanguage.json`
+4. Register language in `package.json` with file extensions `.akkado`, `.akk`
+5. Basic extension activation (logs to output channel)
+
+**Files:**
+| File | Change |
+|------|--------|
+| `package.json` | New - Extension manifest |
+| `src/extension.ts` | New - Entry point |
+| `syntaxes/akkado.tmLanguage.json` | New - TextMate grammar |
+| `src/syntax/grammar-generator.ts` | New - Generates grammar from tokens |
+
+**Verification:** Open `.akkado` file in VS Code, verify syntax colors match web IDE.
+
+### Phase 2: Providers (Diagnostics + Completion)
+
+**Goal:** Errors appear as squiggly underlines + Problems panel. Autocomplete works.
+
+1. Implement `CompletionProvider` using VS Code Direct API
+2. Implement `DiagnosticProvider` (parse `nkido-cli check --json` output)
+3. Implement `SignatureHelpProvider` for function parameter tooltips
+4. Register providers in `extension.ts`
+5. Test with sample `.akkado` file
+
+**Files:**
+| File | Change |
+|------|--------|
+| `src/providers/completion-provider.ts` | New |
+| `src/providers/diagnostic-provider.ts` | New |
+| `src/providers/signature-help.ts` | New |
+| `src/extension.ts` | Modified (register providers) |
+
+**Verification:** Type invalid code, see red squiggly lines. Type `l`, see autocomplete popup with function names.
+
+### Phase 3: CLI Integration + Commands
+
+**Goal:** Play/stop commands work. Audio plays from VS Code.
+
+1. Implement `CliClient` (spawns `nkido-cli`)
+2. Implement `UiModeManager` (persistent UI mode process)
+3. Register commands: `nkido.evaluate`, `nkido.stop`, `nkido.compile`
+4. Configure keyboard shortcuts (default Ctrl+Enter, Escape)
+5. Add settings: `nkido.cliPath`, `nkido.autoCompileOnSave`
+
+**Files:**
+| File | Change |
+|------|--------|
+| `src/cli/cli-client.ts` | New |
+| `src/cli/ui-mode-manager.ts` | New |
+| `src/commands/evaluate.ts` | New |
+| `src/commands/stop.ts` | New |
+| `package.json` | Modified (add commands, keybindings, settings) |
+
+**Verification:** Open `.akkado` file, press Ctrl+Enter, hear audio. Press Escape, audio stops.
+
+### Phase 4: Polish + Settings
+
+**Goal:** Signature tooltips work. Output channel shows status. Settings are complete.
+
+1. Verify signature help provider works (implemented in Phase 2)
+2. Wire up Nkido output channel
+3. Add all configurable settings
+4. Test edge cases (missing CLI, invalid code, etc.)
+5. Update README with installation/usage instructions
+
+**Files:**
+| File | Change |
+|------|--------|
+| `src/utils/config.ts` | New |
+| `src/utils/logger.ts` | New |
+| `README.md` | New |
+
+**Verification:** Type `lp(`, see signature tooltip. Check output channel for status messages. Verify all settings work.
+
+---
+
+## 8. Edge Cases
+
+**Empty file:** `nkido.evaluate` shows info message "No code to evaluate", no error.
+
+**Missing nkido-cli:** Extension shows warning "nkido-cli not found. Configure path in settings." Output channel logs full error. Diagnostics cleared.
+
+**Invalid code:** `nkido-cli check` returns errors. Squiggly underlines appear at correct line/column. Problems panel populated. Audio stops if playing.
+
+**CLI crashes:** `UiModeManager` detects process exit, clears playback state. Output channel shows error. User can restart via command.
+
+**Multiple files open:** Each file tracked independently. Diagnostics scoped to correct file. Only active editor's file is played on evaluate.
+
+**Save before play:** If `autoCompileOnSave` is true, file is saved automatically before evaluate. Otherwise, user gets prompt "Save file before playing?"
+
+**Large files:** Completions filtered to relevant items. No performance degradation for files < 1000 lines.
+
+**Rapid evaluate presses:** Debounced to 500ms. Multiple rapid Ctrl+Enter presses queued, only latest executed.
+
+---
+
+## 9. Testing Strategy
+
+### Manual Testing (v1)
+
+1. **Syntax highlighting:** Open `.akkado` file, verify keywords, builtins, strings, comments are colored
+2. **Autocomplete:** Type `l`, verify popup shows `lp`, `limiter`, `lfo`, etc.
+3. **Diagnostics:** Type invalid code, verify squiggly underlines + Problems panel
+4. **Signature help:** Type `lp(`, verify tooltip shows `lp(in, cut, q?)`
+5. **Evaluate:** Press Ctrl+Enter, verify audio plays
+6. **Stop:** Press Escape, verify audio stops
+7. **Settings:** Change `nkido.cliPath`, verify extension uses new path
+8. **Output channel:** Verify Nkido channel shows compilation/playback status
+
+### Build Verification
+
+```bash
+cd ~/workspace/nkido-vscode
+npm install
+npm run compile         # Compile TypeScript
+npm run package          # Create .vsix file
+code --install-extension nkido-0.1.0.vsix
+# Test in VS Code
+```
+
+---
+
+## 10. Open Questions
+
+1. **UI mode IPC**: The `nkido-cli ui` mode uses SDL2 for rendering. Should the VS Code extension:
+   - Hide the SDL2 window (run headless)?
+   - Or show the window (user can see CLI's UI too)?
+
+2. **nkido-cli path validation**: Should the extension verify `nkido-cli` works on startup, or lazily on first use?
+
+3. **Signature help trigger**: Using `(` and `,` as trigger characters. Should `Ctrl+Shift+Space` also manually trigger it (standard VS Code behavior)?
+
+---
+
+## 11. Impact Assessment
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| `nkido/cedar` | **Stays** | No modifications, used via `nkido-cli` |
+| `nkido/akkado` | **Stays** | No modifications, used via `nkido-cli` |
+| `nkido/tools/nkido-cli` | **Stays** | No modifications needed for v1 |
+| `~/workspace/nkido-vscode` | **New** | Entire extension is new |
+| Web IDE (`nkido/web`) | **Stays** | Independent, may share syntax definitions in future |
+
+---
+
+## 12. Future Work (post-v1)
+
+- **Inline visualizations**: Waveforms, frequency responses (requires significant editor integration)
+- **Parameter controls**: UI for `param()`, `toggle()`, `button()` bound to code
+- **Debug panels**: State inspector, pattern debugger, instruction highlighting
+- **Multi-file support**: Module imports, workspace-level compilation
+- **WASM integration**: Embed `akkado.wasm` for offline compilation (no CLI needed)
+- **Recording**: Record audio output to WAV file from VS Code
+- **Snippets**: Code snippets for common patterns (oscillator, envelope, etc.)
+- **Hover info**: Hover over function name shows documentation
+- **Go to definition**: Jump to user-defined function definitions
+
+---
+
+## 13. References
+
+- [VS Code Extension API](https://code.visualstudio.com/api)
+- [TextMate Grammar Guide](https://macromates.com/manual/en/language_grammars)
+- [Nkido Web IDE PRD](./prd-nkido-web-ide.md) - Source of truth for feature parity
+- [Nkido Editor Autocomplete PRD](./prd-editor-autocomplete.md) - Completion logic reference
+- [nkido-cli source](../tools/nkido-cli/) - CLI integration target
+- [Web IDE Akkado Language](../web/src/lib/editor/akkado-language.ts) - Tokenizer to port
+- [Web IDE Completions](../web/src/lib/editor/akkado-completions.ts) - Completion logic to reuse
