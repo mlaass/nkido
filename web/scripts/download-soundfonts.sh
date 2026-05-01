@@ -10,6 +10,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST_DIR="$SCRIPT_DIR/../static/soundfonts"
 
+# --minimal: download only TimGM6mb (the default "gm" bank). Used by
+# Netlify CI to keep build size/time down. Local dev gets the full set.
+MINIMAL=false
+if [ "$1" = "--minimal" ]; then
+    MINIMAL=true
+fi
+
 mkdir -p "$DEST_DIR"
 
 HAS_SF3CONVERT=false
@@ -40,30 +47,34 @@ if [ -f "$TIMGM_SF2" ] && $HAS_SF3CONVERT; then
     echo "Done: $(du -h "$TIMGM_SF3" | cut -f1)"
 fi
 
-# --- FluidR3Mono_GM (optional "gm_medium") ---
+if ! $MINIMAL; then
+    # --- FluidR3Mono_GM (optional "gm_medium") ---
 
-FLUID_SF3_URL="https://github.com/musescore/MuseScore/raw/2.1/share/sound/FluidR3Mono_GM.sf3"
-FLUID_SF3="$DEST_DIR/FluidR3Mono_GM.sf3"
+    FLUID_SF3_URL="https://github.com/musescore/MuseScore/raw/2.1/share/sound/FluidR3Mono_GM.sf3"
+    FLUID_SF3="$DEST_DIR/FluidR3Mono_GM.sf3"
 
-if [ -f "$FLUID_SF3" ]; then
-    echo "FluidR3Mono_GM.sf3 already exists, skipping"
+    if [ -f "$FLUID_SF3" ]; then
+        echo "FluidR3Mono_GM.sf3 already exists, skipping"
+    else
+        echo "Downloading FluidR3Mono_GM.sf3..."
+        curl -L -o "$FLUID_SF3" "$FLUID_SF3_URL"
+        echo "Done: $(du -h "$FLUID_SF3" | cut -f1)"
+    fi
+
+    # --- MuseScore_General (optional "gm_large") ---
+
+    MUSESCORE_SF3_URL="https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3"
+    MUSESCORE_SF3="$DEST_DIR/MuseScore_General.sf3"
+
+    if [ -f "$MUSESCORE_SF3" ]; then
+        echo "MuseScore_General.sf3 already exists, skipping"
+    else
+        echo "Downloading MuseScore_General.sf3..."
+        curl -L -o "$MUSESCORE_SF3" "$MUSESCORE_SF3_URL"
+        echo "Done: $(du -h "$MUSESCORE_SF3" | cut -f1)"
+    fi
 else
-    echo "Downloading FluidR3Mono_GM.sf3..."
-    curl -L -o "$FLUID_SF3" "$FLUID_SF3_URL"
-    echo "Done: $(du -h "$FLUID_SF3" | cut -f1)"
-fi
-
-# --- MuseScore_General (optional "gm_large") ---
-
-MUSESCORE_SF3_URL="https://ftp.osuosl.org/pub/musescore/soundfont/MuseScore_General/MuseScore_General.sf3"
-MUSESCORE_SF3="$DEST_DIR/MuseScore_General.sf3"
-
-if [ -f "$MUSESCORE_SF3" ]; then
-    echo "MuseScore_General.sf3 already exists, skipping"
-else
-    echo "Downloading MuseScore_General.sf3..."
-    curl -L -o "$MUSESCORE_SF3" "$MUSESCORE_SF3_URL"
-    echo "Done: $(du -h "$MUSESCORE_SF3" | cut -f1)"
+    echo "Minimal mode: skipping FluidR3Mono_GM and MuseScore_General"
 fi
 
 # --- License ---

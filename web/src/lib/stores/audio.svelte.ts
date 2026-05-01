@@ -1105,12 +1105,10 @@ function createAudioEngine() {
 
 				let loaded = false;
 				for (const url of urls) {
-					try {
-						await loadSoundFontFromUrl(sf.filename, url);
+					const info = await loadSoundFontFromUrl(sf.filename, url);
+					if (info) {
 						loaded = true;
 						break;
-					} catch {
-						// Try next URL
 					}
 				}
 				if (!loaded) {
