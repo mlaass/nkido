@@ -42,6 +42,9 @@ jobs:
           emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
 
+      - name: Install sf3convert
+        run: sudo apt-get update && sudo apt-get install -y sf3convert
+
       - name: Download SoundFonts
         run: web/scripts/download-soundfonts.sh
 
