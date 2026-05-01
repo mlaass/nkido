@@ -1,19 +1,19 @@
-// Polyphony — a jazz progression using `poly()` for voice allocation.
+// Polyphony: a jazz progression using `poly()` for voice allocation.
 // Each chord event spawns voices with their own gates and frequencies;
 // `poly()` reuses voice slots across consecutive notes so envelopes
 // continue smoothly when the same pitch repeats.
 
-bpm = 100
+bpm = 96
 
 pad = (freq, gate, vel) -> {
     // Two slightly-detuned saws for chorusing.
     voices = saw(freq) + saw(freq * 1.005)
-    voices * adsr(gate, 0.08, 0.7) * vel * 0.18
+    voices * adsr(gate, 0.08, 0.7, .1, 0.5) * vel * 0.18
         |> lp(@, 1400 + ar(gate, 0.02, 0.6) * 1800)
 }
 
-chord("Cmaj9 Am11 Dm9 G13 Cmaj9 Em7 A7 Dm9")
+chord("Cmaj9 Am11@.5 Dm9@2 G13@.5 Cmaj9 Em7@.5 A7@2 Dm9@.5")
     |> poly(@, pad)
     |> @ + delay(@, 0.5, 0.35) * 0.4
-    |> @ + freeverb(@, 0.6, 0.5) * 0.5
+    |> @ + freeverb(@, 0.6, 0.5) * 0.1
     |> out(@)

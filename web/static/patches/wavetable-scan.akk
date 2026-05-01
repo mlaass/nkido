@@ -1,5 +1,5 @@
-// Wavetable — sweeping through a wavetable bank to morph timbre over time.
-// `smooch("bank", freq, phase, tablePos)` reads a position 0–31 from the
+// Wavetable Scan: sweeping through a wavetable bank to morph timbre over time.
+// `wt("bank", freq, phase, tablePos)` reads a position 0–31 from the
 // loaded bank; modulating that position scans through every frame.
 //
 // The bank is a curated set of harmonic profiles — slowly scanning it
@@ -13,9 +13,11 @@ wt_load("morph", "wavetables/sine_to_saw.wav")
 scan = (osc("sin", 0.08) * 0.5 + 0.5) * 31
 
 // A four-note arpeggio drives the carrier frequency.
-freq = pat("a2 e3 a3 c#4 e4 c#4 a3 e3") |> mtof(% + 12)
+mel = n"a2 e3 a3 c#4 e4 c#4 a3 e3"
 
-smooch("morph", freq, 0, scan) * 0.4
+mel
+    |> wt("morph", @.freq, 0, scan) * 0.4
     |> lp(%, 3500)
     |> @ + delay(@, 0.375, 0.45) * 0.5
     |> out(%, %)
+
