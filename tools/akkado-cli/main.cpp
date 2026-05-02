@@ -13,6 +13,7 @@ void print_usage(const char* program) {
               << "  --json               Output diagnostics as JSON (for LSP/tooling)\n"
               << "  --check              Check syntax only, don't generate bytecode\n"
               << "  --samples            List required samples\n"
+              << "  --uris               List URI declarations (samples() and friends)\n"
               << std::endl;
 }
 
@@ -31,6 +32,7 @@ int main(int argc, char* argv[]) {
     bool json_output = false;
     bool check_only = false;
     bool list_samples = false;
+    bool list_uris = false;
 
     for (int i = 1; i < argc; ++i) {
         std::string_view arg = argv[i];
@@ -57,6 +59,11 @@ int main(int argc, char* argv[]) {
 
         if (arg == "--samples") {
             list_samples = true;
+            continue;
+        }
+
+        if (arg == "--uris") {
+            list_uris = true;
             continue;
         }
 
@@ -126,6 +133,34 @@ int main(int argc, char* argv[]) {
             std::cout << "Required samples:\n";
             for (const auto& name : result.required_samples) {
                 std::cout << "  " << name << "\n";
+            }
+        }
+    }
+
+    // List URI declarations from samples() and friends
+    if (list_uris) {
+        auto kind_name = [](akkado::UriKind k) -> const char* {
+            switch (k) {
+                case akkado::UriKind::SampleBank: return "sample_bank";
+                case akkado::UriKind::SoundFont:  return "soundfont";
+                case akkado::UriKind::Wavetable:  return "wavetable";
+                case akkado::UriKind::Sample:     return "sample";
+            }
+            return "?";
+        };
+        if (json_output) {
+            std::cout << "{\"required_uris\":[";
+            for (size_t i = 0; i < result.required_uris.size(); ++i) {
+                if (i > 0) std::cout << ",";
+                std::cout << "{\"uri\":\"" << result.required_uris[i].uri
+                          << "\",\"kind\":\"" << kind_name(result.required_uris[i].kind)
+                          << "\"}";
+            }
+            std::cout << "]}\n";
+        } else {
+            std::cout << "Required URIs (" << result.required_uris.size() << "):\n";
+            for (const auto& req : result.required_uris) {
+                std::cout << "  [" << kind_name(req.kind) << "] " << req.uri << "\n";
             }
         }
     }

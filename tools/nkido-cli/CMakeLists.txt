@@ -5,6 +5,7 @@ find_package(SDL2 REQUIRED)
 add_executable(nkido-cli
     main.cpp
     audio_engine.cpp
+    asset_loader.cpp
     bytecode_loader.cpp
     bytecode_dump.cpp
     ui/bitmap_font.cpp

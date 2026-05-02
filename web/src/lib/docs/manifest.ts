@@ -13,6 +13,7 @@ export const slugToPath: Record<string, string> = {
 	"basics": "reference/mini-notation/basics.md",
 	"curve-notation": "reference/mini-notation/curve-notation.md",
 	"literals": "reference/pattern/literals.md",
+	"uri-schemes": "reference/uri-schemes.md",
 	"methods": "reference/language/methods.md",
 	"conditionals": "reference/language/conditionals.md",
 	"pipes": "reference/language/pipes.md",
@@ -861,6 +862,66 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "pattern",
 		"title": "Pattern Literals"
 	},
+	"uri": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"resolver": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"soundfont": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"wavetable": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"github": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"http": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"https": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"file": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"bundled": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"blob": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"idb": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
+	"asset loading": {
+		"slug": "uri-schemes",
+		"category": "reference",
+		"title": "URI Schemes"
+	},
 	"method": {
 		"slug": "methods",
 		"category": "language",
@@ -894,7 +955,7 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 	"truth convention": {
 		"slug": "conditionals",
 		"category": "language",
-		"title": "Truth Convention",
+		"title": "Truth convention",
 		"anchor": "truth-convention"
 	},
 	"gt": {
@@ -954,7 +1015,7 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 	"see also": {
 		"slug": "conditionals",
 		"category": "language",
-		"title": "See Also",
+		"title": "See also",
 		"anchor": "see-also"
 	},
 	"conditionals": {
@@ -1055,7 +1116,7 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 	"array literals": {
 		"slug": "arrays",
 		"category": "language",
-		"title": "Array Literals",
+		"title": "Array literals",
 		"anchor": "array-literals"
 	},
 	"indexing": {
@@ -1067,7 +1128,7 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 	"auto-expansion via map and sum": {
 		"slug": "arrays",
 		"category": "language",
-		"title": "Auto-Expansion via map and sum",
+		"title": "Auto-expansion via map and sum",
 		"anchor": "auto-expansion-via-map-and-sum"
 	},
 	"len": {
@@ -1187,13 +1248,13 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 	"polyphony builtins": {
 		"slug": "arrays",
 		"category": "language",
-		"title": "Polyphony Builtins",
+		"title": "Polyphony builtins",
 		"anchor": "polyphony-builtins"
 	},
 	"common patterns": {
 		"slug": "arrays",
 		"category": "language",
-		"title": "Common Patterns",
+		"title": "Common patterns",
 		"anchor": "common-patterns"
 	},
 	"array": {
@@ -1389,11 +1450,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Audio Input"
 	},
 	"tab": {
-		"slug": "audio-input",
-		"category": "builtins",
-		"title": "Audio Input"
-	},
-	"file": {
 		"slug": "audio-input",
 		"category": "builtins",
 		"title": "Audio Input"
@@ -1834,31 +1890,31 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 	"unary math": {
 		"slug": "math",
 		"category": "builtins",
-		"title": "Unary Math",
+		"title": "Unary math",
 		"anchor": "unary-math"
 	},
 	"binary math": {
 		"slug": "math",
 		"category": "builtins",
-		"title": "Binary Math",
+		"title": "Binary math",
 		"anchor": "binary-math"
 	},
 	"ternary math": {
 		"slug": "math",
 		"category": "builtins",
-		"title": "Ternary Math",
+		"title": "Ternary math",
 		"anchor": "ternary-math"
 	},
 	"trigonometric functions": {
 		"slug": "math",
 		"category": "builtins",
-		"title": "Trigonometric Functions",
+		"title": "Trigonometric functions",
 		"anchor": "trigonometric-functions"
 	},
 	"hyperbolic functions": {
 		"slug": "math",
 		"category": "builtins",
-		"title": "Hyperbolic Functions",
+		"title": "Hyperbolic functions",
 		"anchor": "hyperbolic-functions"
 	},
 	"math": {
@@ -2343,37 +2399,38 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 export const previews: Record<string, string> = {
 	"signals": "Akkado has two kinds of audio signals: Mono (one channel) and Stereo (two channels, L and R). Every expression the compiler sees has a known...",
 	"05-testing-progression": "Work through each level in order. Report back which levels work, fail, or have issues.",
-	"03-synthesis": "Now that you know oscillators and filters, let's combine them into complete synthesizer voices with amplitude envelopes.",
-	"06-pattern-modulation": "So far you've used patterns to drive note pitches. This chapter shows how to use patterns as values — feeding any DSP slot from a pattern,...",
-	"02-filters": "Filters are essential tools for sculpting your sounds. They remove or emphasize certain frequencies, transforming raw oscillators into musical...",
-	"04-rhythm": "Music is about time. In this tutorial, you'll learn to create rhythmic patterns, from basic beats to complex polyrhythms.",
-	"01-hello-sine": "Welcome to Akkado! In this tutorial, you'll make your first sound and learn the basics of how the language works.",
+	"03-synthesis": "With oscillators and filters in hand, the next step is wrapping them in amplitude envelopes to make actual notes.",
+	"06-pattern-modulation": "So far patterns have driven note pitches. They can also be used as values: feeding any DSP slot from a pattern, modulating per-event properties,...",
+	"02-filters": "Filters remove or emphasize certain frequencies, turning raw oscillators into something more musical.",
+	"04-rhythm": "This tutorial covers rhythmic patterns, from basic beats to polyrhythms.",
+	"01-hello-sine": "Every Akkado program is a signal flow graph. The smallest one is a sine wave sent to the output:",
 	"microtonal": "Akkado supports microtonal pitch notation through micro-step operators (, , ) and the  function, which selects how those operators map to frequency.",
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
-	"curve-notation": "Curve notation provides a compact, visual ASCII-art syntax for defining automation curves that compile to Cedar's  opcode breakpoints.",
+	"curve-notation": "Curve notation is an ASCII-art syntax for defining automation curves that compile to Cedar's  opcode breakpoints.",
 	"literals": "Patterns can be written as typed string prefixes that disambiguate parse semantics at the literal site:",
-	"methods": "Akkado supports method-call syntax for any callable in scope — built-in or user-defined. The form",
+	"uri-schemes": "Every asset loaded by nkido — sample banks, SoundFonts, wavetables, single audio files — is identified by a URI. The same scheme syntax works in...",
+	"methods": "Akkado supports method-call syntax for any callable in scope, built-in or user-defined. The form",
 	"conditionals": "Signal-rate decision-making: compare signals, combine boolean signals with AND/OR/NOT, and pick between two signals based on a condition. Every...",
-	"pipes": "The pipe operator () and hole () are the foundation of Akkado's signal flow model.",
+	"pipes": "The pipe operator () and hole () define Akkado's signal flow model.",
 	"arrays": "Arrays are ordered, fixed-size collections of values. They are the primary way to express parallel signal flows in Akkado: every element of an...",
 	"variables": "Variables store values for reuse throughout your patch.",
-	"closures": "Closures are anonymous functions that capture their environment. They're the bridge between patterns and synthesis.",
+	"closures": "Closures are anonymous functions that capture their environment. They connect patterns to synthesis.",
 	"operators": "Akkado uses operators for arithmetic, comparison, logic, and signal flow.",
-	"audio-input": "The  builtin exposes external audio as a signal source — microphone, tab/system audio, or an uploaded file — so any Cedar effect can process it....",
-	"stereo": "Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every signal; mono DSP ops applied to a stereo signal auto-lift — a...",
+	"audio-input": "The  builtin exposes external audio as a signal source (microphone, tab/system audio, or an uploaded file) so any Cedar effect can process it. The...",
+	"stereo": "Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every signal; mono DSP ops applied to a stereo signal auto-lift: a...",
 	"sequencing": "Timing and sequencing functions create rhythmic patterns, triggers, and automation curves synchronized to the global clock.",
-	"delays": "Delay effects create copies of a signal offset in time, enabling echoes, rhythmic effects, and spatial depth.",
+	"delays": "Delay effects create copies of a signal offset in time for echoes, rhythmic effects, and spatial depth.",
 	"filters": "Filters shape the frequency content of signals by attenuating or boosting certain frequencies.",
 	"distortion": "Distortion effects add harmonic content by clipping, saturating, or otherwise mangling signals.",
 	"utility": "Utility functions for common audio tasks like output, MIDI conversion, and signal processing helpers.",
 	"envelopes": "Envelopes shape the amplitude or other parameters of a sound over time. They respond to gates (sustained signals) or triggers (momentary pulses).",
-	"modulation": "Modulation effects use time-varying delays to create movement and spatial interest in sounds.",
+	"modulation": "Modulation effects use time-varying delays to add movement and spatial width to sounds.",
 	"math": "Mathematical operations for signal processing and control logic.",
-	"oscillators": "Oscillators are the fundamental sound sources in synthesis. The  function is the unified interface for all oscillator types.",
+	"oscillators": "Oscillators are the primary sound sources in synthesis. The  function is the unified interface for all oscillator types.",
 	"state": "State cells let you persist a single floating-point value across audio blocks from inside a closure. They are the building block for writing your...",
 	"edge": "Edge primitives detect transitions in trigger / control signals and accumulate counts. All four variants share one backing opcode () for cache...",
 	"dynamics": "Dynamics processors control the volume envelope of signals, reducing dynamic range or removing unwanted quiet sections.",
-	"reverbs": "Reverbs simulate acoustic spaces by creating many delayed, filtered reflections. Different algorithms offer different sonic characteristics.",
-	"visualizations": "Inline visualizations that render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain — the audio...",
+	"reverbs": "Reverbs simulate acoustic spaces by generating many delayed, filtered reflections. Each algorithm has its own character.",
+	"visualizations": "Inline visualizations that render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain; the audio...",
 	"DOCUMENTATION_GUIDE": "This guide outlines standards and practices for writing NKIDO documentation."
 };

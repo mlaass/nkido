@@ -1,4 +1,4 @@
-> **Status: IN PROGRESS (Phases 1-7 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phases 1-8 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
@@ -603,14 +603,17 @@ Cedar tests: 184 passing / 1 skipped (network) — all 334,848 assertions green.
 - ✅ Tests: 7 cases / 23 assertions in `[samples-builtin]` (single URI, source order, dedup, non-literal arg rejection, empty-URI rejection, arity errors, no instruction emitted). Full akkado suite still green at 137,577 assertions.
 - 🟡 Native CLI flow (mentioned in PRD goal) lands in phase 8 with `--bank` URI flag.
 
-### Phase 8 — CLI URI flags + docs (1 day)
+### Phase 8 — CLI URI flags + docs (1 day) ✅ DONE
 
 **Goal:** CLI flags accept URIs uniformly. Docs updated.
 
-- `nkido-cli --soundfont`, `--bank`, `--sample` accept any URI
-- Update `--help` output
-- Add a docs page covering the URI scheme list and `samples()` syntax
-- Update `mini-notation-reference.md` if needed
+- ✅ `nkido-cli --bank/--soundfont/--sample` accept any URI; bare paths route to `file://`. Flags repeat; banks accumulate as default banks searched in order. `--sample` also accepts `name=uri` for explicit registry-name binding.
+- ✅ `nkido-cli` registers all native handlers (`FileHandler`, `HttpHandler×2`, `GithubHandler`, `BundledHandler`) on `cedar::UriResolver::instance()` at startup, with a process-scoped `FileCache`.
+- ✅ `samples()` declarations from source flow through the same path: render mode iterates `cr.required_uris`, fetches each manifest, resolves every `RequiredSample` against the loaded banks.
+- ✅ New `tools/nkido-cli/asset_loader.{hpp,cpp}` adds a minimal strudel.json scanner (handles `_base`, `_name`, string and string-array fields), `register_native_handlers`, and the bank/soundfont/sample loaders.
+- ✅ `akkado-cli --uris` lists `required_uris` (text + JSON modes).
+- ✅ `docs/uri-schemes.md` covers the scheme list, `samples()` syntax, CLI usage, and caching. Mirrored to `web/static/docs/reference/` and indexed by `bun run build:docs`.
+- ✅ Smoke test: `nkido-cli render --bank github:tidalcycles/Dirt-Samples --seconds 1 -o /tmp/x.wav --source 'sin(440) |> out(%, %)'` succeeds; cold run 301 ms, cache-hit 29 ms (10× speedup).
 
 ### Phase 9 — Verification sweep (0.5 day)
 

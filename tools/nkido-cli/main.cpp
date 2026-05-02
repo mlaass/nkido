@@ -1,3 +1,4 @@
+#include "asset_loader.hpp"
 #include "bytecode_loader.hpp"
 #include "bytecode_dump.hpp"
 #include "audio_engine.hpp"
@@ -5,12 +6,14 @@
 #include "akkado/akkado.hpp"
 #include "cedar/vm/vm.hpp"
 #include "cedar/opcodes/dsp_state.hpp"
+#include "cedar/io/file_cache.hpp"
 #include <iostream>
 #include <fstream>
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
 #include <sstream>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -41,6 +44,11 @@ void print_usage(const char* program) {
               << "  --trace-poly <f>   Write per-block poly voice state to JSONL\n"
               << "  --list-devices     List audio capture devices and exit\n"
               << "  --input-device <n> Capture device name for in() (default: system default)\n"
+              << "  --bank <uri>       Sample-bank manifest URI (strudel.json). May repeat.\n"
+              << "                     Schemes: file://, http(s)://, github:user/repo, bundled://...\n"
+              << "                     Bare paths are treated as file://.\n"
+              << "  --soundfont <uri>  SoundFont (SF2) URI. May repeat.\n"
+              << "  --sample <uri>     Single-sample URI ('name=uri' or just URI). May repeat.\n"
               << "  -h, --help         Show this help\n\n"
               << "Examples:\n"
               << "  " << program << " play song.akkado\n"
@@ -135,6 +143,24 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
                 return std::nullopt;
             }
             opts.input_device = argv[i];
+        } else if (arg == "--bank") {
+            if (++i >= argc) {
+                std::cerr << "error: --bank requires a URI\n";
+                return std::nullopt;
+            }
+            opts.bank_uris.push_back(argv[i]);
+        } else if (arg == "--soundfont") {
+            if (++i >= argc) {
+                std::cerr << "error: --soundfont requires a URI\n";
+                return std::nullopt;
+            }
+            opts.soundfont_uris.push_back(argv[i]);
+        } else if (arg == "--sample") {
+            if (++i >= argc) {
+                std::cerr << "error: --sample requires a URI (or 'name=uri')\n";
+                return std::nullopt;
+            }
+            opts.sample_uris.push_back(argv[i]);
         } else if (arg == "--dump-bytecode") {
             opts.dump_bytecode = true;
         } else if (arg == "--json") {
@@ -312,6 +338,86 @@ void apply_state_inits(cedar::VM& vm, const akkado::CompileResult& result,
     }
 }
 
+// Resolve and register every asset declared via CLI flags (`--bank`,
+// `--soundfont`, `--sample`) and via top-level akkado directives
+// (`samples()`'s required_uris, `required_samples_extended`). Returns
+// false if any *required* fetch failed in a way that should abort the
+// run; warnings are printed to stderr but not propagated.
+bool load_program_assets(cedar::VM& vm,
+                          const nkido::Options& opts,
+                          const akkado::CompileResult& cr) {
+    // Build the bank list. Order matters: --bank flags first, then
+    // samples() declarations in source order. Resolution iterates the
+    // list and takes the first hit per RequiredSample.
+    std::vector<nkido::BankManifest> default_banks;
+
+    auto load_bank = [&](const std::string& uri) -> bool {
+        try {
+            auto m = nkido::fetch_bank_manifest(uri);
+            std::cerr << "Loaded bank manifest from " << uri
+                      << " (" << m.samples.size() << " samples)\n";
+            default_banks.push_back(std::move(m));
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "error: bank '" << uri << "' failed to load: " << e.what() << "\n";
+            return false;
+        }
+    };
+
+    for (const auto& uri : opts.bank_uris) {
+        if (!load_bank(uri)) return false;
+    }
+    for (const auto& req : cr.required_uris) {
+        if (req.kind == akkado::UriKind::SampleBank) {
+            if (!load_bank(req.uri)) return false;
+        }
+    }
+
+    // SoundFonts (one fetch each, registered under their URI tail as
+    // display name).
+    for (const auto& uri : opts.soundfont_uris) {
+        std::string display = uri;
+        auto last = uri.find_last_of('/');
+        if (last != std::string::npos) display = uri.substr(last + 1);
+        const int sf_id = nkido::load_soundfont_uri(vm, uri, display);
+        if (sf_id < 0) {
+            std::cerr << "error: SoundFont '" << uri << "' failed to load\n";
+            return false;
+        }
+    }
+
+    // Single-sample URIs (`--sample name=uri` or `--sample uri`; uri
+    // tail used as the registry name when no explicit name).
+    for (const auto& spec : opts.sample_uris) {
+        std::string name, uri;
+        auto eq = spec.find('=');
+        if (eq != std::string::npos) {
+            name = spec.substr(0, eq);
+            uri  = spec.substr(eq + 1);
+        } else {
+            uri = spec;
+            auto last = uri.find_last_of('/');
+            std::string filename = last == std::string::npos ? uri : uri.substr(last + 1);
+            auto dot = filename.find_last_of('.');
+            name = dot == std::string::npos ? filename : filename.substr(0, dot);
+        }
+        if (nkido::load_sample_uri(vm, uri, name) == 0) {
+            std::cerr << "error: sample '" << uri << "' failed to load\n";
+            return false;
+        }
+    }
+
+    // Resolve every RequiredSample referenced by the program against the
+    // loaded bank list (named banks not yet supported on the CLI).
+    if (!cr.required_samples_extended.empty()) {
+        std::unordered_map<std::string, nkido::BankManifest> named_banks;
+        nkido::register_required_samples(
+            vm, cr.required_samples_extended, default_banks, named_banks);
+    }
+
+    return true;
+}
+
 int handle_render_mode(const nkido::Options& opts) {
     // Read source
     std::string source, filename;
@@ -355,6 +461,12 @@ int handle_render_mode(const nkido::Options& opts) {
     auto vm = std::make_unique<cedar::VM>();
     vm->set_sample_rate(static_cast<float>(opts.sample_rate));
     vm->set_bpm(opts.render_bpm);
+
+    // Resolve every URI-keyed asset (banks, soundfonts, samples) declared
+    // via CLI flags or via top-level akkado directives.
+    if (!load_program_assets(*vm, opts, cr)) {
+        return EXIT_FAILURE;
+    }
 
     // Load any wavetable banks declared via wt_load() in source order, so
     // their runtime slot IDs match the inst.rate values the compiler baked
@@ -476,6 +588,14 @@ int main(int argc, char* argv[]) {
     if (!opts) {
         return EXIT_FAILURE;
     }
+
+    // Set up the URI resolver with native handlers (file:// http(s)://
+    // github: bundled://). The cache is process-scoped under
+    // $XDG_CACHE_HOME/nkido (or platform equivalent) and outlives all
+    // resolver lookups so HTTP fetches benefit from disk caching across
+    // runs.
+    static cedar::FileCache uri_cache;
+    nkido::register_native_handlers(uri_cache);
 
     // --list-devices stands on its own; no input required.
     if (opts->list_devices) {

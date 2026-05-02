@@ -54,6 +54,13 @@ struct Options {
     bool list_devices = false;                    // Print capture devices and exit
     std::optional<std::string> input_device;      // Capture device name (nullopt = default)
 
+    // URI-keyed asset flags (URI Resolver PRD §4.5). Each accepts any
+    // scheme the resolver recognises (file://, http(s)://, github:,
+    // bundled://, file path / bare path → file://).
+    std::vector<std::string> bank_uris;           // Sample-bank manifests (strudel.json)
+    std::vector<std::string> soundfont_uris;      // SoundFont (SF2/SF3) URIs
+    std::vector<std::string> sample_uris;         // Single-sample URIs ("name=uri" or just "uri")
+
     // Check if input needs compilation
     [[nodiscard]] bool needs_compilation() const {
         return input_type == InputType::SourceFile ||
