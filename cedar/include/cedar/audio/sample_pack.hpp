@@ -107,7 +107,7 @@ public:
         int loaded = 0;
 
         for (const auto& sample : samples) {
-            std::uint32_t id = bank.load_wav_file(sample.name, sample.filepath);
+            std::uint32_t id = detail::load_sample_file(bank, sample.name, sample.filepath);
 
             if (id != 0) {
                 if (registry) {

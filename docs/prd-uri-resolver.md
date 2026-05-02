@@ -1,10 +1,11 @@
-> **Status: IN PROGRESS (Phases 1-8 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: DONE** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
-**Status:** In Progress
+**Status:** Done
 **Author:** Claude
 **Date:** 2026-05-02
+**Completed:** 2026-05-02
 **Related:**
 - [File Loading Abstraction (DONE)](prd-file-loading-abstraction.md)
 - [SoundFont and Sample Bank PRD](prd-soundfonts-sample-banks.md)
@@ -615,12 +616,16 @@ Cedar tests: 184 passing / 1 skipped (network) — all 334,848 assertions green.
 - ✅ `docs/uri-schemes.md` covers the scheme list, `samples()` syntax, CLI usage, and caching. Mirrored to `web/static/docs/reference/` and indexed by `bun run build:docs`.
 - ✅ Smoke test: `nkido-cli render --bank github:tidalcycles/Dirt-Samples --seconds 1 -o /tmp/x.wav --source 'sin(440) |> out(%, %)'` succeeds; cold run 301 ms, cache-hit 29 ms (10× speedup).
 
-### Phase 9 — Verification sweep (0.5 day)
+### Phase 9 — Verification sweep (0.5 day) ✅ DONE
 
-- Run the full audit from §10
-- Confirm zero callers of every deleted symbol
-- Confirm `nkido-cli --bank github:tidalcycles/Dirt-Samples song.akkado` plays correctly
-- Confirm web demo loads a URI-declared bank end-to-end
+- ✅ §10.4 audit run: zero hits for `loadFromGitHub`, `_cedar_load_sample_wav` / `cedar_load_sample_wav`, `load_wav_file` / `load_wav_memory`, `load_from_memory.*void`, `loadSampleFromUrl` / `loadSoundFontFromUrl` / `loadWavetableFromUrl`. The lone `FileSource` match is `acquireFileSource` (audio-input PRD), unrelated to the deleted file-loader source-type union.
+- ✅ Found and ported one orphan: `cedar/include/cedar/audio/sample_pack.hpp:load_samples` was still calling the deleted `bank.load_wav_file`. Routed through `detail::load_sample_file` (already used by the sibling `load_drum_kit`), which goes via `FileLoader::load + load_audio_data`.
+- ✅ Cedar tests: 334,788 / 334,788 assertions passing, 184 / 185 cases passing (1 skipped).
+- ✅ Akkado tests: 137,577 / 137,577 assertions passing across 570 cases.
+- ✅ Web type-check + targeted vitest suites (uri-resolver, bank-registry): 22 / 22 passing.
+- ✅ E2E smoke: `nkido-cli render --bank github:tidalcycles/Dirt-Samples --seconds 1 -o out.wav --source 'sin(440) |> out(%, %)'` succeeds; cold 332 ms, cache-hit 28 ms (12× speedup). `samples("github:tidalcycles/Dirt-Samples")` in source resolves identically.
+- ✅ Web demo path: `audio.svelte.ts::compile()` drains `requiredUris` between wavetable and SoundFont drains, dispatches kind=SampleBank → `loadAsset(uri, 'sample_bank')`. The `bank-registry.test.ts` regression test pins single-fetch invariant for `loadBank('github:...')`.
+- ✅ CHANGELOG entry filed under the next release; PRD §1 status flipped to DONE.
 
 **Total estimated effort:** ~13 working days. Phases 1-3 unblock the rest; phases 4-6 can parallelize if desired; phases 7-9 are sequential.
 

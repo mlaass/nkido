@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Unified URI resolver (`cedar::UriResolver` / TS `uriResolver`) for all asset loading. Handlers cover `file://`, `http://`, `https://`, `github:`, `bundled://`, plus `blob:nkido:` and `idb:` on the web side. Disk cache under the platform's user cache directory (Linux `$XDG_CACHE_HOME/nkido/`, macOS `~/Library/Caches/nkido/`, Windows `%LOCALAPPDATA%/nkido/cache/`), 500 MB cap with mtime-based LRU eviction.
+- `samples("uri")` top-level akkado directive that records sample-bank URIs into `CompileResult.required_uris`. The host fetches and registers each before bytecode swap. Mirrors `wt_load` end-to-end (NOP opcode + special-cased codegen handler).
+- `nkido-cli --bank/--soundfont/--sample` URI flags. Each accepts any registered scheme; bare paths are treated as `file://`. Banks accumulate as default banks searched in order; `--sample` admits a `name=uri` shorthand.
+- `akkado-cli --uris` lists URI declarations from the program (text + JSON output).
+- `docs/uri-schemes.md` documents the scheme list, `samples()` syntax, CLI flags, and caching layout. Indexed in F1 help.
+- `web/tests/bank-registry.test.ts` regression test pinning the single-fetch invariant for `bankRegistry.loadBank('github:...')`.
+
+### Changed
+- WASM bridge: standardized all four asset loaders (`cedar_load_sample`, `cedar_load_audio_data`, `cedar_load_soundfont`, `cedar_load_wavetable_wav`) on `int32_t` return with `-1` on failure. `cedar_load_soundfont` parameter order is now `(name, data, size)` matching the others.
+- `BankRegistry.loadBank` flows `github:` URIs through the resolver; the dedicated `loadFromGitHub` path is gone, eliminating the prior double-fetch on cold loads.
+- `audio.svelte.ts` exposes one `loadAsset(uri, kind, name)` method covering samples, SoundFonts, wavetables, and sample banks. Discriminated return per kind.
+- `SampleBank::load_audio_data`, `SoundFontRegistry::load_from_memory`, `WavetableBankRegistry::load_from_memory` all take `MemoryView` uniformly.
+
+### Removed
+- `BankRegistry.loadFromGitHub` (web) and `audioEngine.loadBankFromGitHub` wrapper.
+- `audioEngine.loadSampleFromUrl` / `loadSoundFontFromUrl` / `loadWavetableFromUrl` (web). Replaced by `loadAsset`.
+- `cedar_load_sample_wav` WASM export (already dead) and the `_cedar_load_sample_wav` entry in the export list.
+- `SampleBank::load_wav_file` / `load_wav_memory` callers; the orphan `SamplePack::load_samples` reference was ported to the resolver path.
+- TS `FileSource` discriminated union in favor of URI-string-only `loadFile(uri, options)`.
+
 ## [0.3.0] - 2026-05-01
 
 ### Added
