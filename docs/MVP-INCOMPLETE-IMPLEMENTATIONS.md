@@ -77,17 +77,13 @@ The analyzer's `desugar_method_call()` rewrites `a.f(b)` → `f(a, b)` during th
 
 **Tests:** `akkado/tests/test_codegen.cpp:1760-1898` (chained dot-calls, user fn dot-calls, dot-call on hole, dot-call on as-binding, pattern method via dot-call, chained pattern methods).
 
-Known edge: dot-call on a variable-bound pattern (`p = pat(...); p.slow(2)`) currently errors with E130 inside the transform pipeline — the method call is rewritten, but the pattern-arg compiler doesn't follow the variable binding. Not an MVP blocker; track separately if needed.
+Identifier-bound patterns are also supported as transform arguments: `compile_pattern_for_transform` has an `Identifier` case at `akkado/src/codegen_patterns.cpp:2036-2050` that follows `Symbol::pattern.pattern_node`. Regression test: `akkado/tests/test_codegen.cpp:3250` ("Pattern transforms accept identifier-bound patterns").
 
 ### 2.3 Post Statements
 
-**Status:** BLOCKED (E115) — non-blocking for MVP
-**File:** `akkado/src/codegen.cpp:1518-1520`
-**Syntax:** `post(() -> ...)`
+**Status:** REMOVED — placeholder syntax with no defined semantics
 
-**Error:** "Post statements not supported in MVP"
-
-**Investigation needed:** What is the intended semantics of post statements? Not used anywhere in shipping patches, so this remains a no-op error until the semantics are specified.
+`post(closure)` was added in commit `ab787be` as a placeholder, never specified, never used in any shipping patch, and had no analog in Strudel/Tidal. The syntax has been removed entirely from the lexer, parser, AST, codegen, spec, and tests. Re-add from git history if a real use case appears.
 
 ### 2.4 Field Access on Arbitrary Expressions
 
@@ -141,6 +137,23 @@ Cedar gained an `ARRAY_INDEX` opcode. Codegen folds constant indices into a dire
 
 ---
 
+## Priority 4: Known Non-MVP Gaps
+
+Items that are not MVP blockers but emit errors today and are tracked here so they aren't rediscovered.
+
+### 4.1 Array Expression Defaults in Function Parameters
+
+**Status:** NOT YET SUPPORTED (E105) — non-blocking
+**File:** `akkado/src/codegen_functions.cpp:341, 574`
+
+```akkado
+fn foo(arr = [1, 2, 3]) -> ...   // E105: Array expression defaults not yet supported
+```
+
+The `ConstEvaluator` doesn't fold array literals at compile time, so array-typed defaults can't be materialised into the param buffer. Scalar defaults (numbers, strings) work fine. Open this up by extending the const-evaluator to handle `ArrayLit` and emitting the array via `ARRAY_PACK` / `PUSH_CONST` per element.
+
+---
+
 ## Implementation Order
 
 1. ~~**Pattern transformation chaining**~~ - **FIXED** (commit `9a61089`)
@@ -148,7 +161,7 @@ Cedar gained an `ARRAY_INDEX` opcode. Codegen folds constant indices into a dire
 3. ~~**Nested field access**~~ - **RESOLVED** via TypedValue refactor (commit `c733f66`)
 4. ~~**Field access on expressions**~~ - **RESOLVED** for Pattern/Record; E135 correctly fires for non-record types
 5. ~~**Method calls (UFCS)**~~ - **RESOLVED** via `desugar_method_call` in analyzer
-6. **Post statements** - still blocked, needs semantics clarification; not used anywhere
+6. ~~**Post statements**~~ - **REMOVED** — placeholder with no defined semantics, deleted from lexer/parser/AST/codegen
 7. ~~**Array indexing**~~ - **RESOLVED** via `ARRAY_INDEX` opcode in Cedar VM
 8. ~~**Chord expansion**~~ - **OBSOLETE** — `C4'` deprecated, chords in patterns work
 
@@ -179,3 +192,5 @@ cmake --build build --target akkado
 | Method calls (UFCS) | `akkado/src/analyzer.cpp` (`desugar_method_call`) | — |
 | Field access on expr | `akkado/src/codegen.cpp` (type-dispatched) | `c733f66` |
 | Array indexing | `cedar/src/vm/` (`ARRAY_INDEX`), `akkado/src/codegen.cpp` | — |
+| Identifier-bound patterns in transforms | `akkado/src/codegen_patterns.cpp` | `5815d9a` |
+| Post statements removed | `akkado/src/{lexer,parser,codegen}.cpp`, `akkado/include/akkado/{token,ast,parser}.hpp` | — |
