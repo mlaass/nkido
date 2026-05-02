@@ -1,12 +1,9 @@
 #pragma once
 
-#ifndef __EMSCRIPTEN__
-
 #include "cedar/io/buffer.hpp"
 #include "cedar/io/errors.hpp"
 
 #include <cstddef>
-#include <filesystem>
 #include <optional>
 #include <string>
 #include <variant>
@@ -33,6 +30,8 @@ struct LoadResult {
     }
 };
 
+#ifndef __EMSCRIPTEN__
+
 class FileLoader {
 public:
     /// Load entire file into memory
@@ -45,6 +44,6 @@ public:
     static std::optional<std::size_t> file_size(const std::string& path);
 };
 
-}  // namespace cedar
-
 #endif  // __EMSCRIPTEN__
+
+}  // namespace cedar

@@ -1,8 +1,8 @@
-> **Status: NOT STARTED** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phase 1 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
-**Status:** Draft
+**Status:** In Progress
 **Author:** Claude
 **Date:** 2026-05-02
 **Related:**
@@ -526,15 +526,15 @@ No `[[deprecated]]` shims, no compat wrappers. The audit table in §10 verifies 
 
 Each phase ships independently and leaves the codebase in a working state. Tests gate each phase.
 
-### Phase 1 — C++ resolver foundation (2 days)
+### Phase 1 — C++ resolver foundation (2 days) ✅ DONE
 
 **Goal:** `cedar::UriResolver` exists and dispatches to handlers. `file://` and `bundled://` work on native.
 
-- `cedar/include/cedar/io/uri_resolver.hpp` + `.cpp`
-- `FileHandler`, `BundledHandler`
-- Unit test: round-trip a known file via `file://`, lookup a bundled asset.
+- `cedar/include/cedar/io/uri_resolver.hpp` + `.cpp` ✅
+- `FileHandler`, `BundledHandler` ✅
+- Unit test: round-trip a known file via `file://`, lookup a bundled asset. ✅
 
-No API users yet. Existing code unchanged.
+No API users yet. Existing code unchanged. `FileError` enum extended with `NetworkError` and `Aborted` for use by later phases. Tests: 10 cases / 51 assertions in `[uri-resolver]`.
 
 ### Phase 2 — Native HTTP + github: + native cache (2 days)
 

@@ -2,6 +2,7 @@
 
 #include "cedar/io/file_loader.hpp"
 
+#include <filesystem>
 #include <fstream>
 
 namespace cedar {

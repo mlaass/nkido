@@ -10,7 +10,9 @@ enum class FileError {
     TooLarge,
     InvalidFormat,
     Corrupted,
-    UnsupportedFormat
+    UnsupportedFormat,
+    NetworkError,
+    Aborted
 };
 
 struct FileLoadError {

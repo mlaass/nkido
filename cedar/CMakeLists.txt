@@ -55,6 +55,8 @@ set(CEDAR_ARENA_SIZE "" CACHE STRING "Override AudioArena size in bytes (default
 set(CEDAR_SOURCES
     src/cedar.cpp
     src/vm/vm.cpp
+    src/io/uri_resolver.cpp
+    src/io/handlers/bundled_handler.cpp
 )
 
 # Conditional sources
@@ -83,7 +85,10 @@ if(CEDAR_ENABLE_MINBLEP)
 endif()
 
 if(CEDAR_ENABLE_FILE_IO AND NOT EMSCRIPTEN)
-    list(APPEND CEDAR_SOURCES src/io/file_loader.cpp)
+    list(APPEND CEDAR_SOURCES
+        src/io/file_loader.cpp
+        src/io/handlers/file_handler.cpp
+    )
 endif()
 
 # Cedar library

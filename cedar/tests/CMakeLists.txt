@@ -33,6 +33,7 @@ add_executable(cedar_tests
     test_sequence.cpp
     test_poly.cpp
     test_file_loader.cpp
+    test_uri_resolver.cpp
     test_audio_decoder.cpp
     test_fft.cpp
     test_wavetable.cpp
