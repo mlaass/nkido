@@ -1,0 +1,32 @@
+// Drum'n'Bass with Amen breaks from Dirt-Samples
+//
+// `samples("github:...")` is a top-level directive that pulls a Strudel
+// sample bank from any URL — file://, https://, or `github:user/repo`.
+// First play fetches the manifest + each variant over HTTPS (a few hundred
+// KB total); the IndexedDB cache makes every subsequent run instant.
+// `.bank("Dirt-Samples")` routes events to that bank instead of the bundled
+// default kit.
+
+samples("github:tidalcycles/Dirt-Samples")
+
+bpm = 174  // classic drum'n'bass tempo
+
+// 32-step amen-cut chop. Variants 0..7 spread across 8 sixteenth notes,
+// then a fill of higher slices on every fourth bar.
+s"amencutup:0 amencutup:1 amencutup:2 amencutup:3
+  amencutup:4 amencutup:5 amencutup:6 <amencutup:7 amencutup:15>"
+    .bank("Dirt-Samples")
+    .out()
+
+// Jungle sub-bass — short attack, deep saturated sine on the kick beats.
+s"jungbass:0 ~ jungbass:0 ~"
+    .bank("Dirt-Samples")
+    |> @ * 0.7
+    |> out(@)
+
+// Sub layer for the lowest octave the breakbeat is missing.
+osc("sin", 41.2)  // E1
+    * ar(euclid(3, 8), 0.005, 0.45)
+    |> saturate(@, 4)
+    |> lp(@, 380)
+    |> out(@ * 0.4)

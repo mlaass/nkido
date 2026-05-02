@@ -338,6 +338,42 @@ void apply_state_inits(cedar::VM& vm, const akkado::CompileResult& result,
     }
 }
 
+// Derive a bank name from a manifest URI. Mirrors the web
+// `BankRegistry.extractBankName` heuristic: the last URL/path segment with
+// any trailing `.json` / `.strudel.json` removed, or — if that segment is
+// "strudel" — the parent segment (so `…/Dirt-Samples/strudel.json` →
+// `Dirt-Samples`). For bare `github:user/repo` URIs the last `/`-separated
+// segment is the repo name.
+std::string derive_bank_name(const std::string& uri) {
+    std::string last;
+    std::string parent;
+    std::size_t pos = 0;
+    while (pos < uri.size()) {
+        auto slash = uri.find('/', pos);
+        if (slash == std::string::npos) {
+            parent = last;
+            last = uri.substr(pos);
+            break;
+        }
+        if (slash > pos) {
+            parent = last;
+            last = uri.substr(pos, slash - pos);
+        }
+        pos = slash + 1;
+    }
+    auto strip_ext = [](std::string& s, const std::string& ext) {
+        if (s.size() > ext.size() &&
+            s.compare(s.size() - ext.size(), ext.size(), ext) == 0) {
+            s.resize(s.size() - ext.size());
+        }
+    };
+    strip_ext(last, ".strudel.json");
+    strip_ext(last, ".json");
+    if (last == "strudel" && !parent.empty()) return parent;
+    if (last.empty()) return "unnamed";
+    return last;
+}
+
 // Resolve and register every asset declared via CLI flags (`--bank`,
 // `--soundfont`, `--sample`) and via top-level akkado directives
 // (`samples()`'s required_uris, `required_samples_extended`). Returns
@@ -347,16 +383,21 @@ bool load_program_assets(cedar::VM& vm,
                           const nkido::Options& opts,
                           const akkado::CompileResult& cr) {
     // Build the bank list. Order matters: --bank flags first, then
-    // samples() declarations in source order. Resolution iterates the
-    // list and takes the first hit per RequiredSample.
+    // samples() declarations in source order. Each bank is registered
+    // both into `default_banks` (searched first-hit-wins for unqualified
+    // RequiredSample lookups) and `named_banks` (keyed by derived bank
+    // name for `.bank("Name")` qualified lookups).
     std::vector<nkido::BankManifest> default_banks;
+    std::unordered_map<std::string, nkido::BankManifest> named_banks;
 
     auto load_bank = [&](const std::string& uri) -> bool {
         try {
             auto m = nkido::fetch_bank_manifest(uri);
-            std::cerr << "Loaded bank manifest from " << uri
+            std::string name = derive_bank_name(uri);
+            std::cerr << "Loaded bank manifest '" << name << "' from " << uri
                       << " (" << m.samples.size() << " samples)\n";
-            default_banks.push_back(std::move(m));
+            default_banks.push_back(m);
+            named_banks[std::move(name)] = std::move(m);
             return true;
         } catch (const std::exception& e) {
             std::cerr << "error: bank '" << uri << "' failed to load: " << e.what() << "\n";
@@ -408,9 +449,10 @@ bool load_program_assets(cedar::VM& vm,
     }
 
     // Resolve every RequiredSample referenced by the program against the
-    // loaded bank list (named banks not yet supported on the CLI).
+    // loaded bank list. Default-bank events search `default_banks`
+    // first-hit-wins; events qualified with `.bank("Name")` look up
+    // `named_banks` by the derived bank name.
     if (!cr.required_samples_extended.empty()) {
-        std::unordered_map<std::string, nkido::BankManifest> named_banks;
         nkido::register_required_samples(
             vm, cr.required_samples_extended, default_banks, named_banks);
     }

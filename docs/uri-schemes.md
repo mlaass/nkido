@@ -40,12 +40,17 @@ Default branch is `main`. Specify a different branch as the third path segment.
 
 ## In akkado source: `samples("...")`
 
-The `samples()` directive declares a sample-bank URI for the host to fetch before the program runs:
+The `samples()` directive declares a sample-bank URI for the host to fetch before the program runs. Combine with `.bank("Name")` on a sample pattern to route events to that bank instead of the bundled default kit:
 
 ```akkado
 samples("github:tidalcycles/Dirt-Samples")
-sample(beat(2), 60, sample_id("bd:0")) |> out(%, %)
+
+s"amencutup:0 amencutup:1 amencutup:2 amencutup:3"
+    .bank("Dirt-Samples")
+    .out()
 ```
+
+Bank names come from the manifest's `_name` field, falling back to the last URL segment (so `github:tidalcycles/Dirt-Samples` → `Dirt-Samples`). Live demo: `dnb-amen` in the patch browser.
 
 Multiple `samples()` calls are allowed; they're resolved in source order. Identical URIs are deduplicated. Each call must take exactly one string-literal argument (variables are not resolved at compile time).
 

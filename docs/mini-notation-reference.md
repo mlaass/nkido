@@ -79,6 +79,16 @@ sd:1        // Snare drum, variant 1
 kick:2      // Kick sample, variant 2
 ```
 
+**External banks via URI:** declare any Strudel-format sample manifest with the top-level `samples("uri")` directive, then route events to that bank with `.bank("Name")`:
+
+```akkado
+samples("github:tidalcycles/Dirt-Samples")
+
+s"amencutup:0 amencutup:1".bank("Dirt-Samples").out()
+```
+
+URI schemes (`file://`, `http(s)://`, `github:user/repo`, `bundled://`) are resolved by the unified URI resolver — see [URI Schemes](uri-schemes.md) for the full list and caching behaviour.
+
 ### Chords
 
 Chords start with an uppercase note letter followed by an optional accidental and quality.

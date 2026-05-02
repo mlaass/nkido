@@ -54,6 +54,12 @@
     "landing": true
   },
   {
+    "slug": "dnb-amen",
+    "title": "Drum'n'Bass",
+    "description": "Amen-break chops + jungle bass loaded over HTTPS via samples(\"github:tidalcycles/Dirt-Samples\"). First play fetches; refresh hits the IndexedDB cache.",
+    "landing": true
+  },
+  {
     "slug": "hello-sine",
     "title": "Oscillators",
     "description": "The smallest Akkado patch — a sine wave with vibrato. Swap the waveform name to hear saw, tri, square, or noise.",
