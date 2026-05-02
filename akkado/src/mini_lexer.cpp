@@ -167,10 +167,31 @@ bool MiniLexer::looks_like_pitch() const {
 
     std::size_t pos = current_ + 1;
 
-    // Scan modifier stream: accidentals (#, b, x) and micro-step operators (^, v, +)
+    // Scan modifier stream: accidentals (#, b, x) and micro-step operators
+    // (^, v, +, d, \). `d` is ambiguous with note D and with sample names
+    // like "bd", "sd". Per PRD §4.2 it acts as an alias only when the token
+    // unambiguously continues into an octave digit — otherwise we leave it
+    // for the sample lexer. `\` is unambiguous: never appears in sample names.
+    auto chain_reaches_digit = [this](std::size_t scan) {
+        while (scan < pattern_.size()) {
+            char sc = pattern_[scan];
+            if (is_digit(sc)) return true;
+            if (sc == '#' || sc == 'b' || sc == 'x' ||
+                sc == '^' || sc == 'v' || sc == '+' ||
+                sc == 'd' || sc == '\\') {
+                scan++;
+            } else {
+                return false;
+            }
+        }
+        return false;
+    };
     while (pos < pattern_.size()) {
         char c = pattern_[pos];
-        if (c == '#' || c == 'b' || c == 'x' || c == '^' || c == 'v' || c == '+') {
+        if (c == '#' || c == 'b' || c == 'x' ||
+            c == '^' || c == 'v' || c == '+' || c == '\\') {
+            pos++;
+        } else if (c == 'd' && chain_reaches_digit(pos + 1)) {
             pos++;
         } else {
             break;
@@ -604,7 +625,26 @@ MiniToken MiniLexer::lex_pitch() {
     int accidental_std = 0;
     std::int8_t micro_offset = 0;
 
-    // Parse modifier stream: accidentals and micro-step operators
+    // Parse modifier stream: standard accidentals (#, b, x) and microtonal
+    // operators / aliases (^, v, +, d, \) per PRD §4.1–§4.2. `d` is the
+    // Stein-Zimmermann inverted-flat alias and is ambiguous with note D /
+    // sample names like "bd"; we only treat it as a modifier when the rest
+    // of the token reaches an octave digit. looks_like_pitch() applies the
+    // same rule so the gate stays consistent.
+    auto chain_reaches_digit = [this](std::size_t scan) {
+        while (scan < pattern_.size()) {
+            char sc = pattern_[scan];
+            if (is_digit(sc)) return true;
+            if (sc == '#' || sc == 'b' || sc == 'x' ||
+                sc == '^' || sc == 'v' || sc == '+' ||
+                sc == 'd' || sc == '\\') {
+                scan++;
+            } else {
+                return false;
+            }
+        }
+        return false;
+    };
     while (!is_at_end()) {
         char c = peek();
         if (c == '#')      { accidental_std++; advance(); }
@@ -613,6 +653,10 @@ MiniToken MiniLexer::lex_pitch() {
         else if (c == '^') { micro_offset++; advance(); }
         else if (c == 'v') { micro_offset--; advance(); }
         else if (c == '+') { micro_offset++; advance(); }
+        else if (c == '\\') { micro_offset--; advance(); }
+        else if (c == 'd' && chain_reaches_digit(current_ + 1)) {
+            micro_offset--; advance();
+        }
         else break;
     }
 

@@ -1,10 +1,10 @@
-> **Status: NOT STARTED** — No microtonal parsing or tuning engine.
+> **Status: COMPLETE** — Microtonal parsing (^, v, +, d, \, x), tune() compile-time scope modifier, EDO / JI (5-limit symmetric) / Bohlen-Pierce tuning contexts, and the SoundFont fractional-MIDI fix all shipped. Numeric-argument syntax (§3.3) was descoped due to ambiguity with the octave digit; see Roadmap.
 
 # **Product Requirement Document: Akkado Microtonal Extension**
 
-**Version:** 2.0
+**Version:** 2.1
 
-**Status:** Draft / Planned
+**Status:** COMPLETE
 
 **Feature:** Microtonal Notation & Tuning Engine
 
@@ -36,12 +36,9 @@ Two new primary operators control micro-steps.
 | ^ | Step Up | Increments the micro\_offset counter by 1. |
 | v | Step Down | Decrements the micro\_offset counter by 1. |
 
-### **3.3. Numeric Arguments**
+### **3.3. Numeric Arguments — DESCOPED**
 
-To support large intervals or specific harmonic indices, operators accept numeric arguments.
-
-* ^n (e.g., ^4) is semantically equivalent to repeating the operator n times (^^^^).
-* vn (e.g., v2) is semantically equivalent to repeating v n times.
+> **Status: descoped.** The originally-planned `^n` / `vn` shorthand (e.g., `^4` ≡ `^^^^`) cannot be added without breaking the existing octave-digit syntax: in `c^4`, the trailing `4` is the octave, not an argument to `^`. Disambiguating would require either a delimiter (which clutters the notation) or a context-sensitive lookahead that conflicts with `cn4` (note + numeric ambiguity). Stacking the operator (`c^^^^4`) remains supported and conveys the same intent.
 
 ## **4. Parser Implementation Requirements**
 
@@ -94,15 +91,21 @@ The character `d` is ambiguous (Note D vs. Alias d). The current lexer structure
 
 ### **4.4. Implementation Mapping to Codebase**
 
-1. **`MiniLexer::is_accidental()`** — Currently recognizes `#` and `b` only. Extend to include `^`, `v`, `+`, `d`, `\`, `x`.
+> **Note:** This section reflects the shipped implementation. Modifier parsing lives in `MiniLexer::lex_pitch()` (a dedicated function for character-by-character pitch lexing), not in `is_accidental()` — the gating function `looks_like_pitch()` and `lex_pitch()` share the same modifier alphabet. The `d` alias requires a forward-lookahead that confirms the token reaches an octave digit, otherwise `bd` / `sd` / `cp` etc. would be reinterpreted as pitches.
 
-2. **`MiniLexer::lex_pitch_or_sample()`** — Currently parses `[a-g][#b]?[0-9]?`. Refactor to parse the full modifier stream between note letter and octave digit, accumulating `accidental_std` and `micro_offset` separately.
+1. **`MiniLexer::looks_like_pitch()`** (`akkado/src/mini_lexer.cpp:170`) — Modifier-stream gate. Recognizes `#`, `b`, `x`, `^`, `v`, `+`, `\`, and `d` (the last only if the chain reaches an octave digit).
 
-3. **`MiniPitchData`** — Currently `{ uint8_t midi; bool has_octave; float velocity; }`. Add `int8_t micro_offset` field.
+2. **`MiniLexer::lex_pitch()`** (`akkado/src/mini_lexer.cpp:600`) — Character-by-character pitch parsing. Accumulates `accidental_std` (from `#`/`b`/`x`) into the standard MIDI semitone count, and `micro_offset` (from `^`/`v`/`+`/`d`/`\`) into the microtonal step counter.
 
-4. **`MiniAtomData`** — Currently stores `uint8_t midi_note`. Add `int8_t micro_offset` field alongside it. The `midi_note` continues to include standard accidentals as today.
+3. **`MiniPitchData`** (`akkado/include/akkado/mini_token.hpp:122`) — `int8_t micro_offset` field added.
 
-5. **`codegen_patterns.cpp` (line ~313)** — The Hz conversion `440 * 2^((midi-69)/12)` needs to consult the active tuning context to incorporate `micro_offset`.
+4. **`MiniAtomData`** (`akkado/include/akkado/ast.hpp:196`) — `int8_t micro_offset` field added.
+
+5. **`PatternEvent`** (`akkado/include/akkado/pattern_event.hpp`) — Carries `micro_offset` from AST through pattern evaluation to codegen.
+
+6. **`codegen_patterns.cpp:425`** — Hz conversion calls `tuning_.resolve_hz(midi_note, micro_offset)`.
+
+7. **`TuningContext`** (`akkado/include/akkado/tuning.hpp`) — Holds `Kind {EDO, JI, BP}`, `divisions`, and `interval_cents`. Resolves `(midi, micro_offset) → Hz`.
 
 ## **5. Architecture & Data Flow**
 
@@ -129,17 +132,28 @@ tune("31edo") {
 }
 ```
 
-**Resolution Logic (Pseudocode):**
+**Resolution Logic:**
 
 * **EDO (Equal Division of Octave):**
-  * StepSize = 1200 / EDO\_Count
-  * Nominal\_Cents = MidiToCents(event.midi\_note)   // includes accidental\_std
-  * Micro\_Shift = event.micro\_offset * StepSize
-  * Total\_Cents = Nominal\_Cents + Micro\_Shift
-  * freq = 440 * 2^((Total\_Cents - 6900) / 1200)
+  * StepSize = `interval_cents / divisions` (octave = 1200 cents)
+  * Nominal\_Cents = `(midi_note - 69) * 100`   // includes accidental\_std folded into midi\_note
+  * Micro\_Shift = `micro_offset * StepSize`
+  * freq = `440 * 2^((Nominal_Cents + Micro_Shift) / 1200)`
 
-* **Just Intonation:**
-  * The micro\_offset acts as an index traverser in a ratio array, relative to the nominal anchor.
+* **JI (5-limit symmetric, 12-tone):**
+  * Anchored at C4 = 12-EDO C4 (≈ 261.626 Hz).
+  * Total chromatic step = `(midi_note - 60) + micro_offset`.
+  * `pc = step mod 12`, `octave = floor(step / 12)`.
+  * Ratio table (relative to C): `1/1, 16/15, 9/8, 6/5, 5/4, 4/3, 45/32, 3/2, 8/5, 5/3, 9/5, 15/8`.
+  * freq = `c4_hz * ratios[pc] * 2^octave`.
+  * Effect: `micro_offset` shifts by one entry in the JI ratio array — useful for microtonal scale traversal that respects the JI structure.
+
+* **BP (Bohlen-Pierce, 13edt):**
+  * Tritave (3:1) = 1200 · log₂(3) ≈ 1901.955 cents, divided into 13 equal steps (~146.3 cents).
+  * Anchor: midi=60 → C4_hz (12-EDO).
+  * Total step count = `(midi_note - 60) + micro_offset`.
+  * freq = `c4_hz * 2^(steps * step_cents / 1200)`.
+  * Note: BP is non-octave; midi_note is reinterpreted as a step count along the BP scale, not a 12-EDO position. A4 (midi=69) is *not* 440 Hz in BP.
 
 ### **5.3. Instrument Compatibility**
 
@@ -186,15 +200,11 @@ voice->speed = pitch_ratio * (zone.sample_rate / ctx.sample_rate);
 
 ### **6.1. Built-in Library**
 
-The system ships with definitions for common xenharmonic systems.
+`parse_tuning(name)` accepts the following formats (`akkado/src/tuning.cpp`):
 
-* **12edo** (Default)
-* **17edo, 19edo, 22edo** (Superparticular)
-* **24edo** (Quarter-tone)
-* **31edo** (Meantone/Huygens)
-* **41edo, 53edo** (High-count approximations)
-* **ji** (5-limit symmetric)
-* **bp** (Bohlen-Pierce non-octave)
+* **`Nedo` / `N-edo` / `N-EDO`** — any positive-integer EDO. Common values include `12edo` (default), `17edo`, `19edo`, `22edo`, `24edo` (quarter-tone), `31edo` (meantone/Huygens), `41edo`, `53edo`.
+* **`ji`** — 5-limit symmetric 12-tone just intonation (anchored at C4 = 12-EDO C4).
+* **`bp`** — Bohlen-Pierce (13 equal divisions of the tritave 3:1).
 
 ### **6.2. External Loading API (Future)**
 
@@ -209,30 +219,25 @@ tune("slendro") {
 
 ## **7. Development Roadmap**
 
-### Phase 1: Parser Update
-- Refactor `MiniLexer::lex_pitch_or_sample()` for modifier stream parsing (`^`, `v`, `+`, `d`, `\`, `x`, numeric args)
-- Add `micro_offset` to `MiniPitchData` and `MiniAtomData`
-- Standard accidentals (`#`, `b`, `x`) continue affecting `midi_note` as today
-- New operators (`^`, `v`, `+`, `d`, `\`) accumulate into `micro_offset`
-- **Files:** `akkado/src/mini_lexer.cpp`, `akkado/include/akkado/mini_lexer.hpp`, `akkado/include/akkado/ast.hpp`, `akkado/include/akkado/mini_token.hpp`
-- Unit tests for all stacking examples from Section 4.3
+### Phase 1: Parser Update — ✅ Shipped
+- `MiniLexer::lex_pitch()` parses the modifier stream `(^, v, +, d, \, #, b, x)` between note letter and octave.
+- `d` alias requires a forward-lookahead that confirms the token reaches an octave digit (PRD §4.2 disambiguation; protects sample names like `bd`/`sd` from accidental pitch interpretation).
+- `micro_offset` field added to `MiniPitchData`, `MiniAtomData`, and `PatternEvent`.
+- Numeric-argument shorthand (`^4`) descoped — see §3.3.
 
-### Phase 2: Tuning Context & Codegen
-- Implement `TuningContext` struct (EDO count, step-to-cents mapping, or ratio table)
-- `tune()` as a compile-time scope modifier that sets the active tuning
-- Modify `codegen_patterns.cpp` Hz conversion to use `(base_midi, micro_offset, tuning_context)` → Hz
-- Default context: 12-EDO where each `micro_offset` step = 100 cents (one semitone)
-- **Files:** `akkado/src/codegen_patterns.cpp`, `akkado/include/akkado/codegen/` (new tuning context)
-- Built-in presets: 12, 17, 19, 22, 24, 31, 41, 53 EDO + JI + BP
+### Phase 2: Tuning Context & Codegen — ✅ Shipped
+- `TuningContext` (`akkado/include/akkado/tuning.hpp`) supports `Kind {EDO, JI, BP}` with arbitrary `divisions` and `interval_cents`.
+- `tune("name", pattern)` is a compile-time scope modifier (`handle_tune_call` in `codegen_patterns.cpp:4038`; transform-recursion path at `:2154`).
+- Codegen Hz conversion (`codegen_patterns.cpp:425`) calls `tuning_.resolve_hz(midi, micro)`.
+- `parse_tuning()` accepts `Nedo` / `N-edo`, `ji`, `bp`.
 
-### Phase 3: SoundFont Microtonal Fix
-- Preserve exact fractional MIDI in `soundfont.hpp` pitch calculation
-- Use rounded MIDI only for zone selection, exact for playback speed
-- **Files:** `cedar/include/cedar/opcodes/soundfont.hpp`
-- Test with quarter-tone pitches through SF player
+### Phase 3: SoundFont Microtonal Fix — ✅ Shipped
+- `cedar/include/cedar/opcodes/soundfont.hpp` preserves fractional MIDI for pitch calculation (line 127) and filter key tracking (line 168). Rounded MIDI is used only for zone selection (line 78).
 
 ### Future
-- Scala/TUN file loading
-- JI ratio tables with configurable prime limits
-- Microtonal chord voicings (reinterpret chord intervals through tuning context)
-- Runtime `detune()` parameter for real-time micro-adjustments on top of compiled tuning
+- **Numeric-argument syntax** (descoped per §3.3) — would need a new delimiter to coexist with the octave digit; revisit only if a non-conflicting syntax is proposed.
+- Scala/TUN file loading.
+- JI ratio tables with configurable prime limits and tonic anchor (currently fixed at C).
+- Microtonal chord voicings (reinterpret chord intervals through tuning context).
+- Runtime `detune()` parameter for real-time micro-adjustments on top of compiled tuning.
+- BP-friendly note nominal scheme (current BP reuses 12-EDO MIDI as a step counter, which is functional but unintuitive for users writing pure BP).

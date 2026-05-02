@@ -1800,25 +1800,25 @@ TEST_CASE("parse_tuning", "[tuning]") {
     SECTION("standard EDO formats") {
         auto t12 = parse_tuning("12edo");
         REQUIRE(t12.has_value());
-        CHECK(t12->edo_count == 12);
+        CHECK(t12->divisions == 12);
 
         auto t24 = parse_tuning("24edo");
         REQUIRE(t24.has_value());
-        CHECK(t24->edo_count == 24);
+        CHECK(t24->divisions == 24);
 
         auto t31 = parse_tuning("31edo");
         REQUIRE(t31.has_value());
-        CHECK(t31->edo_count == 31);
+        CHECK(t31->divisions == 31);
     }
 
     SECTION("dash format") {
         auto t = parse_tuning("31-edo");
         REQUIRE(t.has_value());
-        CHECK(t->edo_count == 31);
+        CHECK(t->divisions == 31);
 
         auto t2 = parse_tuning("53-EDO");
         REQUIRE(t2.has_value());
-        CHECK(t2->edo_count == 53);
+        CHECK(t2->divisions == 53);
     }
 
     SECTION("invalid tunings return nullopt") {
@@ -1869,6 +1869,212 @@ TEST_CASE("tune() compiles end-to-end", "[tuning]") {
     SECTION("non-pattern second arg produces error") {
         auto result = akkado::compile(R"(tune("24edo", 42))");
         CHECK_FALSE(result.success);
+    }
+}
+
+// Helper: extract emitted event Hz values from a compiled tune() pattern.
+// Returns the values[0] (frequency) of every event in the first SequenceProgram.
+static std::vector<float> extract_event_hz(const akkado::CompileResult& result) {
+    std::vector<float> hz;
+    for (const auto& init : result.state_inits) {
+        if (init.type != akkado::StateInitData::Type::SequenceProgram) continue;
+        for (const auto& events : init.sequence_events) {
+            for (const auto& ev : events) hz.push_back(ev.values[0]);
+        }
+        break;  // first sequence-program init is enough
+    }
+    return hz;
+}
+
+TEST_CASE("tune() emits correct Hz for microtonal notes", "[tuning][hz_roundtrip]") {
+    using Catch::Matchers::WithinRel;
+
+    SECTION("12-EDO default: c^4 == c#4 (one semitone)") {
+        auto result = akkado::compile(R"(pat("c4 c^4 c#4"))");
+        REQUIRE(result.success);
+        auto hz = extract_event_hz(result);
+        REQUIRE(hz.size() == 3);
+        // c4 = 60, c#4 = 61; in 12-EDO, c^4 with micro=+1 step (100¢) == c#4
+        CHECK_THAT(static_cast<double>(hz[1]),
+                   WithinRel(static_cast<double>(hz[2]), 0.001));
+    }
+
+    SECTION("24-EDO: c^4 is a quarter tone above c4") {
+        auto result = akkado::compile(R"(tune("24edo", pat("c4 c^4")))");
+        REQUIRE(result.success);
+        auto hz = extract_event_hz(result);
+        REQUIRE(hz.size() == 2);
+        // 24-EDO step = 50¢ → ratio = 2^(50/1200) ≈ 1.02930
+        double ratio = static_cast<double>(hz[1]) / static_cast<double>(hz[0]);
+        CHECK_THAT(ratio, WithinRel(std::pow(2.0, 50.0 / 1200.0), 0.001));
+    }
+
+    SECTION("31-EDO: c^4 step is ~38.7¢") {
+        auto result = akkado::compile(R"(tune("31edo", pat("c4 c^4")))");
+        REQUIRE(result.success);
+        auto hz = extract_event_hz(result);
+        REQUIRE(hz.size() == 2);
+        double ratio = static_cast<double>(hz[1]) / static_cast<double>(hz[0]);
+        CHECK_THAT(ratio, WithinRel(std::pow(2.0, 1200.0 / 31.0 / 1200.0), 0.001));
+    }
+
+    SECTION("d alias produces -1 micro_offset (sesquiflat cbd4)") {
+        auto result = akkado::compile(R"(tune("24edo", pat("c4 cbd4")))");
+        REQUIRE(result.success);
+        auto hz = extract_event_hz(result);
+        REQUIRE(hz.size() == 2);
+        // cbd4 = c with std=-1 (b flat) and micro=-1 (d alias) in 24-EDO
+        // = c4 - 100¢ - 50¢ = -150¢ from c4
+        double ratio = static_cast<double>(hz[1]) / static_cast<double>(hz[0]);
+        CHECK_THAT(ratio, WithinRel(std::pow(2.0, -150.0 / 1200.0), 0.001));
+    }
+
+    SECTION("\\ alias produces -1 micro_offset") {
+        auto result = akkado::compile(R"(tune("24edo", pat("c\\4 c4")))");
+        REQUIRE(result.success);
+        auto hz = extract_event_hz(result);
+        REQUIRE(hz.size() == 2);
+        double ratio = static_cast<double>(hz[0]) / static_cast<double>(hz[1]);
+        CHECK_THAT(ratio, WithinRel(std::pow(2.0, -50.0 / 1200.0), 0.001));
+    }
+}
+
+// ============================================================================
+// PRD §4.3 — full stacking-strategy table coverage [microtonal]
+// ============================================================================
+
+TEST_CASE("PRD §4.3 stacking table", "[mini_lexer][microtonal][prd_4_3]") {
+    auto check = [](const char* input, int expected_std, int expected_micro) {
+        auto [tokens, diags] = lex_mini(input);
+        REQUIRE(diags.empty());
+        REQUIRE(tokens.size() >= 1);
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        const auto& p = tokens[0].as_pitch();
+        // accidental_std is folded into midi_note: c4=60, +1=61, -1=59, ...
+        CHECK(static_cast<int>(p.midi_note) - 60 == expected_std);
+        CHECK(static_cast<int>(p.micro_offset) == expected_micro);
+    };
+
+    SECTION("c#4: standard sharp (+1, 0)")     { check("c#4",  +1, 0); }
+    SECTION("c^4: pure micro step (0, +1)")    { check("c^4",  0, +1); }
+    SECTION("c#^4: sharp + micro (+1, +1)")    { check("c#^4", +1, +1); }
+    SECTION("cbb4: stacked flats (-2, 0)")     { check("cbb4", -2, 0); }
+    SECTION("cbd4: sesquiflat (-1, -1)")       { check("cbd4", -1, -1); }
+    SECTION("c+4: + alias (0, +1)")            { check("c+4",  0, +1); }
+    SECTION("cd4: d alias (0, -1)")            { check("cd4",  0, -1); }
+    SECTION("cx4: double sharp (+2, 0)")       { check("cx4",  +2, 0); }
+    SECTION("c\\4: \\ alias (0, -1)")          { check("c\\4", 0, -1); }
+}
+
+TEST_CASE("d alias does not break sample tokens", "[mini_lexer][microtonal][regression]") {
+    SECTION("bd is still a sample") {
+        auto [tokens, diags] = lex_mini("bd");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::SampleToken);
+        CHECK(tokens[0].as_sample().name == "bd");
+    }
+    SECTION("sd is still a sample") {
+        auto [tokens, diags] = lex_mini("sd");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::SampleToken);
+        CHECK(tokens[0].as_sample().name == "sd");
+    }
+    SECTION("bd:2 (sample variant) is still a sample") {
+        auto [tokens, diags] = lex_mini("bd:2");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::SampleToken);
+        CHECK(tokens[0].as_sample().name == "bd");
+        CHECK(tokens[0].as_sample().variant == 2);
+    }
+    SECTION("standalone 'd' is note D (PRD §4.2: d starting a token is pitch)") {
+        auto [tokens, diags] = lex_mini("d");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        // D4 default octave; no micro shift
+        CHECK(tokens[0].as_pitch().midi_note == 62);
+        CHECK(tokens[0].as_pitch().micro_offset == 0);
+    }
+    SECTION("'d4' starting a token is note D, not an alias") {
+        auto [tokens, diags] = lex_mini("d4");
+        REQUIRE(diags.empty());
+        REQUIRE(tokens[0].type == MiniTokenType::PitchToken);
+        // D4 = MIDI 62; no micro shift
+        CHECK(tokens[0].as_pitch().midi_note == 62);
+        CHECK(tokens[0].as_pitch().micro_offset == 0);
+    }
+}
+
+// ============================================================================
+// JI and Bohlen-Pierce tuning support [tuning]
+// ============================================================================
+
+TEST_CASE("parse_tuning recognizes ji and bp presets", "[tuning][ji_bp]") {
+    auto ji = parse_tuning("ji");
+    REQUIRE(ji.has_value());
+    CHECK(ji->kind == TuningContext::Kind::JI);
+
+    auto bp = parse_tuning("bp");
+    REQUIRE(bp.has_value());
+    CHECK(bp->kind == TuningContext::Kind::BP);
+    CHECK(bp->divisions == 13);
+}
+
+TEST_CASE("JI tuning resolves ratios from 5-limit symmetric scale", "[tuning][ji]") {
+    using Catch::Matchers::WithinRel;
+    TuningContext ji;
+    ji.kind = TuningContext::Kind::JI;
+
+    // C4 in JI is anchored at 12-EDO C4 ≈ 261.626 Hz (1/1)
+    float c4_hz = 440.0f * std::pow(2.0f, (60.0f - 69.0f) / 12.0f);
+    CHECK_THAT(static_cast<double>(ji.resolve_hz(60, 0)),
+               WithinRel(static_cast<double>(c4_hz), 0.001));
+
+    // E4 = MIDI 64, JI ratio 5/4 above C4
+    CHECK_THAT(static_cast<double>(ji.resolve_hz(64, 0)),
+               WithinRel(static_cast<double>(c4_hz) * 5.0 / 4.0, 0.001));
+
+    // G4 = MIDI 67, JI ratio 3/2 above C4
+    CHECK_THAT(static_cast<double>(ji.resolve_hz(67, 0)),
+               WithinRel(static_cast<double>(c4_hz) * 3.0 / 2.0, 0.001));
+
+    // C5 = MIDI 72, exactly one octave (2/1) above C4
+    CHECK_THAT(static_cast<double>(ji.resolve_hz(72, 0)),
+               WithinRel(static_cast<double>(c4_hz) * 2.0, 0.001));
+
+    // micro_offset shifts within the JI scale: c4 + micro=+1 lands on c#4 ratio (16/15)
+    CHECK_THAT(static_cast<double>(ji.resolve_hz(60, 1)),
+               WithinRel(static_cast<double>(c4_hz) * 16.0 / 15.0, 0.001));
+}
+
+TEST_CASE("BP tuning uses 13 equal divisions of the tritave", "[tuning][bp]") {
+    using Catch::Matchers::WithinRel;
+    TuningContext bp{TuningContext::Kind::BP, 13, 1901.9550008653875f};
+
+    // BP step in cents
+    float step = bp.step_cents();
+    CHECK_THAT(static_cast<double>(step), WithinRel(1901.955 / 13.0, 0.001));
+
+    // midi=60 (root) → C4_hz; +1 BP step = C4 * 2^(step/1200)
+    float c4_hz = 440.0f * std::pow(2.0f, (60.0f - 69.0f) / 12.0f);
+    CHECK_THAT(static_cast<double>(bp.resolve_hz(60, 0)),
+               WithinRel(static_cast<double>(c4_hz), 0.001));
+
+    CHECK_THAT(static_cast<double>(bp.resolve_hz(60, 1)),
+               WithinRel(static_cast<double>(c4_hz) * std::pow(2.0, step / 1200.0), 0.001));
+
+    // 13 BP steps = one tritave (3:1)
+    CHECK_THAT(static_cast<double>(bp.resolve_hz(60, 13)),
+               WithinRel(static_cast<double>(c4_hz) * 3.0, 0.001));
+}
+
+TEST_CASE("tune(\"ji\") and tune(\"bp\") compile end-to-end", "[tuning][ji_bp]") {
+    SECTION("ji compiles") {
+        auto result = akkado::compile(R"(tune("ji", pat("c4 e4 g4")) |> ((f) -> osc("sin", f)) |> out(%, %))");
+        CHECK(result.success);
+    }
+    SECTION("bp compiles") {
+        auto result = akkado::compile(R"(tune("bp", pat("c4 c^4 c^^4")) |> ((f) -> osc("sin", f)) |> out(%, %))");
+        CHECK(result.success);
     }
 }
 
