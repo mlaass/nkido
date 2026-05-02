@@ -18,7 +18,7 @@
 		try {
 			// Extract filename from URL for display name
 			const name = url.split('/').pop() || url;
-			await audioEngine.loadSoundFontFromUrl(name, url);
+			await audioEngine.loadAsset(url, 'soundfont', name);
 			sfUrlInput = '';
 		} catch (e) {
 			console.error('Failed to load SoundFont:', e);

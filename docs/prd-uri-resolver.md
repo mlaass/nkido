@@ -1,4 +1,4 @@
-> **Status: IN PROGRESS (Phases 1-5 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phases 1-6 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
@@ -581,14 +581,15 @@ Cedar tests: 184 passing / 1 skipped (network) — all 334,848 assertions green.
 - ✅ All four loaders (`cedar_load_sample`, `cedar_load_audio_data`, `cedar_load_soundfont`, `cedar_load_wavetable_wav`) standardized on `int32_t` return with `-1` on failure. Worklet success checks unified to `id >= 0`.
 - ✅ `cedar-processor.js` SoundFont call site updated; type-check + WASM build clean.
 
-### Phase 6 — BankRegistry collapse + audio store collapse (1.5 days)
+### Phase 6 — BankRegistry collapse + audio store collapse (1.5 days) ✅ DONE
 
 **Goal:** `loadFromGitHub` gone, three audio store methods collapsed to one. GitHub double-fetch fixed structurally.
 
-- Delete `BankRegistry.loadFromGitHub`. `loadBank(uri, name?)`.
-- Internal manifest fetch goes through `uriResolver.load(uri)` only.
-- `audio.svelte.ts`: collapse to `loadAsset(uri, kind?)`.
-- Update all call sites in the audio store and elsewhere.
+- ✅ `BankRegistry.loadFromGitHub` deleted. `loadBank('github:user/repo')` flows through the resolver. The github URL transform is shared via `githubToHttps` so the bank registry can derive base URLs without re-fetching.
+- ✅ Internal manifest fetch goes through `uriResolver.load(uri)` only — single network round-trip per cold load.
+- ✅ `audio.svelte.ts` `loadSampleFromUrl` / `loadSoundFontFromUrl` / `loadWavetableFromUrl` deleted. New unified `loadAsset(uri, kind, name)` with overloaded return type per kind. `loadBankFromGitHub` wrapper removed (callers use `loadBank(uri)`).
+- ✅ All call sites updated (9 in audio store, 1 in bank-registry, 1 in SampleBrowser).
+- ✅ Regression test: `web/tests/bank-registry.test.ts` spies `fetch`, asserts `loadBank('github:tidalcycles/Dirt-Samples')` does exactly one network call.
 
 ### Phase 7 — Akkado samples() builtin + CompileResult.required_uris (2 days)
 

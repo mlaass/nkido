@@ -829,8 +829,8 @@ function createAudioEngine() {
 		if (defaultSample) {
 			sampleLoadState.set(name, 'loading');
 			try {
-				const success = await loadSampleFromUrl(name, defaultSample.url);
-				// Note: loadSampleFromUrl now waits for worklet confirmation
+				const success = await loadAsset(defaultSample.url, 'sample', name);
+				// Note: loadAsset waits for worklet confirmation
 				// The 'sampleLoaded' handler will set state to 'loaded'
 				if (!success) {
 					sampleLoadState.set(name, 'error');
@@ -903,7 +903,7 @@ function createAudioEngine() {
 			if (variantSample) {
 				sampleLoadState.set(qualifiedName, 'loading');
 				try {
-					const success = await loadSampleFromUrl(qualifiedName, variantSample.url);
+					const success = await loadAsset(variantSample.url, 'sample', qualifiedName);
 					if (!success) {
 						sampleLoadState.set(qualifiedName, 'error');
 					}
@@ -919,7 +919,7 @@ function createAudioEngine() {
 			if (baseSample) {
 				sampleLoadState.set(qualifiedName, 'loading');
 				try {
-					const success = await loadSampleFromUrl(qualifiedName, baseSample.url);
+					const success = await loadAsset(baseSample.url, 'sample', qualifiedName);
 					if (!success) {
 						sampleLoadState.set(qualifiedName, 'error');
 					}
@@ -962,7 +962,7 @@ function createAudioEngine() {
 		sampleLoadState.set(qualifiedName, 'loading');
 		try {
 			console.log(`[AudioEngine] Loading bank sample ${qualifiedName} from ${fullUrl}`);
-			const success = await loadSampleFromUrl(qualifiedName, fullUrl);
+			const success = await loadAsset(fullUrl, 'sample', qualifiedName);
 			if (!success) {
 				sampleLoadState.set(qualifiedName, 'error');
 			} else {
@@ -1070,7 +1070,7 @@ function createAudioEngine() {
 					            wt.path.startsWith('/')
 						? wt.path
 						: `/${wt.path}`;
-					const bankId = await loadWavetableFromUrl(wt.name, url);
+					const bankId = await loadAsset(url, 'wavetable', wt.name);
 					if (bankId < 0) {
 						return {
 							success: false,
@@ -1105,7 +1105,7 @@ function createAudioEngine() {
 
 				let loaded = false;
 				for (const url of urls) {
-					const info = await loadSoundFontFromUrl(sf.filename, url);
+					const info = await loadAsset(url, 'soundfont', sf.filename);
 					if (info) {
 						loaded = true;
 						break;
@@ -1281,21 +1281,20 @@ function createAudioEngine() {
 	}
 
 	/**
-	 * Load a sample from a URL
-	 * @param name Sample name (e.g., "kick", "snare")
-	 * @param url URL to audio file (WAV, OGG, FLAC, MP3)
+	 * Load a sample from a URI (any scheme: file://, https://, github:, blob:, ...).
+	 * Internal helper called by `loadAsset(uri, 'sample', name)`.
 	 */
-	async function loadSampleFromUrl(name: string, url: string): Promise<boolean> {
+	async function loadSampleFromUri(name: string, uri: string): Promise<boolean> {
 		if (!workletNode) {
 			console.warn('[AudioEngine] Cannot load sample - worklet not initialized');
 			return false;
 		}
 
 		try {
-			console.log('[AudioEngine] Fetching sample from URL:', url);
-			const result = await loadFile(url, { cache: true });
+			console.log('[AudioEngine] Fetching sample from URI:', uri);
+			const result = await loadFile(uri, { cache: true });
 			const arrayBuffer = result.data;
-			console.log('[AudioEngine] Loaded sample from URL:', name, 'size:', arrayBuffer.byteLength);
+			console.log('[AudioEngine] Loaded sample from URI:', name, 'size:', arrayBuffer.byteLength);
 
 			// Create a promise that will be resolved when worklet confirms load
 			const loadPromise = new Promise<boolean>((resolve) => {
@@ -1320,7 +1319,7 @@ function createAudioEngine() {
 			// Wait for worklet to confirm sample is loaded
 			return await loadPromise;
 		} catch (err) {
-			console.error('[AudioEngine] Failed to load sample from URL:', err);
+			console.error('[AudioEngine] Failed to load sample from URI:', err);
 			return false;
 		}
 	}
@@ -1332,7 +1331,7 @@ function createAudioEngine() {
 	async function loadSamplePack(samples: Array<{ name: string; url: string }>): Promise<number> {
 		let loaded = 0;
 		for (const sample of samples) {
-			const success = await loadSampleFromUrl(sample.name, sample.url);
+			const success = await loadAsset(sample.url, 'sample', sample.name);
 			if (success) loaded++;
 		}
 		console.log('[AudioEngine] Loaded', loaded, 'of', samples.length, 'samples');
@@ -1364,7 +1363,7 @@ function createAudioEngine() {
 				if (sampleLoadState.get(sample.name) === 'pending') {
 					sampleLoadState.set(sample.name, 'loading');
 					try {
-						const success = await loadSampleFromUrl(sample.name, sample.url);
+						const success = await loadAsset(sample.url, 'sample', sample.name);
 						if (success) {
 							sampleLoadState.set(sample.name, 'loaded');
 							loadedSamples.add(sample.name);
@@ -1401,7 +1400,7 @@ function createAudioEngine() {
 				let loaded = false;
 				for (const url of sf.urls) {
 					try {
-						const info = await loadSoundFontFromUrl(sf.name, url);
+						const info = await loadAsset(url, 'soundfont', sf.name);
 						if (info) {
 							console.log(`[AudioEngine] Default SoundFont '${sf.name}' loaded: ${info.presetCount} presets`);
 							loaded = true;
@@ -1450,20 +1449,6 @@ function createAudioEngine() {
 		}
 	}
 
-	/**
-	 * Load a sample bank from GitHub
-	 * @param repo GitHub shortcut (e.g., "github:user/repo" or "github:user/repo/branch/path")
-	 */
-	async function loadBankFromGitHub(repo: string): Promise<boolean> {
-		try {
-			await bankRegistry.loadFromGitHub(repo);
-			return true;
-		} catch (err) {
-			console.error('[AudioEngine] Failed to load bank from GitHub:', err);
-			return false;
-		}
-	}
-
 	// =========================================================================
 	// SoundFont API
 	// =========================================================================
@@ -1503,14 +1488,12 @@ function createAudioEngine() {
 	}
 
 	/**
-	 * Load a SoundFont from a URL
-	 * @param name Display name for the SoundFont
-	 * @param url URL to the SF2 file
-	 * @returns SoundFont info with preset list, or null on failure
+	 * Load a SoundFont from a URI. Internal helper called by
+	 * `loadAsset(uri, 'soundfont', name)`.
 	 */
-	async function loadSoundFontFromUrl(name: string, url: string): Promise<SoundFontInfo | null> {
+	async function loadSoundFontFromUri(name: string, uri: string): Promise<SoundFontInfo | null> {
 		try {
-			const result = await loadFile(url, { cache: true });
+			const result = await loadFile(uri, { cache: true });
 			return await loadSoundFont(name, result.data);
 		} catch (err) {
 			console.error('[AudioEngine] Failed to fetch SoundFont:', err);
@@ -1557,15 +1540,49 @@ function createAudioEngine() {
 	}
 
 	/**
-	 * Fetch a wavetable WAV from a URL and load it into the worklet.
+	 * Fetch a wavetable WAV from a URI and load it into the worklet.
+	 * Internal helper called by `loadAsset(uri, 'wavetable', name)`.
 	 */
-	async function loadWavetableFromUrl(name: string, url: string): Promise<number> {
+	async function loadWavetableFromUri(name: string, uri: string): Promise<number> {
 		try {
-			const result = await loadFile(url, { cache: true });
+			const result = await loadFile(uri, { cache: true });
 			return await loadWavetable(name, result.data);
 		} catch (err) {
 			console.error('[AudioEngine] Failed to fetch wavetable:', err);
 			return -1;
+		}
+	}
+
+	/**
+	 * Unified asset loader keyed by URI. Dispatches to the right registry
+	 * based on `kind`. The URI is resolved via the singleton `uriResolver`,
+	 * so any scheme it knows about (file://, https://, github:, blob:, ...)
+	 * works uniformly.
+	 *
+	 * Return type is overloaded by `kind`:
+	 * - 'sample'      → boolean (loaded successfully)
+	 * - 'soundfont'   → SoundFontInfo | null (preset list / null on failure)
+	 * - 'wavetable'   → number (assigned bank ID, or -1 on failure)
+	 * - 'sample_bank' → boolean (manifest fetched + parsed successfully)
+	 */
+	function loadAsset(uri: string, kind: 'sample', name: string): Promise<boolean>;
+	function loadAsset(uri: string, kind: 'soundfont', name: string): Promise<SoundFontInfo | null>;
+	function loadAsset(uri: string, kind: 'wavetable', name: string): Promise<number>;
+	function loadAsset(uri: string, kind: 'sample_bank', name?: string): Promise<boolean>;
+	function loadAsset(
+		uri: string,
+		kind: 'sample' | 'soundfont' | 'wavetable' | 'sample_bank',
+		name?: string
+	): Promise<boolean | SoundFontInfo | null | number> {
+		switch (kind) {
+			case 'sample':
+				return loadSampleFromUri(name!, uri);
+			case 'soundfont':
+				return loadSoundFontFromUri(name!, uri);
+			case 'wavetable':
+				return loadWavetableFromUri(name!, uri);
+			case 'sample_bank':
+				return loadBank(uri, name);
 		}
 	}
 
@@ -2087,20 +2104,18 @@ function createAudioEngine() {
 		getFrequencyData,
 		loadSample,
 		loadSampleFromFile,
-		loadSampleFromUrl,
 		loadSamplePack,
 		clearSamples,
 		// Sample bank API
 		loadBank,
-		loadBankFromGitHub,
 		getBankNames,
 		// SoundFont API
 		loadSoundFont,
-		loadSoundFontFromUrl,
 		// Wavetable API (Smooch)
 		loadWavetable,
-		loadWavetableFromUrl,
 		clearWavetables,
+		// Unified URI-keyed asset loader
+		loadAsset,
 		getBankSampleNames,
 		getBankSampleVariantCount,
 		hasBank,

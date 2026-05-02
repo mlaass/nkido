@@ -7,6 +7,7 @@
 
 import { audioEngine } from '$lib/stores/audio.svelte';
 import { loadFile } from '$lib/io/file-loader';
+import { githubToHttps } from '$lib/io/handlers/github-handler';
 
 /**
  * Strudel-compatible manifest format
@@ -91,7 +92,11 @@ class BankRegistryClass {
 		let baseUrl: string;
 
 		if (typeof source === 'string') {
-			// URL - fetch manifest via FileLoader (with caching)
+			// URI - fetch manifest via the resolver (with caching). github: URIs
+			// are resolved to the corresponding raw.githubusercontent.com URL by
+			// the github handler; we mirror that transform here so we can derive
+			// the asset base URL for relative sample paths in the manifest.
+			const httpUri = source.startsWith('github:') ? githubToHttps(source) : source;
 			const result = await loadFile(source, { cache: true });
 			const text = new TextDecoder().decode(result.data);
 			manifestData = JSON.parse(text);
@@ -99,10 +104,14 @@ class BankRegistryClass {
 			// Determine base URL: use _base if provided, otherwise derive from manifest URL
 			if (manifestData._base) {
 				baseUrl = manifestData._base;
-			} else {
-				// Extract directory from manifest URL
-				const url = new URL(source, window.location.href);
+			} else if (/^[a-z][a-z0-9+.-]*:/i.test(httpUri)) {
+				// Absolute URL (http(s)://, file://, etc.) — parse to extract directory.
+				const url = new URL(httpUri);
 				baseUrl = url.href.substring(0, url.href.lastIndexOf('/') + 1);
+			} else {
+				// Bare path — string-wise extract directory.
+				const lastSlash = httpUri.lastIndexOf('/');
+				baseUrl = lastSlash >= 0 ? httpUri.substring(0, lastSlash + 1) : '';
 			}
 		} else {
 			// File - read as JSON
@@ -145,42 +154,6 @@ class BankRegistryClass {
 		console.log(`[BankRegistry] Loaded bank "${bankName}" with ${samples.size} samples`);
 
 		return manifest;
-	}
-
-	/**
-	 * Load a bank from a GitHub repository
-	 * Supports: "github:user/repo", "github:user/repo/branch", "github:user/repo/branch/path"
-	 */
-	async loadFromGitHub(repo: string): Promise<BankManifest> {
-		// Parse GitHub shortcut
-		const match = repo.match(/^github:([^/]+)\/([^/]+)(?:\/([^/]+))?(?:\/(.+))?$/);
-		if (!match) {
-			throw new Error(`Invalid GitHub shortcut: ${repo}. Expected format: github:user/repo[/branch][/path]`);
-		}
-
-		const [, user, repoName, branch = 'main', path = ''] = match;
-
-		// Construct raw GitHub URL for strudel.json
-		const manifestPath = path ? `${path}/strudel.json` : 'strudel.json';
-		const url = `https://raw.githubusercontent.com/${user}/${repoName}/${branch}/${manifestPath}`;
-
-		// Load with derived base URL
-		const baseUrl = `https://raw.githubusercontent.com/${user}/${repoName}/${branch}/${path ? path + '/' : ''}`;
-
-		const response = await fetch(url);
-		if (!response.ok) {
-			throw new Error(`Failed to fetch GitHub manifest: ${response.status} ${response.statusText}`);
-		}
-
-		const manifestData: StrudelManifest = await response.json();
-
-		// Override base URL to point to GitHub raw content
-		manifestData._base = baseUrl;
-
-		// Determine bank name from repo or manifest
-		const bankName = manifestData._name || `${user}/${repoName}`;
-
-		return this._loadBankInternal(url, bankName);
 	}
 
 	/**
@@ -236,7 +209,7 @@ class BankRegistryClass {
 
 		// Fetch and load the sample via audio engine (which uses FileLoader with caching)
 		console.log(`[BankRegistry] Loading sample ${qualifiedName} from ${fullUrl}`);
-		const success = await audioEngine.loadSampleFromUrl(qualifiedName, fullUrl);
+		const success = await audioEngine.loadAsset(fullUrl, 'sample', qualifiedName);
 		if (!success) {
 			throw new Error(`Failed to load sample ${qualifiedName}`);
 		}
