@@ -7,7 +7,7 @@ keywords: [timeline, breakpoint, automation, envelope, curve, curve-notation, sc
 
 # Timelines
 
-Breakpoint automation envelopes synced to the clock. Use `timeline()` to define smooth parameter curves with arbitrary shapes — slower than an `lfo()`, more expressive than a static value. Curves are expressed in **curve notation** (see the mini-notation reference) which encodes break-point amplitudes and segment shapes as a string of characters.
+Breakpoint automation envelopes synced to the clock. Use `timeline()` to define smooth parameter curves with arbitrary shapes: slower than an `lfo()` and more expressive than a static value. Curves are written in **curve notation** (see the mini-notation reference), which encodes breakpoint amplitudes and segment shapes as a string of characters.
 
 ## timeline
 

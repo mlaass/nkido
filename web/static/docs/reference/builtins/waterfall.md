@@ -7,7 +7,7 @@ keywords: [waterfall, spectrogram, fft, visualization, viz, gradient, magma, vir
 
 # Waterfall
 
-A scrolling spectrogram visualizer: time on one axis, frequency on the other, color for amplitude. Inserted as a pass-through node in the signal chain.
+A scrolling spectrogram visualizer: time on one axis, frequency on the other, color for amplitude. It sits in the chain as a pass-through, so audio flows through unchanged.
 
 ## waterfall
 

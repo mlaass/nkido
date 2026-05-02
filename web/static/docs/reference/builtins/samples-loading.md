@@ -17,7 +17,7 @@ How user-supplied audio reaches the sampler at runtime. The `samples()` directiv
 |-------|--------|---------|-------------|
 | uri   | string | -       | Bank URI (string literal) |
 
-The directive emits no audio-time instruction — it adds a `UriRequest{kind=SampleBank}` entry that the host (web app, CLI) drains before swapping bytecode. Multiple `samples()` calls accumulate in source order; identical URIs are deduplicated.
+The directive emits no audio-time instruction. It adds a `UriRequest{kind=SampleBank}` entry that the host (web app, CLI) drains before swapping bytecode. Multiple `samples()` calls accumulate in source order; identical URIs are deduplicated.
 
 ```akk
 // Load the TidalCycles Dirt-Samples bank
@@ -29,7 +29,7 @@ pat("bd sd cp ~") |> out(%, %)
 
 ## bank
 
-A **bank** is a directory of named samples. The default 808 kit ships with names like `bd`, `sd`, `hh`, `oh`, `cp`. External banks add more — Dirt-Samples adds hundreds (`ho`, `bell`, `casio`, etc.).
+A **bank** is a directory of named samples. The default 808 kit ships with names like `bd`, `sd`, `hh`, `oh`, `cp`. External banks add more; Dirt-Samples adds hundreds (`ho`, `bell`, `casio`, etc.).
 
 Use `.bank("Name")` on a sample pattern to route events to a specific bank instead of the default kit:
 
@@ -49,7 +49,7 @@ samples("github:tidalcycles/Dirt-Samples")
 
 ## http
 
-Use `https://...` (or `http://...`) for samples hosted on any web server. CORS rules apply — the server must allow cross-origin reads.
+Use `https://...` (or `http://...`) for samples hosted on any web server. CORS rules apply; the server must allow cross-origin reads.
 
 ```akk
 samples("https://example.com/my-bank.zip")

@@ -7,7 +7,7 @@ keywords: [waveform, visualization, viz, envelope, time-domain, scale, filled, l
 
 # Waveform
 
-A time-domain envelope visualizer that draws the min/max amplitude of the signal over time. Inserted as a pass-through node in the signal chain.
+A time-domain envelope visualizer that draws the min/max amplitude of the signal over time. It sits in the chain as a pass-through, so audio flows through unchanged.
 
 ## waveform
 

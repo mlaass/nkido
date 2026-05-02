@@ -7,7 +7,7 @@ keywords: [spectrum, fft, frequency, visualization, viz, analyzer, logScale, min
 
 # Spectrum Analyzer
 
-A frequency-domain visualizer using FFT analysis. Inserted as a pass-through node in the signal chain.
+A frequency-domain visualizer that runs an FFT on the signal. It sits in the chain as a pass-through, so audio flows through unchanged.
 
 ## spectrum
 

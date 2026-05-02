@@ -57,7 +57,7 @@ pat("c4 e4 ~ g4")
 For chord symbols (`Am7`, `Cmaj7`), inline chord brackets (`[c4 e4 g4]`), and voice-leading transforms (`anchor`, `mode`, `voicing`, `addVoicings`), see [Chords](chords).
 
 ```akk
-// Inline chord — three notes at once
+// Inline chord, three notes at once
 pat("[c4 e4 g4]")
 
 // Chord-symbol progression

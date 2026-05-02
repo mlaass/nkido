@@ -7,7 +7,7 @@ keywords: [visualization, viz, oscilloscope, waveform, spectrum, waterfall, pian
 
 # Visualizations
 
-Inline visualizations render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain — the audio passes through unchanged while being displayed.
+Inline visualizations render directly in the editor. Each visualization is a pass-through node in the signal chain: audio flows through unchanged.
 
 All visualization functions accept an optional name string and an options record. Common options shared by all types:
 
@@ -42,7 +42,7 @@ osc("saw", 220) |> spectrum(%) |> out(%, %)
 
 ## waterfall
 
-Scrolling spectrogram — time-frequency display with color-mapped amplitude. See [waterfall](waterfall) for the full reference.
+Scrolling spectrogram. Time-frequency display with color-mapped amplitude. See [waterfall](waterfall) for the full reference.
 
 ```akk
 osc("saw", 220) |> waterfall(%) |> out(%, %)

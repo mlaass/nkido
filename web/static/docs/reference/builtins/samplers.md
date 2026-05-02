@@ -7,7 +7,7 @@ keywords: [sampler, sample, sample_loop, drum, kit, "808", "909", bd, sd, hh, oh
 
 # Samplers
 
-Samplers play recorded audio. The most common path is a **sample pattern** — `pat("bd sd hh sd")` — which triggers events from the loaded sample bank. nkido ships with a default 808 drum kit so common drum names work out of the box. For more control, the `sample()` and `sample_loop()` builtins play a single sample by ID.
+Samplers play recorded audio. The common path is a **sample pattern** like `pat("bd sd hh sd")`, which triggers events from the loaded sample bank. nkido ships with a default 808 drum kit so common drum names work out of the box. For more control, `sample()` and `sample_loop()` play a single sample by ID.
 
 ## sample
 
@@ -70,7 +70,7 @@ pat("hh*16") |> out(%, %)
 
 ## oh
 
-The **open hi-hat**. Use to vary the closed-hat pattern — typical syncopation drops an `oh` on the off-beat.
+The **open hi-hat**. Use it to vary the closed-hat pattern; typical syncopation drops an `oh` on the off-beat.
 
 ```akk
 // Closed/open hat variation

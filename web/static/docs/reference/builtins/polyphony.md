@@ -46,7 +46,7 @@ pat("c4 e4 g4 b4") |> poly(@, (f, g, v) -> osc("sin", f) * v, 8) |> out(@)
 | input      | pattern  | -       | Pattern producing events |
 | instrument | function | -       | A function `(freq, gate, vel) -> signal` |
 
-`mono()` is `poly()` with one voice and last-note priority. Every new note retriggers the gate, so envelopes restart cleanly: the classic hardware-mono behavior.
+`mono()` is `poly()` with one voice and last-note priority. Every new note retriggers the gate so envelopes restart cleanly, the classic hardware-mono behavior.
 
 `mono(stereo_signal)` is a different builtin (stereo-to-mono downmix). The compiler routes based on argument type: a function instrument gets the voice manager; a stereo signal gets the downmix.
 
@@ -93,6 +93,6 @@ A **voice** is one independent instance of the instrument function. `poly()` run
 
 ## voices
 
-The **voice count** parameter to `poly()` (default 64). Must be a literal — the compiler needs to know it for static allocation. Lower voice counts give predictable voice stealing; higher counts handle complex patterns without dropouts.
+The **voice count** parameter to `poly()` (default 64). It must be a literal so the compiler can statically allocate. Lower voice counts give predictable voice stealing; higher counts handle complex patterns without dropouts.
 
 Related: [sequencing](sequencing), [chord](../mini-notation/chords), [pat](../mini-notation/basics)

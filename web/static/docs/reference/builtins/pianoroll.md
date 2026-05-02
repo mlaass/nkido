@@ -7,7 +7,7 @@ keywords: [pianoroll, piano, roll, visualization, viz, beats, showGrid, scale, c
 
 # Piano Roll
 
-A pattern-event visualizer that draws notes as rectangles on a pitch-time grid. Inserted as a pass-through node in the signal chain.
+A pattern-event visualizer that draws notes as rectangles on a pitch-time grid. It sits in the signal chain as a pass-through.
 
 ## pianoroll
 
@@ -55,11 +55,11 @@ Highlight notes that fall inside a named scale; notes outside are dimmed. Helps 
 
 ## chromatic
 
-`"chromatic"` (default) — every note is highlighted; no filtering applied.
+`"chromatic"` (default): every note is highlighted; no filtering applied.
 
 ## pentatonic
 
-`"pentatonic"` — highlights C major pentatonic (C, D, E, G, A). Notes outside this set are dimmed.
+`"pentatonic"`: highlights C major pentatonic (C, D, E, G, A). Notes outside this set are dimmed.
 
 ```akk
 // Pentatonic scale filter, no grid
@@ -68,6 +68,6 @@ pat("c4 d4 e4 f4 g4 a4 b4 c5") |> pianoroll(%, "scale check", {scale: "pentatoni
 
 ## octave
 
-`"octave"` — highlights only root notes (C across octaves). Useful for verifying tonal centers in a long progression.
+`"octave"`: highlights only root notes (C across octaves). Useful for verifying tonal centers in a long progression.
 
 Related: [oscilloscope](oscilloscope), [spectrum](spectrum)
