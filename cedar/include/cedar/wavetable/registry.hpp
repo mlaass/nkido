@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cedar/io/buffer.hpp"
 #include "cedar/wavetable/bank.hpp"
 
 #include <array>
@@ -52,8 +53,8 @@ public:
                        std::string* error_out = nullptr);
 
     /// WASM/host: load from an in-memory WAV byte buffer.
-    int load_from_memory(const std::string& name, const std::uint8_t* data,
-                         std::size_t size, std::string* error_out = nullptr);
+    int load_from_memory(const std::string& name, MemoryView data,
+                         std::string* error_out = nullptr);
 
     /// Register a pre-built bank under `name`. Used by tests / synthetic
     /// banks. Returns the assigned bank ID (≥ 0).

@@ -1,4 +1,4 @@
-> **Status: IN PROGRESS (Phases 1-3 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phases 1-4 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
@@ -560,14 +560,17 @@ OpenSSL linked as a hard dep on native; SYSTEM include path quiets vendored-head
 
 `bun run check` clean (0 errors). Existing call sites untouched outside the migration. The `loadFromGitHub` path in BankRegistry stays for now — it's deleted in Phase 6 along with the audio store collapse.
 
-### Phase 4 — Aggressive C++ cleanup (1.5 days)
+### Phase 4 — Aggressive C++ cleanup (1.5 days) ✅ DONE
 
 **Goal:** SoundFont, Wavetable, SampleBank all use `MemoryView`. No more `void*`/`int`.
 
-- `SoundFontRegistry::load_from_memory(MemoryView, ...)`
-- `WavetableBankRegistry::load_from_memory(MemoryView, ...)` — delete raw-pointer overload
-- `SampleBank` collapsed to `load_pcm` + `load_audio_data`
-- All cedar tests still green.
+- `SoundFontRegistry::load_from_memory(MemoryView, name, bank)` ✅
+- `WavetableBankRegistry::load_from_memory(name, MemoryView, error)` ✅ (raw-pointer overload deleted)
+- `SampleBank::load_wav_file` and `load_wav_memory` deleted ✅. `load_sample` (raw float) and `load_audio_data` (any format via MemoryView) are the only paths. The PRD's `load_pcm` rename is deferred — the existing `load_sample` name is retained because it's idiomatic and the rename adds churn for no semantic gain.
+- `cedar_load_sample_wav` (WASM) deleted in this phase too — the symbol depended on `SampleBank::load_wav_memory`. The PRD's phase 5 still owns `cedar_load_soundfont` param reorder + return-type standardization.
+- WASM `cedar_load_wavetable_wav` and `cedar_load_soundfont` updated to wrap their input with `MemoryView`. `sample_pack.hpp` ported off `bank.load_wav_file` to a shared `detail::load_sample_file` helper backed by `FileLoader::load + load_audio_data`.
+
+Cedar tests: 184 passing / 1 skipped (network) — all 334,848 assertions green. Akkado tests: 7 failures in `test_codegen.cpp` for pat-chord parsing are pre-existing (caused by uncommitted akkado/ source changes from before phase 1) and don't touch any refactored API.
 
 ### Phase 5 — WASM bridge collapse (1 day)
 

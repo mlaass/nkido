@@ -266,7 +266,7 @@ PYBIND11_MODULE(cedar_core, m) {
                 throw std::runtime_error("Short read on SoundFont file: " + path);
             }
             return vm.soundfont_registry().load_from_memory(
-                buf.data(), static_cast<int>(buf.size()),
+                cedar::MemoryView(buf.data(), buf.size()),
                 name, vm.sample_bank());
         }, py::arg("name"), py::arg("path"))
 
@@ -277,7 +277,8 @@ PYBIND11_MODULE(cedar_core, m) {
                                               py::bytes data) {
             std::string raw = data;  // implicit conversion to std::string
             return vm.soundfont_registry().load_from_memory(
-                raw.data(), static_cast<int>(raw.size()),
+                cedar::MemoryView(reinterpret_cast<const std::uint8_t*>(raw.data()),
+                                  raw.size()),
                 name, vm.sample_bank());
         }, py::arg("name"), py::arg("data"))
 

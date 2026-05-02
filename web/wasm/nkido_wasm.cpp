@@ -330,23 +330,6 @@ WASM_EXPORT uint32_t cedar_load_sample(const char* name,
 }
 
 /**
- * Load a sample from WAV file data in memory
- * @param name Sample name (null-terminated)
- * @param wav_data Pointer to WAV file data
- * @param wav_size Size of WAV data in bytes
- * @return Sample ID (>0) on success, 0 on failure
- */
-WASM_EXPORT uint32_t cedar_load_sample_wav(const char* name,
-                                            const uint8_t* wav_data,
-                                            uint32_t wav_size) {
-    if (!g_vm || !name || !wav_data || wav_size == 0) {
-        return 0;
-    }
-    
-    return g_vm->sample_bank().load_wav_memory(name, wav_data, wav_size);
-}
-
-/**
  * Load a sample from audio data in any supported format (WAV, OGG, FLAC, MP3)
  * Auto-detects the format from magic bytes and decodes in C++.
  * @param name Sample name (null-terminated)
@@ -424,7 +407,7 @@ WASM_EXPORT int32_t cedar_load_wavetable_wav(const char* name,
     }
     std::string err;
     const int id = g_vm->wavetable_registry().load_from_memory(
-        name, wav_data, wav_size, &err);
+        name, cedar::MemoryView(wav_data, wav_size), &err);
     if (id < 0) {
         std::printf("[Wavetable] Load failed for '%s': %s\n", name, err.c_str());
         return -1;
@@ -1857,7 +1840,9 @@ WASM_EXPORT int cedar_load_soundfont(const uint8_t* data, int size, const char* 
         return -1;
     }
 
-    return g_vm->soundfont_registry().load_from_memory(data, size, name, g_vm->sample_bank());
+    return g_vm->soundfont_registry().load_from_memory(
+        cedar::MemoryView(data, static_cast<std::size_t>(size)),
+        name, g_vm->sample_bank());
 }
 
 /**

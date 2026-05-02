@@ -1,5 +1,7 @@
 #pragma once
 
+#include "cedar/io/buffer.hpp"
+
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -137,12 +139,11 @@ public:
     static constexpr std::size_t MAX_SOUNDFONTS = 256;
 
     /// Load a SoundFont from memory, extracting samples into the SampleBank
-    /// @param data Raw SF2 file data
-    /// @param size Size in bytes
+    /// @param data Raw SF2 file bytes
     /// @param name Display name for this SoundFont
     /// @param sample_bank Target sample bank for extracted audio
     /// @return SoundFont ID (0-based), or -1 on failure
-    int load_from_memory(const void* data, int size,
+    int load_from_memory(MemoryView data,
                          const std::string& name,
                          SampleBank& sample_bank);
 

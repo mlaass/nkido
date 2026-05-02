@@ -64,10 +64,9 @@ int WavetableBankRegistry::load_from_file(const std::string& name,
 }
 
 int WavetableBankRegistry::load_from_memory(const std::string& name,
-                                              const std::uint8_t* data,
-                                              std::size_t size,
+                                              MemoryView data,
                                               std::string* error_out) {
-    WavData wav = WavLoader::load_from_memory(data, size);
+    WavData wav = WavLoader::load_from_memory(data);
     if (!wav.success) {
         if (error_out) *error_out = "wt_load: " + wav.error_message;
         return -1;

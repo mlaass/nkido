@@ -2,10 +2,34 @@
 
 #include "cedar/vm/sample_bank.hpp"
 #include "akkado/sample_registry.hpp"
+
+#ifndef __EMSCRIPTEN__
+#include "cedar/io/file_loader.hpp"
+#endif
+
 #include <string>
 #include <vector>
 
 namespace cedar {
+
+namespace detail {
+
+/// Load a file from disk into the bank using the unified audio decoder.
+/// Native-only path; on Emscripten this returns 0 (no filesystem access).
+inline std::uint32_t load_sample_file(SampleBank& bank,
+                                       const std::string& name,
+                                       const std::string& filepath) {
+#ifdef __EMSCRIPTEN__
+    (void)bank; (void)name; (void)filepath;
+    return 0;
+#else
+    auto result = FileLoader::load(filepath);
+    if (!result.success()) return 0;
+    return bank.load_audio_data(name, result.buffer().view());
+#endif
+}
+
+}  // namespace detail
 
 /// Helper for loading collections of samples
 class SamplePack {
@@ -58,7 +82,7 @@ public:
 
         for (const auto& sample : drum_samples) {
             std::string filepath = directory + "/" + sample.filepath;
-            std::uint32_t id = bank.load_wav_file(sample.name, filepath);
+            std::uint32_t id = detail::load_sample_file(bank, sample.name, filepath);
 
             if (id != 0) {
                 // Successfully loaded

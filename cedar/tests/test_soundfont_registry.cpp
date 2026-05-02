@@ -46,27 +46,24 @@ TEST_CASE("SoundFontRegistry rejects invalid input", "[soundfont][registry]") {
     cedar::SoundFontRegistry reg;
     cedar::SampleBank bank;
 
-    SECTION("null data returns -1") {
-        CHECK(reg.load_from_memory(nullptr, 1024, "x", bank) == -1);
+    SECTION("empty buffer returns -1") {
+        CHECK(reg.load_from_memory(cedar::MemoryView{}, "x", bank) == -1);
         CHECK(reg.size() == 0);
     }
 
     SECTION("zero size returns -1") {
         std::uint8_t dummy[4]{};
-        CHECK(reg.load_from_memory(dummy, 0, "x", bank) == -1);
-        CHECK(reg.size() == 0);
-    }
-
-    SECTION("negative size returns -1") {
-        std::uint8_t dummy[4]{};
-        CHECK(reg.load_from_memory(dummy, -1, "x", bank) == -1);
+        CHECK(reg.load_from_memory(cedar::MemoryView(dummy, 0), "x", bank) == -1);
         CHECK(reg.size() == 0);
     }
 
     SECTION("non-RIFF data returns -1") {
         // 12 bytes so the header check actually runs.
         const char garbage[] = "not-a-riff\0";
-        CHECK(reg.load_from_memory(garbage, sizeof(garbage), "x", bank) == -1);
+        CHECK(reg.load_from_memory(
+                  cedar::MemoryView(reinterpret_cast<const std::uint8_t*>(garbage),
+                                    sizeof(garbage)),
+                  "x", bank) == -1);
         CHECK(reg.size() == 0);
     }
 
@@ -76,7 +73,8 @@ TEST_CASE("SoundFontRegistry rejects invalid input", "[soundfont][registry]") {
             'R','I','F','F',  0,0,0,0,
             'W','A','V','E',  0,0,0,0
         };
-        CHECK(reg.load_from_memory(hdr, sizeof(hdr), "x", bank) == -1);
+        CHECK(reg.load_from_memory(cedar::MemoryView(hdr, sizeof(hdr)),
+                                    "x", bank) == -1);
         CHECK(reg.size() == 0);
     }
 }
@@ -94,7 +92,7 @@ TEST_CASE("SoundFontRegistry deduplicates by name", "[soundfont][registry][dedup
     cedar::SampleBank bank;
 
     SECTION("loading the same name twice returns the same ID") {
-        int first = reg.load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+        int first = reg.load_from_memory(cedar::MemoryView(bytes.data(), bytes.size()),
                                           "gm", bank);
         REQUIRE(first >= 0);
         REQUIRE(reg.size() == 1);
@@ -102,18 +100,19 @@ TEST_CASE("SoundFontRegistry deduplicates by name", "[soundfont][registry][dedup
         // Second call with the same name short-circuits via the dedup loop.
         // Use deliberately invalid data to prove the parser is never reached.
         std::uint8_t junk[16] = {0};
-        int second = reg.load_from_memory(junk, sizeof(junk), "gm", bank);
+        int second = reg.load_from_memory(cedar::MemoryView(junk, sizeof(junk)),
+                                           "gm", bank);
 
         CHECK(second == first);
         CHECK(reg.size() == 1);  // no new bank added
     }
 
     SECTION("loading a different name returns a different ID") {
-        int first = reg.load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+        int first = reg.load_from_memory(cedar::MemoryView(bytes.data(), bytes.size()),
                                           "gm", bank);
         REQUIRE(first >= 0);
 
-        int second = reg.load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+        int second = reg.load_from_memory(cedar::MemoryView(bytes.data(), bytes.size()),
                                            "piano", bank);
         REQUIRE(second >= 0);
         CHECK(second != first);
@@ -122,14 +121,14 @@ TEST_CASE("SoundFontRegistry deduplicates by name", "[soundfont][registry][dedup
 
     SECTION("dedup short-circuits before parsing (no SampleBank growth)") {
         // First load extends sample_bank with the SF2's samples.
-        int first = reg.load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+        int first = reg.load_from_memory(cedar::MemoryView(bytes.data(), bytes.size()),
                                           "gm", bank);
         REQUIRE(first >= 0);
         std::size_t samples_after_first = bank.size();
 
         // Second load with same name but fresh-looking bytes: must not grow
         // the sample bank, because the dedup short-circuit prevents parsing.
-        int second = reg.load_from_memory(bytes.data(), static_cast<int>(bytes.size()),
+        int second = reg.load_from_memory(cedar::MemoryView(bytes.data(), bytes.size()),
                                            "gm", bank);
         CHECK(second == first);
         CHECK(bank.size() == samples_after_first);

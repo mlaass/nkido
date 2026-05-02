@@ -122,37 +122,6 @@ public:
         return id;
     }
 
-    /// Load a sample from a WAV file
-    /// @param name Sample name for lookup
-    /// @param filepath Path to WAV file
-    /// @return Sample ID, or 0 if failed
-    std::uint32_t load_wav_file(const std::string& name, const std::string& filepath) {
-        WavData wav = WavLoader::load_from_file(filepath);
-        if (!wav.success) {
-            return 0;
-        }
-
-        return load_sample(name, wav.samples.data(), wav.num_frames,
-                          wav.channels, static_cast<float>(wav.sample_rate));
-    }
-
-    /// Load a sample from WAV data in memory
-    /// @param name Sample name for lookup
-    /// @param data Pointer to WAV file data
-    /// @param size Size of WAV data in bytes
-    /// @return Sample ID, or 0 if failed
-    std::uint32_t load_wav_memory(const std::string& name,
-                                   const std::uint8_t* data,
-                                   std::size_t size) {
-        WavData wav = WavLoader::load_from_memory(data, size);
-        if (!wav.success) {
-            return 0;
-        }
-
-        return load_sample(name, wav.samples.data(), wav.num_frames,
-                          wav.channels, static_cast<float>(wav.sample_rate));
-    }
-
 #ifndef CEDAR_NO_AUDIO_DECODERS
     /// Load a sample from audio data in any supported format (WAV, OGG, FLAC, MP3)
     /// Auto-detects the format from magic bytes

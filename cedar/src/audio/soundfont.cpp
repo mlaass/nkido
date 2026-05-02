@@ -41,12 +41,12 @@
 
 namespace cedar {
 
-int SoundFontRegistry::load_from_memory(const void* data, int size,
+int SoundFontRegistry::load_from_memory(MemoryView data,
                                          const std::string& name,
                                          SampleBank& sample_bank) {
-    if (!data || size <= 0) {
-        std::printf("[SoundFont] Invalid data: %s (data=%p, size=%d)\n",
-                    name.c_str(), data, size);
+    if (data.empty()) {
+        std::printf("[SoundFont] Invalid data: %s (size=%zu)\n",
+                    name.c_str(), data.size);
         return -1;
     }
 
@@ -60,9 +60,10 @@ int SoundFontRegistry::load_from_memory(const void* data, int size,
     if (banks_.size() >= MAX_SOUNDFONTS) return -1;
 
     // Pre-flight: verify RIFF/sfbk header before passing to TSF
-    const auto* header = static_cast<const uint8_t*>(data);
+    const auto* header = data.data;
+    const std::size_t size = data.size;
     if (size < 12) {
-        std::printf("[SoundFont] File too small for SF2 header: %s (%d bytes)\n",
+        std::printf("[SoundFont] File too small for SF2 header: %s (%zu bytes)\n",
                     name.c_str(), size);
         return -1;
     }
@@ -77,15 +78,17 @@ int SoundFontRegistry::load_from_memory(const void* data, int size,
         return -1;
     }
 
-    std::printf("[SoundFont] Parsing '%s' (%d bytes, %.1f MB)...\n",
-                name.c_str(), size, size / (1024.0 * 1024.0));
+    std::printf("[SoundFont] Parsing '%s' (%zu bytes, %.1f MB)...\n",
+                name.c_str(), size, static_cast<double>(size) / (1024.0 * 1024.0));
 
     // Parse SF2 with TinySoundFont
-    tsf* sf = tsf_load_memory(data, size);
+    tsf* sf = tsf_load_memory(header, static_cast<int>(size));
     if (!sf) {
         std::printf("[SoundFont] tsf_load_memory failed for '%s' — likely out of memory "
                     "(input: %.1f MB, estimated peak: ~%.0f MB)\n",
-                    name.c_str(), size / (1024.0 * 1024.0), (size * 5.0) / (1024.0 * 1024.0));
+                    name.c_str(),
+                    static_cast<double>(size) / (1024.0 * 1024.0),
+                    (static_cast<double>(size) * 5.0) / (1024.0 * 1024.0));
         return -1;
     }
 

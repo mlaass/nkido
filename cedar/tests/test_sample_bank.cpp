@@ -238,11 +238,11 @@ TEST_CASE("SampleData interpolation", "[sample_bank]") {
 TEST_CASE("SampleBank WAV loading", "[sample_bank]") {
     SampleBank bank;
 
-    SECTION("load_wav_memory loads mono WAV") {
+    SECTION("load_audio_data loads mono WAV") {
         auto wav_data = create_test_wav(100, 1, 44100);
 
-        std::uint32_t id = bank.load_wav_memory("mono_wav",
-            wav_data.data(), wav_data.size());
+        std::uint32_t id = bank.load_audio_data("mono_wav",
+            MemoryView(wav_data.data(), wav_data.size()));
 
         CHECK(id != 0);
 
@@ -253,11 +253,11 @@ TEST_CASE("SampleBank WAV loading", "[sample_bank]") {
         CHECK_THAT(sample->sample_rate, WithinAbs(44100.0f, 1.0f));
     }
 
-    SECTION("load_wav_memory loads stereo WAV") {
+    SECTION("load_audio_data loads stereo WAV") {
         auto wav_data = create_test_wav(50, 2, 48000);
 
-        std::uint32_t id = bank.load_wav_memory("stereo_wav",
-            wav_data.data(), wav_data.size());
+        std::uint32_t id = bank.load_audio_data("stereo_wav",
+            MemoryView(wav_data.data(), wav_data.size()));
 
         CHECK(id != 0);
 
@@ -361,8 +361,8 @@ TEST_CASE("SampleBank edge cases", "[sample_bank][edge]") {
     SECTION("invalid WAV data") {
         std::vector<std::uint8_t> garbage = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
 
-        std::uint32_t id = bank.load_wav_memory("garbage",
-            garbage.data(), garbage.size());
+        std::uint32_t id = bank.load_audio_data("garbage",
+            MemoryView(garbage.data(), garbage.size()));
 
         CHECK(id == 0);
     }
@@ -372,8 +372,8 @@ TEST_CASE("SampleBank edge cases", "[sample_bank][edge]") {
         // Truncate to header only
         wav_data.resize(44);
 
-        std::uint32_t id = bank.load_wav_memory("truncated",
-            wav_data.data(), wav_data.size());
+        std::uint32_t id = bank.load_audio_data("truncated",
+            MemoryView(wav_data.data(), wav_data.size()));
 
         CHECK(id == 0);
     }
