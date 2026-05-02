@@ -3,10 +3,15 @@
 #include <cedar/io/uri_resolver.hpp>
 #include <cedar/io/handlers/bundled_handler.hpp>
 
+#include <cedar/io/handlers/github_handler.hpp>
+
 #ifndef __EMSCRIPTEN__
 #include <cedar/io/handlers/file_handler.hpp>
+#include <cedar/io/handlers/http_handler.hpp>
+#include <cedar/io/file_cache.hpp>
 #include <filesystem>
 #include <fstream>
+#include <cstdlib>
 #endif
 
 #include <memory>
@@ -203,6 +208,134 @@ TEST_CASE("FileHandler round-trips a file via the URI resolver", "[uri-resolver]
         auto result = r.load("file://" + missing);
         REQUIRE_FALSE(result.success());
         CHECK(result.error().code == FileError::NotFound);
+    }
+
+    fs::remove_all(tmp);
+}
+
+// ============================================================================
+// FileCache (native only) [uri-resolver]
+// ============================================================================
+
+TEST_CASE("FileCache round-trip", "[uri-resolver][cache]") {
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "cedar_uri_cache_roundtrip";
+    fs::remove_all(tmp);
+
+    FileCache cache(tmp);
+
+    SECTION("miss returns nullopt") {
+        auto miss = cache.get("https://example.com/never-fetched");
+        CHECK_FALSE(miss.has_value());
+    }
+
+    SECTION("set then get returns the same bytes") {
+        std::vector<std::uint8_t> bytes{0xCA, 0xFE, 0xBA, 0xBE};
+        cache.set("https://example.com/x", MemoryView(bytes.data(), bytes.size()));
+
+        auto hit = cache.get("https://example.com/x");
+        REQUIRE(hit.has_value());
+        REQUIRE(hit->size() == 4);
+        CHECK(hit->view().data[0] == 0xCA);
+        CHECK(hit->view().data[3] == 0xBE);
+    }
+
+    SECTION("remove deletes an entry") {
+        std::vector<std::uint8_t> bytes{1};
+        cache.set("uri-a", MemoryView(bytes.data(), bytes.size()));
+        REQUIRE(cache.get("uri-a").has_value());
+        cache.remove("uri-a");
+        CHECK_FALSE(cache.get("uri-a").has_value());
+    }
+
+    SECTION("clear empties the directory") {
+        std::vector<std::uint8_t> bytes{1};
+        cache.set("a", MemoryView(bytes.data(), bytes.size()));
+        cache.set("b", MemoryView(bytes.data(), bytes.size()));
+        cache.clear();
+        CHECK(cache.total_size() == 0);
+    }
+
+    fs::remove_all(tmp);
+}
+
+// ============================================================================
+// GithubHandler URL transform [uri-resolver]
+// ============================================================================
+
+TEST_CASE("GithubHandler::to_https_url transforms URIs", "[uri-resolver][github]") {
+    using GH = GithubHandler;
+    SECTION("user/repo defaults to main + strudel.json") {
+        CHECK(GH::to_https_url("github:tidalcycles/Dirt-Samples")
+              == "https://raw.githubusercontent.com/tidalcycles/Dirt-Samples/main/strudel.json");
+    }
+
+    SECTION("user/repo/branch") {
+        CHECK(GH::to_https_url("github:foo/bar/develop")
+              == "https://raw.githubusercontent.com/foo/bar/develop/strudel.json");
+    }
+
+    SECTION("user/repo/branch/sub/dir") {
+        CHECK(GH::to_https_url("github:foo/bar/main/sub/dir")
+              == "https://raw.githubusercontent.com/foo/bar/main/sub/dir/strudel.json");
+    }
+
+    SECTION("audio extension fetched as-is") {
+        CHECK(GH::to_https_url("github:foo/bar/main/path/file.wav")
+              == "https://raw.githubusercontent.com/foo/bar/main/path/file.wav");
+        CHECK(GH::to_https_url("github:foo/bar/main/x.sf2")
+              == "https://raw.githubusercontent.com/foo/bar/main/x.sf2");
+    }
+
+    SECTION("malformed input returns empty") {
+        CHECK(GH::to_https_url("github:").empty());
+        CHECK(GH::to_https_url("github:onlyone").empty());
+        CHECK(GH::to_https_url("notgithub:foo/bar").empty());
+    }
+}
+
+// ============================================================================
+// Live HTTP test (gated on env var) [uri-resolver][http][network]
+// ============================================================================
+
+TEST_CASE("HttpHandler fetches a real file", "[uri-resolver][http][network]") {
+    if (!std::getenv("CEDAR_ENABLE_NETWORK_TESTS")) {
+        SKIP("network tests disabled (set CEDAR_ENABLE_NETWORK_TESTS=1)");
+    }
+
+    namespace fs = std::filesystem;
+    auto tmp = fs::temp_directory_path() / "cedar_http_test_cache";
+    fs::remove_all(tmp);
+
+    FileCache cache(tmp);
+    auto& r = fresh_resolver();
+    r.register_handler(std::make_unique<HttpHandler>("https", &cache));
+    r.register_handler(std::make_unique<GithubHandler>());
+
+    constexpr std::string_view kSmallBd =
+        "https://raw.githubusercontent.com/tidalcycles/Dirt-Samples/master/bd/BT0A0A7.wav";
+
+    auto first = r.load(kSmallBd);
+    if (!first.success()) {
+        WARN("HTTP fetch failed: " << first.error().message);
+    }
+    REQUIRE(first.success());
+    CHECK(first.buffer().size() > 0);
+
+    auto second = r.load(kSmallBd);
+    REQUIRE(second.success());
+    CHECK(second.buffer().size() == first.buffer().size());
+
+    // Both fetches stored the same single cache entry.
+    CHECK(cache.total_size() == first.buffer().size());
+
+    SECTION("github: scheme also resolves") {
+        auto g = r.load("github:tidalcycles/Dirt-Samples/master/bd/BT0A0A7.wav");
+        if (!g.success()) {
+            WARN("github fetch failed: " << g.error().message);
+        }
+        REQUIRE(g.success());
+        CHECK(g.buffer().size() == first.buffer().size());
     }
 
     fs::remove_all(tmp);

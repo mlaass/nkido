@@ -1,4 +1,4 @@
-> **Status: IN PROGRESS (Phase 1 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phases 1-2 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
@@ -536,15 +536,17 @@ Each phase ships independently and leaves the codebase in a working state. Tests
 
 No API users yet. Existing code unchanged. `FileError` enum extended with `NetworkError` and `Aborted` for use by later phases. Tests: 10 cases / 51 assertions in `[uri-resolver]`.
 
-### Phase 2 — Native HTTP + github: + native cache (2 days)
+### Phase 2 — Native HTTP + github: + native cache (2 days) ✅ DONE
 
 **Goal:** `nkido-cli --bank github:user/repo manifest.json` returns bytes (not yet wired into bank loading).
 
-- Vendor cpp-httplib into `cedar/third_party/`
-- `HttpHandler` (uses cpp-httplib)
-- `GithubHandler` (URL transform, recurse)
-- `cedar::FileCache` with `~/.cache/nkido/` directory
-- Unit test: fetch a small file from `https://raw.githubusercontent.com/...`, second fetch hits cache.
+- Vendor cpp-httplib into `cedar/third_party/` ✅ (v0.18.5)
+- `HttpHandler` (uses cpp-httplib) ✅
+- `GithubHandler` (URL transform, recurse) ✅
+- `cedar::FileCache` with `~/.cache/nkido/` directory ✅ (XDG-aware, FNV-1a-64 hex keys, mtime-LRU eviction at 500MB)
+- Unit test: fetch a small file from `https://raw.githubusercontent.com/...`, second fetch hits cache. ✅ (gated on `CEDAR_ENABLE_NETWORK_TESTS=1`)
+
+OpenSSL linked as a hard dep on native; SYSTEM include path quiets vendored-header warnings. Tests: 13 cases / 67 assertions in `[uri-resolver]` (offline) + 1 case / 7 assertions in `[network]` (live).
 
 ### Phase 3 — TS resolver + URI-only loadFile (2 days)
 

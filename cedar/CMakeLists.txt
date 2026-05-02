@@ -57,6 +57,7 @@ set(CEDAR_SOURCES
     src/vm/vm.cpp
     src/io/uri_resolver.cpp
     src/io/handlers/bundled_handler.cpp
+    src/io/handlers/github_handler.cpp
 )
 
 # Conditional sources
@@ -87,7 +88,9 @@ endif()
 if(CEDAR_ENABLE_FILE_IO AND NOT EMSCRIPTEN)
     list(APPEND CEDAR_SOURCES
         src/io/file_loader.cpp
+        src/io/file_cache.cpp
         src/io/handlers/file_handler.cpp
+        src/io/handlers/http_handler.cpp
     )
 endif()
 
@@ -98,8 +101,10 @@ target_include_directories(cedar
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-    PRIVATE
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>
+)
+# Vendored headers as SYSTEM so their warnings don't get flagged by -Wall.
+target_include_directories(cedar SYSTEM PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party>
 )
 
 # Apply compiler options (use BUILD_INTERFACE to avoid export issues)
@@ -107,6 +112,13 @@ target_link_libraries(cedar
     PRIVATE
         $<BUILD_INTERFACE:nkido_compiler_options>
 )
+
+# Native HTTP support: link OpenSSL for HTTPS via cpp-httplib (header-only).
+# Skipped on Emscripten — TS handles HTTP on the web side.
+if(CEDAR_ENABLE_FILE_IO AND NOT EMSCRIPTEN)
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(cedar PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+endif()
 
 # Inject version as compile definitions (read from VERSION file)
 target_compile_definitions(cedar PUBLIC
