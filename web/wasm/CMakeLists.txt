@@ -114,6 +114,10 @@ if(EMSCRIPTEN)
         _akkado_get_required_wavetables_count
         _akkado_get_required_wavetable_name
         _akkado_get_required_wavetable_path
+        # Required URIs (samples() and friends)
+        _akkado_get_required_uri_count
+        _akkado_get_required_uri
+        _akkado_get_required_uri_kind
         # Required input sources (audio-input PRD §4.4)
         _akkado_get_required_input_sources_count
         _akkado_get_required_input_source

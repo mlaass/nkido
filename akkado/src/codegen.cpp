@@ -46,6 +46,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     required_samples_extended_.clear();
     required_soundfonts_.clear();
     required_wavetables_.clear();
+    required_uris_.clear();
     required_input_sources_.clear();
     param_decls_.clear();
     viz_decls_.clear();
@@ -65,7 +66,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     if (!ast.valid()) {
         error("E100", "Invalid AST", {});
-        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, {}, {}, {}, false};
+        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false};
     }
 
     // Visit root (Program node)
@@ -90,7 +91,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
             std::move(state_inits_), std::move(required_samples_vec), std::move(required_samples_extended_),
             std::move(required_soundfonts_), std::move(required_input_sources_),
             std::move(param_decls_), std::move(viz_decls_), std::move(builtin_var_overrides_),
-            std::move(required_wavetables_), success};
+            std::move(required_wavetables_), std::move(required_uris_), success};
 }
 
 TypedValue CodeGenerator::visit(NodeIndex node) {
@@ -905,6 +906,9 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 // smooch / wt / wavetable resolve the bank name to its ID at
                 // compile time and emit OSC_WAVETABLE with rate = bank_id.
                 {"wt_load",   &CodeGenerator::handle_wt_load_call},
+                // samples("uri") — compile-time URI declaration for sample
+                // banks; records to required_uris_ for host to fetch.
+                {"samples",   &CodeGenerator::handle_samples_call},
                 {"smooch",    &CodeGenerator::handle_smooch_call},
                 {"wt",        &CodeGenerator::handle_smooch_call},
                 {"wavetable", &CodeGenerator::handle_smooch_call},

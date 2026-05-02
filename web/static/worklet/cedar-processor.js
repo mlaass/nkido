@@ -365,6 +365,28 @@ class CedarProcessor extends AudioWorkletProcessor {
 	}
 
 	/**
+	 * Get URI declarations from the compile result. The kind tag mirrors
+	 * akkado::UriKind: 0=SampleBank, 1=SoundFont, 2=Wavetable, 3=Sample.
+	 * The host iterates this list in order and dispatches each URI to the
+	 * appropriate registry; bytecode swap blocks until every URI resolves.
+	 * @returns {Array<{uri: string, kind: number}>}
+	 */
+	getRequiredUris() {
+		if (!this.module._akkado_get_required_uri_count) {
+			return [];
+		}
+		const count = this.module._akkado_get_required_uri_count();
+		const uris = [];
+		for (let i = 0; i < count; i++) {
+			const uriPtr = this.module._akkado_get_required_uri(i);
+			const uri = uriPtr ? this.module.UTF8ToString(uriPtr) : '';
+			const kind = this.module._akkado_get_required_uri_kind(i);
+			uris.push({ uri, kind });
+		}
+		return uris;
+	}
+
+	/**
 	 * Extract a float array from WASM memory, making a copy.
 	 * Always creates fresh heap views to handle memory growth safely.
 	 */
@@ -645,6 +667,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 					const requiredSamplesExtended = this.getRequiredSamplesExtended();
 					const requiredSoundfonts = this.getRequiredSoundFonts();
 					const requiredWavetables = this.getRequiredWavetables();
+					const requiredUris = this.getRequiredUris();
 					const requiredInputSources = this.getRequiredInputSources();
 
 					// Extract all state initialization data
@@ -706,6 +729,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 						requiredSamplesExtended,
 						requiredSoundfonts,
 						requiredWavetables,
+						requiredUris,
 						requiredInputSources,
 						paramDecls,
 						vizDecls,

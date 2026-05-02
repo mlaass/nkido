@@ -242,6 +242,16 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
                    {NAN, NAN, NAN, NAN, NAN},
                    "Load a wavetable bank (compile-time): wt_load(\"name\", \"path\")."}},
 
+    // samples — compile-time directive that declares a sample-bank URI for
+    // the host to load. Mirrors wt_load in shape: opcode = NOP, special-cased
+    // by codegen (see codegen.cpp special_handlers) to extract the string-
+    // literal argument and append a UriRequest to `required_uris_`. The host
+    // fetches each URI via the resolver before swapping bytecode.
+    {"samples",   {cedar::Opcode::NOP, 1, 0, false,
+                   {"uri", "", "", "", "", ""},
+                   {NAN, NAN, NAN, NAN, NAN},
+                   "Declare a sample-bank URI (compile-time): samples(\"github:user/repo\")."}},
+
     // Filters (signal, cutoff required; q optional with default 0.707)
     // SVF (State Variable Filter) - stable under modulation
     {"lp",      {cedar::Opcode::FILTER_SVF_LP, 2, 1, true,

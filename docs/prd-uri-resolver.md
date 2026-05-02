@@ -1,4 +1,4 @@
-> **Status: IN PROGRESS (Phases 1-6 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phases 1-7 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
@@ -591,15 +591,17 @@ Cedar tests: 184 passing / 1 skipped (network) — all 334,848 assertions green.
 - ✅ All call sites updated (9 in audio store, 1 in bank-registry, 1 in SampleBrowser).
 - ✅ Regression test: `web/tests/bank-registry.test.ts` spies `fetch`, asserts `loadBank('github:tidalcycles/Dirt-Samples')` does exactly one network call.
 
-### Phase 7 — Akkado samples() builtin + CompileResult.required_uris (2 days)
+### Phase 7 — Akkado samples() builtin + CompileResult.required_uris (2 days) ✅ DONE
 
 **Goal:** `samples("github:...")` in akkado source compiles; host fetches before bytecode swap.
 
-- `UriKind` / `UriRequest` in codegen.
-- `samples(uri)` builtin in `akkado/include/akkado/builtins.hpp` and codegen.
-- `CompileResult.required_uris` populated.
-- Web host: in the compile→run pipeline, drain `required_uris` via `uriResolver.load()` and feed into appropriate registry before swap.
-- Native CLI: same flow.
+- ✅ `UriKind` enum and `UriRequest` struct in `codegen.hpp`; `required_uris` field on `CodeGenResult` and `CompileResult`.
+- ✅ `samples` registered in `builtins.hpp` (Opcode::NOP, 1 required arg) and dispatched via the special-handlers table.
+- ✅ `handle_samples_call` in `codegen_patterns.cpp`: validates string literal, dedups, rejects empty URI, appends `UriRequest{kind = SampleBank}`. Emits no audio-time instruction.
+- ✅ WASM accessors `akkado_get_required_uri_count` / `akkado_get_required_uri` / `akkado_get_required_uri_kind` exposed and listed in CMakeLists.
+- ✅ Worklet extracts `requiredUris` and forwards in the `compiled` message; audio store drains it (kind 0 → `loadAsset(uri, 'sample_bank')`) between the wavetable and SoundFont drains, blocking bytecode swap on resolution.
+- ✅ Tests: 7 cases / 23 assertions in `[samples-builtin]` (single URI, source order, dedup, non-literal arg rejection, empty-URI rejection, arity errors, no instruction emitted). Full akkado suite still green at 137,577 assertions.
+- 🟡 Native CLI flow (mentioned in PRD goal) lands in phase 8 with `--bank` URI flag.
 
 ### Phase 8 — CLI URI flags + docs (1 day)
 

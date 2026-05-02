@@ -5542,6 +5542,57 @@ TypedValue CodeGenerator::handle_wt_load_call(NodeIndex node, const Node& n) {
     return TypedValue::void_val();
 }
 
+TypedValue CodeGenerator::handle_samples_call(NodeIndex node, const Node& n) {
+    // samples("uri") — declare a sample-bank URI for the host to load.
+    // Compile-time directive only (emits no audio-time instruction). The
+    // argument must be a string literal; any URI scheme is accepted (the
+    // host's URI resolver dispatches based on the scheme prefix).
+    (void)node;
+
+    std::size_t arg_count = 0;
+    NodeIndex arg = n.first_child;
+    while (arg != NULL_NODE) {
+        ++arg_count;
+        arg = ast_->arena[arg].next_sibling;
+    }
+    if (arg_count != 1) {
+        error("E230",
+              "samples() takes 1 argument (uri) — got "
+              + std::to_string(arg_count),
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    auto uri_opt = get_string_arg(*ast_, n, 0);
+    if (!uri_opt.has_value()) {
+        error("E231",
+              "samples() argument must be a string literal "
+              "(URI, e.g. \"github:tidalcycles/Dirt-Samples\")",
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    if (uri_opt->empty()) {
+        error("E232",
+              "samples() URI cannot be empty",
+              n.location);
+        return TypedValue::error_val();
+    }
+
+    // Dedup: same URI declared twice in source is a no-op.
+    for (const auto& u : required_uris_) {
+        if (u.kind == UriKind::SampleBank && u.uri == *uri_opt) {
+            return TypedValue::void_val();
+        }
+    }
+
+    UriRequest req;
+    req.uri  = *uri_opt;
+    req.kind = UriKind::SampleBank;
+    required_uris_.push_back(std::move(req));
+    return TypedValue::void_val();
+}
+
 TypedValue CodeGenerator::handle_smooch_call(NodeIndex node, const Node& n) {
     // smooch("bank_name", freq, phase?, tablePos?) — wavetable oscillator.
     // First arg is a string literal naming a bank previously declared via

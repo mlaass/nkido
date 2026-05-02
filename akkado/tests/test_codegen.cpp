@@ -7261,3 +7261,116 @@ TEST_CASE("Breakpoint limit warns and truncates via codegen", "[timeline_edge_ca
     }
     CHECK(has_warning);
 }
+
+// =============================================================================
+// samples() builtin (URI declaration for sample banks)
+// =============================================================================
+
+TEST_CASE("samples() records a single URI", "[samples-builtin]") {
+    auto result = akkado::compile(
+        "samples(\"github:tidalcycles/Dirt-Samples\")\n"
+        "0 |> out(%, %)"
+    );
+    REQUIRE(result.success);
+    REQUIRE(result.required_uris.size() == 1);
+    CHECK(result.required_uris[0].uri == "github:tidalcycles/Dirt-Samples");
+    CHECK(result.required_uris[0].kind == akkado::UriKind::SampleBank);
+}
+
+TEST_CASE("samples() preserves source order across multiple calls", "[samples-builtin]") {
+    auto result = akkado::compile(
+        "samples(\"github:foo/bar\")\n"
+        "samples(\"https://example.com/strudel.json\")\n"
+        "samples(\"file:///tmp/local.json\")\n"
+        "0 |> out(%, %)"
+    );
+    REQUIRE(result.success);
+    REQUIRE(result.required_uris.size() == 3);
+    CHECK(result.required_uris[0].uri == "github:foo/bar");
+    CHECK(result.required_uris[1].uri == "https://example.com/strudel.json");
+    CHECK(result.required_uris[2].uri == "file:///tmp/local.json");
+}
+
+TEST_CASE("samples() dedups identical URIs", "[samples-builtin]") {
+    auto result = akkado::compile(
+        "samples(\"github:foo/bar\")\n"
+        "samples(\"github:foo/bar\")\n"
+        "0 |> out(%, %)"
+    );
+    REQUIRE(result.success);
+    REQUIRE(result.required_uris.size() == 1);
+    CHECK(result.required_uris[0].uri == "github:foo/bar");
+}
+
+TEST_CASE("samples() rejects non-string-literal arg", "[samples-builtin]") {
+    auto result = akkado::compile(
+        "u = \"github:foo/bar\"\n"
+        "samples(u)\n"
+        "0 |> out(%, %)"
+    );
+    CHECK_FALSE(result.success);
+    bool found = false;
+    for (const auto& d : result.diagnostics) {
+        if (d.code == "E231") { found = true; break; }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("samples() rejects empty URI", "[samples-builtin]") {
+    auto result = akkado::compile(
+        "samples(\"\")\n"
+        "0 |> out(%, %)"
+    );
+    CHECK_FALSE(result.success);
+    bool found = false;
+    for (const auto& d : result.diagnostics) {
+        if (d.code == "E232") { found = true; break; }
+    }
+    CHECK(found);
+}
+
+TEST_CASE("samples() rejects wrong arg count", "[samples-builtin]") {
+    // Arity validation fires from the generic builtin signature check
+    // (min=1, max=1) before the special handler runs — same as wt_load.
+    SECTION("zero args") {
+        auto result = akkado::compile(
+            "samples()\n"
+            "0 |> out(%, %)"
+        );
+        CHECK_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E006") { found = true; break; }
+        }
+        CHECK(found);
+    }
+
+    SECTION("two args") {
+        auto result = akkado::compile(
+            "samples(\"github:foo/bar\", \"extra\")\n"
+            "0 |> out(%, %)"
+        );
+        CHECK_FALSE(result.success);
+        bool found = false;
+        for (const auto& d : result.diagnostics) {
+            if (d.code == "E007") { found = true; break; }
+        }
+        CHECK(found);
+    }
+}
+
+TEST_CASE("samples() emits no audio-time instruction", "[samples-builtin]") {
+    auto result = akkado::compile(
+        "samples(\"github:foo/bar\")\n"
+        "0 |> out(%, %)"
+    );
+    REQUIRE(result.success);
+    auto with = get_instructions(result);
+
+    auto baseline = akkado::compile("0 |> out(%, %)");
+    REQUIRE(baseline.success);
+    auto without = get_instructions(baseline);
+
+    // samples() is a compile-time directive; bytecode size must be unchanged
+    CHECK(with.size() == without.size());
+}

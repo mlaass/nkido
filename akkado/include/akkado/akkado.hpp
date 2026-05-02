@@ -57,6 +57,10 @@ struct CompileResult {
     // Wavetable banks declared via wt_load(). v1 keeps the *last* loaded bank
     // active; multi-bank routing is a v2 follow-up.
     std::vector<RequiredWavetable> required_wavetables;
+    // URIs declared via top-level directives like samples("..."). Hosts iterate
+    // these in source order, dispatch each by `kind` to the appropriate
+    // registry, and block bytecode swap until every URI resolves.
+    std::vector<UriRequest> required_uris;
 };
 
 /// Compile Akkado source code to Cedar bytecode

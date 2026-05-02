@@ -149,6 +149,16 @@ interface RequiredWavetable {
 	id: number;    // sequential slot ID assigned by the compiler
 }
 
+// URI kinds emitted by the akkado compiler. Mirrors `akkado::UriKind`.
+// 0 = SampleBank manifest (strudel.json), 1 = SoundFont (.sf2),
+// 2 = Wavetable (.wav), 3 = standalone sample.
+export type UriKind = 0 | 1 | 2 | 3;
+
+export interface UriRequest {
+	uri: string;
+	kind: UriKind;
+}
+
 interface CompileResult {
 	success: boolean;
 	bytecodeSize?: number;
@@ -157,6 +167,10 @@ interface CompileResult {
 	requiredSamplesExtended?: RequiredSampleExtended[]; // Extended: with bank/variant info
 	requiredSoundfonts?: RequiredSoundFont[]; // SF2 files needed
 	requiredWavetables?: RequiredWavetable[]; // Wavetable banks needed (Smooch)
+	// URIs declared via top-level directives (samples("..."), etc.). Hosts iterate
+	// these in source order, dispatch each by `kind` to the appropriate registry,
+	// and block bytecode swap until every URI resolves.
+	requiredUris?: UriRequest[];
 	// Source strings collected from in() calls (one per call, "" = UI default).
 	// Populated by audio-input PRD §4.4. Empty array when in() is not used.
 	requiredInputSources?: string[];
@@ -454,6 +468,7 @@ function createAudioEngine() {
 					requiredSamplesExtended: msg.requiredSamplesExtended as RequiredSampleExtended[] | undefined,
 					requiredSoundfonts: msg.requiredSoundfonts as RequiredSoundFont[] | undefined,
 					requiredWavetables: msg.requiredWavetables as RequiredWavetable[] | undefined,
+					requiredUris: msg.requiredUris as UriRequest[] | undefined,
 					requiredInputSources: msg.requiredInputSources as string[] | undefined,
 					paramDecls: msg.paramDecls as ParamDecl[] | undefined,
 					vizDecls: msg.vizDecls as VizDecl[] | undefined,
@@ -1090,6 +1105,51 @@ function createAudioEngine() {
 							` but compiler expected ${wt.id} — bytecode may reference the wrong bank`
 						);
 					}
+				}
+			}
+
+			// Step 2d: Drain required URIs (samples() and friends).
+			// Each declaration goes to the registry indicated by its kind tag;
+			// bytecode swap blocks until every URI resolves.
+			const requiredUris = compileResult.requiredUris || [];
+			for (const req of requiredUris) {
+				try {
+					if (req.kind === 0) {
+						// SampleBank manifest (e.g. github:user/repo)
+						const ok = await loadAsset(req.uri, 'sample_bank');
+						if (!ok) {
+							return {
+								success: false,
+								diagnostics: [
+									{
+										severity: 2,
+										message: `Sample bank '${req.uri}' failed to load`,
+										line: 1,
+										column: 1
+									}
+								]
+							};
+						}
+					} else {
+						// Other kinds are reserved for future use; warn and skip
+						// so a stray declaration doesn't silently sink playback.
+						console.warn(
+							`[AudioEngine] Unsupported URI kind ${req.kind} for '${req.uri}', skipping`
+						);
+					}
+				} catch (err) {
+					console.error(`[AudioEngine] URI '${req.uri}' failed to load:`, err);
+					return {
+						success: false,
+						diagnostics: [
+							{
+								severity: 2,
+								message: `URI '${req.uri}' failed to load: ${(err as Error).message}`,
+								line: 1,
+								column: 1
+							}
+						]
+					};
 				}
 			}
 

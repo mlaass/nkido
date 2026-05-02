@@ -209,6 +209,25 @@ struct RequiredWavetable {
     int         id = 0;   // Slot ID assigned by the compiler (== index in this vector)
 };
 
+/// Asset category for a UriRequest. The host dispatches on this to decide
+/// which registry receives the resolved bytes.
+enum class UriKind {
+    SampleBank,   // strudel.json manifest → BankRegistry.loadBank
+    SoundFont,    // .sf2/.sf3 → SoundFontRegistry
+    Wavetable,    // .wav → WavetableBankRegistry
+    Sample        // single .wav/.ogg/.flac → SampleBank
+};
+
+/// Required asset declared via a compile-time URI directive (e.g.
+/// `samples("github:...")`). The host iterates these in source order after
+/// compilation, fetches each via `cedar::UriResolver` / `uriResolver`, and
+/// feeds the bytes into the registry indicated by `kind`. Bytecode swap
+/// blocks until every URI resolves (success or terminal failure).
+struct UriRequest {
+    std::string uri;
+    UriKind     kind = UriKind::SampleBank;
+};
+
 /// Result of code generation
 struct CodeGenResult {
     std::vector<cedar::Instruction> instructions;
@@ -226,6 +245,7 @@ struct CodeGenResult {
     std::vector<VisualizationDecl> viz_decls;  // Declared visualizations for UI generation
     std::vector<BuiltinVarOverride> builtin_var_overrides;  // Builtin variable overrides (bpm, sr)
     std::vector<RequiredWavetable> required_wavetables;  // Wavetable banks from wt_load()
+    std::vector<UriRequest> required_uris;  // URI declarations from samples() etc.
     bool success = false;
 };
 
@@ -549,6 +569,13 @@ private:
     /// `required_wavetables_`; the host loads it after compilation.
     TypedValue handle_wt_load_call(NodeIndex node, const Node& n);
 
+    /// Handle samples("uri") - declare a sample-bank URI for the host to load.
+    /// Compile-time directive only — emits no instruction. The argument must
+    /// be a string literal (any URI scheme: file://, https://, github:, ...).
+    /// Recorded in `required_uris_` with kind = SampleBank; the host fetches
+    /// each entry before bytecode swap.
+    TypedValue handle_samples_call(NodeIndex node, const Node& n);
+
     /// Handle smooch("bank", freq, phase?, tablePos?) - wavetable oscillator.
     /// First arg must be a string literal naming a previously declared
     /// wt_load bank. The bank ID is resolved at compile time and packed
@@ -679,6 +706,9 @@ private:
     // (per-call order; deduplicated on (name, path) pair to avoid reloading
     // when the same bank appears in multiple modules).
     std::vector<RequiredWavetable> required_wavetables_;
+    // Track URI declarations from samples()/etc. (per-call order; deduplicated
+    // on uri string within each kind). Drained into CodeGenResult.required_uris.
+    std::vector<UriRequest> required_uris_;
     // Track input source strings from in('...') calls (per-call order; not deduplicated)
     std::vector<std::string> required_input_sources_;
 

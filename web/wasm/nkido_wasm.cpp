@@ -709,6 +709,47 @@ WASM_EXPORT const char* akkado_get_required_wavetable_path(uint32_t index) {
     return g_compile_result.required_wavetables[index].path.c_str();
 }
 
+// ============================================================================
+// Required URIs API (akkado samples() builtin and friends)
+// ============================================================================
+//
+// The Akkado compiler records every top-level URI directive (samples("..."),
+// future soundfont("..."), etc.) in `required_uris`. The JS host iterates
+// these after compile and dispatches each URI to the appropriate registry
+// based on its `kind`:
+//   0 = SampleBank   → bankRegistry.loadBank(uri)
+//   1 = SoundFont    → audioEngine.loadAsset(uri, 'soundfont', ...)
+//   2 = Wavetable    → audioEngine.loadAsset(uri, 'wavetable', ...)
+//   3 = Sample       → audioEngine.loadAsset(uri, 'sample', ...)
+// The bytecode swap is gated behind every URI resolving (the same drain
+// pattern as required_samples / required_soundfonts / required_wavetables).
+
+/**
+ * Get the number of URI directives in the compile result.
+ */
+WASM_EXPORT uint32_t akkado_get_required_uri_count() {
+    return static_cast<uint32_t>(g_compile_result.required_uris.size());
+}
+
+/**
+ * Get the URI string at `index`.
+ * @return Pointer to null-terminated URI, or nullptr if index out of range.
+ */
+WASM_EXPORT const char* akkado_get_required_uri(uint32_t index) {
+    if (index >= g_compile_result.required_uris.size()) return nullptr;
+    return g_compile_result.required_uris[index].uri.c_str();
+}
+
+/**
+ * Get the kind tag (0..3) for the URI at `index`. Mirrors
+ * `akkado::UriKind`.
+ * @return UriKind enum value, or -1 if index out of range.
+ */
+WASM_EXPORT int32_t akkado_get_required_uri_kind(uint32_t index) {
+    if (index >= g_compile_result.required_uris.size()) return -1;
+    return static_cast<int32_t>(g_compile_result.required_uris[index].kind);
+}
+
 /**
  * Get number of in() calls in the most recent compile (each entry corresponds
  * to one in() call in source order). Returns 0 if the program does not use in().
