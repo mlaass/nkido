@@ -4,7 +4,7 @@
 
 This document tracks the incomplete implementations that were flagged as MVP blockers. Every concrete blocker has been resolved — either directly (Priority 1), or as a side effect of later refactors (TypedValue system enabling nested field access and UFCS, `ARRAY_INDEX` opcode added to Cedar VM). Remaining items (post statements, chord expansion stub) are either non-blocking or deliberately deferred.
 
-Audit trail: [`audits/MVP-INCOMPLETE-IMPLEMENTATIONS_audit_2026-04-24.md`](audits/MVP-INCOMPLETE-IMPLEMENTATIONS_audit_2026-04-24.md).
+Audit trail: [`../audits/MVP-INCOMPLETE-IMPLEMENTATIONS_audit_2026-04-24.md`](../audits/MVP-INCOMPLETE-IMPLEMENTATIONS_audit_2026-04-24.md).
 
 ## Priority 1: Pattern Transformations (Partially Complete)
 

@@ -1,6 +1,6 @@
 # Audit: MVP Incomplete Implementations
 
-**PRD:** `docs/MVP-INCOMPLETE-IMPLEMENTATIONS.md`
+**PRD:** `docs/reports/2026-01-31-mvp-incomplete-implementations.md`
 **Audit base:** `17a765a` (PRD introduction, 2026-01-31)
 **Audit head:** `4977c77` (2026-04-24)
 **Audited:** 2026-04-24
