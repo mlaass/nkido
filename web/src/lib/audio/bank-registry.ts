@@ -92,7 +92,7 @@ class BankRegistryClass {
 
 		if (typeof source === 'string') {
 			// URL - fetch manifest via FileLoader (with caching)
-			const result = await loadFile({ type: 'url', url: source }, { cache: true });
+			const result = await loadFile(source, { cache: true });
 			const text = new TextDecoder().decode(result.data);
 			manifestData = JSON.parse(text);
 

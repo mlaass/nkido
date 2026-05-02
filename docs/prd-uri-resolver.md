@@ -1,4 +1,4 @@
-> **Status: IN PROGRESS (Phases 1-2 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phases 1-3 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
@@ -548,15 +548,17 @@ No API users yet. Existing code unchanged. `FileError` enum extended with `Netwo
 
 OpenSSL linked as a hard dep on native; SYSTEM include path quiets vendored-header warnings. Tests: 13 cases / 67 assertions in `[uri-resolver]` (offline) + 1 case / 7 assertions in `[network]` (live).
 
-### Phase 3 — TS resolver + URI-only loadFile (2 days)
+### Phase 3 — TS resolver + URI-only loadFile (2 days) ✅ DONE
 
 **Goal:** `loadFile(uri)` works for all schemes on the web. `FileSource` deleted.
 
-- `web/src/lib/io/uri-resolver.ts`
-- All five web handlers (`http`, `github`, `idb`, `bundled`, `blob`)
-- Rewrite `file-loader.ts` to be a thin wrapper: `loadFile(uri, opts) = uriResolver.load(uri, opts)`
-- Update every existing call site of `loadFile({type:'url',...})` to `loadFile(url)`
-- Test: URI dispatch table, blob round-trip, github URL transform.
+- `web/src/lib/io/uri-resolver.ts` ✅ (with `registerBlob` / `unregisterBlob` and in-flight dedup)
+- All six web handlers (`http`, `https`, `github`, `idb`, `bundled`, `blob`) ✅
+- Rewrite `file-loader.ts` to be a thin wrapper: `loadFile(uri, opts) = uriResolver.load(uri, opts)` ✅
+- Update every existing call site of `loadFile({type:'url',...})` to `loadFile(url)` ✅ (4 sites: bank-registry.ts:95, audio.svelte.ts:1296/1513/1564, plus removed `FileSource` import)
+- Test: URI dispatch table, blob round-trip, github URL transform. ✅ (19 cases passing)
+
+`bun run check` clean (0 errors). Existing call sites untouched outside the migration. The `loadFromGitHub` path in BankRegistry stays for now — it's deleted in Phase 6 along with the audio store collapse.
 
 ### Phase 4 — Aggressive C++ cleanup (1.5 days)
 

@@ -8,7 +8,7 @@ import { DEFAULT_DRUM_KIT } from '$lib/audio/default-samples';
 import { DEFAULT_SOUNDFONTS, resolveDefaultSoundFontUrls } from '$lib/audio/default-soundfonts';
 import { settingsStore } from './settings.svelte';
 import { bankRegistry, type SampleReference } from '$lib/audio/bank-registry';
-import { loadFile, type FileSource } from '$lib/io/file-loader';
+import { loadFile } from '$lib/io/file-loader';
 import {
 	acquireMicSource,
 	acquireTabSource,
@@ -1293,7 +1293,7 @@ function createAudioEngine() {
 
 		try {
 			console.log('[AudioEngine] Fetching sample from URL:', url);
-			const result = await loadFile({ type: 'url', url }, { cache: true });
+			const result = await loadFile(url, { cache: true });
 			const arrayBuffer = result.data;
 			console.log('[AudioEngine] Loaded sample from URL:', name, 'size:', arrayBuffer.byteLength);
 
@@ -1510,7 +1510,7 @@ function createAudioEngine() {
 	 */
 	async function loadSoundFontFromUrl(name: string, url: string): Promise<SoundFontInfo | null> {
 		try {
-			const result = await loadFile({ type: 'url', url }, { cache: true });
+			const result = await loadFile(url, { cache: true });
 			return await loadSoundFont(name, result.data);
 		} catch (err) {
 			console.error('[AudioEngine] Failed to fetch SoundFont:', err);
@@ -1561,7 +1561,7 @@ function createAudioEngine() {
 	 */
 	async function loadWavetableFromUrl(name: string, url: string): Promise<number> {
 		try {
-			const result = await loadFile({ type: 'url', url }, { cache: true });
+			const result = await loadFile(url, { cache: true });
 			return await loadWavetable(name, result.data);
 		} catch (err) {
 			console.error('[AudioEngine] Failed to fetch wavetable:', err);
