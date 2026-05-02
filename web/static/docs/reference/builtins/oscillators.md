@@ -87,14 +87,11 @@ osc("noise") |> lp(%, 200 + osc("sin", 0.5) * 1000) |> out(%, %)
 
 ### FM synthesis
 
+FM synthesis modulates the carrier's frequency input with another oscillator. See [fm-synthesis](fm-synthesis) for the full treatment.
+
 ```akk
 // Simple FM
 osc("sin", 440 + osc("sin", 5) * 10) |> out(%, %)
 ```
 
-```akk
-// FM using phasor as modulator
-osc("sin", 440 + osc("phasor", 5) * 100) |> out(%, %)
-```
-
-Related: [Math Functions](math), [Filters](filters)
+Related: [fm-synthesis](fm-synthesis), [Math Functions](math), [Filters](filters)

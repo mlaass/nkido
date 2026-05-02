@@ -2,7 +2,7 @@
 title: Mini-Notation Basics
 category: mini-notation
 order: 1
-keywords: [mini-notation, pattern, sequence, rhythm, pitch, chord, rest, tidal, strudel, modifier, speed, slow, repeat, chance, alternation]
+keywords: [mini-notation, pattern, sequence, rhythm, pitch, rest, tidal, strudel, modifier, speed, slow, repeat, chance, alternation]
 ---
 
 # Mini-Notation
@@ -54,29 +54,14 @@ pat("c4 e4 ~ g4")
 
 ## Chords
 
-Use the `chord()` function with standard chord symbols:
+For chord symbols (`Am7`, `Cmaj7`), inline chord brackets (`[c4 e4 g4]`), and voice-leading transforms (`anchor`, `mode`, `voicing`, `addVoicings`), see [Chords](chords).
 
 ```akk
-// Major chord
-chord("C")      // C major triad
-
-// Minor seventh
-chord("Am7")    // A minor seventh
-
-// Chord progression
-chord("Am C Dm G")  // One chord per beat
-
-// Available chord qualities:
-// m (minor), maj, 7, maj7, m7, dim, aug, sus2, sus4
-```
-
-## Inline chords
-
-Play multiple notes simultaneously with square brackets:
-
-```akk
-// C major as inline chord
+// Inline chord — three notes at once
 pat("[c4 e4 g4]")
+
+// Chord-symbol progression
+chord("Am C G F")
 ```
 
 ## Grouping

@@ -9,6 +9,7 @@ export const slugToPath: Record<string, string> = {
 	"02-filters": "tutorials/02-filters.md",
 	"04-rhythm": "tutorials/04-rhythm.md",
 	"01-hello-sine": "tutorials/01-hello-sine.md",
+	"chords": "reference/mini-notation/chords.md",
 	"microtonal": "reference/mini-notation/microtonal.md",
 	"basics": "reference/mini-notation/basics.md",
 	"curve-notation": "reference/mini-notation/curve-notation.md",
@@ -25,17 +26,28 @@ export const slugToPath: Record<string, string> = {
 	"stereo": "reference/builtins/stereo.md",
 	"sequencing": "reference/builtins/sequencing.md",
 	"delays": "reference/builtins/delays.md",
+	"samples-loading": "reference/builtins/samples-loading.md",
+	"polyphony": "reference/builtins/polyphony.md",
 	"filters": "reference/builtins/filters.md",
 	"distortion": "reference/builtins/distortion.md",
 	"utility": "reference/builtins/utility.md",
 	"envelopes": "reference/builtins/envelopes.md",
 	"modulation": "reference/builtins/modulation.md",
+	"pianoroll": "reference/builtins/pianoroll.md",
 	"math": "reference/builtins/math.md",
+	"samplers": "reference/builtins/samplers.md",
 	"oscillators": "reference/builtins/oscillators.md",
 	"state": "reference/builtins/state.md",
 	"edge": "reference/builtins/edge.md",
 	"dynamics": "reference/builtins/dynamics.md",
+	"oscilloscope": "reference/builtins/oscilloscope.md",
+	"soundfonts": "reference/builtins/soundfonts.md",
+	"timelines": "reference/builtins/timelines.md",
+	"waterfall": "reference/builtins/waterfall.md",
+	"spectrum": "reference/builtins/spectrum.md",
+	"waveform": "reference/builtins/waveform.md",
 	"reverbs": "reference/builtins/reverbs.md",
+	"fm-synthesis": "reference/builtins/fm-synthesis.md",
 	"visualizations": "reference/builtins/visualizations.md",
 	"DOCUMENTATION_GUIDE": "DOCUMENTATION_GUIDE.md"
 };
@@ -131,6 +143,50 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "audio-input",
 			"title": "Audio Input"
+		},
+		{
+			"slug": "fm-synthesis",
+			"title": "FM Synthesis"
+		},
+		{
+			"slug": "samplers",
+			"title": "Samplers"
+		},
+		{
+			"slug": "soundfonts",
+			"title": "SoundFonts"
+		},
+		{
+			"slug": "samples-loading",
+			"title": "Samples Loading"
+		},
+		{
+			"slug": "polyphony",
+			"title": "Polyphony"
+		},
+		{
+			"slug": "timelines",
+			"title": "Timelines"
+		},
+		{
+			"slug": "oscilloscope",
+			"title": "Oscilloscope"
+		},
+		{
+			"slug": "waveform",
+			"title": "Waveform"
+		},
+		{
+			"slug": "spectrum",
+			"title": "Spectrum Analyzer"
+		},
+		{
+			"slug": "waterfall",
+			"title": "Waterfall"
+		},
+		{
+			"slug": "pianoroll",
+			"title": "Piano Roll"
 		}
 	],
 	"language": [
@@ -171,6 +227,10 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 		{
 			"slug": "microtonal",
 			"title": "Microtonal Notation"
+		},
+		{
+			"slug": "chords",
+			"title": "Chords"
 		}
 	],
 	"concepts": [
@@ -186,8 +246,18 @@ export const navigation: Record<string, Array<{ slug: string; title: string }>> 
 };
 
 export const lookup: Record<string, { slug: string; category: string; title: string; anchor?: string }> = {
+	"808": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
+	"909": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
 	"mono": {
-		"slug": "sequencing",
+		"slug": "polyphony",
 		"category": "builtins",
 		"title": "mono",
 		"anchor": "mono"
@@ -255,9 +325,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Testing Progression"
 	},
 	"samples": {
-		"slug": "05-testing-progression",
-		"category": "tutorials",
-		"title": "Testing Progression"
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "samples",
+		"anchor": "samples"
 	},
 	"filters": {
 		"slug": "05-testing-progression",
@@ -460,9 +531,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Building Synth Voices"
 	},
 	"voice": {
-		"slug": "03-synthesis",
-		"category": "tutorials",
-		"title": "Building Synth Voices"
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "voice",
+		"anchor": "voice"
 	},
 	"pattern": {
 		"slug": "06-pattern-modulation",
@@ -578,7 +650,7 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Rhythm & Patterns"
 	},
 	"clock": {
-		"slug": "utility",
+		"slug": "timelines",
 		"category": "builtins",
 		"title": "clock",
 		"anchor": "clock"
@@ -649,6 +721,106 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "osc",
 		"anchor": "osc"
+	},
+	"chord": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"chords": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"voicing": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"voicings": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"anchor": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"mode": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"addvoicings": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"drop2": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"drop3": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"close": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"open": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"inversion": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"m7": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"maj7": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"dim": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"aug": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"sus2": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"sus4": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"triad": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
+	},
+	"seventh": {
+		"slug": "chords",
+		"category": "mini-notation",
+		"title": "Chords"
 	},
 	"microtonal": {
 		"slug": "microtonal",
@@ -735,11 +907,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "mini-notation",
 		"title": "Mini-Notation Basics"
 	},
-	"chord": {
-		"slug": "basics",
-		"category": "mini-notation",
-		"title": "Mini-Notation Basics"
-	},
 	"rest": {
 		"slug": "basics",
 		"category": "mini-notation",
@@ -761,9 +928,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Mini-Notation Basics"
 	},
 	"speed": {
-		"slug": "basics",
-		"category": "mini-notation",
-		"title": "Mini-Notation Basics"
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "speed",
+		"anchor": "speed"
 	},
 	"slow": {
 		"slug": "basics",
@@ -787,20 +955,22 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Mini-Notation Basics"
 	},
 	"curve": {
-		"slug": "curve-notation",
-		"category": "reference",
-		"title": "Curve Notation"
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "curve",
+		"anchor": "curve"
 	},
 	"timeline": {
-		"slug": "sequencing",
+		"slug": "timelines",
 		"category": "builtins",
 		"title": "timeline",
 		"anchor": "timeline"
 	},
 	"automation": {
-		"slug": "curve-notation",
-		"category": "reference",
-		"title": "Curve Notation"
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "automation",
+		"anchor": "automation"
 	},
 	"t\"": {
 		"slug": "curve-notation",
@@ -808,9 +978,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Curve Notation"
 	},
 	"breakpoint": {
-		"slug": "curve-notation",
-		"category": "reference",
-		"title": "Curve Notation"
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "breakpoint",
+		"anchor": "breakpoint"
 	},
 	"literal": {
 		"slug": "literals",
@@ -833,9 +1004,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Pattern Literals"
 	},
 	"sample": {
-		"slug": "literals",
-		"category": "pattern",
-		"title": "Pattern Literals"
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "sample",
+		"anchor": "sample"
 	},
 	"n\"…\"": {
 		"slug": "literals",
@@ -873,9 +1045,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "URI Schemes"
 	},
 	"soundfont": {
-		"slug": "uri-schemes",
-		"category": "reference",
-		"title": "URI Schemes"
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "soundfont",
+		"anchor": "soundfont"
 	},
 	"wavetable": {
 		"slug": "uri-schemes",
@@ -883,14 +1056,16 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "URI Schemes"
 	},
 	"github": {
-		"slug": "uri-schemes",
-		"category": "reference",
-		"title": "URI Schemes"
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "github",
+		"anchor": "github"
 	},
 	"http": {
-		"slug": "uri-schemes",
-		"category": "reference",
-		"title": "URI Schemes"
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "http",
+		"anchor": "http"
 	},
 	"https": {
 		"slug": "uri-schemes",
@@ -898,9 +1073,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "URI Schemes"
 	},
 	"file": {
-		"slug": "uri-schemes",
-		"category": "reference",
-		"title": "URI Schemes"
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "file",
+		"anchor": "file"
 	},
 	"bundled": {
 		"slug": "uri-schemes",
@@ -1216,8 +1392,8 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"anchor": "normalize"
 	},
 	"scale": {
-		"slug": "arrays",
-		"category": "language",
+		"slug": "waveform",
+		"category": "builtins",
 		"title": "scale",
 		"anchor": "scale"
 	},
@@ -1288,9 +1464,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Arrays"
 	},
 	"voices": {
-		"slug": "arrays",
-		"category": "language",
-		"title": "Arrays"
+		"slug": "polyphony",
+		"category": "builtins",
+		"title": "voices",
+		"anchor": "voices"
 	},
 	"multi-buffer": {
 		"slug": "arrays",
@@ -1530,29 +1707,11 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "euclid",
 		"anchor": "euclid"
 	},
-	"poly": {
+	"pattern transforms": {
 		"slug": "sequencing",
 		"category": "builtins",
-		"title": "poly",
-		"anchor": "poly"
-	},
-	"legato": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "legato",
-		"anchor": "legato"
-	},
-	"spread": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "spread",
-		"anchor": "spread"
-	},
-	"pattern transforms (phase 2 prd)": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Pattern transforms (Phase 2 PRD)",
-		"anchor": "pattern-transforms-phase-2-prd"
+		"title": "Pattern transforms",
+		"anchor": "pattern-transforms"
 	},
 	"pattern generators": {
 		"slug": "sequencing",
@@ -1560,28 +1719,12 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Pattern generators",
 		"anchor": "pattern-generators"
 	},
-	"voicing transforms (chord patterns only)": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Voicing transforms (chord patterns only)",
-		"anchor": "voicing-transforms-chord-patterns-only"
-	},
 	"sequencing": {
 		"slug": "sequencing",
 		"category": "builtins",
 		"title": "Sequencing & Timing"
 	},
 	"timing": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Sequencing & Timing"
-	},
-	"polyphonic": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Sequencing & Timing"
-	},
-	"instrument": {
 		"slug": "sequencing",
 		"category": "builtins",
 		"title": "Sequencing & Timing"
@@ -1661,26 +1804,6 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Sequencing & Timing"
 	},
-	"anchor": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Sequencing & Timing"
-	},
-	"mode": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Sequencing & Timing"
-	},
-	"voicing": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Sequencing & Timing"
-	},
-	"addvoicings": {
-		"slug": "sequencing",
-		"category": "builtins",
-		"title": "Sequencing & Timing"
-	},
 	"delay_ms": {
 		"slug": "delays",
 		"category": "builtins",
@@ -1735,6 +1858,95 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "delays",
 		"category": "builtins",
 		"title": "Delays"
+	},
+	"bank": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "bank",
+		"anchor": "bank"
+	},
+	"url": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "url",
+		"anchor": "url"
+	},
+	"drag-drop": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "drag-drop",
+		"anchor": "drag-drop"
+	},
+	"asset": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "asset",
+		"anchor": "asset"
+	},
+	"loading": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "Samples Loading"
+	},
+	"registry": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "Samples Loading"
+	},
+	"samples-directive": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "Samples Loading"
+	},
+	"dirt-samples": {
+		"slug": "samples-loading",
+		"category": "builtins",
+		"title": "Samples Loading"
+	},
+	"poly": {
+		"slug": "polyphony",
+		"category": "builtins",
+		"title": "poly",
+		"anchor": "poly"
+	},
+	"legato": {
+		"slug": "polyphony",
+		"category": "builtins",
+		"title": "legato",
+		"anchor": "legato"
+	},
+	"spread": {
+		"slug": "polyphony",
+		"category": "builtins",
+		"title": "spread",
+		"anchor": "spread"
+	},
+	"polyphonic": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "polyphonic",
+		"anchor": "polyphonic"
+	},
+	"instrument": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "instrument",
+		"anchor": "instrument"
+	},
+	"allocation": {
+		"slug": "polyphony",
+		"category": "builtins",
+		"title": "Polyphony"
+	},
+	"retrigger": {
+		"slug": "polyphony",
+		"category": "builtins",
+		"title": "Polyphony"
+	},
+	"voice-stealing": {
+		"slug": "polyphony",
+		"category": "builtins",
+		"title": "Polyphony"
 	},
 	"bp": {
 		"slug": "filters",
@@ -1886,6 +2098,72 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "modulation",
 		"category": "builtins",
 		"title": "Modulation Effects"
+	},
+	"pianoroll": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "pianoroll",
+		"anchor": "pianoroll"
+	},
+	"beats": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "beats",
+		"anchor": "beats"
+	},
+	"showgrid": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "showGrid",
+		"anchor": "showgrid"
+	},
+	"chromatic": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "chromatic",
+		"anchor": "chromatic"
+	},
+	"pentatonic": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "pentatonic",
+		"anchor": "pentatonic"
+	},
+	"octave": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "octave",
+		"anchor": "octave"
+	},
+	"piano": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "Piano Roll"
+	},
+	"roll": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "Piano Roll"
+	},
+	"visualization": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "Piano Roll"
+	},
+	"viz": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "Piano Roll"
+	},
+	"events": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "Piano Roll"
+	},
+	"grid": {
+		"slug": "pianoroll",
+		"category": "builtins",
+		"title": "Piano Roll"
 	},
 	"unary math": {
 		"slug": "math",
@@ -2062,6 +2340,77 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Math Functions"
 	},
+	"sample_loop": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "sample_loop",
+		"anchor": "sample-loop"
+	},
+	"bd": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "bd",
+		"anchor": "bd"
+	},
+	"sd": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "sd",
+		"anchor": "sd"
+	},
+	"hh": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "hh",
+		"anchor": "hh"
+	},
+	"oh": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "oh",
+		"anchor": "oh"
+	},
+	"cp": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "cp",
+		"anchor": "cp"
+	},
+	"sampler": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
+	"drum": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
+	"kit": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
+	"percussion": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
+	"playback": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
+	"one-shot": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
+	"loop": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
 	"tri": {
 		"slug": "oscillators",
 		"category": "builtins",
@@ -2201,14 +2550,16 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Edge Primitives"
 	},
 	"rising": {
-		"slug": "edge",
+		"slug": "oscilloscope",
 		"category": "builtins",
-		"title": "Edge Primitives"
+		"title": "rising",
+		"anchor": "rising"
 	},
 	"falling": {
-		"slug": "edge",
+		"slug": "oscilloscope",
 		"category": "builtins",
-		"title": "Edge Primitives"
+		"title": "falling",
+		"anchor": "falling"
 	},
 	"sample-and-hold": {
 		"slug": "edge",
@@ -2231,9 +2582,10 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"title": "Dynamics"
 	},
 	"ratio": {
-		"slug": "dynamics",
+		"slug": "fm-synthesis",
 		"category": "builtins",
-		"title": "Dynamics"
+		"title": "ratio",
+		"anchor": "ratio"
 	},
 	"ceiling": {
 		"slug": "dynamics",
@@ -2244,6 +2596,232 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"slug": "dynamics",
 		"category": "builtins",
 		"title": "Dynamics"
+	},
+	"oscilloscope": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "oscilloscope",
+		"anchor": "oscilloscope"
+	},
+	"triggerlevel": {
+		"slug": "oscilloscope",
+		"category": "builtins",
+		"title": "triggerLevel",
+		"anchor": "triggerlevel"
+	},
+	"triggeredge": {
+		"slug": "oscilloscope",
+		"category": "builtins",
+		"title": "triggerEdge",
+		"anchor": "triggeredge"
+	},
+	"time-domain": {
+		"slug": "oscilloscope",
+		"category": "builtins",
+		"title": "Oscilloscope"
+	},
+	"display": {
+		"slug": "oscilloscope",
+		"category": "builtins",
+		"title": "Oscilloscope"
+	},
+	"monitor": {
+		"slug": "oscilloscope",
+		"category": "builtins",
+		"title": "Oscilloscope"
+	},
+	"probe": {
+		"slug": "oscilloscope",
+		"category": "builtins",
+		"title": "Oscilloscope"
+	},
+	"gm": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "gm",
+		"anchor": "gm"
+	},
+	"preset": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "preset",
+		"anchor": "preset"
+	},
+	"sf2": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "SoundFonts"
+	},
+	"sf3": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "SoundFonts"
+	},
+	"general-midi": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "SoundFonts"
+	},
+	"fluidsynth": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "SoundFonts"
+	},
+	"timgm6mb": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "SoundFonts"
+	},
+	"fluidr3": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "SoundFonts"
+	},
+	"musescore": {
+		"slug": "soundfonts",
+		"category": "builtins",
+		"title": "SoundFonts"
+	},
+	"sync": {
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "sync",
+		"anchor": "sync"
+	},
+	"scheduled": {
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "scheduled",
+		"anchor": "scheduled"
+	},
+	"curve-notation": {
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "Timelines"
+	},
+	"breakpoints": {
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "Timelines"
+	},
+	"parameter": {
+		"slug": "timelines",
+		"category": "builtins",
+		"title": "Timelines"
+	},
+	"waterfall": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "waterfall",
+		"anchor": "waterfall"
+	},
+	"gradient": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "gradient",
+		"anchor": "gradient"
+	},
+	"magma": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "magma",
+		"anchor": "magma"
+	},
+	"viridis": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "viridis",
+		"anchor": "viridis"
+	},
+	"inferno": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "inferno",
+		"anchor": "inferno"
+	},
+	"thermal": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "thermal",
+		"anchor": "thermal"
+	},
+	"grayscale": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "grayscale",
+		"anchor": "grayscale"
+	},
+	"angle": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "angle",
+		"anchor": "angle"
+	},
+	"spectrogram": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "Waterfall"
+	},
+	"fft": {
+		"slug": "spectrum",
+		"category": "builtins",
+		"title": "fft",
+		"anchor": "fft"
+	},
+	"time-frequency": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "Waterfall"
+	},
+	"scrolling": {
+		"slug": "waterfall",
+		"category": "builtins",
+		"title": "Waterfall"
+	},
+	"mindb": {
+		"slug": "spectrum",
+		"category": "builtins",
+		"title": "minDb",
+		"anchor": "mindb"
+	},
+	"maxdb": {
+		"slug": "spectrum",
+		"category": "builtins",
+		"title": "maxDb",
+		"anchor": "maxdb"
+	},
+	"spectrum": {
+		"slug": "visualizations",
+		"category": "builtins",
+		"title": "spectrum",
+		"anchor": "spectrum"
+	},
+	"logscale": {
+		"slug": "spectrum",
+		"category": "builtins",
+		"title": "logScale",
+		"anchor": "logscale"
+	},
+	"analyzer": {
+		"slug": "spectrum",
+		"category": "builtins",
+		"title": "Spectrum Analyzer"
+	},
+	"frequency-domain": {
+		"slug": "spectrum",
+		"category": "builtins",
+		"title": "Spectrum Analyzer"
+	},
+	"filled": {
+		"slug": "waveform",
+		"category": "builtins",
+		"title": "filled",
+		"anchor": "filled"
+	},
+	"line": {
+		"slug": "waveform",
+		"category": "builtins",
+		"title": "Waveform"
 	},
 	"room": {
 		"slug": "reverbs",
@@ -2275,104 +2853,40 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Reverbs"
 	},
-	"oscilloscope": {
-		"slug": "visualizations",
+	"carrier": {
+		"slug": "fm-synthesis",
 		"category": "builtins",
-		"title": "oscilloscope",
-		"anchor": "oscilloscope"
+		"title": "carrier",
+		"anchor": "carrier"
 	},
-	"spectrum": {
-		"slug": "visualizations",
+	"modulator": {
+		"slug": "fm-synthesis",
 		"category": "builtins",
-		"title": "spectrum",
-		"anchor": "spectrum"
+		"title": "modulator",
+		"anchor": "modulator"
 	},
-	"waterfall": {
-		"slug": "visualizations",
+	"index": {
+		"slug": "fm-synthesis",
 		"category": "builtins",
-		"title": "waterfall",
-		"anchor": "waterfall"
+		"title": "index",
+		"anchor": "index"
 	},
-	"pianoroll": {
-		"slug": "visualizations",
+	"sideband": {
+		"slug": "fm-synthesis",
 		"category": "builtins",
-		"title": "pianoroll",
-		"anchor": "pianoroll"
+		"title": "sideband",
+		"anchor": "sideband"
 	},
-	"visualization": {
-		"slug": "visualizations",
+	"harmonic": {
+		"slug": "fm-synthesis",
 		"category": "builtins",
-		"title": "Visualizations"
+		"title": "harmonic",
+		"anchor": "harmonic"
 	},
-	"viz": {
-		"slug": "visualizations",
+	"fm": {
+		"slug": "fm-synthesis",
 		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"piano": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"roll": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"display": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"monitor": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"probe": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"fft": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"spectrogram": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"logscale": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"mindb": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"maxdb": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"filled": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"showgrid": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
-	},
-	"gradient": {
-		"slug": "visualizations",
-		"category": "builtins",
-		"title": "Visualizations"
+		"title": "FM Synthesis"
 	},
 	"contributing": {
 		"slug": "DOCUMENTATION_GUIDE",
@@ -2404,6 +2918,7 @@ export const previews: Record<string, string> = {
 	"02-filters": "Filters remove or emphasize certain frequencies, turning raw oscillators into something more musical.",
 	"04-rhythm": "This tutorial covers rhythmic patterns, from basic beats to polyrhythms.",
 	"01-hello-sine": "Every Akkado program is a signal flow graph. The smallest one is a sine wave sent to the output:",
+	"chords": "Two paths to chordal patterns: the  function with chord-symbol literals (, ), and inline chord brackets in  strings (). For voice leading, the , ,...",
 	"microtonal": "Akkado supports microtonal pitch notation through micro-step operators (, , ) and the  function, which selects how those operators map to frequency.",
 	"basics": "Mini-notation is a compact syntax for describing musical patterns, inspired by TidalCycles and Strudel.",
 	"curve-notation": "Curve notation is an ASCII-art syntax for defining automation curves that compile to Cedar's  opcode breakpoints.",
@@ -2420,17 +2935,28 @@ export const previews: Record<string, string> = {
 	"stereo": "Stereo signal operations. Akkado tracks channel count (Mono vs Stereo) on every signal; mono DSP ops applied to a stereo signal auto-lift: a...",
 	"sequencing": "Timing and sequencing functions create rhythmic patterns, triggers, and automation curves synchronized to the global clock.",
 	"delays": "Delay effects create copies of a signal offset in time for echoes, rhythmic effects, and spatial depth.",
+	"samples-loading": "How user-supplied audio reaches the sampler at runtime. The  directive declares a bank URI to fetch before the program runs; the IDE also accepts...",
+	"polyphony": "Voice allocation for patterns.  runs an instrument function per voice and sums the outputs.  and  are single-voice variants with different...",
 	"filters": "Filters shape the frequency content of signals by attenuating or boosting certain frequencies.",
 	"distortion": "Distortion effects add harmonic content by clipping, saturating, or otherwise mangling signals.",
 	"utility": "Utility functions for common audio tasks like output, MIDI conversion, and signal processing helpers.",
 	"envelopes": "Envelopes shape the amplitude or other parameters of a sound over time. They respond to gates (sustained signals) or triggers (momentary pulses).",
 	"modulation": "Modulation effects use time-varying delays to add movement and spatial width to sounds.",
+	"pianoroll": "A pattern-event visualizer that draws notes as rectangles on a pitch-time grid. Inserted as a pass-through node in the signal chain.",
 	"math": "Mathematical operations for signal processing and control logic.",
+	"samplers": "Samplers play recorded audio. The most common path is a sample pattern —  — which triggers events from the loaded sample bank. nkido ships with a...",
 	"oscillators": "Oscillators are the primary sound sources in synthesis. The  function is the unified interface for all oscillator types.",
 	"state": "State cells let you persist a single floating-point value across audio blocks from inside a closure. They are the building block for writing your...",
 	"edge": "Edge primitives detect transitions in trigger / control signals and accumulate counts. All four variants share one backing opcode () for cache...",
 	"dynamics": "Dynamics processors control the volume envelope of signals, reducing dynamic range or removing unwanted quiet sections.",
+	"oscilloscope": "A time-domain visualizer that draws the signal as a waveform with trigger stabilization. Inserted as a pass-through node in the signal chain — the...",
+	"soundfonts": "SoundFonts (.sf2 / .sf3) are bundled instrument banks — typically General MIDI piano, strings, brass, drums. The  builtin plays a pattern through...",
+	"timelines": "Breakpoint automation envelopes synced to the clock. Use  to define smooth parameter curves with arbitrary shapes — slower than an , more...",
+	"waterfall": "A scrolling spectrogram visualizer: time on one axis, frequency on the other, color for amplitude. Inserted as a pass-through node in the signal...",
+	"spectrum": "A frequency-domain visualizer using FFT analysis. Inserted as a pass-through node in the signal chain.",
+	"waveform": "A time-domain envelope visualizer that draws the min/max amplitude of the signal over time. Inserted as a pass-through node in the signal chain.",
 	"reverbs": "Reverbs simulate acoustic spaces by generating many delayed, filtered reflections. Each algorithm has its own character.",
-	"visualizations": "Inline visualizations that render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain; the audio...",
+	"fm-synthesis": "Frequency modulation (FM) synthesizes complex timbres by modulating the frequency of one oscillator (the carrier) with the output of another (the...",
+	"visualizations": "Inline visualizations render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain — the audio passes...",
 	"DOCUMENTATION_GUIDE": "This guide outlines standards and practices for writing NKIDO documentation."
 };
