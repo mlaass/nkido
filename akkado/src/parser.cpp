@@ -93,7 +93,6 @@ void Parser::synchronize() {
     while (!is_at_end()) {
         // Synchronize at statement boundaries
         switch (current().type) {
-            case TokenType::Post:
             case TokenType::Pat:
             case TokenType::Timeline:
             case TokenType::ValuePat:
@@ -271,11 +270,6 @@ NodeIndex Parser::parse_statement() {
         return parse_fn_def();
     }
 
-    // Check for post statement
-    if (match(TokenType::Post)) {
-        return parse_post_stmt();
-    }
-
     // Check for assignment: identifier = expr (block _ = ...)
     if (check(TokenType::Underscore) && current_idx_ + 1 < tokens_.size() &&
         tokens_[current_idx_ + 1].type == TokenType::Equals) {
@@ -313,28 +307,6 @@ NodeIndex Parser::parse_assignment(const Token& name_token) {
         arena_.add_child(node, value);
     }
 
-    return node;
-}
-
-NodeIndex Parser::parse_post_stmt() {
-    Token post_token = previous();
-    consume(TokenType::LParen, "Expected '(' after 'post'");
-
-    NodeIndex node = make_node(NodeType::PostStmt, post_token);
-
-    // Expect a closure: (params) -> body
-    if (!check(TokenType::LParen)) {
-        error("Expected closure in post()");
-        return node;
-    }
-
-    advance();  // consume '(' of the closure
-    NodeIndex closure = parse_closure();
-    if (closure != NULL_NODE) {
-        arena_.add_child(node, closure);
-    }
-
-    consume(TokenType::RParen, "Expected ')' after post closure");
     return node;
 }
 

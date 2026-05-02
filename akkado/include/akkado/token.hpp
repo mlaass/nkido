@@ -24,7 +24,6 @@ enum class TokenType : std::uint8_t {
     // Keywords
     True,           // true
     False,          // false
-    Post,           // post
     Match,          // match
     Fn,             // fn
     As,             // as (pipe binding)
@@ -104,7 +103,6 @@ constexpr std::string_view token_type_name(TokenType type) {
         case TokenType::ChordLit:     return "ChordLit";
         case TokenType::True:         return "True";
         case TokenType::False:        return "False";
-        case TokenType::Post:         return "Post";
         case TokenType::Match:        return "Match";
         case TokenType::Fn:           return "Fn";
         case TokenType::As:           return "As";

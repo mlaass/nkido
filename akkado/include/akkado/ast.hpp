@@ -55,7 +55,6 @@ enum class NodeType : std::uint8_t {
     // Statements
     Assignment,     // x = expr
     ConstDecl,      // const x = expr
-    PostStmt,       // post(closure)
     Block,          // { statements... expr }
     FunctionDef,    // fn name(params) -> body
 
@@ -108,7 +107,6 @@ constexpr const char* node_type_name(NodeType type) {
         case NodeType::MiniModified:   return "MiniModified";
         case NodeType::Assignment:     return "Assignment";
         case NodeType::ConstDecl:      return "ConstDecl";
-        case NodeType::PostStmt:    return "PostStmt";
         case NodeType::Block:       return "Block";
         case NodeType::FunctionDef: return "FunctionDef";
         case NodeType::MatchExpr:   return "MatchExpr";

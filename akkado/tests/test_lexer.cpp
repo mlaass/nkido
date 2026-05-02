@@ -766,14 +766,6 @@ TEST_CASE("Lexer keywords", "[lexer]") {
         CHECK(tokens[0].as_string() == "p");
     }
 
-    SECTION("post keyword") {
-        auto [tokens, diags] = lex("post");
-        REQUIRE(diags.empty());
-        REQUIRE(tokens.size() == 2);
-
-        CHECK(tokens[0].type == TokenType::Post);
-    }
-
     SECTION("keywords are case sensitive") {
         auto [tokens, diags] = lex("True FALSE Post");
         REQUIRE(diags.empty());
@@ -1034,7 +1026,6 @@ TEST_CASE("token_type_name returns correct strings", "[lexer]") {
     CHECK(token_type_name(TokenType::ChordLit) == "ChordLit");
     CHECK(token_type_name(TokenType::True) == "True");
     CHECK(token_type_name(TokenType::False) == "False");
-    CHECK(token_type_name(TokenType::Post) == "Post");
     CHECK(token_type_name(TokenType::Match) == "Match");
     CHECK(token_type_name(TokenType::Fn) == "Fn");
     CHECK(token_type_name(TokenType::As) == "As");

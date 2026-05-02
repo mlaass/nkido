@@ -206,10 +206,9 @@ Examples:
 
 ```ebnf
 program      = { statement } ;
-statement    = assignment | function_def | post_stmt | pipe_expr ;
+statement    = assignment | function_def | pipe_expr ;
 assignment   = identifier "=" pipe_expr ;
 function_def = "fn" identifier "(" [ param_list ] ")" "->" function_body ;
-post_stmt    = "post" "(" closure ")" ;
 ```
 
 Statements are separated by newlines or simply sequenced. No semicolons.
@@ -821,9 +820,8 @@ pad = seq("c3e3g3b3:4 g3b3d4:4 a3c4e4:4 f3a3c4:4", (t, v, p) -> {
 ```ebnf
 (* Program *)
 program     = { statement } ;
-statement   = assignment | function_def | post_stmt | pipe_expr ;
+statement   = assignment | function_def | pipe_expr ;
 assignment  = identifier "=" pipe_expr ;
-post_stmt   = "post" "(" closure ")" ;
 
 (* User-Defined Functions *)
 function_def  = "fn" identifier "(" [ param_list ] ")" "->" function_body ;

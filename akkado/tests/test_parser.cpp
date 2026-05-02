@@ -529,17 +529,6 @@ TEST_CASE("Parser error recovery", "[parser]") {
     }
 }
 
-TEST_CASE("Parser post statement", "[parser]") {
-    SECTION("post with closure") {
-        auto ast = parse_ok("post((x) -> x)");
-        NodeIndex post = ast.arena[ast.root].first_child;
-        REQUIRE(ast.arena[post].type == NodeType::PostStmt);
-
-        NodeIndex closure = ast.arena[post].first_child;
-        CHECK(ast.arena[closure].type == NodeType::Closure);
-    }
-}
-
 TEST_CASE("Parser method calls", "[parser]") {
     SECTION("simple method call") {
         auto ast = parse_ok("x.foo()");

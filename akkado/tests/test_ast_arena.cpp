@@ -339,7 +339,6 @@ TEST_CASE("node_type_name returns correct strings", "[ast_arena]") {
     CHECK(std::string(node_type_name(NodeType::MiniEuclidean)) == "MiniEuclidean");
     CHECK(std::string(node_type_name(NodeType::MiniModified)) == "MiniModified");
     CHECK(std::string(node_type_name(NodeType::Assignment)) == "Assignment");
-    CHECK(std::string(node_type_name(NodeType::PostStmt)) == "PostStmt");
     CHECK(std::string(node_type_name(NodeType::Block)) == "Block");
     CHECK(std::string(node_type_name(NodeType::FunctionDef)) == "FunctionDef");
     CHECK(std::string(node_type_name(NodeType::MatchExpr)) == "MatchExpr");

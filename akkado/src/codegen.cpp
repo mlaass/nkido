@@ -1640,10 +1640,6 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
         case NodeType::MiniLiteral:
             return handle_mini_literal(node, n);
 
-        case NodeType::PostStmt:
-            error("E115", "Post statements not supported in MVP", n.location);
-            return TypedValue::error_val();
-
         case NodeType::FunctionDef:
             // Function definitions don't generate code directly
             // They're registered in the symbol table for inline expansion
