@@ -1,4 +1,4 @@
-> **Status: IN PROGRESS (Phases 1-4 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
+> **Status: IN PROGRESS (Phases 1-5 complete)** — Unifies file loading behind a URI-keyed resolver, deletes redundant load entry points, and exposes HTTP sample loading from akkado source.
 
 # PRD: URI Resolver and Akkado HTTP Sample Loading
 
@@ -572,14 +572,14 @@ OpenSSL linked as a hard dep on native; SYSTEM include path quiets vendored-head
 
 Cedar tests: 184 passing / 1 skipped (network) — all 334,848 assertions green. Akkado tests: 7 failures in `test_codegen.cpp` for pat-chord parsing are pre-existing (caused by uncommitted akkado/ source changes from before phase 1) and don't touch any refactored API.
 
-### Phase 5 — WASM bridge collapse (1 day)
+### Phase 5 — WASM bridge collapse (1 day) ✅ DONE
 
 **Goal:** Lean WASM API. Worklet updated.
 
-- Delete `cedar_load_sample_wav` and worklet handler (verify no callers first)
-- Reorder `cedar_load_soundfont` to `(name, data, size)`
-- Standardize return type on `int32_t` with `-1` failure
-- Update `cedar-processor.js` call sites and message handlers
+- ✅ `cedar_load_sample_wav` already removed in phase 4 (no worklet handler existed). Stale CMakeLists.txt export entry deleted alongside.
+- ✅ `cedar_load_soundfont` reordered to `(name, data, size)`.
+- ✅ All four loaders (`cedar_load_sample`, `cedar_load_audio_data`, `cedar_load_soundfont`, `cedar_load_wavetable_wav`) standardized on `int32_t` return with `-1` on failure. Worklet success checks unified to `id >= 0`.
+- ✅ `cedar-processor.js` SoundFont call site updated; type-check + WASM build clean.
 
 ### Phase 6 — BankRegistry collapse + audio store collapse (1.5 days)
 

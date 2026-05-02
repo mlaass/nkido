@@ -79,7 +79,6 @@ if(EMSCRIPTEN)
         _cedar_set_param_slew
         # Sample management
         _cedar_load_sample
-        _cedar_load_sample_wav
         _cedar_load_audio_data
         _cedar_has_sample
         _cedar_get_sample_id

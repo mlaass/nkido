@@ -315,18 +315,19 @@ WASM_EXPORT int cedar_set_param_slew(const char* name, float value, float slew_m
  * @param num_samples Total number of samples (frames * channels)
  * @param channels Number of channels (1=mono, 2=stereo)
  * @param sample_rate Sample rate in Hz
- * @return Sample ID (>0) on success, 0 on failure
+ * @return Sample ID (>=0) on success, -1 on failure
  */
-WASM_EXPORT uint32_t cedar_load_sample(const char* name,
-                                        const float* audio_data,
-                                        uint32_t num_samples,
-                                        uint32_t channels,
-                                        float sample_rate) {
+WASM_EXPORT int32_t cedar_load_sample(const char* name,
+                                      const float* audio_data,
+                                      uint32_t num_samples,
+                                      uint32_t channels,
+                                      float sample_rate) {
     if (!g_vm || !name || !audio_data || channels == 0) {
-        return 0;
+        return -1;
     }
-    
-    return g_vm->load_sample(name, audio_data, num_samples, channels, sample_rate);
+
+    const std::uint32_t id = g_vm->load_sample(name, audio_data, num_samples, channels, sample_rate);
+    return id == 0 ? -1 : static_cast<int32_t>(id);
 }
 
 /**
@@ -335,17 +336,18 @@ WASM_EXPORT uint32_t cedar_load_sample(const char* name,
  * @param name Sample name (null-terminated)
  * @param data Pointer to audio file data
  * @param size Size of data in bytes
- * @return Sample ID (>0) on success, 0 on failure
+ * @return Sample ID (>=0) on success, -1 on failure
  */
-WASM_EXPORT uint32_t cedar_load_audio_data(const char* name,
-                                            const uint8_t* data,
-                                            uint32_t size) {
+WASM_EXPORT int32_t cedar_load_audio_data(const char* name,
+                                          const uint8_t* data,
+                                          uint32_t size) {
     if (!g_vm || !name || !data || size == 0) {
-        return 0;
+        return -1;
     }
 
     cedar::MemoryView view(data, size);
-    return g_vm->sample_bank().load_audio_data(name, view);
+    const std::uint32_t id = g_vm->sample_bank().load_audio_data(name, view);
+    return id == 0 ? -1 : static_cast<int32_t>(id);
 }
 
 /**
@@ -385,9 +387,8 @@ WASM_EXPORT void cedar_clear_samples() {
 
 /**
  * Load a wavetable bank from WAV file data in memory and register it
- * under `name`. Mirrors cedar_load_sample_wav. The bank is preprocessed
- * (FFT mip pyramid, RMS-normalized, fundamental-phase aligned) inside
- * this call.
+ * under `name`. The bank is preprocessed (FFT mip pyramid, RMS-normalized,
+ * fundamental-phase aligned) inside this call.
  *
  * Multi-bank: each call appends to the registry. To match the compiler's
  * sequential bank IDs, the host should call cedar_clear_wavetables() once
@@ -1830,19 +1831,19 @@ static std::string g_soundfont_presets_json;
 
 /**
  * Load a SoundFont from memory
+ * @param name Display name (null-terminated)
  * @param data Pointer to SF2 file data
  * @param size Size of data in bytes
- * @param name Display name (null-terminated)
  * @return SoundFont ID (>=0) on success, -1 on failure
  */
-WASM_EXPORT int cedar_load_soundfont(const uint8_t* data, int size, const char* name) {
-    if (!g_vm || !data || size <= 0 || !name) {
+WASM_EXPORT int32_t cedar_load_soundfont(const char* name, const uint8_t* data, int32_t size) {
+    if (!g_vm || !name || !data || size <= 0) {
         return -1;
     }
 
-    return g_vm->soundfont_registry().load_from_memory(
+    return static_cast<int32_t>(g_vm->soundfont_registry().load_from_memory(
         cedar::MemoryView(data, static_cast<std::size_t>(size)),
-        name, g_vm->sample_bank());
+        name, g_vm->sample_bank()));
 }
 
 /**

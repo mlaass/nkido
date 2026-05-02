@@ -929,7 +929,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 			// Load sample
 			const sampleId = this.module._cedar_load_sample(namePtr, audioPtr, audioData.length, channels, sampleRate);
 
-			if (sampleId > 0) {
+			if (sampleId >= 0) {
 				console.log('[CedarProcessor] Sample loaded successfully, ID:', sampleId);
 				this.port.postMessage({ type: 'sampleLoaded', name, sampleId });
 			} else {
@@ -978,7 +978,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 
 			const sampleId = this.module._cedar_load_audio_data(namePtr, dataPtr, dataArray.length);
 
-			if (sampleId > 0) {
+			if (sampleId >= 0) {
 				console.log('[CedarProcessor] Audio sample loaded successfully, ID:', sampleId);
 				this.port.postMessage({ type: 'sampleLoaded', name, sampleId });
 			} else {
@@ -1029,7 +1029,7 @@ class CedarProcessor extends AudioWorkletProcessor {
 			this.module.stringToUTF8(name, namePtr, nameLen);
 			this.writeByteArray(dataPtr, dataArray);
 
-			const sfId = this.module._cedar_load_soundfont(dataPtr, dataArray.length, namePtr);
+			const sfId = this.module._cedar_load_soundfont(namePtr, dataPtr, dataArray.length);
 
 			if (sfId >= 0) {
 				// Get preset list
