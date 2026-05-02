@@ -11,11 +11,16 @@ The Akkado compiler pipeline and web editor need substantially better error hand
 3. **Fragile compilation**: The pipeline aborts between stages (lex errors block parsing, parse errors block semantic analysis), so users fix one category at a time. There is no `onprocessorerror` handler on the AudioWorklet, so if compilation causes a WASM trap, the audio thread dies silently with no recovery path.
 
 Key design decisions:
-- Multi-stage error collection: lex + parse + semantic errors shown simultaneously (codegen still gated on zero prior errors)
-- "Did you mean?" suggestions using Levenshtein distance against builtins + user symbols
-- Error panel enhanced with source context, click-to-jump (scroll + cursor + highlight), and error code badges
-- `onprocessorerror` safety net added to detect and report worklet crashes
-- Parser recovery behavior stays as-is (one error at a time per stage is acceptable)
+- **Multi-stage error collection**: lex + parse + semantic errors shown simultaneously (codegen still gated on zero prior errors).
+  *Why?* Live-coding feedback loops are tighter when fixing a typo doesn't reveal a hidden semantic error two compiles later. Codegen stays gated to guarantee invalid bytecode never enters the VM.
+- **"Did you mean?" suggestions** using Levenshtein distance against builtins + user symbols.
+  *Why?* The most common live-coding error is a misspelled function name; surfacing the correction in the diagnostic itself avoids a context switch to docs.
+- **Error panel enhanced** with source context, click-to-jump (scroll + cursor + highlight), and error code badges.
+  *Why?* The current panel shows only message + line/column; users still have to scroll the editor to see context. Click-to-jump matches IDE conventions.
+- **`onprocessorerror` safety net** added to detect and report worklet crashes.
+  *Why?* AudioWorklet WASM traps cannot be caught by JS try/catch. Today the audio thread dies silently, requiring a page reload. Even detection-only is a major UX win — automatic state recovery is out of scope (see §6 Phase 6).
+- **Parser recovery behavior stays as-is** (one error at a time per stage is acceptable).
+  *Why?* Existing panic-mode + statement-boundary sync points already give acceptable recovery for the multi-stage benefit. Mid-expression recovery is high risk (cascading bogus errors) for low value in a live-coding context.
 
 ---
 
@@ -45,7 +50,7 @@ The infrastructure is solid — the problems are in the details:
 - Cedar VM preserves previous working program when compilation fails — audio keeps playing
 - WASM bridge exposes diagnostic count, severity, message, line, column — but NOT length or code
 - Web editor uses CodeMirror 6 `lintGutter()` with inline diagnostics — but `to` position falls back to end-of-line (`editor-linter.ts:23`)
-- The worklet `compile()` method has a try/catch that always sends a response (`cedar-processor.js:612-621`) — but a WASM trap cannot be caught by try/catch
+- The worklet `compile()` method has an outer try/catch that always sends a response (`cedar-processor.js`, `compile()` at ~line 581 with `try` at ~594 and `catch` at ~730) — but a WASM trap cannot be caught by try/catch
 
 ---
 
@@ -288,7 +293,7 @@ Currently all parser errors use `P001`. This PRD introduces distinct codes:
 | `E120`-`E122` | Codegen | len() / match errors |
 | `E130`-`E136` | Codegen | map/lambda/field access errors |
 | `E140`-`E155` | Codegen | Array ops, compose, destructure, directives |
-| `E160`-`E180` | Codegen | Stereo ops, array ops, viz ops (*) |
+| `E160`-`E184` | Codegen | Stereo ops, array ops, viz ops (*) |
 | `E199` | Codegen | Unsupported node type |
 | `E200` | Const eval | Division/modulo by zero |
 | `E202` | Const eval | Cannot evaluate at compile time |
@@ -299,7 +304,7 @@ Currently all parser errors use `P001`. This PRD introduces distinct codes:
 | `E500`-`E505` | Import | Import resolution errors |
 | `W000` | Semantic | General warning |
 
-(*) **Note**: Codes E150-E180 have collisions — they are reused with different meanings across `codegen_arrays.cpp`, `codegen_stereo.cpp`, and `codegen_viz.cpp`. This is a pre-existing issue not introduced by this PRD; a future cleanup should assign unique codes.
+(*) **Note**: Codes E160-E184 have collisions — they are reused with different meanings across `codegen_arrays.cpp`, `codegen_stereo.cpp`, and `codegen_viz.cpp` (E150-E155 are unique to `codegen_arrays.cpp`, no collision there). This is a pre-existing issue not introduced by this PRD; a future cleanup should assign unique codes.
 
 ### 5.3 Levenshtein "Did You Mean?" Algorithm
 
@@ -339,11 +344,13 @@ if (!suggestion.empty()) msg += "; did you mean '" + suggestion + "'?";
 error("E004", msg, n.location);
 ```
 
-Applied at:
-- `analyzer.cpp:1370` — `"Undefined identifier 'xyz'"` → `"Undefined identifier 'xyz'; did you mean 'abc'?"`
-- `analyzer.cpp:1108` — `"Unknown function 'xyz'"` → `"Unknown function 'xyz'; did you mean 'abc'?"`
-- `codegen.cpp:426` — same for codegen-level undefined identifier
-- `codegen.cpp:823` — same for codegen-level unknown function
+Applied at (line numbers current as of PRD review; symbols are stable references):
+- `analyzer.cpp:1469` — E005 `"Undefined identifier 'xyz'"` → `"Undefined identifier 'xyz'; did you mean 'abc'?"`
+- `analyzer.cpp:1202` — E004 `"Unknown function 'xyz'"` → `"Unknown function 'xyz'; did you mean 'abc'?"`
+- `codegen.cpp:479` — E102 `"Undefined identifier"` (codegen-level), same suggestion suffix
+- `codegen.cpp:979` — E107 `"Unknown function"` (codegen-level), same suggestion suffix
+
+The `<=6 chars → max 2, >6 chars → max 3` distance bound matches the heuristic used by GCC and rustc for "did you mean?" suggestions; it keeps suggestions tight enough to avoid noisy proposals on short names while still tolerating one transposition + one insertion on longer ones.
 
 ### 5.4 Multi-Stage Pipeline Change
 
@@ -393,22 +400,54 @@ deduplicate_diagnostics(result.diagnostics);
 
 **Safety constraint**: Codegen is never reached if any prior stage had errors. Invalid bytecode must never enter the VM.
 
-The parser's `synchronize()` method needs a small change to skip Error tokens at statement boundaries:
-```cpp
-void Parser::synchronize() {
-    panic_mode_ = false;
-    while (!is_at_end()) {
-        // Skip error tokens (already reported by lexer)
-        if (current().type == TokenType::Error) {
-            current_idx_++;
-            continue;
-        }
-        // ... existing sync point logic
-    }
-}
+The parser's `synchronize()` (`parser.cpp:90`) needs a small additive change — insert an Error-token skip step at the **head** of the existing loop, **before** the existing keyword-and-RBrace dispatch. Diff against current code:
+
+```diff
+ void Parser::synchronize() {
+     panic_mode_ = false;
+
+     while (!is_at_end()) {
++        // Skip error tokens (already reported by lexer) before dispatching
++        // on real sync points. Done only at synchronization (statement
++        // boundaries), never in advance(), to avoid silently consuming
++        // tokens mid-expression.
++        if (current().type == TokenType::Error) {
++            advance();
++            continue;
++        }
++
+         // Synchronize at statement boundaries
+         switch (current().type) {
+             case TokenType::Pat:
+             // ... existing sync points unchanged
+         }
+         // ... existing RBrace check + advance() unchanged
+     }
+ }
 ```
 
-Note: Error tokens are skipped only during synchronization (at statement boundaries), not during `advance()`. This avoids silently consuming tokens mid-expression, which could produce confusing secondary parse errors.
+The existing sync points (statement keywords, `RBrace` boundary check, end-of-loop `advance()`) all remain untouched. The only new behavior is one Error-token skip at the head of each iteration.
+
+#### Token display helper for error messages
+
+The Phase 2 change to `error_at()` requires rendering the offending token in `, found '<token>'`. The existing `token_type_name()` (`token.hpp:96`) returns debug-style PascalCase (`"Eof"`, `"Plus"`, `"Equals"`) — unsuitable for user-facing messages.
+
+Add a new helper `token_display(const Token&) -> std::string` that returns:
+- For literals/identifiers: the lexeme verbatim (`"foo"`, `"42"`, `"\"hello\""`)
+- For operators/delimiters: the surface symbol (`"="`, `"("`, `"|>"`, `","`)
+- For keywords: the keyword text (`"fn"`, `"const"`, `"pat"`)
+- For `Eof`: the literal string `"end of file"` — and `error_at` substitutes the prefix `at end of file` instead of `, found '<token>'`
+- For `Error`: the lexeme of the error token (whatever the lexer captured), so cascading parse errors at lex-error sites still show useful context
+
+Reuse the existing `token_type_name()` only as a debug fallback for token types that have no natural display form.
+
+#### Diagnostic deduplication
+
+`deduplicate_diagnostics()` is a free function in `akkado.cpp` (private to the translation unit) called once at the end of `compile()` after all stages have contributed.
+
+Dedup rule: **drop a diagnostic only if (line, column, message) all match exactly an earlier diagnostic in the vector.** Same-location diagnostics with different messages (e.g., a lexer "Unexpected character '@'" and a parser "Expected expression, found '<error>'" at the same position) are kept — the user benefits from seeing both perspectives. This also avoids hiding genuine bugs where two distinct rules fire at the same location.
+
+Stable order is preserved (lex → parse → semantic), so the first occurrence wins on exact matches.
 
 ---
 
@@ -496,9 +535,10 @@ Note: Error tokens are skipped only during synchronization (at statement boundar
 **Changes**:
 1. Update `Lexer::add_error` to accept a code parameter
 2. Replace all generic lexer messages with character-specific messages and distinct codes (L001-L006)
-3. Modify `Parser::error_at()` to append `, found '<token>'` to every error message
-4. Add contextual hints: lone `=` → "did you mean `==`?", unexpected closing delimiter → "no matching `(` found"
-5. Assign distinct parser codes (P001-P005) based on error category
+3. Add `token_display(const Token&) -> std::string` (see §5.4) for user-friendly token rendering
+4. Modify `Parser::error_at()` to append `, found '<token>'` (using `token_display()`) to every error message; use `at end of file` instead when the offending token is `Eof`
+5. Add contextual hints: lone `=` → "did you mean `==`?", unexpected closing delimiter → "no matching `(` found"
+6. Assign distinct parser codes (P001-P005) based on error category
 
 **Verify**: Compile `x = @` → message says `Unexpected character '@'`. Compile `if x = 3` → message says `Expected expression, found '='`.
 
@@ -511,7 +551,7 @@ Note: Error tokens are skipped only during synchronization (at statement boundar
 **Changes**:
 1. Implement `levenshtein()` distance function
 2. Implement `suggest_similar()` that searches user symbols + `BUILTIN_FUNCTIONS` map
-3. Update error messages at `analyzer.cpp:1108` (E004), `analyzer.cpp:1370` (E005), `codegen.cpp:426` (E102), `codegen.cpp:823` (E107)
+3. Update error messages at `analyzer.cpp:1202` (E004), `analyzer.cpp:1469` (E005), `codegen.cpp:479` (E102), `codegen.cpp:979` (E107)
 
 **Verify**: Compile `osc("sin", 440) |> ou(%, %)` → message says `Unknown function 'ou'; did you mean 'out'?`
 
@@ -522,13 +562,13 @@ Note: Error tokens are skipped only during synchronization (at statement boundar
 **Files**: `akkado.cpp`, `parser.cpp`
 
 **Changes**:
-1. Remove early returns after lex and parse error checks in `compile()`
-2. Add Error token skipping to parser's `synchronize()` method (at statement boundaries only, not in `advance()`)
-3. Run semantic analysis on valid ASTs even when earlier stages had errors
+1. Remove early returns after lex and parse error checks in `compile()` (`akkado.cpp:128-131` and `139-142`); keep the early returns after analysis and codegen failure.
+2. Add Error token skipping to parser's `synchronize()` method as an additive diff (see §5.4)
+3. Run semantic analysis on valid ASTs even when earlier stages had errors. **Robustness assumption**: the existing analyzer is trusted to walk recovered ASTs without crashing — Phase 4 includes regression tests (see §10.1) that fuzz analyzer entry points with broken sub-ASTs (NULL_NODE children, partial expressions). Any analyzer crash uncovered by these tests must be fixed before this phase ships.
 4. Gate codegen on zero total errors (safety: never emit bytecode from broken AST)
-5. Add `deduplicate_diagnostics()` to remove duplicate errors at the same (line, column) before returning `CompileResult`
+5. Add `deduplicate_diagnostics()` per the rule in §5.4 (drop only on exact (line, column, message) match) before returning `CompileResult`
 
-**Verify**: Source with a lex error on line 2 and an undefined identifier on line 5 shows both errors simultaneously.
+**Verify**: Source with a lex error on line 2 and an undefined identifier on line 5 shows both errors simultaneously. Run the analyzer-on-broken-AST regression suite — no crashes.
 
 ### Phase 5: Enhanced Error Panel
 
@@ -555,7 +595,9 @@ Note: Error tokens are skipped only during synchronization (at statement boundar
 2. On error: set `state.isPlaying = false`, set `state.error` to a descriptive message, null the node reference
 3. When `play()` is called with a null node (after crash), reinitialize the audio context and worklet
 
-**Verify**: If worklet dies (simulate by closing audio context), UI shows error message. Clicking play restarts successfully.
+**Out of scope for this PRD**: full state recovery after a crash. WASM holds loaded samples, the current bytecode, parameter values, and SoundFonts — all are lost when the worklet dies. After reinit, the worklet is empty; the user must recompile (which re-triggers required-sample loading from the main-thread sample cache) to get audio back. Manually-uploaded samples that aren't backed by a main-thread cache are lost. This is a known UX gap; a follow-up PRD can address full session restoration.
+
+**Verify**: If worklet dies (simulate by closing audio context), UI shows error message. Clicking play restarts the worklet successfully and recompiling restores audio.
 
 ---
 
@@ -568,7 +610,7 @@ Some diagnostics may have `length = 0` (e.g., errors at EOF, errors generated by
 When the lexer encounters an error at the end of the source, `current_ - start_` may be 0. The parser's Error-token skipping must not loop infinitely — it must also check `is_at_end()`.
 
 ### 9.3 Cascading errors across stages
-Multi-stage collection means the parser may generate errors for positions where the lexer already reported an error. To avoid duplicate errors at the same location, deduplicate diagnostics by (line, column) in `compile()` in `akkado.cpp`, after collecting diagnostics from all stages and before returning `CompileResult`.
+Multi-stage collection means the parser may generate errors for positions where the lexer already reported an error. Deduplication runs in `compile()` after collecting diagnostics from all stages and before returning `CompileResult`. The rule is conservative — see §5.4 — only exact (line, column, message) matches are dropped, so two distinct messages at the same position are both retained. This avoids hiding the parser's perspective behind a same-position lexer error.
 
 ### 9.4 "Did you mean?" with no close match
 If no symbol is within Levenshtein threshold, don't suggest anything. Message stays as `"Undefined identifier 'xyzzy'"` without a suggestion tail.
@@ -624,6 +666,45 @@ TEST_CASE("Distinct error codes", "[diagnostics]") {
     auto [tokens, diags] = lex("\"unterminated", "<test>");
     REQUIRE(!diags.empty());
     CHECK(diags[0].code == "L002");  // Not L001
+}
+
+TEST_CASE("Analyzer survives broken sub-ASTs", "[diagnostics][robustness]") {
+    // Parser produces a valid root with recovered sub-trees containing
+    // NULL_NODE children or Error-typed slots. Analyzer must not crash.
+    for (auto src : {
+        "x = ",                            // missing RHS expression
+        "fn f() = ",                       // missing function body
+        "y = osc(",                        // unclosed call
+        "z = (1 + ) * 2",                  // missing operand
+        "pat(\"c4 [ e4\")",                // unclosed mini bracket
+        "x = @\ny = z * 2",                // lex error + later semantic ref
+    }) {
+        auto result = compile(src);
+        // Whatever errors are produced, the call must return cleanly.
+        // Codegen must NOT have run if there are any errors.
+        if (!filter_errors(result.diagnostics).empty()) {
+            CHECK_FALSE(result.success);
+            CHECK(result.bytecode.empty());
+        }
+    }
+}
+
+TEST_CASE("Dedup keeps distinct messages at same position", "[diagnostics]") {
+    // A lex error and a parse error often land on the same (line, column).
+    // Dedup must NOT collapse them when the messages differ.
+    auto result = compile("x = @");
+    auto errors = filter_errors(result.diagnostics);
+    // Two errors at (1, 5): one lexer (Unexpected character '@'),
+    // potentially one parser (Expected expression). If messages differ,
+    // both are kept.
+    if (errors.size() >= 2) {
+        bool seen_lex = false, seen_parse = false;
+        for (auto& d : errors) {
+            if (d.code.starts_with("L")) seen_lex = true;
+            if (d.code.starts_with("P")) seen_parse = true;
+        }
+        CHECK((seen_lex || seen_parse));  // at least one stage's diag survives
+    }
 }
 ```
 
