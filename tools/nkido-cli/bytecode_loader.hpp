@@ -17,7 +17,8 @@ enum class Mode {
     Compile,   // Compile source to bytecode file
     Check,     // Syntax check only
     UI,        // Interactive editor mode
-    Render     // Offline render to WAV (with optional voice trace)
+    Render,    // Offline render to WAV (with optional voice trace)
+    Serve      // Headless persistent mode for editor integration (JSON-over-stdio)
 };
 
 // Input type

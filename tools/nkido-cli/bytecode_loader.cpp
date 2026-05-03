@@ -16,6 +16,9 @@ InputType detect_input_type(const std::string& input) {
     if (input.size() >= 7 && input.substr(input.size() - 7) == ".akkado") {
         return InputType::SourceFile;
     }
+    if (input.size() >= 4 && input.substr(input.size() - 4) == ".akk") {
+        return InputType::SourceFile;
+    }
     if (input.size() >= 3 && input.substr(input.size() - 3) == ".ak") {
         return InputType::SourceFile;
     }

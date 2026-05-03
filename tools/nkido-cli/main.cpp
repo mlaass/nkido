@@ -2,6 +2,7 @@
 #include "bytecode_loader.hpp"
 #include "bytecode_dump.hpp"
 #include "audio_engine.hpp"
+#include "serve_mode.hpp"
 #include "ui/ui_mode.hpp"
 #include "akkado/akkado.hpp"
 #include "cedar/vm/vm.hpp"
@@ -26,7 +27,8 @@ void print_usage(const char* program) {
               << "  compile   Compile source to bytecode file\n"
               << "  check     Syntax check only\n"
               << "  ui        Interactive editor mode\n"
-              << "  render    Compile + render to WAV (offline)\n\n"
+              << "  render    Compile + render to WAV (offline)\n"
+              << "  serve     Headless mode: read JSON commands from stdin\n\n"
               << "Input:\n"
               << "  <file.akkado>   Akkado source file\n"
               << "  <file.cedar>    Cedar bytecode file\n"
@@ -85,6 +87,9 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
             has_mode = true;
         } else if (arg == "render" && !has_mode) {
             opts.mode = nkido::Mode::Render;
+            has_mode = true;
+        } else if (arg == "serve" && !has_mode) {
+            opts.mode = nkido::Mode::Serve;
             has_mode = true;
         }
         // Options
@@ -181,9 +186,10 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
         }
     }
 
-    // Validate (UI mode and --list-devices don't need input)
+    // Validate (UI/Serve modes and --list-devices don't need input)
     if (!has_input && opts.input_type != nkido::InputType::InlineSource &&
-        opts.mode != nkido::Mode::UI && !opts.list_devices) {
+        opts.mode != nkido::Mode::UI && opts.mode != nkido::Mode::Serve &&
+        !opts.list_devices) {
         std::cerr << "error: no input specified\n";
         print_usage(argv[0]);
         return std::nullopt;
@@ -663,6 +669,11 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
         return ui.run();
+    }
+
+    // Handle serve mode (headless JSON-over-stdio for editor integration)
+    if (opts->mode == nkido::Mode::Serve) {
+        return nkido::run_serve_mode(*opts);
     }
 
     // Load/compile bytecode

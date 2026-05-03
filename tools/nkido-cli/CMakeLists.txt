@@ -8,6 +8,7 @@ add_executable(nkido-cli
     asset_loader.cpp
     bytecode_loader.cpp
     bytecode_dump.cpp
+    serve_mode.cpp
     ui/bitmap_font.cpp
     ui/text_buffer.cpp
     ui/ui_mode.cpp
