@@ -118,6 +118,19 @@ bool AudioEngine::init(const Config& config) {
         return false;
     }
 
+    // Diagnostic: log selected driver + negotiated format so silence bugs
+    // (wrong sink, format mismatch, no driver) can be diagnosed from
+    // serve's stderr stream.
+    const char* driver = SDL_GetCurrentAudioDriver();
+    std::fprintf(stderr,
+                 "[audio] driver=%s device_id=%u freq=%d ch=%d samples=%u format=0x%04x\n",
+                 driver ? driver : "(none)",
+                 device_id_,
+                 have.freq,
+                 static_cast<int>(have.channels),
+                 static_cast<unsigned>(have.samples),
+                 static_cast<unsigned>(have.format));
+
     // Verify we got what we asked for
     if (have.freq != want.freq || have.format != want.format ||
         have.channels != want.channels) {
@@ -231,6 +244,13 @@ void AudioEngine::capture_callback(void* userdata, std::uint8_t* stream, int len
 void AudioEngine::audio_callback(void* userdata, std::uint8_t* stream, int len) {
     auto* engine = static_cast<AudioEngine*>(userdata);
     auto* output = reinterpret_cast<float*>(stream);
+
+    // One-shot diagnostic: confirm the SDL audio thread actually invokes us.
+    static std::atomic<bool> first_call{true};
+    bool expected = true;
+    if (first_call.compare_exchange_strong(expected, false)) {
+        std::fprintf(stderr, "[audio] callback first-fire len=%d\n", len);
+    }
 
     // Check for shutdown request
     if (engine->shutdown_requested_.load(std::memory_order_relaxed) ||
