@@ -9,6 +9,7 @@ import { DEFAULT_SOUNDFONTS, resolveDefaultSoundFontUrls } from '$lib/audio/defa
 import { settingsStore } from './settings.svelte';
 import { bankRegistry, type SampleReference } from '$lib/audio/bank-registry';
 import { loadFile } from '$lib/io/file-loader';
+import { pathToFetchUri } from '$lib/io/path-to-uri';
 import {
 	acquireMicSource,
 	acquireTabSource,
@@ -844,7 +845,7 @@ function createAudioEngine() {
 		if (defaultSample) {
 			sampleLoadState.set(name, 'loading');
 			try {
-				const success = await loadAsset(defaultSample.url, 'sample', name);
+				const success = await loadAsset(pathToFetchUri(defaultSample.url), 'sample', name);
 				// Note: loadAsset waits for worklet confirmation
 				// The 'sampleLoaded' handler will set state to 'loaded'
 				if (!success) {
@@ -918,7 +919,7 @@ function createAudioEngine() {
 			if (variantSample) {
 				sampleLoadState.set(qualifiedName, 'loading');
 				try {
-					const success = await loadAsset(variantSample.url, 'sample', qualifiedName);
+					const success = await loadAsset(pathToFetchUri(variantSample.url), 'sample', qualifiedName);
 					if (!success) {
 						sampleLoadState.set(qualifiedName, 'error');
 					}
@@ -934,7 +935,7 @@ function createAudioEngine() {
 			if (baseSample) {
 				sampleLoadState.set(qualifiedName, 'loading');
 				try {
-					const success = await loadAsset(baseSample.url, 'sample', qualifiedName);
+					const success = await loadAsset(pathToFetchUri(baseSample.url), 'sample', qualifiedName);
 					if (!success) {
 						sampleLoadState.set(qualifiedName, 'error');
 					}
@@ -971,7 +972,8 @@ function createAudioEngine() {
 
 		// Construct full URL
 		const baseUrl = manifest.baseUrl.endsWith('/') ? manifest.baseUrl : manifest.baseUrl + '/';
-		const fullUrl = samplePath.startsWith('http') || samplePath.startsWith('/') ? samplePath : baseUrl + samplePath;
+		const rawUrl = samplePath.startsWith('http') || samplePath.startsWith('/') ? samplePath : baseUrl + samplePath;
+		const fullUrl = pathToFetchUri(rawUrl);
 
 		// Load the sample with qualified name
 		sampleLoadState.set(qualifiedName, 'loading');
@@ -1077,14 +1079,11 @@ function createAudioEngine() {
 			if (requiredWavetables.length > 0) {
 				clearWavetables();
 				for (const wt of requiredWavetables) {
-					// Resolve the path relative to the static dir if it has
-					// no scheme. Mirrors how soundfont paths are passed
-					// straight through.
-					const url = wt.path.startsWith('http://') ||
-					            wt.path.startsWith('https://') ||
-					            wt.path.startsWith('/')
-						? wt.path
-						: `/${wt.path}`;
+					// The URI resolver requires an explicit scheme; bare
+					// paths from `wt_load("name", "wavetables/x.wav")` get
+					// resolved against the document origin so the http
+					// handler can fetch them.
+					const url = pathToFetchUri(wt.path);
 					const bankId = await loadAsset(url, 'wavetable', wt.name);
 					if (bankId < 0) {
 						return {
@@ -1164,7 +1163,8 @@ function createAudioEngine() {
 				const urls = defaultUrls.length > 0 ? defaultUrls : [sf.filename];
 
 				let loaded = false;
-				for (const url of urls) {
+				for (const rawUrl of urls) {
+					const url = pathToFetchUri(rawUrl);
 					const info = await loadAsset(url, 'soundfont', sf.filename);
 					if (info) {
 						loaded = true;
@@ -1391,7 +1391,7 @@ function createAudioEngine() {
 	async function loadSamplePack(samples: Array<{ name: string; url: string }>): Promise<number> {
 		let loaded = 0;
 		for (const sample of samples) {
-			const success = await loadAsset(sample.url, 'sample', sample.name);
+			const success = await loadAsset(pathToFetchUri(sample.url), 'sample', sample.name);
 			if (success) loaded++;
 		}
 		console.log('[AudioEngine] Loaded', loaded, 'of', samples.length, 'samples');
@@ -1423,7 +1423,7 @@ function createAudioEngine() {
 				if (sampleLoadState.get(sample.name) === 'pending') {
 					sampleLoadState.set(sample.name, 'loading');
 					try {
-						const success = await loadAsset(sample.url, 'sample', sample.name);
+						const success = await loadAsset(pathToFetchUri(sample.url), 'sample', sample.name);
 						if (success) {
 							sampleLoadState.set(sample.name, 'loaded');
 							loadedSamples.add(sample.name);
@@ -1458,9 +1458,9 @@ function createAudioEngine() {
 				if (state.loadedSoundfonts.some((s) => s.name === sf.name)) continue;
 
 				let loaded = false;
-				for (const url of sf.urls) {
+				for (const rawUrl of sf.urls) {
 					try {
-						const info = await loadAsset(url, 'soundfont', sf.name);
+						const info = await loadAsset(pathToFetchUri(rawUrl), 'soundfont', sf.name);
 						if (info) {
 							console.log(`[AudioEngine] Default SoundFont '${sf.name}' loaded: ${info.presetCount} presets`);
 							loaded = true;
