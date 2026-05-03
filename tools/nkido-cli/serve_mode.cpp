@@ -418,7 +418,12 @@ int run_serve_mode(const Options& opts) {
 
         } else if (cmd == "stop") {
             if (playing) {
-                engine->pause();  // pause not stop, so state survives next load
+                // Tear down the SDL device fully (not just pause). A paused
+                // pulseaudio/pipewire-pulse stream gets corked and won't
+                // produce audio when unpaused later; the next load will
+                // reopen the device cleanly.
+                engine->stop();
+                audio_initialized = false;
                 playing = false;
             }
             emit_event("stopped");
