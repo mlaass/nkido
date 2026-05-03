@@ -4,7 +4,9 @@
 	import { goto } from '$app/navigation';
 	import Transport from '$components/Transport/Transport.svelte';
 	import Editor from '$components/Editor/Editor.svelte';
+	import ParamsPanel from '$components/Params/ParamsPanel.svelte';
 	import { editorStore } from '$stores/editor.svelte';
+	import { audioEngine } from '$stores/audio.svelte';
 	import { loadPatch, loadPatchIndex, isValidSlug, type PatchMeta } from '$lib/patches/loader';
 
 	const DEFAULT_SLUG = 'hello-sine';
@@ -15,6 +17,7 @@
 	let patchLoaded = $state(false);
 
 	const currentMeta = $derived(patches.find((p) => p.slug === currentSlug));
+	const hasParams = $derived(audioEngine.params.length > 0);
 
 	function slugFromURL(): string {
 		const raw = $page.url.searchParams.get('patch');
@@ -27,6 +30,10 @@
 		// Unmount the editor while the new patch loads so CodeMirror reinitializes
 		// with the fresh doc on remount.
 		patchLoaded = false;
+		// Drop the previous patch's param controls — if we evaluate next, the new
+		// patch's params will repopulate; if we don't, the panel stays hidden so
+		// it can't show controls that don't match the visible code.
+		audioEngine.clearParams();
 		try {
 			const code = await loadPatch(slug);
 			editorStore.setCode(code);
@@ -74,13 +81,22 @@
 		}
 	}
 
-	function handlePatchChange(e: Event) {
+	async function handlePatchChange(e: Event) {
 		const target = e.target as HTMLSelectElement;
 		const slug = target.value;
 		const url = new URL($page.url);
 		url.searchParams.set('patch', slug);
 		goto(url.pathname + url.search, { replaceState: false, noScroll: true, keepFocus: true });
-		applyPatch(slug);
+
+		const wasPlaying = audioEngine.isPlaying;
+		try {
+			await applyPatch(slug);
+			if (wasPlaying) {
+				await editorStore.evaluate();
+			}
+		} catch (err) {
+			console.error('[embed] patch switch failed:', slug, err);
+		}
 	}
 
 	onMount(async () => {
@@ -157,12 +173,20 @@
 	{/if}
 
 	<main class="embed-main">
-		{#if patchLoaded}
-			{#key currentSlug}
-				<Editor />
-			{/key}
-		{:else if !loadError}
-			<div class="embed-placeholder">Loading patch…</div>
+		<div class="embed-editor">
+			{#if patchLoaded}
+				{#key currentSlug}
+					<Editor />
+				{/key}
+			{:else if !loadError}
+				<div class="embed-placeholder">Loading patch…</div>
+			{/if}
+		</div>
+
+		{#if hasParams}
+			<aside class="embed-controls">
+				<ParamsPanel />
+			</aside>
 		{/if}
 	</main>
 </div>
@@ -236,6 +260,13 @@
 		min-height: 0;
 		position: relative;
 		display: flex;
+		flex-direction: row;
+	}
+
+	.embed-editor {
+		flex: 1;
+		min-width: 0;
+		display: flex;
 	}
 
 	.embed-placeholder {
@@ -245,5 +276,27 @@
 		justify-content: center;
 		color: var(--text-muted);
 		font-size: 14px;
+	}
+
+	.embed-controls {
+		flex-shrink: 0;
+		width: 280px;
+		max-width: 40vw;
+		overflow-y: auto;
+		border-left: 1px solid var(--border-muted);
+		background-color: var(--bg-secondary);
+	}
+
+	@media (max-width: 720px) {
+		.embed-main {
+			flex-direction: column;
+		}
+		.embed-controls {
+			width: auto;
+			max-width: none;
+			max-height: 40vh;
+			border-left: none;
+			border-top: 1px solid var(--border-muted);
+		}
 	}
 </style>
