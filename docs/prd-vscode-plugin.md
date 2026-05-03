@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — VS Code extension for Akkado live coding
+> **Status: NOT STARTED** — VS Code extension for Akkado live coding. Depends on a `nkido-cli serve` mode (headless JSON-over-stdio) that does not yet exist; see §11.1.
 
 # PRD: VS Code Extension for Nkido/Akkado
 
@@ -19,7 +19,7 @@ Create a VS Code extension that brings the full web IDE experience to VS Code:
 - Autocomplete with function signatures (via VS Code Direct API)
 - Real-time diagnostics with inline squiggly underlines and Problems panel
 - Signature help tooltips when typing function calls
-- Integration with `nkido-cli` for compilation and playback (both per-command and persistent UI mode)
+- Integration with `nkido-cli` for compilation and playback (per-command for `check`/`compile`, persistent `serve` mode for live hot-swap)
 - User-configurable keyboard shortcuts (defaulting to web IDE conventions: Ctrl+Enter to evaluate, Escape to stop)
 
 ### 1.3 Goals (v1)
@@ -28,7 +28,7 @@ Create a VS Code extension that brings the full web IDE experience to VS Code:
 - **Autocomplete**: Builtin functions, aliases, keywords, user-defined variables/functions (VS Code Direct API)
 - **Diagnostics**: Compilation errors shown as squiggly underlines + Problems panel (VS Code Direct API)
 - **Signature help**: Parameter tooltips when typing function calls (VS Code Direct API)
-- **CLI integration**: Play/stop/compile via `nkido-cli` with both spawn-per-command and persistent UI mode
+- **CLI integration**: Play/stop/compile via `nkido-cli` (spawn-per-command for `check`/`compile`, persistent `serve` mode for hot-swap)
 - **Configurable shortcuts**: User can customize keyboard bindings, defaults match web IDE
 - **Dedicated output channel**: "Nkido" channel showing compilation status, errors, playback state
 
@@ -91,15 +91,16 @@ When compilation fails:
 
 ### 2.5 CLI Integration Modes
 
-**Spawn-per-command mode** (simple operations):
-- `nkido-cli check file.akkado` — Syntax check
+**Spawn-per-command mode** (simple operations, available today):
+- `nkido-cli check file.akkado --json` — Syntax check (JSON diagnostics)
 - `nkido-cli compile -o out.cedar file.akkado` — Compile to bytecode
 - `nkido-cli play file.akkado` — Play once and exit
 
-**Persistent UI mode** (live coding with hot-swap):
-- `nkido-cli ui` — Starts interactive mode with SDL2 UI
-- Extension sends commands via stdin or IPC for hot-swapping
-- Escape or stop command terminates the UI mode process
+**Persistent hot-swap mode** (live coding):
+- Today, `nkido-cli ui` is a self-contained SDL2 editor with no external command channel — it only consumes SDL keyboard/text events.
+- For VS Code v1, `nkido-cli` must grow a headless persistent mode (working name: `nkido-cli serve`) that reads newline-delimited JSON commands from stdin (`{"cmd": "load", "source": "..."}`, `{"cmd": "stop"}`) and emits status/diagnostics to stdout.
+- The extension launches one `serve` process per workspace, sends source on Ctrl+Enter for hot-swap, sends stop on Escape, and kills the process on deactivation.
+- See section 11 (Impact Assessment) for the prerequisite work in `tools/nkido-cli`.
 
 ---
 
@@ -123,8 +124,8 @@ When compilation fails:
 │   │   ├── akkado.tmLanguage.json          # TextMate grammar
 │   │   └── grammar-generator.ts            # Generates grammar from web IDE tokens
 │   ├── cli/
-│   │   ├── cli-client.ts                   # nkido-cli wrapper
-│   │   ├── ui-mode-manager.ts              # Persistent UI mode process
+│   │   ├── cli-client.ts                   # nkido-cli wrapper (spawn-per-command)
+│   │   ├── serve-mode-manager.ts           # Persistent serve-mode process (JSON over stdio)
 │   │   └── audio-engine.ts                 # Playback state management
 │   ├── commands/
 │   │   ├── evaluate.ts                     # Ctrl+Enter handler
@@ -136,6 +137,10 @@ When compilation fails:
 │       └── logger.ts                      # Output channel logging
 ├── syntaxes/
 │   └── akkado.tmLanguage.json             # Generated TextMate grammar
+├── icons/
+│   ├── akkado-light.svg                   # File icon (light theme) — human-delivered
+│   └── akkado-dark.svg                    # File icon (dark theme) — human-delivered
+├── language-configuration.json
 ├── package.json
 ├── tsconfig.json
 ├── vsc-extension-quickstart.md
@@ -160,7 +165,7 @@ When compilation fails:
 │  │  - extension.ts (activation, commands)      │              │
 │  │  - providers/*.ts (completion, diagnostics) │              │
 │  │  - cli-client.ts (nkido-cli wrapper)       │              │
-│  │  - ui-mode-manager.ts (persistent process)  │              │
+│  │  - serve-mode-manager.ts (persistent JSON) │              │
 │  └──────────────────────┬──────────────────────┘              │
 └─────────────────────────┼─────────────────────────────────────┘
                           │ spawns
@@ -172,7 +177,10 @@ When compilation fails:
 │  - check: Syntax check (spawn, exit)        │
 │  - compile: Compile to bytecode (spawn)     │
 │  - play: Play and exit (spawn)              │
-│  - ui: Persistent UI mode (long-running)    │
+│  - serve: Headless JSON-over-stdio mode     │
+│           (NEW — prerequisite, see §11)     │
+│  - ui: SDL2 standalone editor (unchanged,   │
+│        not used by the VS Code extension)   │
 └─────────────────────────────────────────────┘
 ```
 
@@ -245,7 +253,7 @@ Configurable via VS Code settings (`settings.json`):
 | `Nkido: Compile` | `nkido.compile` | Compile to bytecode without playing |
 | `Nkido: Check Syntax` | `nkido.check` | Syntax check only |
 | `Nkido: Show Output` | `nkido.showOutput` | Focus Nkido output channel |
-| `Nkido: Restart CLI` | `nkido.restartCli` | Restart nkido-cli UI mode |
+| `Nkido: Restart CLI` | `nkido.restartCli` | Restart `nkido-cli serve` process |
 
 ### 4.3 VS Code API Features
 
@@ -433,44 +441,101 @@ export class CliClient {
 }
 ```
 
-### 5.4 UI Mode Manager (Persistent Process)
+### 5.4 Serve Mode Manager (Persistent Process)
+
+Spawns `nkido-cli serve` (headless mode, prerequisite — see section 11) and exchanges newline-delimited JSON over stdio. One process per workspace; restarted on crash.
+
+Wire format (subject to refinement when the CLI side is designed):
+
+```jsonl
+→ {"cmd": "load", "source": "...", "uri": "file:///..."}
+← {"event": "compiled", "ok": true}
+← {"event": "diagnostic", "severity": "error", "line": 3, "col": 5, "message": "..."}
+→ {"cmd": "stop"}
+← {"event": "stopped"}
+```
 
 ```typescript
-// ui-mode-manager.ts
-export class UiModeManager {
+// serve-mode-manager.ts
+export class ServeModeManager {
     private process: ChildProcess | null = null;
     private cliPath: string;
-    
+
     start(): void {
         if (this.process) return;
-        
-        this.process = spawn(this.cliPath, ['ui'], {
+
+        this.process = spawn(this.cliPath, ['serve'], {
             stdio: ['pipe', 'pipe', 'pipe']
         });
-        
+
         this.process.stdout?.on('data', (d: Buffer) => {
-            // Parse UI mode output (status updates, etc.)
+            // Parse newline-delimited JSON events (compiled, diagnostic, stopped, ...)
         });
-        
+
         this.process.on('exit', () => {
             this.process = null;
         });
     }
-    
+
     stop(): void {
+        this.send({ cmd: 'stop' });
+    }
+
+    kill(): void {
         if (this.process) {
             this.process.kill();
             this.process = null;
         }
     }
-    
-    sendCommand(command: string): void {
+
+    send(message: object): void {
         if (this.process?.stdin) {
-            this.process.stdin.write(command + '\n');
+            this.process.stdin.write(JSON.stringify(message) + '\n');
         }
     }
 }
 ```
+
+### 5.5 File Icon (Custom .akk / .akkado Icon)
+
+VS Code lets a language contribution declare a custom icon that file-icon themes (and the default theme) will use for files of that language. The icon shows up in the Explorer, tab strips, breadcrumbs, and Quick Open.
+
+**Asset delivery:** The icon is human-delivered. The maintainer provides two SVG files (light + dark variants) sized for VS Code's icon slots (typically 32×32 viewBox, line/glyph weight tuned to match the bundled file icons in Seti / vs-seti). These files live at:
+
+```
+icons/
+├── akkado-light.svg   # used when the active theme is light
+└── akkado-dark.svg    # used when the active theme is dark
+```
+
+**`package.json` contribution:**
+
+```json
+{
+  "contributes": {
+    "languages": [
+      {
+        "id": "akkado",
+        "aliases": ["Akkado", "akkado"],
+        "extensions": [".akkado", ".akk"],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/akkado-light.svg",
+          "dark": "./icons/akkado-dark.svg"
+        }
+      }
+    ]
+  }
+}
+```
+
+**Notes:**
+- The `icon` field on a language contribution is the only built-in mechanism — no separate icon theme is required for the icon to apply to `.akkado` / `.akk` files in any theme that does not already define a more specific icon.
+- Icons must be SVG. PNG is not supported in the language-icon slot.
+- The icon should remain legible at 16×16 (Explorer scale). Maintainer is responsible for visual QA; this PRD does not prescribe the design.
+- If the maintainer also wants a richer file-icon theme (icons for other Nkido-related files like `.cedar` bytecode), that is out of scope for v1.
+
+**Verification:** After install, files named `foo.akkado` and `bar.akk` show the supplied icon in the Explorer in both light and dark themes. Files of other languages are unaffected.
 
 ---
 
@@ -480,7 +545,7 @@ export class UiModeManager {
 // extension.ts
 import * as vscode from 'vscode';
 import { CliClient } from './cli/cli-client';
-import { UiModeManager } from './cli/ui-mode-manager';
+import { ServeModeManager } from './cli/serve-mode-manager';
 import { CompletionProvider } from './providers/completion-provider';
 import { DiagnosticProvider } from './providers/diagnostic-provider';
 import { SignatureHelpProvider } from './providers/signature-help';
@@ -491,7 +556,7 @@ export function activate(context: vscode.ExtensionContext) {
     const outputChannel = vscode.window.createOutputChannel('Nkido');
     
     const cliClient = new CliClient(cliPath, outputChannel);
-    const uiModeManager = new UiModeManager();
+    const serveModeManager = new ServeModeManager();
     const diagnosticCollection = vscode.languages.createDiagnosticCollection('akkado');
     
     // Register providers
@@ -517,15 +582,16 @@ export function activate(context: vscode.ExtensionContext) {
             const diagnostics = await cliClient.check(doc.uri.fsPath);
             
             if (diagnostics.length === 0) {
-                uiModeManager.start();
+                serveModeManager.start();
+                serveModeManager.send({ cmd: 'load', source: doc.getText(), uri: doc.uri.toString() });
                 outputChannel.appendLine(`Playing: ${doc.uri.fsPath}`);
             } else {
                 diagnosticCollection.set(doc.uri, diagnostics);
             }
         }),
-        
+
         vscode.commands.registerCommand('nkido.stop', () => {
-            uiModeManager.stop();
+            serveModeManager.stop();
             outputChannel.appendLine('Playback stopped');
         })
     );
@@ -546,17 +612,20 @@ export function activate(context: vscode.ExtensionContext) {
 2. Port TextMate grammar from web IDE's `akkado-language.ts` tokenizer
 3. Generate `syntaxes/akkado.tmLanguage.json`
 4. Register language in `package.json` with file extensions `.akkado`, `.akk`
-5. Basic extension activation (logs to output channel)
+5. Drop human-delivered file icons into `icons/akkado-{light,dark}.svg` and reference them in the language contribution (see section 5.5)
+6. Basic extension activation (logs to output channel)
 
 **Files:**
 | File | Change |
 |------|--------|
-| `package.json` | New - Extension manifest |
+| `package.json` | New - Extension manifest (incl. `contributes.languages.icon`) |
 | `src/extension.ts` | New - Entry point |
 | `syntaxes/akkado.tmLanguage.json` | New - TextMate grammar |
 | `src/syntax/grammar-generator.ts` | New - Generates grammar from tokens |
+| `icons/akkado-light.svg`, `icons/akkado-dark.svg` | New - File icons (human-delivered) |
+| `language-configuration.json` | New - Brackets, comments, auto-closing |
 
-**Verification:** Open `.akkado` file in VS Code, verify syntax colors match web IDE.
+**Verification:** Open `.akkado` file in VS Code, verify syntax colors match web IDE. Verify the custom file icon shows in the Explorer for both `.akkado` and `.akk` files in light and dark themes.
 
 ### Phase 2: Providers (Diagnostics + Completion)
 
@@ -582,8 +651,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 **Goal:** Play/stop commands work. Audio plays from VS Code.
 
-1. Implement `CliClient` (spawns `nkido-cli`)
-2. Implement `UiModeManager` (persistent UI mode process)
+1. Implement `CliClient` (spawns `nkido-cli` for `check`/`compile`/`play`)
+2. Implement `ServeModeManager` (persistent `nkido-cli serve` process, JSON over stdio — depends on the CLI prerequisite in section 11)
 3. Register commands: `nkido.evaluate`, `nkido.stop`, `nkido.compile`
 4. Configure keyboard shortcuts (default Ctrl+Enter, Escape)
 5. Add settings: `nkido.cliPath`, `nkido.autoCompileOnSave`
@@ -592,7 +661,7 @@ export function activate(context: vscode.ExtensionContext) {
 | File | Change |
 |------|--------|
 | `src/cli/cli-client.ts` | New |
-| `src/cli/ui-mode-manager.ts` | New |
+| `src/cli/serve-mode-manager.ts` | New |
 | `src/commands/evaluate.ts` | New |
 | `src/commands/stop.ts` | New |
 | `package.json` | Modified (add commands, keybindings, settings) |
@@ -628,7 +697,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 **Invalid code:** `nkido-cli check` returns errors. Squiggly underlines appear at correct line/column. Problems panel populated. Audio stops if playing.
 
-**CLI crashes:** `UiModeManager` detects process exit, clears playback state. Output channel shows error. User can restart via command.
+**CLI crashes:** `ServeModeManager` detects process exit, clears playback state. Output channel shows error. User can restart via `Nkido: Restart CLI`.
 
 **Multiple files open:** Each file tracked independently. Diagnostics scoped to correct file. Only active editor's file is played on evaluate.
 
@@ -668,9 +737,7 @@ code --install-extension nkido-0.1.0.vsix
 
 ## 10. Open Questions
 
-1. **UI mode IPC**: The `nkido-cli ui` mode uses SDL2 for rendering. Should the VS Code extension:
-   - Hide the SDL2 window (run headless)?
-   - Or show the window (user can see CLI's UI too)?
+1. **Serve-mode wire format**: JSON over stdio is the proposed transport, but the exact command/event vocabulary needs to be locked down with the CLI work in section 11. Concretely: how are diagnostics shaped (reuse `format_diagnostic_json`?), how is the audio backend selected, and how is `param()` state pushed?
 
 2. **nkido-cli path validation**: Should the extension verify `nkido-cli` works on startup, or lazily on first use?
 
@@ -684,9 +751,21 @@ code --install-extension nkido-0.1.0.vsix
 |-----------|--------|-------|
 | `nkido/cedar` | **Stays** | No modifications, used via `nkido-cli` |
 | `nkido/akkado` | **Stays** | No modifications, used via `nkido-cli` |
-| `nkido/tools/nkido-cli` | **Stays** | No modifications needed for v1 |
+| `nkido/tools/nkido-cli` | **Modified (prerequisite)** | Adds new `serve` mode (headless, JSON-over-stdio) for hot-swap; `bytecode_loader.cpp` extended to recognize `.akk` alongside `.akkado`. Existing `ui` mode is unchanged. |
 | `~/workspace/nkido-vscode` | **New** | Entire extension is new |
+| File icon assets (`icons/akkado-light.svg`, `icons/akkado-dark.svg`) | **New (human-delivered)** | Provided by maintainer, see section 5.5 |
 | Web IDE (`nkido/web`) | **Stays** | Independent, may share syntax definitions in future |
+
+### 11.1 Prerequisite: `nkido-cli serve` mode
+
+Before extension v1 can ship, `nkido-cli` needs:
+
+1. A new `serve` subcommand that runs headless (no SDL2 window, audio backend stays).
+2. A line-delimited JSON command/event protocol on stdin/stdout (`load`, `stop`, `set_param`, `quit` → `compiled`, `diagnostic`, `stopped`, `param_changed`).
+3. Hot-swap: receiving a new `load` while playing should reuse Cedar's existing crossfade path.
+4. `tools/nkido-cli/bytecode_loader.cpp` extended to recognize `.akk` as a source extension (currently keys on `.akkado` only — see line ~with `".akkado"` literal). Without this, files saved with `.akk` will be misclassified as bytecode.
+
+This is its own work item, tracked separately from the extension; the VS Code extension PRD assumes it lands first.
 
 ---
 
