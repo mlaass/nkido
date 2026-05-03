@@ -1737,6 +1737,11 @@ function createAudioEngine() {
 		state.paramValues = newValues;
 	}
 
+	function clearParams() {
+		state.params = [];
+		state.paramValues = new Map();
+	}
+
 	/**
 	 * Set a parameter value (for sliders/continuous params)
 	 */
@@ -1757,7 +1762,7 @@ function createAudioEngine() {
 	 */
 	function pressButton(name: string) {
 		state.paramValues.set(name, 1);
-		workletNode?.port.postMessage({ type: 'setParam', name, value: 1 });
+		workletNode?.port.postMessage({ type: 'setParam', name, value: 1, slewMs: 0 });
 	}
 
 	/**
@@ -1765,7 +1770,7 @@ function createAudioEngine() {
 	 */
 	function releaseButton(name: string) {
 		state.paramValues.set(name, 0);
-		workletNode?.port.postMessage({ type: 'setParam', name, value: 0 });
+		workletNode?.port.postMessage({ type: 'setParam', name, value: 0, slewMs: 0 });
 	}
 
 	/**
@@ -2184,6 +2189,7 @@ function createAudioEngine() {
 		releaseButton,
 		toggleParam,
 		resetParam,
+		clearParams,
 		// Pattern highlighting API
 		getPatternInfo,
 		queryPatternPreview,
