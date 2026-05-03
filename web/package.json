@@ -9,6 +9,7 @@
     "build:docs": "bun scripts/build-docs-index.ts",
     "build:opcodes": "bun scripts/generate-opcode-metadata.ts",
     "build:syntax": "bun scripts/generate-syntax-builtins.ts",
+    "build:builtins-json": "bun scripts/generate-builtins-json.ts",
     "build:wasm": "cd wasm && sh ./build.sh",
     "preview": "bunx --bun vite preview",
     "check": "bunx svelte-kit sync && bunx svelte-check --tsconfig ./tsconfig.json",

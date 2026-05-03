@@ -1,0 +1,3106 @@
+{
+  "functions": {
+    "tri": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Triangle wave oscillator",
+      "requires_state": true
+    },
+    "saw": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Band-limited sawtooth oscillator",
+      "requires_state": true
+    },
+    "sqr": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Band-limited square wave oscillator",
+      "requires_state": true
+    },
+    "ramp": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Rising ramp oscillator (0 to 1)",
+      "requires_state": true
+    },
+    "phasor": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Phase accumulator (0 to 1 ramp)",
+      "requires_state": true
+    },
+    "sqr_minblep": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "MinBLEP anti-aliased square wave",
+      "requires_state": true
+    },
+    "sine": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Sine wave oscillator",
+      "requires_state": true
+    },
+    "sqr_pwm": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "pwm",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Pulse width modulated square wave",
+      "requires_state": true
+    },
+    "saw_pwm": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "pwm",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "Variable-width sawtooth oscillator",
+      "requires_state": true
+    },
+    "sqr_pwm_minblep": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "pwm",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "MinBLEP PWM square wave",
+      "requires_state": true
+    },
+    "sqr_pwm_4x": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "pwm",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "4x oversampled PWM square wave",
+      "requires_state": true
+    },
+    "saw_pwm_4x": {
+      "params": [
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "pwm",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        }
+      ],
+      "description": "4x oversampled PWM sawtooth",
+      "requires_state": true
+    },
+    "smooch": {
+      "params": [
+        {
+          "name": "bank",
+          "required": true
+        },
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "tablePos",
+          "required": false,
+          "default": 0
+        }
+      ],
+      "description": "Wavetable oscillator (Smooch). smooch(\\\"bank\\\", freq, phase?, tablePos?).",
+      "requires_state": true
+    },
+    "wt": {
+      "params": [
+        {
+          "name": "bank",
+          "required": true
+        },
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "tablePos",
+          "required": false,
+          "default": 0
+        }
+      ],
+      "description": "Wavetable oscillator (alias for smooch).",
+      "requires_state": true
+    },
+    "wavetable": {
+      "params": [
+        {
+          "name": "bank",
+          "required": true
+        },
+        {
+          "name": "freq",
+          "required": true
+        },
+        {
+          "name": "phase",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "tablePos",
+          "required": false,
+          "default": 0
+        }
+      ],
+      "description": "Wavetable oscillator (alias for smooch).",
+      "requires_state": true
+    },
+    "wt_load": {
+      "params": [
+        {
+          "name": "name",
+          "required": true
+        },
+        {
+          "name": "path",
+          "required": true
+        }
+      ],
+      "description": "Load a wavetable bank (compile-time): wt_load(\\\"name\\\", \\\"path\\\").",
+      "requires_state": false
+    },
+    "samples": {
+      "params": [
+        {
+          "name": "uri",
+          "required": true
+        }
+      ],
+      "description": "Declare a sample-bank URI (compile-time): samples(\\\"github:user/repo\\\").",
+      "requires_state": false
+    },
+    "lp": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "cut",
+          "required": true
+        },
+        {
+          "name": "q",
+          "required": false,
+          "default": 0.707
+        }
+      ],
+      "description": "State-variable lowpass filter",
+      "requires_state": true
+    },
+    "hp": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "cut",
+          "required": true
+        },
+        {
+          "name": "q",
+          "required": false,
+          "default": 0.707
+        }
+      ],
+      "description": "State-variable highpass filter",
+      "requires_state": true
+    },
+    "bp": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "cut",
+          "required": true
+        },
+        {
+          "name": "q",
+          "required": false,
+          "default": 0.707
+        }
+      ],
+      "description": "State-variable bandpass filter",
+      "requires_state": true
+    },
+    "moog": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "cut",
+          "required": true
+        },
+        {
+          "name": "res",
+          "required": false,
+          "default": 1
+        },
+        {
+          "name": "max_res",
+          "required": false,
+          "default": 4
+        },
+        {
+          "name": "input_scale",
+          "required": false,
+          "default": 0.5
+        }
+      ],
+      "description": "Moog 4-pole ladder filter with resonance",
+      "requires_state": true
+    },
+    "diode": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "cut",
+          "required": true
+        },
+        {
+          "name": "res",
+          "required": false,
+          "default": 1
+        },
+        {
+          "name": "vt",
+          "required": false,
+          "default": 0.026
+        },
+        {
+          "name": "fb_gain",
+          "required": false,
+          "default": 10
+        }
+      ],
+      "description": "TB-303 style diode ladder filter",
+      "requires_state": true
+    },
+    "formant": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "vowel_a",
+          "required": true
+        },
+        {
+          "name": "vowel_b",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "morph",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "q",
+          "required": false,
+          "default": 10
+        }
+      ],
+      "description": "Vowel formant filter with morphing",
+      "requires_state": true
+    },
+    "sallenkey": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "cut",
+          "required": true
+        },
+        {
+          "name": "res",
+          "required": false,
+          "default": 1
+        },
+        {
+          "name": "mode",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "clip_thresh",
+          "required": false,
+          "default": 0.7
+        }
+      ],
+      "description": "MS-20 style Sallen-Key filter",
+      "requires_state": true
+    },
+    "adsr": {
+      "params": [
+        {
+          "name": "gate",
+          "required": true
+        },
+        {
+          "name": "attack",
+          "required": false,
+          "default": 0.01
+        },
+        {
+          "name": "decay",
+          "required": false,
+          "default": 0.1
+        },
+        {
+          "name": "sustain",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "release",
+          "required": false
+        }
+      ],
+      "description": "Attack-decay-sustain-release envelope",
+      "requires_state": true
+    },
+    "ar": {
+      "params": [
+        {
+          "name": "trig",
+          "required": true
+        },
+        {
+          "name": "attack",
+          "required": false,
+          "default": 0.01
+        },
+        {
+          "name": "release",
+          "required": false,
+          "default": 0.3
+        }
+      ],
+      "description": "Attack-release envelope (one-shot)",
+      "requires_state": true
+    },
+    "env_follower": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "attack",
+          "required": false,
+          "default": 0.01
+        },
+        {
+          "name": "release",
+          "required": false,
+          "default": 0.1
+        }
+      ],
+      "description": "Amplitude envelope follower",
+      "requires_state": true
+    },
+    "sample": {
+      "params": [
+        {
+          "name": "trig",
+          "required": true
+        },
+        {
+          "name": "pitch",
+          "required": true
+        },
+        {
+          "name": "id",
+          "required": true
+        }
+      ],
+      "description": "One-shot sample playback",
+      "requires_state": true
+    },
+    "sample_loop": {
+      "params": [
+        {
+          "name": "gate",
+          "required": true
+        },
+        {
+          "name": "pitch",
+          "required": true
+        },
+        {
+          "name": "id",
+          "required": true
+        }
+      ],
+      "description": "Looping sample playback",
+      "requires_state": true
+    },
+    "soundfont": {
+      "params": [
+        {
+          "name": "input",
+          "required": true
+        },
+        {
+          "name": "file",
+          "required": true
+        },
+        {
+          "name": "preset",
+          "required": false
+        }
+      ],
+      "description": "SoundFont playback: soundfont(pattern, \\\"file.sf2\\\", preset)",
+      "requires_state": false
+    },
+    "delay": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "time",
+          "required": true
+        },
+        {
+          "name": "fb",
+          "required": true
+        },
+        {
+          "name": "dry",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "wet",
+          "required": false,
+          "default": 1
+        }
+      ],
+      "description": "Delay line (time in seconds, 0-10)",
+      "requires_state": true
+    },
+    "delay_ms": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "time_ms",
+          "required": true
+        },
+        {
+          "name": "fb",
+          "required": true
+        },
+        {
+          "name": "dry",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "wet",
+          "required": false,
+          "default": 1
+        }
+      ],
+      "description": "Delay line (time in milliseconds, 0-10000)",
+      "requires_state": true
+    },
+    "delay_smp": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "time_smp",
+          "required": true
+        },
+        {
+          "name": "fb",
+          "required": true
+        },
+        {
+          "name": "dry",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "wet",
+          "required": false,
+          "default": 1
+        }
+      ],
+      "description": "Delay line (time in samples, direct control)",
+      "requires_state": true
+    },
+    "tap_delay": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "time",
+          "required": true
+        },
+        {
+          "name": "fb",
+          "required": true
+        },
+        {
+          "name": "processor",
+          "required": true
+        },
+        {
+          "name": "dry",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "wet",
+          "required": false,
+          "default": 1
+        }
+      ],
+      "description": "Tap delay with feedback chain (time in seconds)",
+      "requires_state": true
+    },
+    "tap_delay_ms": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "time_ms",
+          "required": true
+        },
+        {
+          "name": "fb",
+          "required": true
+        },
+        {
+          "name": "processor",
+          "required": true
+        },
+        {
+          "name": "dry",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "wet",
+          "required": false,
+          "default": 1
+        }
+      ],
+      "description": "Tap delay with feedback chain (time in milliseconds)",
+      "requires_state": true
+    },
+    "tap_delay_smp": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "time_smp",
+          "required": true
+        },
+        {
+          "name": "fb",
+          "required": true
+        },
+        {
+          "name": "processor",
+          "required": true
+        },
+        {
+          "name": "dry",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "wet",
+          "required": false,
+          "default": 1
+        }
+      ],
+      "description": "Tap delay with feedback chain (time in samples)",
+      "requires_state": true
+    },
+    "freeverb": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "room",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "damp",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "room_scale",
+          "required": false,
+          "default": 0.28
+        },
+        {
+          "name": "room_offset",
+          "required": false,
+          "default": 0.7
+        }
+      ],
+      "description": "Freeverb algorithmic reverb",
+      "requires_state": true
+    },
+    "dattorro": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "decay",
+          "required": false,
+          "default": 0.7
+        },
+        {
+          "name": "predelay",
+          "required": false,
+          "default": 20
+        },
+        {
+          "name": "in_diff",
+          "required": false,
+          "default": 0.75
+        },
+        {
+          "name": "dec_diff",
+          "required": false,
+          "default": 0.625
+        }
+      ],
+      "description": "Dattorro plate reverb algorithm",
+      "requires_state": true
+    },
+    "fdn": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "decay",
+          "required": false,
+          "default": 0.8
+        },
+        {
+          "name": "damp",
+          "required": false,
+          "default": 0.3
+        }
+      ],
+      "description": "Feedback delay network reverb",
+      "requires_state": true
+    },
+    "chorus": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "rate",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "depth",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "base_delay",
+          "required": false,
+          "default": 20
+        },
+        {
+          "name": "depth_range",
+          "required": false,
+          "default": 10
+        }
+      ],
+      "description": "Stereo chorus effect",
+      "requires_state": true
+    },
+    "flanger": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "rate",
+          "required": false,
+          "default": 1
+        },
+        {
+          "name": "depth",
+          "required": false,
+          "default": 0.7
+        },
+        {
+          "name": "min_delay",
+          "required": false,
+          "default": 0.1
+        },
+        {
+          "name": "max_delay",
+          "required": false,
+          "default": 10
+        }
+      ],
+      "description": "Classic flanger effect",
+      "requires_state": true
+    },
+    "phaser": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "rate",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "depth",
+          "required": false,
+          "default": 0.8
+        },
+        {
+          "name": "min_freq",
+          "required": false,
+          "default": 200
+        },
+        {
+          "name": "max_freq",
+          "required": false,
+          "default": 4000
+        },
+        {
+          "name": "stages",
+          "required": false,
+          "default": 4
+        },
+        {
+          "name": "feedback",
+          "required": false,
+          "default": 0.5
+        }
+      ],
+      "description": "Multi-stage phaser effect",
+      "requires_state": true
+    },
+    "comb": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "time",
+          "required": true
+        },
+        {
+          "name": "fb",
+          "required": true
+        }
+      ],
+      "description": "Comb filter (resonant delay)",
+      "requires_state": true
+    },
+    "saturate": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "drive",
+          "required": false,
+          "default": 2
+        }
+      ],
+      "description": "Soft saturation (tanh) distortion",
+      "requires_state": false
+    },
+    "softclip": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "thresh",
+          "required": false,
+          "default": 0.5
+        }
+      ],
+      "description": "Soft clipper distortion",
+      "requires_state": false
+    },
+    "bitcrush": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "bits",
+          "required": false,
+          "default": 8
+        },
+        {
+          "name": "rate",
+          "required": false,
+          "default": 0.5
+        }
+      ],
+      "description": "Bit depth and sample rate reducer",
+      "requires_state": true
+    },
+    "fold": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "thresh",
+          "required": false,
+          "default": 0.5
+        }
+      ],
+      "description": "Wavefolding distortion",
+      "requires_state": false
+    },
+    "tube": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "drive",
+          "required": false,
+          "default": 5
+        },
+        {
+          "name": "bias",
+          "required": false,
+          "default": 0.1
+        }
+      ],
+      "description": "Tube amp emulation with bias",
+      "requires_state": true
+    },
+    "smooth": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "drive",
+          "required": false,
+          "default": 5
+        }
+      ],
+      "description": "ADAA alias-free saturation",
+      "requires_state": true
+    },
+    "tape": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "drive",
+          "required": false,
+          "default": 3
+        },
+        {
+          "name": "warmth",
+          "required": false,
+          "default": 0.3
+        },
+        {
+          "name": "soft_thresh",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "warmth_scale",
+          "required": false,
+          "default": 0.7
+        }
+      ],
+      "description": "Tape saturation with warmth",
+      "requires_state": true
+    },
+    "xfmr": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "drive",
+          "required": false,
+          "default": 3
+        },
+        {
+          "name": "bass",
+          "required": false,
+          "default": 5
+        },
+        {
+          "name": "bass_freq",
+          "required": false,
+          "default": 60
+        }
+      ],
+      "description": "Transformer saturation with bass boost",
+      "requires_state": true
+    },
+    "excite": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "amount",
+          "required": false,
+          "default": 0.5
+        },
+        {
+          "name": "freq",
+          "required": false,
+          "default": 3000
+        },
+        {
+          "name": "harm_odd",
+          "required": false,
+          "default": 0.4
+        },
+        {
+          "name": "harm_even",
+          "required": false,
+          "default": 0.6
+        }
+      ],
+      "description": "Aural exciter (harmonic enhancer)",
+      "requires_state": true
+    },
+    "comp": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "thresh",
+          "required": false,
+          "default": -12
+        },
+        {
+          "name": "ratio",
+          "required": false,
+          "default": 4
+        }
+      ],
+      "description": "Dynamic range compressor",
+      "requires_state": true
+    },
+    "limiter": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "ceiling",
+          "required": false,
+          "default": -0.1
+        },
+        {
+          "name": "release",
+          "required": false,
+          "default": 0.1
+        }
+      ],
+      "description": "Peak limiter with lookahead",
+      "requires_state": true
+    },
+    "gate": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "thresh",
+          "required": false,
+          "default": -40
+        },
+        {
+          "name": "range",
+          "required": false,
+          "default": -40
+        },
+        {
+          "name": "hyst",
+          "required": false,
+          "default": 6
+        },
+        {
+          "name": "close_time",
+          "required": false,
+          "default": 5
+        }
+      ],
+      "description": "Noise gate with hysteresis",
+      "requires_state": true
+    },
+    "add": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Add two signals",
+      "requires_state": false
+    },
+    "sub": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Subtract two signals",
+      "requires_state": false
+    },
+    "mul": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Multiply two signals",
+      "requires_state": false
+    },
+    "div": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Divide two signals",
+      "requires_state": false
+    },
+    "pow": {
+      "params": [
+        {
+          "name": "base",
+          "required": true
+        },
+        {
+          "name": "exp",
+          "required": true
+        }
+      ],
+      "description": "Raise base to exponent power",
+      "requires_state": false
+    },
+    "neg": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Negate signal (flip sign)",
+      "requires_state": false
+    },
+    "abs": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Absolute value",
+      "requires_state": false
+    },
+    "sqrt": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Square root",
+      "requires_state": false
+    },
+    "log": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Natural logarithm",
+      "requires_state": false
+    },
+    "exp": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Exponential (e^x)",
+      "requires_state": false
+    },
+    "floor": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Round down to integer",
+      "requires_state": false
+    },
+    "ceil": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Round up to integer",
+      "requires_state": false
+    },
+    "sin": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Sine function (radians)",
+      "requires_state": false
+    },
+    "cos": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Cosine function (radians)",
+      "requires_state": false
+    },
+    "tan": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Tangent function (radians)",
+      "requires_state": false
+    },
+    "asin": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Inverse sine (arc sine)",
+      "requires_state": false
+    },
+    "acos": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Inverse cosine (arc cosine)",
+      "requires_state": false
+    },
+    "atan": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Inverse tangent (arc tangent)",
+      "requires_state": false
+    },
+    "atan2": {
+      "params": [
+        {
+          "name": "y",
+          "required": true
+        },
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Two-argument arc tangent",
+      "requires_state": false
+    },
+    "sinh": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Hyperbolic sine",
+      "requires_state": false
+    },
+    "cosh": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Hyperbolic cosine",
+      "requires_state": false
+    },
+    "tanh": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        }
+      ],
+      "description": "Hyperbolic tangent (soft clipper)",
+      "requires_state": false
+    },
+    "min": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": false
+        }
+      ],
+      "description": "Minimum: min(a, b) or min(array)",
+      "requires_state": false
+    },
+    "max": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": false
+        }
+      ],
+      "description": "Maximum: max(a, b) or max(array)",
+      "requires_state": false
+    },
+    "clamp": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        },
+        {
+          "name": "lo",
+          "required": true
+        },
+        {
+          "name": "hi",
+          "required": true
+        }
+      ],
+      "description": "Clamp value between lo and hi",
+      "requires_state": false
+    },
+    "wrap": {
+      "params": [
+        {
+          "name": "x",
+          "required": true
+        },
+        {
+          "name": "lo",
+          "required": true
+        },
+        {
+          "name": "hi",
+          "required": true
+        }
+      ],
+      "description": "Wrap value between lo and hi",
+      "requires_state": false
+    },
+    "select": {
+      "params": [
+        {
+          "name": "cond",
+          "required": true
+        },
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Select between signals: (cond > 0) ? a : b",
+      "requires_state": false
+    },
+    "gt": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Greater than: (a > b) ? 1 : 0",
+      "requires_state": false
+    },
+    "lt": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Less than: (a < b) ? 1 : 0",
+      "requires_state": false
+    },
+    "gte": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Greater or equal: (a >= b) ? 1 : 0",
+      "requires_state": false
+    },
+    "lte": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Less or equal: (a <= b) ? 1 : 0",
+      "requires_state": false
+    },
+    "eq": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Approximate equality: |a - b| < epsilon ? 1 : 0",
+      "requires_state": false
+    },
+    "neq": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Not equal: |a - b| >= epsilon ? 1 : 0",
+      "requires_state": false
+    },
+    "band": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Logical AND: (a > 0 && b > 0) ? 1 : 0",
+      "requires_state": false
+    },
+    "bor": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Logical OR: (a > 0 || b > 0) ? 1 : 0",
+      "requires_state": false
+    },
+    "bnot": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        }
+      ],
+      "description": "Logical NOT: (a > 0) ? 0 : 1",
+      "requires_state": false
+    },
+    "in": {
+      "params": [
+        {
+          "name": "source",
+          "required": false
+        }
+      ],
+      "description": "Live audio input. Optional source: 'mic' (default), 'tab', 'file:NAME'.",
+      "requires_state": false
+    },
+    "noise": {
+      "params": [
+        {
+          "name": "freq",
+          "required": false
+        },
+        {
+          "name": "trig",
+          "required": false
+        },
+        {
+          "name": "seed",
+          "required": false
+        }
+      ],
+      "description": "Noise generator (freq=0: white, freq>0: sample-and-hold)",
+      "requires_state": true
+    },
+    "mtof": {
+      "params": [
+        {
+          "name": "note",
+          "required": true
+        }
+      ],
+      "description": "MIDI note number to frequency (Hz)",
+      "requires_state": false
+    },
+    "dc": {
+      "params": [
+        {
+          "name": "offset",
+          "required": true
+        }
+      ],
+      "description": "DC offset (constant value)",
+      "requires_state": false
+    },
+    "slew": {
+      "params": [
+        {
+          "name": "target",
+          "required": true
+        },
+        {
+          "name": "rate",
+          "required": true
+        }
+      ],
+      "description": "Slew rate limiter (portamento)",
+      "requires_state": true
+    },
+    "sah": {
+      "params": [
+        {
+          "name": "in",
+          "required": true
+        },
+        {
+          "name": "trig",
+          "required": true
+        }
+      ],
+      "description": "Sample and hold",
+      "requires_state": true
+    },
+    "gateup": {
+      "params": [
+        {
+          "name": "sig",
+          "required": true
+        }
+      ],
+      "description": "1.0 on rising edge of sig",
+      "requires_state": true
+    },
+    "gatedown": {
+      "params": [
+        {
+          "name": "sig",
+          "required": true
+        }
+      ],
+      "description": "1.0 on falling edge of sig",
+      "requires_state": true
+    },
+    "counter": {
+      "params": [
+        {
+          "name": "trig",
+          "required": true
+        },
+        {
+          "name": "reset",
+          "required": false
+        },
+        {
+          "name": "start",
+          "required": false
+        }
+      ],
+      "description": "Increment on rising edge of trig; reset to start (or 0) on rising edge of reset",
+      "requires_state": true
+    },
+    "out": {
+      "params": [
+        {
+          "name": "L",
+          "required": true
+        },
+        {
+          "name": "R",
+          "required": false
+        }
+      ],
+      "description": "Audio output (mono or stereo)",
+      "requires_state": false
+    },
+    "stereo": {
+      "params": [
+        {
+          "name": "L",
+          "required": true
+        },
+        {
+          "name": "R",
+          "required": false
+        }
+      ],
+      "description": "Create stereo signal from mono or L/R pair",
+      "requires_state": false
+    },
+    "left": {
+      "params": [
+        {
+          "name": "stereo",
+          "required": true
+        }
+      ],
+      "description": "Extract left channel from stereo signal",
+      "requires_state": false
+    },
+    "right": {
+      "params": [
+        {
+          "name": "stereo",
+          "required": true
+        }
+      ],
+      "description": "Extract right channel from stereo signal",
+      "requires_state": false
+    },
+    "pan": {
+      "params": [
+        {
+          "name": "mono",
+          "required": true
+        },
+        {
+          "name": "pos",
+          "required": true
+        }
+      ],
+      "description": "Pan mono to stereo (-1=L, 0=center, 1=R)",
+      "requires_state": false
+    },
+    "width": {
+      "params": [
+        {
+          "name": "stereo/L",
+          "required": true
+        },
+        {
+          "name": "amount/R",
+          "required": true
+        }
+      ],
+      "description": "Stereo width (0=mono, 1=normal, >1=wide)",
+      "requires_state": false
+    },
+    "ms_encode": {
+      "params": [
+        {
+          "name": "stereo/L",
+          "required": true
+        }
+      ],
+      "description": "Convert stereo to mid/side",
+      "requires_state": false
+    },
+    "ms_decode": {
+      "params": [
+        {
+          "name": "ms/M",
+          "required": true
+        }
+      ],
+      "description": "Convert mid/side to stereo",
+      "requires_state": false
+    },
+    "pingpong": {
+      "params": [
+        {
+          "name": "stereo/L",
+          "required": true
+        },
+        {
+          "name": "time/R",
+          "required": true
+        },
+        {
+          "name": "fb/time",
+          "required": true
+        },
+        {
+          "name": "fb?",
+          "required": false,
+          "default": 1
+        }
+      ],
+      "description": "Ping-pong stereo delay",
+      "requires_state": true
+    },
+    "clock": {
+      "params": [],
+      "description": "Global clock signal",
+      "requires_state": false
+    },
+    "lfo": {
+      "params": [
+        {
+          "name": "rate",
+          "required": true
+        },
+        {
+          "name": "duty",
+          "required": false,
+          "default": 0.5
+        }
+      ],
+      "description": "Low frequency oscillator (-1 to 1)",
+      "requires_state": true
+    },
+    "trigger": {
+      "params": [
+        {
+          "name": "div",
+          "required": true
+        }
+      ],
+      "description": "Clock divider trigger",
+      "requires_state": true
+    },
+    "euclid": {
+      "params": [
+        {
+          "name": "hits",
+          "required": true
+        },
+        {
+          "name": "steps",
+          "required": true
+        },
+        {
+          "name": "rot",
+          "required": false,
+          "default": 0
+        }
+      ],
+      "description": "Euclidean rhythm generator",
+      "requires_state": true
+    },
+    "timeline": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": false
+        }
+      ],
+      "description": "Breakpoint automation timeline",
+      "requires_state": true
+    },
+    "len": {
+      "params": [
+        {
+          "name": "arr",
+          "required": true
+        }
+      ],
+      "description": "Array length (compile-time)",
+      "requires_state": false
+    },
+    "state": {
+      "params": [
+        {
+          "name": "init",
+          "required": true
+        }
+      ],
+      "description": "Allocate a persistent state cell with the given initial value",
+      "requires_state": true
+    },
+    "get": {
+      "params": [
+        {
+          "name": "cell",
+          "required": true
+        }
+      ],
+      "description": "Read the current value of a state cell",
+      "requires_state": false
+    },
+    "set": {
+      "params": [
+        {
+          "name": "cell",
+          "required": true
+        },
+        {
+          "name": "value",
+          "required": true
+        }
+      ],
+      "description": "Write a value to a state cell, returns the new value",
+      "requires_state": false
+    },
+    "map": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        },
+        {
+          "name": "fn",
+          "required": true
+        }
+      ],
+      "description": "Apply function to each element of array",
+      "requires_state": false
+    },
+    "sum": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        }
+      ],
+      "description": "Sum all elements of array",
+      "requires_state": false
+    },
+    "reduce": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        },
+        {
+          "name": "fn",
+          "required": true
+        },
+        {
+          "name": "init",
+          "required": true
+        }
+      ],
+      "description": "Reduce array with binary function and initial value",
+      "requires_state": false
+    },
+    "zipWith": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        },
+        {
+          "name": "fn",
+          "required": true
+        }
+      ],
+      "description": "Combine two arrays element-wise with binary function",
+      "requires_state": false
+    },
+    "zip": {
+      "params": [
+        {
+          "name": "a",
+          "required": true
+        },
+        {
+          "name": "b",
+          "required": true
+        }
+      ],
+      "description": "Interleave two arrays: [a0, b0, a1, b1, ...]",
+      "requires_state": false
+    },
+    "take": {
+      "params": [
+        {
+          "name": "n",
+          "required": true
+        },
+        {
+          "name": "array",
+          "required": true
+        }
+      ],
+      "description": "Take first n elements from array",
+      "requires_state": false
+    },
+    "drop": {
+      "params": [
+        {
+          "name": "n",
+          "required": true
+        },
+        {
+          "name": "array",
+          "required": true
+        }
+      ],
+      "description": "Drop first n elements from array",
+      "requires_state": false
+    },
+    "reverse": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        }
+      ],
+      "description": "Reverse array order",
+      "requires_state": false
+    },
+    "range": {
+      "params": [
+        {
+          "name": "start",
+          "required": true
+        },
+        {
+          "name": "end",
+          "required": true
+        },
+        {
+          "name": "step",
+          "required": false
+        }
+      ],
+      "description": "Generate array [start, start±step, ...] toward end (exclusive); direction follows start/end, step defaults to 1",
+      "requires_state": false
+    },
+    "repeat": {
+      "params": [
+        {
+          "name": "value",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Repeat value n times: [v, v, ..., v]",
+      "requires_state": false
+    },
+    "mean": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        }
+      ],
+      "description": "Average of array elements",
+      "requires_state": false
+    },
+    "rotate": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Rotate array elements by n positions",
+      "requires_state": false
+    },
+    "shuffle": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        },
+        {
+          "name": "seed",
+          "required": false
+        }
+      ],
+      "description": "Deterministic random permutation of array; optional seed mixes into the path-derived seed",
+      "requires_state": false
+    },
+    "sort": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        },
+        {
+          "name": "reverse",
+          "required": false
+        }
+      ],
+      "description": "Sort array in ascending order; reverse=true sorts descending",
+      "requires_state": false
+    },
+    "normalize": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        },
+        {
+          "name": "lo",
+          "required": false
+        },
+        {
+          "name": "hi",
+          "required": false,
+          "default": 0
+        }
+      ],
+      "description": "Scale array to [lo, hi] range (defaults to [0, 1])",
+      "requires_state": false
+    },
+    "scale": {
+      "params": [
+        {
+          "name": "array",
+          "required": true
+        },
+        {
+          "name": "lo",
+          "required": true
+        },
+        {
+          "name": "hi",
+          "required": true
+        }
+      ],
+      "description": "Scale array to [lo, hi] range",
+      "requires_state": false
+    },
+    "poly": {
+      "params": [
+        {
+          "name": "input",
+          "required": true
+        },
+        {
+          "name": "instrument",
+          "required": true
+        },
+        {
+          "name": "voices",
+          "required": false
+        }
+      ],
+      "description": "Polyphonic voice manager: allocates voices driven by a pattern input. Default 64 voices, max 128.",
+      "requires_state": true
+    },
+    "mono": {
+      "params": [
+        {
+          "name": "signal_or_instrument",
+          "required": true
+        },
+        {
+          "name": "input",
+          "required": false
+        }
+      ],
+      "description": "Stereo-to-mono downmix (L+R)*0.5, or monophonic voice manager",
+      "requires_state": false
+    },
+    "legato": {
+      "params": [
+        {
+          "name": "instrument",
+          "required": true
+        },
+        {
+          "name": "input",
+          "required": false
+        }
+      ],
+      "description": "Legato voice manager",
+      "requires_state": false
+    },
+    "spread": {
+      "params": [
+        {
+          "name": "n",
+          "required": true
+        },
+        {
+          "name": "source",
+          "required": true
+        }
+      ],
+      "description": "Force source to specific voice count (pad/truncate)",
+      "requires_state": false
+    },
+    "linspace": {
+      "params": [
+        {
+          "name": "start",
+          "required": true
+        },
+        {
+          "name": "end",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "required": false
+        }
+      ],
+      "description": "Generate n evenly spaced values from start to end; mode=\\\"linear\\\" (default), \\\"log\\\", or \\\"geom\\\"",
+      "requires_state": false
+    },
+    "random": {
+      "params": [
+        {
+          "name": "n",
+          "required": true
+        },
+        {
+          "name": "min",
+          "required": false
+        },
+        {
+          "name": "max",
+          "required": false,
+          "default": 0
+        }
+      ],
+      "description": "Generate n random values in [min, max) (deterministic; defaults to [0, 1))",
+      "requires_state": false
+    },
+    "harmonics": {
+      "params": [
+        {
+          "name": "fundamental",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        },
+        {
+          "name": "ratio",
+          "required": false
+        }
+      ],
+      "description": "Generate harmonic series; ratio>1 stretches partials (piano-like inharmonicity), <1 compresses",
+      "requires_state": false
+    },
+    "compose": {
+      "params": [
+        {
+          "name": "f",
+          "required": true
+        },
+        {
+          "name": "g",
+          "required": true
+        }
+      ],
+      "description": "Compose functions: compose(f, g)(x) = g(f(x))",
+      "requires_state": false
+    },
+    "chord": {
+      "params": [
+        {
+          "name": "symbol",
+          "required": true
+        }
+      ],
+      "description": "Chord expansion (Am, C7, Fmaj7, etc.)",
+      "requires_state": false
+    },
+    "pat": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        }
+      ],
+      "description": "Mini-notation pattern. Returns values based on cycle position.",
+      "requires_state": false
+    },
+    "value": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        }
+      ],
+      "description": "Numeric scalar pattern (raw values, no mtof). Equivalent to v\\\"…\\\".",
+      "requires_state": false
+    },
+    "note": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        }
+      ],
+      "description": "Note-name pattern (note names + MIDI ints both → Hz). Equivalent to n\\\"…\\\".",
+      "requires_state": false
+    },
+    "scalar": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        }
+      ],
+      "description": "Cast a note/value/chord pattern to its primary value buffer as a Signal.",
+      "requires_state": false
+    },
+    "slow": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "factor",
+          "required": true
+        }
+      ],
+      "description": "Slow down pattern by factor (stretch time).",
+      "requires_state": false
+    },
+    "fast": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "factor",
+          "required": true
+        }
+      ],
+      "description": "Speed up pattern by factor (compress time).",
+      "requires_state": false
+    },
+    "rev": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        }
+      ],
+      "description": "Reverse pattern event order.",
+      "requires_state": false
+    },
+    "transpose": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "semitones",
+          "required": true
+        }
+      ],
+      "description": "Transpose pattern pitches by semitones.",
+      "requires_state": false
+    },
+    "velocity": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "vel",
+          "required": true
+        }
+      ],
+      "description": "Set velocity on pattern events (0-1).",
+      "requires_state": false
+    },
+    "bend": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "value",
+          "required": true
+        }
+      ],
+      "description": "Set bend value on pattern events; reachable via e.bend.",
+      "requires_state": false
+    },
+    "aftertouch": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "value",
+          "required": true
+        }
+      ],
+      "description": "Set aftertouch value on pattern events; reachable via e.aftertouch.",
+      "requires_state": false
+    },
+    "dur": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "factor",
+          "required": true
+        }
+      ],
+      "description": "Multiply event durations by factor.",
+      "requires_state": false
+    },
+    "bank": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "bank_name",
+          "required": true
+        }
+      ],
+      "description": "Set sample bank for pattern events.",
+      "requires_state": false
+    },
+    "variant": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "index",
+          "required": true
+        }
+      ],
+      "description": "Set sample variant for pattern events.",
+      "requires_state": false
+    },
+    "tune": {
+      "params": [
+        {
+          "name": "tuning",
+          "required": true
+        },
+        {
+          "name": "pattern",
+          "required": true
+        }
+      ],
+      "description": "Apply microtonal tuning context to a pattern.",
+      "requires_state": false
+    },
+    "early": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "amount",
+          "required": true
+        }
+      ],
+      "description": "Shift events earlier by amount cycles (wraps).",
+      "requires_state": false
+    },
+    "late": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "amount",
+          "required": true
+        }
+      ],
+      "description": "Shift events later by amount cycles (wraps).",
+      "requires_state": false
+    },
+    "palindrome": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        }
+      ],
+      "description": "Play pattern forward then reversed (doubles cycle length).",
+      "requires_state": false
+    },
+    "compress": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "start",
+          "required": true
+        },
+        {
+          "name": "end",
+          "required": true
+        }
+      ],
+      "description": "Squash pattern into [start, end) of cycle (silence elsewhere).",
+      "requires_state": false
+    },
+    "ply": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Repeat each event n times within its slot.",
+      "requires_state": false
+    },
+    "linger": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "frac",
+          "required": true
+        }
+      ],
+      "description": "Keep first frac of pattern; loop it to fill the cycle.",
+      "requires_state": false
+    },
+    "zoom": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "start",
+          "required": true
+        },
+        {
+          "name": "end",
+          "required": true
+        }
+      ],
+      "description": "Play only [start, end) portion of pattern, stretched to fill cycle.",
+      "requires_state": false
+    },
+    "segment": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Sample pattern at n evenly-spaced points; emit n equal-duration events.",
+      "requires_state": false
+    },
+    "swing": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": false
+        }
+      ],
+      "description": "Apply 1/3 swing on n-slice grid (default n=4).",
+      "requires_state": false
+    },
+    "swingBy": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "amount",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": false
+        }
+      ],
+      "description": "Apply swing of `amount` on n-slice grid (default n=4).",
+      "requires_state": false
+    },
+    "iter": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Rotate pattern start by 1/n per cycle (forward).",
+      "requires_state": false
+    },
+    "iterBack": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Rotate pattern start by 1/n per cycle (backward).",
+      "requires_state": false
+    },
+    "run": {
+      "params": [
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Pattern of integers 0..n-1 evenly distributed in cycle.",
+      "requires_state": false
+    },
+    "binary": {
+      "params": [
+        {
+          "name": "n",
+          "required": true
+        }
+      ],
+      "description": "Trigger pattern from binary representation of n (MSB first).",
+      "requires_state": false
+    },
+    "binaryN": {
+      "params": [
+        {
+          "name": "n",
+          "required": true
+        },
+        {
+          "name": "bits",
+          "required": true
+        }
+      ],
+      "description": "Trigger pattern from low `bits` bits of n (zero-padded, MSB first).",
+      "requires_state": false
+    },
+    "anchor": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "note",
+          "required": true
+        }
+      ],
+      "description": "Set anchor MIDI note for chord voicing (e.g., \\\"c4\\\").",
+      "requires_state": false
+    },
+    "mode": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "mode",
+          "required": true
+        }
+      ],
+      "description": "Set chord voicing mode: below/above/duck/root.",
+      "requires_state": false
+    },
+    "voicing": {
+      "params": [
+        {
+          "name": "pattern",
+          "required": true
+        },
+        {
+          "name": "name",
+          "required": true
+        }
+      ],
+      "description": "Apply named voicing dictionary (close/open/drop2/drop3 or custom).",
+      "requires_state": false
+    },
+    "addVoicings": {
+      "params": [
+        {
+          "name": "name",
+          "required": true
+        },
+        {
+          "name": "intervals",
+          "required": true
+        }
+      ],
+      "description": "Register a custom voicing dictionary by name.",
+      "requires_state": false
+    },
+    "param": {
+      "params": [
+        {
+          "name": "name",
+          "required": true
+        },
+        {
+          "name": "default",
+          "required": true
+        },
+        {
+          "name": "min",
+          "required": false
+        },
+        {
+          "name": "max",
+          "required": false,
+          "default": 0
+        }
+      ],
+      "description": "Continuous parameter (slider). Reads from EnvMap.",
+      "requires_state": false
+    },
+    "button": {
+      "params": [
+        {
+          "name": "name",
+          "required": true
+        }
+      ],
+      "description": "Momentary button. 1 while pressed, 0 otherwise.",
+      "requires_state": false
+    },
+    "toggle": {
+      "params": [
+        {
+          "name": "name",
+          "required": true
+        },
+        {
+          "name": "default",
+          "required": false
+        }
+      ],
+      "description": "Boolean toggle. Click to flip between 0 and 1.",
+      "requires_state": false
+    },
+    "dropdown": {
+      "params": [
+        {
+          "name": "name",
+          "required": true
+        },
+        {
+          "name": "opt1",
+          "required": true
+        },
+        {
+          "name": "opt2",
+          "required": false
+        },
+        {
+          "name": "opt3",
+          "required": false
+        },
+        {
+          "name": "opt4",
+          "required": false
+        },
+        {
+          "name": "opt5",
+          "required": false
+        }
+      ],
+      "description": "Selection dropdown. Returns index (0, 1, ...) of selected option.",
+      "requires_state": false
+    },
+    "pianoroll": {
+      "params": [
+        {
+          "name": "signal",
+          "required": true
+        },
+        {
+          "name": "name",
+          "required": false
+        },
+        {
+          "name": "options",
+          "required": false
+        }
+      ],
+      "description": "Attach piano roll visualization. Signal passes through unchanged.",
+      "requires_state": false
+    },
+    "oscilloscope": {
+      "params": [
+        {
+          "name": "signal",
+          "required": true
+        },
+        {
+          "name": "name",
+          "required": false
+        },
+        {
+          "name": "options",
+          "required": false
+        }
+      ],
+      "description": "Attach oscilloscope visualization. Signal passes through unchanged.",
+      "requires_state": true
+    },
+    "waveform": {
+      "params": [
+        {
+          "name": "signal",
+          "required": true
+        },
+        {
+          "name": "name",
+          "required": false
+        },
+        {
+          "name": "options",
+          "required": false
+        }
+      ],
+      "description": "Attach waveform visualization. Signal passes through unchanged.",
+      "requires_state": true
+    },
+    "spectrum": {
+      "params": [
+        {
+          "name": "signal",
+          "required": true
+        },
+        {
+          "name": "name",
+          "required": false
+        },
+        {
+          "name": "options",
+          "required": false
+        }
+      ],
+      "description": "Attach spectrum analyzer visualization. Signal passes through unchanged.",
+      "requires_state": true
+    },
+    "waterfall": {
+      "params": [
+        {
+          "name": "signal",
+          "required": true
+        },
+        {
+          "name": "name",
+          "required": false
+        },
+        {
+          "name": "options",
+          "required": false
+        }
+      ],
+      "description": "Attach scrolling spectrogram visualization. Signal passes through unchanged.",
+      "requires_state": true
+    },
+    "get_bpm": {
+      "params": [],
+      "description": "Get current BPM (beats per minute).",
+      "requires_state": false
+    },
+    "get_sr": {
+      "params": [],
+      "description": "Get current sample rate.",
+      "requires_state": false
+    },
+    "get_spb": {
+      "params": [],
+      "description": "Get seconds per beat = 60.0 / BPM.",
+      "requires_state": false
+    }
+  },
+  "aliases": {
+    "lowpass": "lp",
+    "highpass": "hp",
+    "bandpass": "bp",
+    "output": "out",
+    "moogladder": "moog",
+    "envelope": "adsr",
+    "envfollow": "env_follower",
+    "follower": "env_follower",
+    "svflp": "lp",
+    "svfhp": "hp",
+    "svfbp": "bp",
+    "diodeladder": "diode",
+    "tb303": "diode",
+    "acid": "diode",
+    "vowel": "formant",
+    "sk": "sallenkey",
+    "ms20": "sallenkey",
+    "reverb": "freeverb",
+    "plate": "dattorro",
+    "room": "fdn",
+    "distort": "saturate",
+    "crush": "bitcrush",
+    "wavefold": "fold",
+    "valve": "tube",
+    "triode": "tube",
+    "adaa": "smooth",
+    "transformer": "xfmr",
+    "console": "xfmr",
+    "exciter": "excite",
+    "aural": "excite",
+    "compressor": "comp",
+    "limit": "limiter",
+    "noisegate": "gate"
+  },
+  "keywords": [
+    "true",
+    "false",
+    "fn",
+    "as",
+    "match",
+    "post"
+  ]
+}
