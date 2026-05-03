@@ -1033,83 +1033,9 @@ function createAudioEngine() {
 		// Step 2: Load any required samples and soundfonts (await ALL before proceeding)
 		state.isLoadingSamples = true;
 		try {
-			// Prefer extended samples if available (has bank/variant info)
-			const extendedSamples = compileResult.requiredSamplesExtended || [];
-			const legacySamples = compileResult.requiredSamples || [];
-			const missingSamples: string[] = [];
-
-			if (extendedSamples.length > 0) {
-				// Use extended sample info with bank support
-				for (const sample of extendedSamples) {
-					const loaded = await ensureBankSampleLoaded(sample);
-					if (!loaded) {
-						const displayName = sample.bank ? `${sample.bank}/${sample.name}:${sample.variant}` : sample.name;
-						missingSamples.push(displayName);
-					}
-				}
-			} else {
-				// Fall back to legacy simple sample names
-				for (const name of legacySamples) {
-					const loaded = await ensureSampleLoaded(name);
-					if (!loaded) {
-						missingSamples.push(name);
-					}
-				}
-			}
-
-			// If any samples couldn't be loaded, report as error
-			if (missingSamples.length > 0) {
-				return {
-					success: false,
-					diagnostics: missingSamples.map((name) => ({
-						severity: 2,
-						message: `Sample '${name}' not found or failed to load`,
-						line: 1,
-						column: 1
-					}))
-				};
-			}
-
-			// Step 2c: Load any required wavetable banks (Smooch).
-			// Order matters: the compiler assigns sequential slot IDs in
-			// source order, so we clear the runtime registry first and
-			// then load each bank in compile order — the runtime IDs match
-			// inst.rate values embedded in the bytecode.
-			const requiredWavetables = compileResult.requiredWavetables || [];
-			if (requiredWavetables.length > 0) {
-				clearWavetables();
-				for (const wt of requiredWavetables) {
-					// The URI resolver requires an explicit scheme; bare
-					// paths from `wt_load("name", "wavetables/x.wav")` get
-					// resolved against the document origin so the http
-					// handler can fetch them.
-					const url = pathToFetchUri(wt.path);
-					const bankId = await loadAsset(url, 'wavetable', wt.name);
-					if (bankId < 0) {
-						return {
-							success: false,
-							diagnostics: [
-								{
-									severity: 2,
-									message: `Wavetable bank '${wt.name}' (${wt.path}) failed to load`,
-									line: 1,
-									column: 1
-								}
-							]
-						};
-					}
-					if (bankId !== wt.id) {
-						console.warn(
-							`[AudioEngine] Wavetable '${wt.name}' assigned bank ID ${bankId}` +
-							` but compiler expected ${wt.id} — bytecode may reference the wrong bank`
-						);
-					}
-				}
-			}
-
-			// Step 2d: Drain required URIs (samples() and friends).
-			// Each declaration goes to the registry indicated by its kind tag;
-			// bytecode swap blocks until every URI resolves.
+			// Drain required URIs first: samples() and friends register bank
+			// manifests in their respective registries, which the per-sample
+			// loader below relies on to resolve `.bank("Name")` references.
 			const requiredUris = compileResult.requiredUris || [];
 			for (const req of requiredUris) {
 				try {
@@ -1152,7 +1078,81 @@ function createAudioEngine() {
 				}
 			}
 
-			// Step 2b: Load any required SoundFonts
+			// Prefer extended samples if available (has bank/variant info)
+			const extendedSamples = compileResult.requiredSamplesExtended || [];
+			const legacySamples = compileResult.requiredSamples || [];
+			const missingSamples: string[] = [];
+
+			if (extendedSamples.length > 0) {
+				// Use extended sample info with bank support
+				for (const sample of extendedSamples) {
+					const loaded = await ensureBankSampleLoaded(sample);
+					if (!loaded) {
+						const displayName = sample.bank ? `${sample.bank}/${sample.name}:${sample.variant}` : sample.name;
+						missingSamples.push(displayName);
+					}
+				}
+			} else {
+				// Fall back to legacy simple sample names
+				for (const name of legacySamples) {
+					const loaded = await ensureSampleLoaded(name);
+					if (!loaded) {
+						missingSamples.push(name);
+					}
+				}
+			}
+
+			// If any samples couldn't be loaded, report as error
+			if (missingSamples.length > 0) {
+				return {
+					success: false,
+					diagnostics: missingSamples.map((name) => ({
+						severity: 2,
+						message: `Sample '${name}' not found or failed to load`,
+						line: 1,
+						column: 1
+					}))
+				};
+			}
+
+			// Load any required wavetable banks (Smooch).
+			// Order matters: the compiler assigns sequential slot IDs in
+			// source order, so we clear the runtime registry first and
+			// then load each bank in compile order — the runtime IDs match
+			// inst.rate values embedded in the bytecode.
+			const requiredWavetables = compileResult.requiredWavetables || [];
+			if (requiredWavetables.length > 0) {
+				clearWavetables();
+				for (const wt of requiredWavetables) {
+					// The URI resolver requires an explicit scheme; bare
+					// paths from `wt_load("name", "wavetables/x.wav")` get
+					// resolved against the document origin so the http
+					// handler can fetch them.
+					const url = pathToFetchUri(wt.path);
+					const bankId = await loadAsset(url, 'wavetable', wt.name);
+					if (bankId < 0) {
+						return {
+							success: false,
+							diagnostics: [
+								{
+									severity: 2,
+									message: `Wavetable bank '${wt.name}' (${wt.path}) failed to load`,
+									line: 1,
+									column: 1
+								}
+							]
+						};
+					}
+					if (bankId !== wt.id) {
+						console.warn(
+							`[AudioEngine] Wavetable '${wt.name}' assigned bank ID ${bankId}` +
+							` but compiler expected ${wt.id} — bytecode may reference the wrong bank`
+						);
+					}
+				}
+			}
+
+			// Load any required SoundFonts
 			const requiredSoundfonts = compileResult.requiredSoundfonts || [];
 			for (const sf of requiredSoundfonts) {
 				// Skip if already loaded (by name)
