@@ -11,17 +11,19 @@ subfeatures:
   - name: Triads
     anchor: triad
     tagline: Major, minor, dim, aug.
-    snippet: triad cmaj
+    snippet: 'chord("C")'
   - name: Sevenths
     anchor: seventh
     tagline: Maj7, m7, dom7, dim7.
-    snippet: seventh cmaj7
+    snippet: 'chord("Cmaj7 Am7 Dm7 G7") |> mtof(%) |> osc("saw", %)'
   - name: Voicings
     anchor: voicing
     tagline: Inversions and spread voicings.
+    snippet: 'chord("Cmaj7 Am7 Dm7 G7").voicing("drop2")'
   - name: Drop voicings
     anchor: drop2
     tagline: Drop-2 and drop-3 jazz voicings.
+    snippet: 'chord("Cmaj7").voicing("drop2")'
 ---
 
 # Chords

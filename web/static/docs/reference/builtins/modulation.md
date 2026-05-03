@@ -11,19 +11,19 @@ subfeatures:
   - name: Chorus
     anchor: chorus
     tagline: Stereo chorus, lush detune.
-    snippet: saw 220 -> chorus .3 .005
+    snippet: 'osc("saw", 220) |> chorus(%, 0.5, 0.5)'
   - name: Flanger
     anchor: flanger
     tagline: Swept short delay with feedback.
-    snippet: saw 220 -> flanger .5 .3
+    snippet: 'osc("saw", 110) |> flanger(%, 0.5, 0.7)'
   - name: Phaser
     anchor: phaser
     tagline: All-pass cascade phaser.
-    snippet: saw 220 -> phaser .5
+    snippet: 'osc("saw", 110) |> phaser(%, 0.3, 0.8)'
   - name: Comb
     anchor: comb
     tagline: Comb filter modulation.
-    snippet: saw 220 -> comb .005 .8
+    snippet: 'osc("noise") |> comb(%, 1/220, 0.95)'
 ---
 
 # Modulation Effects

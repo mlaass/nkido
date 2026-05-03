@@ -11,15 +11,15 @@ subfeatures:
   - name: Delay
     anchor: delay
     tagline: Beat-synced feedback delay.
-    snippet: saw 110 -> delay 1/4 .5
+    snippet: 'osc("saw", 220) |> delay(%, 0.5, 0.4)'
   - name: Delay (ms)
     anchor: delay_ms
     tagline: Time-domain delay with millisecond control.
-    snippet: saw 110 -> delay_ms 250 .5
+    snippet: 'osc("saw", 220) |> delay_ms(%, 300, 0.4)'
   - name: Tap Delay
     anchor: tap_delay
-    tagline: Multi-tap, beat-synced.
-    snippet: saw 110 -> tap_delay [1/4 1/8] .6
+    tagline: Multi-tap with feedback processor.
+    snippet: 'osc("saw", 110) |> tap_delay(%, 0.375, 0.7, (x) -> lp(x, 1500))'
 ---
 
 # Delays

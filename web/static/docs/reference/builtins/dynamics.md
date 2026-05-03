@@ -11,15 +11,15 @@ subfeatures:
   - name: Compressor
     anchor: comp
     tagline: Feedforward compressor.
-    snippet: saw 110 -> comp -12 4
+    snippet: 'osc("saw", 110) * ar(trigger(2)) |> comp(%, -12, 4)'
   - name: Limiter
     anchor: limiter
     tagline: Brick-wall ceiling.
-    snippet: saw 110 -> limiter -3
+    snippet: 'osc("saw", 110) * 2 |> limiter(%, -0.1, 0.1)'
   - name: Gate
     anchor: gate
     tagline: Threshold-based noise gate.
-    snippet: noise -> gate -40
+    snippet: 'osc("noise") * ar(trigger(8), 0.001, 0.05) |> gate(%, -20, 10)'
 ---
 
 # Dynamics

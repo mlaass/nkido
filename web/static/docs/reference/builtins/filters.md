@@ -11,23 +11,23 @@ subfeatures:
   - name: Lowpass
     anchor: lp
     tagline: Resonant low-pass with q control.
-    snippet: saw 110 -> lp 800 .5
+    snippet: 'osc("saw", 220) |> lp(%, 800)'
   - name: Highpass
     anchor: hp
     tagline: Resonant high-pass.
-    snippet: noise -> hp 200 .3
+    snippet: 'osc("saw", 110) |> hp(%, 200)'
   - name: Bandpass
     anchor: bp
     tagline: Bandpass with peak control.
-    snippet: noise -> bp 1200 .9
+    snippet: 'osc("saw", 220) |> bp(%, 1000, 4)'
   - name: Moog
     anchor: moog
     tagline: Four-pole ladder, classic warmth.
-    snippet: saw 55 -> moog 600 .9
+    snippet: 'osc("saw", 55) |> moog(%, 400, 2)'
   - name: Sallen-Key
     anchor: sallenkey
     tagline: 12 dB SVF with morphing modes.
-    snippet: saw 110 -> sallenkey 800 .6
+    snippet: 'osc("saw", 55) |> sallenkey(%, 600, 3)'
 ---
 
 # Filters

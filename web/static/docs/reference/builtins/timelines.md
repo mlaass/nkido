@@ -11,7 +11,7 @@ subfeatures:
   - name: Timeline
     anchor: timeline
     tagline: Sample-accurate parameter automation.
-    snippet: timeline [0 1] 4
+    snippet: "osc(\"saw\", 220) * timeline(\"__/''\")"
   - name: Breakpoints
     anchor: breakpoint
     tagline: Linear and curved segments.

@@ -11,11 +11,11 @@ subfeatures:
   - name: ADSR
     anchor: adsr
     tagline: Attack, decay, sustain, release.
-    snippet: saw 220 * adsr .01 .1 .7 .3 g
+    snippet: 'osc("sin", 440) * adsr(trigger(2), 0.01, 0.2)'
   - name: AR
     anchor: ar
     tagline: Compact attack/release.
-    snippet: noise * ar .002 .1 g
+    snippet: 'osc("sin", 55) * ar(trigger(4), 0.001, 0.2)'
 ---
 
 # Envelopes

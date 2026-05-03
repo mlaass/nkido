@@ -11,15 +11,15 @@ subfeatures:
   - name: Freeverb
     anchor: freeverb
     tagline: Schroeder-style room reverb.
-    snippet: saw 220 -> freeverb .5 .8
+    snippet: 'osc("saw", 220) * ar(trigger(2)) |> freeverb(%, 0.5, 0.5)'
   - name: Dattorro
     anchor: dattorro
     tagline: Plate reverb, lush mid-decay.
-    snippet: saw 220 -> dattorro .7 .5
+    snippet: 'osc("saw", 220) * ar(trigger(2)) |> dattorro(%, 0.8, 30)'
   - name: FDN
     anchor: fdn
     tagline: Feedback delay network, deep tails.
-    snippet: saw 220 -> fdn .8 .4
+    snippet: 'osc("saw", 55) * ar(trigger(0.5)) |> fdn(%, 0.9, 0.4)'
 ---
 
 # Reverbs

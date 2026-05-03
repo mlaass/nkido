@@ -11,19 +11,17 @@ subfeatures:
   - name: Poly
     anchor: poly
     tagline: Polyphonic voice allocation.
-    snippet: "[c4 e4 g4] -> poly 8 saw"
+    snippet: 'pat("c4 e4 g4 b4") |> poly(@, (f, g, v) -> osc("sin", f) * v, 8)'
   - name: Mono
     anchor: mono
     tagline: Monophonic last-note priority.
-    snippet: "[c4 e4 g4] -> mono saw"
   - name: Legato
     anchor: legato
     tagline: Held-note legato playing.
-    snippet: "[c4 e4 g4] -> mono legato saw"
   - name: Spread
     anchor: spread
     tagline: Stereo spread across voices.
-    snippet: "[c4 e4 g4] -> poly 8 saw -> spread .8"
+    snippet: 'osc("saw", spread(5, [220, 220.7, 219.3, 221.4, 218.6]))'
 ---
 
 # Polyphony

@@ -11,21 +11,27 @@ subfeatures:
   - name: Arithmetic
     anchor: arithmetic
     tagline: Add, subtract, multiply, divide, power.
+    snippet: 'add(osc("sin", 220), osc("sin", 330)) * 0.5'
   - name: Unary
     anchor: unary-math
     tagline: abs, sqrt, log, exp, floor, ceil, sign.
+    snippet: 'neg(osc("sin", 220))'
   - name: Binary
     anchor: binary-math
     tagline: min, max, mod, pow.
+    snippet: 'min(osc("sin", 220), 0.5)'
   - name: Ternary
     anchor: ternary-math
     tagline: clamp, wrap.
+    snippet: 'clamp(osc("saw", 110), -0.5, 0.5)'
   - name: Trigonometry
     anchor: trigonometric-functions
     tagline: sin, cos, tan, asin, acos, atan, atan2.
+    snippet: 'sin(osc("phasor", 440) * 2 * 3.14159)'
   - name: Hyperbolic
     anchor: hyperbolic-functions
     tagline: sinh, cosh, tanh.
+    snippet: 'osc("saw", 110) * 3 |> tanh(%)'
 ---
 
 # Math Functions
