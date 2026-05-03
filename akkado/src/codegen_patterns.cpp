@@ -1144,6 +1144,58 @@ private:
 // End Compilers
 // ============================================================================
 
+// Emit PUSH_CONST(1.0) + SAMPLE_PLAY for a sample pattern. See declaration in
+// codegen.hpp for the full contract.
+//
+// IMPORTANT: An equivalent block lives inline in the static helper
+// `emit_pattern_with_state()` further down in this file (search for
+// "Mirrors CodeGenerator::emit_sampler_wrapper"). That copy exists because
+// the static helper cannot call class members. Keep both in sync if you
+// change the in3/in4 state-id-split layout, the pitch default, or the
+// `state_id + 1` sampler-id offset.
+std::uint16_t CodeGenerator::emit_sampler_wrapper(std::uint32_t seq_state_id,
+                                                  std::uint16_t value_buf,
+                                                  std::uint16_t trigger_buf,
+                                                  SourceLocation loc) {
+    std::uint16_t pitch_buf = buffers_.allocate();
+    std::uint16_t output_buf = buffers_.allocate();
+
+    if (pitch_buf == BufferAllocator::BUFFER_UNUSED ||
+        output_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", loc);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+
+    // Set pitch to 1.0 for sample playback
+    cedar::Instruction pitch_inst{};
+    pitch_inst.opcode = cedar::Opcode::PUSH_CONST;
+    pitch_inst.out_buffer = pitch_buf;
+    pitch_inst.inputs[0] = 0xFFFF;
+    pitch_inst.inputs[1] = 0xFFFF;
+    pitch_inst.inputs[2] = 0xFFFF;
+    pitch_inst.inputs[3] = 0xFFFF;
+    encode_const_value(pitch_inst, 1.0f);
+    emit(pitch_inst);
+
+    // Wire up sample player.
+    // inputs[3]/[4] carry the upstream SequenceState's state_id (split into
+    // low/high 16-bit halves) so the sampler can read polyphonic events
+    // (e.g. merged [bd, hh] polyrhythms) directly from evt.values[] on
+    // trigger, instead of being limited to the scalar sample_id buffer.
+    cedar::Instruction sample_inst{};
+    sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
+    sample_inst.out_buffer = output_buf;
+    sample_inst.inputs[0] = trigger_buf;   // trigger
+    sample_inst.inputs[1] = pitch_buf;     // pitch
+    sample_inst.inputs[2] = value_buf;     // sample_id (fallback / voice 0)
+    sample_inst.inputs[3] = static_cast<std::uint16_t>(seq_state_id & 0xFFFFu);
+    sample_inst.inputs[4] = static_cast<std::uint16_t>((seq_state_id >> 16) & 0xFFFFu);
+    sample_inst.state_id = seq_state_id + 1;
+    emit(sample_inst);
+
+    return output_buf;
+}
+
 // Handle MiniLiteral (pattern) nodes
 TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
     // Check for timeline curve notation
@@ -1259,43 +1311,12 @@ TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
 
     // Handle sample patterns - need to wire to SAMPLE_PLAY
     if (is_sample_pattern) {
-        std::uint16_t pitch_buf = buffers_.allocate();
-        std::uint16_t output_buf = buffers_.allocate();
-
-        if (pitch_buf == BufferAllocator::BUFFER_UNUSED ||
-            output_buf == BufferAllocator::BUFFER_UNUSED) {
-            error("E101", "Buffer pool exhausted", n.location);
+        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
+                                                        trigger_buf, n.location);
+        if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             pop_path();
             return TypedValue::signal(value_buf);  // Return value buffer as fallback
         }
-
-        // Set pitch to 1.0 for sample playback
-        cedar::Instruction pitch_inst{};
-        pitch_inst.opcode = cedar::Opcode::PUSH_CONST;
-        pitch_inst.out_buffer = pitch_buf;
-        pitch_inst.inputs[0] = 0xFFFF;
-        pitch_inst.inputs[1] = 0xFFFF;
-        pitch_inst.inputs[2] = 0xFFFF;
-        pitch_inst.inputs[3] = 0xFFFF;
-        encode_const_value(pitch_inst, 1.0f);
-        emit(pitch_inst);
-
-        // Wire up sample player.
-        // inputs[3]/[4] carry the upstream SequenceState's state_id (split into
-        // low/high 16-bit halves) so the sampler can read polyphonic events
-        // (e.g. merged [bd, hh] polyrhythms) directly from evt.values[] on
-        // trigger, instead of being limited to the scalar sample_id buffer.
-        cedar::Instruction sample_inst{};
-        sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
-        sample_inst.out_buffer = output_buf;
-        sample_inst.inputs[0] = trigger_buf;   // trigger
-        sample_inst.inputs[1] = pitch_buf;     // pitch
-        sample_inst.inputs[2] = value_buf;     // sample_id (fallback / voice 0)
-        sample_inst.inputs[3] = static_cast<std::uint16_t>(state_id & 0xFFFFu);
-        sample_inst.inputs[4] = static_cast<std::uint16_t>((state_id >> 16) & 0xFFFFu);
-        sample_inst.state_id = state_id + 1;
-        emit(sample_inst);
-
         result_buf = output_buf;
     } else if (closure_node != NULL_NODE) {
         // Handle closure for pitch patterns
@@ -1540,10 +1561,24 @@ TypedValue CodeGenerator::handle_pattern_reference(const std::string& name,
     seq_init.sequence_sample_mappings = compiler.sample_mappings();  // For deferred sample ID resolution
     state_inits_.push_back(std::move(seq_init));
 
+    // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
+    // buffer would be raw sample-IDs (DC), not audio — see
+    // emit_sampler_wrapper() docstring.
+    std::uint16_t result_buf = value_buf;
+    if (is_sample_pattern) {
+        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
+                                                        trigger_buf, loc);
+        if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            pop_path();
+            return TypedValue::void_val();
+        }
+        result_buf = output_buf;
+    }
+
     pop_path();
     pattern_payload->state_id = state_id;
     pattern_payload->cycle_length = cycle_length;
-    return cache_and_return(pattern_node, TypedValue::make_pattern(pattern_payload, value_buf));
+    return cache_and_return(pattern_node, TypedValue::make_pattern(pattern_payload, result_buf));
 }
 
 // Handle chord() calls - uses SEQPAT system via SequenceCompiler
@@ -2655,7 +2690,11 @@ static TypedValue emit_pattern_with_state(
 
     std::uint16_t result_buf = value_buf;
 
-    // Wire up SAMPLE_PLAY for sample patterns (same as handle_mini_literal)
+    // Wire up SAMPLE_PLAY for sample patterns. Mirrors
+    // CodeGenerator::emit_sampler_wrapper() — kept inline here because this
+    // is a static helper using an emit_fn callback and cannot call the class
+    // member. Keep the two in sync if you change the in3/in4 state-id-split
+    // layout, the pitch default, or the `state_id + 1` sampler-id offset.
     if (is_sample_pattern) {
         std::uint16_t pitch_buf = buffers.allocate();
         std::uint16_t output_buf = buffers.allocate();
@@ -3284,6 +3323,20 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
+    // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
+    // buffer would be raw sample-IDs (DC), not audio — see
+    // emit_sampler_wrapper() docstring.
+    std::uint16_t result_buf = value_buf;
+    if (is_sample_pattern) {
+        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
+                                                        trigger_buf, n.location);
+        if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            pop_path();
+            return TypedValue::void_val();
+        }
+        result_buf = output_buf;
+    }
+
     // Build PatternPayload with scaled velocity
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
@@ -3303,7 +3356,7 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     }
 
     pop_path();
-    return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
+    return cache_and_return(node, TypedValue::make_pattern(payload, result_buf));
 }
 
 // Phase 2.1 PRD §11.2: standalone bend()/aftertouch() — set a custom-property
@@ -3660,6 +3713,20 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
         }
     }
 
+    // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
+    // buffer would be raw sample-IDs (DC), not audio — see
+    // emit_sampler_wrapper() docstring.
+    std::uint16_t result_buf = value_buf;
+    if (is_sample_pattern) {
+        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
+                                                        trigger_buf, n.location);
+        if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            pop_path();
+            return TypedValue::void_val();
+        }
+        result_buf = output_buf;
+    }
+
     // Build PatternPayload
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
@@ -3678,7 +3745,7 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     }
 
     pop_path();
-    return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
+    return cache_and_return(node, TypedValue::make_pattern(payload, result_buf));
 }
 
 TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
@@ -3853,6 +3920,20 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
         }
     }
 
+    // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
+    // buffer would be raw sample-IDs (DC), not audio — see
+    // emit_sampler_wrapper() docstring.
+    std::uint16_t result_buf = value_buf;
+    if (is_sample_pattern) {
+        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
+                                                        trigger_buf, n.location);
+        if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            pop_path();
+            return TypedValue::void_val();
+        }
+        result_buf = output_buf;
+    }
+
     // Build PatternPayload
     auto payload = std::make_shared<PatternPayload>();
     payload->fields[PatternPayload::FREQ] = value_buf;
@@ -3871,7 +3952,7 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
     }
 
     pop_path();
-    return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
+    return cache_and_return(node, TypedValue::make_pattern(payload, result_buf));
 }
 
 TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
@@ -4029,10 +4110,24 @@ TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
+    // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
+    // buffer would be raw sample-IDs (DC), not audio — see
+    // emit_sampler_wrapper() docstring.
+    std::uint16_t result_buf = value_buf;
+    if (is_sample_pattern) {
+        std::uint16_t output_buf = emit_sampler_wrapper(seq_state_id, value_buf,
+                                                        trigger_buf, n.location);
+        if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            pop_path();
+            return TypedValue::void_val();
+        }
+        result_buf = output_buf;
+    }
+
     pop_path();
     pattern_payload->state_id = seq_state_id;
     pattern_payload->cycle_length = cycle_length;
-    return cache_and_return(node, TypedValue::make_pattern(pattern_payload, value_buf));
+    return cache_and_return(node, TypedValue::make_pattern(pattern_payload, result_buf));
 }
 
 TypedValue CodeGenerator::handle_tune_call(NodeIndex node, const Node& n) {

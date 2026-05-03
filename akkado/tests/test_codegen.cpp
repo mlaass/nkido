@@ -2007,6 +2007,18 @@ TEST_CASE("Pattern function: velocity()", "[codegen][patterns]") {
         auto result = akkado::compile(R"(velocity(pat("c4 e4"), 0.7))");
         CHECK(result.success);
     }
+
+    SECTION("velocity on sample pattern emits SAMPLE_PLAY") {
+        // Regression guard: velocity() recompiles the inner pattern and
+        // re-emits SEQPAT_QUERY/STEP itself; without explicit sampler wiring
+        // it would return raw sample-IDs as DC instead of audio.
+        auto result = akkado::compile(R"(velocity(pat("bd sd hh"), 0.7))");
+        REQUIRE(result.success);
+        auto insts = get_instructions(result);
+        CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_QUERY) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_STEP) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::SAMPLE_PLAY) != nullptr);
+    }
 }
 
 // =============================================================================
@@ -5385,10 +5397,14 @@ TEST_CASE("Pattern function: bank()", "[codegen][patterns][bank]") {
         auto result = akkado::compile(R"(bank(pat("bd sd hh"), "TR808"))");
         REQUIRE(result.success);
 
-        // Should have SEQPAT_QUERY and SEQPAT_STEP instructions
+        // Should have SEQPAT_QUERY, SEQPAT_STEP, and SAMPLE_PLAY instructions.
+        // The SAMPLE_PLAY check guards against a regression where bank()
+        // emitted only the SEQPAT pipeline and dropped the sampler — the
+        // returned buffer was raw sample-IDs as DC instead of audio.
         auto insts = get_instructions(result);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_QUERY) != nullptr);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_STEP) != nullptr);
+        CHECK(find_instruction(insts, cedar::Opcode::SAMPLE_PLAY) != nullptr);
     }
 
     SECTION("bank populates required_samples_extended with bank info") {
@@ -5413,6 +5429,8 @@ TEST_CASE("Pattern function: bank()", "[codegen][patterns][bank]") {
 
         auto insts = get_instructions(result);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_QUERY) != nullptr);
+        // Sampler must be wired up: regression guard for SAMPLE_PLAY drop.
+        CHECK(find_instruction(insts, cedar::Opcode::SAMPLE_PLAY) != nullptr);
     }
 }
 
@@ -5440,6 +5458,8 @@ TEST_CASE("Pattern function: variant()", "[codegen][patterns][variant]") {
         auto insts = get_instructions(result);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_QUERY) != nullptr);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_STEP) != nullptr);
+        // Sampler must be wired up: regression guard for SAMPLE_PLAY drop.
+        CHECK(find_instruction(insts, cedar::Opcode::SAMPLE_PLAY) != nullptr);
     }
 
     SECTION("variant populates required_samples_extended with variant info") {
@@ -5464,6 +5484,8 @@ TEST_CASE("Pattern function: variant()", "[codegen][patterns][variant]") {
 
         auto insts = get_instructions(result);
         CHECK(find_instruction(insts, cedar::Opcode::SEQPAT_QUERY) != nullptr);
+        // Sampler must be wired up: regression guard for SAMPLE_PLAY drop.
+        CHECK(find_instruction(insts, cedar::Opcode::SAMPLE_PLAY) != nullptr);
     }
 
     SECTION("variant with pattern index (cycling)") {
