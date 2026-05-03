@@ -1,4 +1,4 @@
-// Polyphony: a jazz progression using `poly()` for voice allocation.
+// Polyphony: a chord progression using `poly()` for voice allocation.
 // Each chord event spawns voices with their own gates and frequencies;
 // `poly()` reuses voice slots across consecutive notes so envelopes
 // continue smoothly when the same pitch repeats.
