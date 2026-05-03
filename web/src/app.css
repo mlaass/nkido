@@ -102,6 +102,36 @@ body {
 	color: var(--bg-primary);
 }
 
+/* Visualization widgets */
+.viz-waveform,
+.viz-oscilloscope,
+.viz-pianoroll,
+.viz-spectrum,
+.viz-waterfall {
+	display: inline-block;
+	border-radius: 4px;
+	overflow: hidden;
+	background: var(--bg-secondary, #1a1a1a);
+	border: 1px solid var(--border-primary, #333);
+	vertical-align: top;
+}
+
+.viz-label {
+	font-size: 10px;
+	padding: 6px 3px;
+	color: var(--text-secondary, #888);
+	border-bottom: 1px solid var(--border-primary, #333);
+	min-height: 12px;
+}
+
+.viz-waveform canvas,
+.viz-oscilloscope canvas,
+.viz-pianoroll canvas,
+.viz-spectrum canvas,
+.viz-waterfall canvas {
+	display: block;
+}
+
 /* Utility classes */
 .visually-hidden {
 	position: absolute;

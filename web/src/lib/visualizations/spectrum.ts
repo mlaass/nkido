@@ -48,34 +48,21 @@ const spectrumRenderer: VisualizationRenderer = {
 
 		const container = document.createElement('div');
 		container.className = 'viz-spectrum';
-		container.style.cssText = `
-			display: inline-block;
-			border-radius: 4px;
-			overflow: hidden;
-			background: var(--bg-secondary, #1a1a1a);
-			border: 1px solid var(--border-primary, #333);
-			width: ${isRelativeWidth ? '100%' : width + 'px'};
-			height: ${isRelativeHeight ? '100%' : height + 'px'};
-			vertical-align: top;
-		`;
+		container.style.width = isRelativeWidth ? '100%' : `${width}px`;
+		container.style.height = isRelativeHeight ? '100%' : `${height}px`;
 
 		// Add label
 		const label = document.createElement('div');
 		label.className = 'viz-label';
 		label.textContent = viz.name;
-		label.style.cssText = `
-			font-size: 10px;
-			padding: 2px 6px;
-			color: var(--text-secondary, #888);
-			border-bottom: 1px solid var(--border-primary, #333);
-		`;
 		container.appendChild(label);
 
 		// Add canvas (2x for retina)
 		const canvas = document.createElement('canvas');
 		canvas.width = width * 2;
 		canvas.height = canvasHeight * 2;
-		canvas.style.cssText = `display: block; width: ${width}px; height: ${canvasHeight}px;`;
+		canvas.style.width = `${width}px`;
+		canvas.style.height = `${canvasHeight}px`;
 		container.appendChild(canvas);
 
 		const ctx = canvas.getContext('2d');
