@@ -1,5 +1,7 @@
 #pragma once
 
+#include "required_sample.hpp"
+
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -61,6 +63,15 @@ struct PatternPayload {
     /// pick a field or wrap with poly() / sampler() explicitly.
     bool is_sample_pattern = false;
     std::uint8_t max_voices = 1;
+
+    /// Samples this Pattern needs, with bank/variant context. Populated by
+    /// every Pattern producer (mini-literal, transforms, bank/variant calls)
+    /// from the local SequenceCompiler's per-event mappings. Transparent
+    /// across transforms: `s"foo:0".bank("X").fast(2)` ends up with
+    /// `{bank:"X", name:"foo", variant:0}` regardless of wrapping order.
+    /// Published to CodeGenResult::required_samples_extended via
+    /// CodeGenerator::publish_sample_refs() at the producer site.
+    std::vector<RequiredSample> sample_refs;
 
     /// Field index constants
     static constexpr std::size_t FREQ = 0;

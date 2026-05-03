@@ -5525,21 +5525,21 @@ TEST_CASE("Pattern function: bank and variant chaining", "[codegen][patterns][ba
     }
 
     SECTION("method chaining: bank().variant()") {
-        // Note: Each transform recompiles the pattern, so bank info from earlier
-        // in the chain doesn't propagate to later transforms. This is correct
-        // behavior - the outermost transform (variant) determines the final sample mappings.
+        // bank() and variant() must compose: the inner transform's bank info
+        // travels with the Pattern through compile_pattern_for_transform and
+        // is preserved on the final sample_refs (see "Pattern transforms are
+        // transparent to sample requirements" TEST_CASE).
         auto result = akkado::compile(R"(pat("bd sd").bank("TR909").variant(2))");
         REQUIRE(result.success);
 
-        // Verify variant() applied variant=2
-        bool found_variant = false;
+        bool found_both = false;
         for (const auto& sample : result.required_samples_extended) {
-            if (sample.variant == 2) {
-                found_variant = true;
+            if (sample.variant == 2 && sample.bank == "TR909") {
+                found_both = true;
                 break;
             }
         }
-        CHECK(found_variant);
+        CHECK(found_both);
     }
 
     SECTION("bank alone populates bank field") {
@@ -5554,6 +5554,103 @@ TEST_CASE("Pattern function: bank and variant chaining", "[codegen][patterns][ba
             }
         }
         CHECK(all_have_bank);
+    }
+}
+
+// Patterns-as-values architectural invariants (added 2026-05-03):
+//
+// Pattern transforms (.fast, .slow, .rev, .transpose, .velocity, ...) must be
+// transparent to sample-requirement metadata. Bank/variant info attached to
+// a Pattern by .bank()/.variant() must travel through any number of wrapping
+// transforms and end up in `required_samples_extended` regardless of how the
+// Pattern is wrapped, and one Pattern chain's metadata must never depend on
+// another chain's compile state.
+//
+// Origin: a user repro of the form
+//   s"jungbass:0 ~".bank("Dirt-Samples").fast(2) |> out(@*.7)
+// failed with "Sample 'amencutup' not found" — and amencutup was in a
+// completely independent chain. Root cause was that
+// `required_samples_extended_` was populated only by inline loops in
+// `handle_bank_call`/`handle_variant_call`, so any wrapping transform
+// (.fast, .slow, ...) silently dropped the registration. The web loader
+// then branched on `extendedSamples.length > 0`, leaking one chain's
+// missing entry into another chain's loader path.
+TEST_CASE("Pattern transforms are transparent to sample requirements",
+          "[codegen][patterns][bank][transform]") {
+    auto bank_for = [](const akkado::CompileResult& r,
+                       const std::string& name) -> std::string {
+        for (const auto& s : r.required_samples_extended) {
+            if (s.name == name) return s.bank;
+        }
+        return "<missing>";
+    };
+
+    SECTION("bank() info survives a wrapping .fast()") {
+        // The original failing case: .fast(2) wrapping .bank() must not drop
+        // the bank entry from required_samples_extended.
+        auto result = akkado::compile(
+            R"(pat("bd sd").bank("TR909").fast(2))");
+        REQUIRE(result.success);
+        CHECK(bank_for(result, "bd") == "TR909");
+        CHECK(bank_for(result, "sd") == "TR909");
+    }
+
+    SECTION("bank() info survives a deep transform stack") {
+        auto result = akkado::compile(
+            R"(pat("bd sd").bank("X").fast(2).slow(3).rev())");
+        REQUIRE(result.success);
+        CHECK(bank_for(result, "bd") == "X");
+        CHECK(bank_for(result, "sd") == "X");
+    }
+
+    SECTION("independent chains do not share metadata") {
+        // Toggling .fast() on chain B must not change chain A's entries.
+        // This is the chain-independence invariant — under the old design,
+        // chain B's missing extended entry caused the JS loader to fall
+        // back to legacy single-name resolution for chain A as well.
+        auto without_fast_b = akkado::compile(R"(
+            pat("bd sd").bank("A").fast(2)
+            pat("hh").bank("B")
+        )");
+        auto with_fast_b = akkado::compile(R"(
+            pat("bd sd").bank("A").fast(2)
+            pat("hh").bank("B").fast(2)
+        )");
+        REQUIRE(without_fast_b.success);
+        REQUIRE(with_fast_b.success);
+
+        // Chain A's bank is "A" regardless of what chain B does.
+        CHECK(bank_for(without_fast_b, "bd") == "A");
+        CHECK(bank_for(with_fast_b,    "bd") == "A");
+        // Chain B's bank is "B" regardless of whether it has .fast().
+        CHECK(bank_for(without_fast_b, "hh") == "B");
+        CHECK(bank_for(with_fast_b,    "hh") == "B");
+    }
+
+    SECTION("bank() info survives velocity() and transpose()") {
+        auto v = akkado::compile(R"(pat("bd").bank("V").velocity(0.5))");
+        auto t = akkado::compile(R"(pat("bd").bank("T").transpose(2))");
+        REQUIRE(v.success);
+        REQUIRE(t.success);
+        CHECK(bank_for(v, "bd") == "V");
+        CHECK(bank_for(t, "bd") == "T");
+    }
+
+    SECTION("Pattern value carries its own sample_refs") {
+        // The Pattern's PatternPayload owns its sample_refs as a value-type
+        // field. Even after stacking transforms, the final Pattern's
+        // sample_refs should reflect the cumulative bank/variant.
+        auto result = akkado::compile(
+            R"(pat("bd sd").bank("Z").variant(1).fast(2))");
+        REQUIRE(result.success);
+        // The required_samples_extended ledger reflects the same data
+        // (it's a deduped union of every Pattern's published sample_refs).
+        CHECK(bank_for(result, "bd") == "Z");
+        bool variant_propagated = false;
+        for (const auto& s : result.required_samples_extended) {
+            if (s.bank == "Z" && s.variant == 1) variant_propagated = true;
+        }
+        CHECK(variant_propagated);
     }
 }
 

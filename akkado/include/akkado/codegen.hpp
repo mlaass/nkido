@@ -3,6 +3,7 @@
 #include "ast.hpp"
 #include "diagnostics.hpp"
 #include "mini_token.hpp"
+#include "required_sample.hpp"
 #include "symbol_table.hpp"
 #include "sample_registry.hpp"
 #include "typed_value.hpp"
@@ -160,30 +161,6 @@ struct StateInitData {
     // init_sequence_program_state() when iter_n > 0.
     std::uint8_t iter_n = 0;
     std::int8_t iter_dir = 0;
-};
-
-/// Required sample with bank context
-/// Used for runtime sample resolution with bank support
-struct RequiredSample {
-    std::string bank;      // Bank name (empty = default)
-    std::string name;      // Sample name (e.g., "bd", "snare")
-    int variant = 0;       // Variant index (0 = first variant)
-
-    /// Get a unique key for deduplication
-    [[nodiscard]] std::string key() const {
-        if (bank.empty()) {
-            return variant > 0 ? name + ":" + std::to_string(variant) : name;
-        }
-        return bank + "/" + name + ":" + std::to_string(variant);
-    }
-
-    /// Get the qualified sample name for Cedar (e.g., "TR808_bd_0")
-    [[nodiscard]] std::string qualified_name() const {
-        if (bank.empty() || bank == "default") {
-            return variant > 0 ? name + ":" + std::to_string(variant) : name;
-        }
-        return bank + "_" + name + "_" + std::to_string(variant);
-    }
 };
 
 /// Required SoundFont from compile-time soundfont() calls
@@ -468,6 +445,14 @@ public:
     /// codegen_patterns.cpp (e.g. compile_pattern_for_transform resolving
     /// identifier-bound patterns through PatternInfo.pattern_node).
     const SymbolTable& symbols() const { return *symbols_; }
+
+    /// Publish a Pattern's `sample_refs` to the global
+    /// `required_samples_extended_` ledger, deduplicated by `RequiredSample::key()`.
+    /// Single source of registration: every Pattern producer calls this after
+    /// building its `PatternPayload`. Public so the free static helper
+    /// `emit_pattern_with_state()` in codegen_patterns.cpp can invoke it
+    /// through its `gen` parameter.
+    void publish_sample_refs(const std::vector<RequiredSample>& refs);
 
 private:
 

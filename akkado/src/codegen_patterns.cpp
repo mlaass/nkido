@@ -21,6 +21,28 @@ using codegen::encode_const_value;
 using codegen::unwrap_argument;
 using codegen::emit_zero;
 
+// Project per-event SequenceSampleMappings to a deduped Pattern-level
+// sample_refs vector. One entry per (bank, name, variant) tuple — the global
+// `required_samples_extended_` ledger does its own dedup across patterns, but
+// per-Pattern dedup keeps the sample_refs surface small for any consumer
+// that wants to iterate a single pattern's requirements.
+static std::vector<RequiredSample> sample_refs_from_mappings(
+    const std::vector<SequenceSampleMapping>& mappings) {
+    std::vector<RequiredSample> refs;
+    std::set<std::string> seen;
+    refs.reserve(mappings.size());
+    for (const auto& m : mappings) {
+        RequiredSample r;
+        r.bank = m.bank;
+        r.name = m.sample_name;
+        r.variant = static_cast<int>(m.variant);
+        if (seen.insert(r.key()).second) {
+            refs.push_back(std::move(r));
+        }
+    }
+    return refs;
+}
+
 // ============================================================================
 // SequenceCompiler - Converts mini-notation AST to Sequence/Event format
 // ============================================================================
@@ -1307,6 +1329,9 @@ TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
     seq_init.ast_json = serialize_mini_ast_json(pattern_node, ast_->arena);  // Serialize AST for debug UI
     state_inits_.push_back(std::move(seq_init));
 
+    pattern_payload->sample_refs = sample_refs_from_mappings(compiler.sample_mappings());
+    publish_sample_refs(pattern_payload->sample_refs);
+
     std::uint16_t result_buf = value_buf;
 
     // Handle sample patterns - need to wire to SAMPLE_PLAY
@@ -1561,6 +1586,9 @@ TypedValue CodeGenerator::handle_pattern_reference(const std::string& name,
     seq_init.sequence_sample_mappings = compiler.sample_mappings();  // For deferred sample ID resolution
     state_inits_.push_back(std::move(seq_init));
 
+    pattern_payload->sample_refs = sample_refs_from_mappings(compiler.sample_mappings());
+    publish_sample_refs(pattern_payload->sample_refs);
+
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
     // buffer would be raw sample-IDs (DC), not audio — see
     // emit_sampler_wrapper() docstring.
@@ -1751,6 +1779,9 @@ TypedValue CodeGenerator::handle_chord_call(NodeIndex node, const Node& n) {
         error("E101", "Buffer pool exhausted", n.location);
         return TypedValue::void_val();
     }
+
+    payload->sample_refs = sample_refs_from_mappings(compiler.sample_mappings());
+    publish_sample_refs(payload->sample_refs);
 
     pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, value_buf));
@@ -2750,6 +2781,13 @@ static TypedValue emit_pattern_with_state(
         return TypedValue::void_val();
     }
 
+    // Pattern-as-value: the local SequenceCompiler's mappings already reflect
+    // any nested .bank()/.variant() applied through compile_pattern_for_transform,
+    // so projecting them here gives the correct bank-qualified sample refs
+    // regardless of how this transform is wrapped.
+    payload->sample_refs = sample_refs_from_mappings(compiler.sample_mappings());
+    gen.publish_sample_refs(payload->sample_refs);
+
     auto tv = TypedValue::make_pattern(payload, result_buf);
     node_types[node] = tv;
     return tv;
@@ -3355,6 +3393,9 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
         return TypedValue::void_val();
     }
 
+    payload->sample_refs = sample_refs_from_mappings(compiler.sample_mappings());
+    publish_sample_refs(payload->sample_refs);
+
     pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, result_buf));
 }
@@ -3699,20 +3740,6 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = std::move(sample_mappings);  // Use updated mappings
     state_inits_.push_back(std::move(seq_init));
 
-    // Add to extended samples with bank info
-    for (const auto& mapping : state_inits_.back().sequence_sample_mappings) {
-        RequiredSample req_sample;
-        req_sample.name = mapping.sample_name;
-        req_sample.bank = mapping.bank;
-        req_sample.variant = mapping.variant;
-
-        std::string key = req_sample.key();
-        if (required_samples_extended_keys_.find(key) == required_samples_extended_keys_.end()) {
-            required_samples_extended_keys_.insert(key);
-            required_samples_extended_.push_back(std::move(req_sample));
-        }
-    }
-
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
     // buffer would be raw sample-IDs (DC), not audio — see
     // emit_sampler_wrapper() docstring.
@@ -3743,6 +3770,13 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
         error("E101", "Buffer pool exhausted", n.location);
         return TypedValue::void_val();
     }
+
+    // Bank-mutated mappings live in state_inits_.back() (we moved the local
+    // sample_mappings into it above). Project them into the Pattern's
+    // sample_refs so the bank info travels with the value.
+    payload->sample_refs = sample_refs_from_mappings(
+        state_inits_.back().sequence_sample_mappings);
+    publish_sample_refs(payload->sample_refs);
 
     pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, result_buf));
@@ -3906,20 +3940,6 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = std::move(sample_mappings);  // Use updated mappings
     state_inits_.push_back(std::move(seq_init));
 
-    // Add to extended samples with variant info
-    for (const auto& mapping : state_inits_.back().sequence_sample_mappings) {
-        RequiredSample req_sample;
-        req_sample.name = mapping.sample_name;
-        req_sample.bank = mapping.bank;
-        req_sample.variant = mapping.variant;
-
-        std::string key = req_sample.key();
-        if (required_samples_extended_keys_.find(key) == required_samples_extended_keys_.end()) {
-            required_samples_extended_keys_.insert(key);
-            required_samples_extended_.push_back(std::move(req_sample));
-        }
-    }
-
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
     // buffer would be raw sample-IDs (DC), not audio — see
     // emit_sampler_wrapper() docstring.
@@ -3950,6 +3970,11 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
         error("E101", "Buffer pool exhausted", n.location);
         return TypedValue::void_val();
     }
+
+    // Variant-mutated mappings live in state_inits_.back() (moved above).
+    payload->sample_refs = sample_refs_from_mappings(
+        state_inits_.back().sequence_sample_mappings);
+    publish_sample_refs(payload->sample_refs);
 
     pop_path();
     return cache_and_return(node, TypedValue::make_pattern(payload, result_buf));
@@ -4109,6 +4134,9 @@ TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
     seq_init.pattern_location = pattern.location;
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
+
+    pattern_payload->sample_refs = sample_refs_from_mappings(compiler.sample_mappings());
+    publish_sample_refs(pattern_payload->sample_refs);
 
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
     // buffer would be raw sample-IDs (DC), not audio — see

@@ -1078,27 +1078,24 @@ function createAudioEngine() {
 				}
 			}
 
-			// Prefer extended samples if available (has bank/variant info)
+			// requiredSamplesExtended is the canonical sample list — every
+			// Pattern producer in the compiler publishes its sample_refs into
+			// it (see CodeGenerator::publish_sample_refs). Bank-less samples
+			// arrive with empty `bank` and round-trip through the bank-aware
+			// loader unchanged. The legacy `requiredSamples` array stays
+			// exposed for non-web consumers but the web loader does not
+			// branch on it anymore — the previous extended/legacy fork
+			// caused cross-chain coupling where one chain's missing
+			// extended entry redirected another chain's loader path.
 			const extendedSamples = compileResult.requiredSamplesExtended || [];
-			const legacySamples = compileResult.requiredSamples || [];
 			const missingSamples: string[] = [];
-
-			if (extendedSamples.length > 0) {
-				// Use extended sample info with bank support
-				for (const sample of extendedSamples) {
-					const loaded = await ensureBankSampleLoaded(sample);
-					if (!loaded) {
-						const displayName = sample.bank ? `${sample.bank}/${sample.name}:${sample.variant}` : sample.name;
-						missingSamples.push(displayName);
-					}
-				}
-			} else {
-				// Fall back to legacy simple sample names
-				for (const name of legacySamples) {
-					const loaded = await ensureSampleLoaded(name);
-					if (!loaded) {
-						missingSamples.push(name);
-					}
+			for (const sample of extendedSamples) {
+				const loaded = await ensureBankSampleLoaded(sample);
+				if (!loaded) {
+					const displayName = sample.bank
+						? `${sample.bank}/${sample.name}:${sample.variant}`
+						: sample.name;
+					missingSamples.push(displayName);
 				}
 			}
 

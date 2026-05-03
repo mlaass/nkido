@@ -94,6 +94,15 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
             std::move(required_wavetables_), std::move(required_uris_), success};
 }
 
+void CodeGenerator::publish_sample_refs(const std::vector<RequiredSample>& refs) {
+    for (const auto& r : refs) {
+        std::string key = r.key();
+        if (required_samples_extended_keys_.insert(key).second) {
+            required_samples_extended_.push_back(r);
+        }
+    }
+}
+
 TypedValue CodeGenerator::visit(NodeIndex node) {
     if (node == NULL_NODE) return TypedValue::void_val();
 
