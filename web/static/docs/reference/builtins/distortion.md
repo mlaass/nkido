@@ -3,6 +3,49 @@ title: Distortion
 category: builtins
 order: 8
 keywords: [distortion, saturate, softclip, bitcrush, fold, wavefold, drive, crush, lofi, tube, valve, smooth, adaa, tape, warmth, xfmr, transformer, excite, exciter, harmonics]
+group: effects
+subgroup: nonlinear
+icon: Zap
+tagline: Soft to extreme nonlinearity — saturation, folding, and lo-fi.
+subfeatures:
+  - name: Saturate
+    anchor: saturate
+    tagline: Tape-style tanh saturation.
+    snippet: saw 110 -> saturate .5
+  - name: Softclip
+    anchor: softclip
+    tagline: Cubic soft clipper.
+    snippet: saw 110 -> softclip 2
+  - name: Bitcrush
+    anchor: bitcrush
+    tagline: 8-bit lo-fi color.
+    snippet: noise -> bitcrush 4 .25
+    icon: Binary
+  - name: Fold
+    anchor: fold
+    tagline: Wavefolder for harmonic chaos.
+    snippet: saw 110 -> fold .8
+  - name: Tube
+    anchor: tube
+    tagline: Asymmetric valve warmth.
+    snippet: saw 110 -> tube .7
+    icon: Cylinder
+  - name: Smooth
+    anchor: smooth
+    tagline: Anti-aliased smooth distortion.
+    snippet: saw 110 -> smooth .6
+  - name: Tape
+    anchor: tape
+    tagline: Tape compression and saturation.
+    snippet: saw 110 -> tape .5
+  - name: XFMR
+    anchor: xfmr
+    tagline: Transformer-style coloration.
+    snippet: saw 110 -> xfmr .8
+  - name: Excite
+    anchor: excite
+    tagline: Harmonic exciter.
+    snippet: saw 110 -> excite .5 .5
 ---
 
 # Distortion

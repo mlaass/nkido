@@ -3,6 +3,23 @@ title: Reverbs
 category: builtins
 order: 6
 keywords: [reverb, freeverb, dattorro, fdn, room, plate, space, decay, damping, wet, dry]
+group: effects
+subgroup: time-based
+icon: Wind
+tagline: Algorithmic reverbs from rooms to plates to dense FDN.
+subfeatures:
+  - name: Freeverb
+    anchor: freeverb
+    tagline: Schroeder-style room reverb.
+    snippet: saw 220 -> freeverb .5 .8
+  - name: Dattorro
+    anchor: dattorro
+    tagline: Plate reverb, lush mid-decay.
+    snippet: saw 220 -> dattorro .7 .5
+  - name: FDN
+    anchor: fdn
+    tagline: Feedback delay network, deep tails.
+    snippet: saw 220 -> fdn .8 .4
 ---
 
 # Reverbs

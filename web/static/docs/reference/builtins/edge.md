@@ -3,6 +3,10 @@ title: Edge Primitives
 category: builtins
 order: 12
 keywords: [gateup, gatedown, counter, edge, rising, falling, trigger, accumulator, sah, sample-and-hold]
+group: tools
+subgroup: state-io
+icon: Triangle
+tagline: Rising/falling edge detection and sample-and-hold.
 ---
 
 # Edge Primitives

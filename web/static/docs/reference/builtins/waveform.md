@@ -3,6 +3,9 @@ title: Waveform
 category: builtins
 order: 21
 keywords: [waveform, visualization, viz, envelope, time-domain, scale, filled, line, display, monitor, probe]
+group: visualizations
+icon: AudioWaveform
+tagline: Continuous waveform display.
 ---
 
 # Waveform

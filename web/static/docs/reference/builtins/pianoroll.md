@@ -3,6 +3,9 @@ title: Piano Roll
 category: builtins
 order: 24
 keywords: [pianoroll, piano, roll, visualization, viz, beats, showGrid, scale, chromatic, pentatonic, octave, pattern, events, grid, midi]
+group: visualizations
+icon: Grid3x3
+tagline: Note-event grid for pattern visualization.
 ---
 
 # Piano Roll

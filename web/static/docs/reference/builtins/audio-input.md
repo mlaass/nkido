@@ -3,6 +3,10 @@ title: Audio Input
 category: builtins
 order: 13
 keywords: [in, input, microphone, mic, tab, file, live, audio, capture, getUserMedia]
+group: tools
+subgroup: state-io
+icon: Mic
+tagline: Capture mic, tab audio, or file as a signal source.
 ---
 
 # Audio Input

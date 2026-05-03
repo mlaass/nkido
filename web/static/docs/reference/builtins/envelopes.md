@@ -3,6 +3,19 @@ title: Envelopes
 category: builtins
 order: 3
 keywords: [envelope, adsr, ar, attack, decay, sustain, release, gate, trigger]
+group: effects
+subgroup: frequency
+icon: Activity
+tagline: Gate-driven amplitude shapers.
+subfeatures:
+  - name: ADSR
+    anchor: adsr
+    tagline: Attack, decay, sustain, release.
+    snippet: saw 220 * adsr .01 .1 .7 .3 g
+  - name: AR
+    anchor: ar
+    tagline: Compact attack/release.
+    snippet: noise * ar .002 .1 g
 ---
 
 # Envelopes

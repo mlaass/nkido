@@ -3,6 +3,9 @@ title: Oscilloscope
 category: builtins
 order: 20
 keywords: [oscilloscope, visualization, viz, time-domain, trigger, triggerLevel, triggerEdge, rising, falling, display, monitor, probe, scope]
+group: visualizations
+icon: LineChart
+tagline: Triggered time-domain probe.
 ---
 
 # Oscilloscope

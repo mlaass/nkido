@@ -3,6 +3,27 @@ title: Polyphony
 category: builtins
 order: 18
 keywords: [polyphony, polyphonic, poly, mono, legato, spread, voice, voices, chord, instrument, allocation, retrigger, voice-stealing]
+group: sequencing
+subgroup: voicing
+icon: Layers
+tagline: Voice allocation, legato, and stereo spread.
+subfeatures:
+  - name: Poly
+    anchor: poly
+    tagline: Polyphonic voice allocation.
+    snippet: "[c4 e4 g4] -> poly 8 saw"
+  - name: Mono
+    anchor: mono
+    tagline: Monophonic last-note priority.
+    snippet: "[c4 e4 g4] -> mono saw"
+  - name: Legato
+    anchor: legato
+    tagline: Held-note legato playing.
+    snippet: "[c4 e4 g4] -> mono legato saw"
+  - name: Spread
+    anchor: spread
+    tagline: Stereo spread across voices.
+    snippet: "[c4 e4 g4] -> poly 8 saw -> spread .8"
 ---
 
 # Polyphony

@@ -3,6 +3,23 @@ title: Dynamics
 category: builtins
 order: 9
 keywords: [dynamics, comp, compressor, limiter, gate, noisegate, threshold, ratio, ceiling, compression]
+group: effects
+subgroup: dynamics
+icon: Gauge
+tagline: Compression, limiting, and gating.
+subfeatures:
+  - name: Compressor
+    anchor: comp
+    tagline: Feedforward compressor.
+    snippet: saw 110 -> comp -12 4
+  - name: Limiter
+    anchor: limiter
+    tagline: Brick-wall ceiling.
+    snippet: saw 110 -> limiter -3
+  - name: Gate
+    anchor: gate
+    tagline: Threshold-based noise gate.
+    snippet: noise -> gate -40
 ---
 
 # Dynamics

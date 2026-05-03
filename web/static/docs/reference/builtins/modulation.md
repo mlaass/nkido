@@ -3,6 +3,27 @@ title: Modulation Effects
 category: builtins
 order: 7
 keywords: [modulation, chorus, flanger, phaser, comb, effect, rate, depth, sweep]
+group: effects
+subgroup: time-based
+icon: Wand2
+tagline: Modulated short delay lines for movement and color.
+subfeatures:
+  - name: Chorus
+    anchor: chorus
+    tagline: Stereo chorus, lush detune.
+    snippet: saw 220 -> chorus .3 .005
+  - name: Flanger
+    anchor: flanger
+    tagline: Swept short delay with feedback.
+    snippet: saw 220 -> flanger .5 .3
+  - name: Phaser
+    anchor: phaser
+    tagline: All-pass cascade phaser.
+    snippet: saw 220 -> phaser .5
+  - name: Comb
+    anchor: comb
+    tagline: Comb filter modulation.
+    snippet: saw 220 -> comb .005 .8
 ---
 
 # Modulation Effects

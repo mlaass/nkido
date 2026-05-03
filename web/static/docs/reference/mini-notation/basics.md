@@ -3,6 +3,27 @@ title: Mini-Notation Basics
 category: mini-notation
 order: 1
 keywords: [mini-notation, pattern, sequence, rhythm, pitch, rest, tidal, strudel, modifier, speed, slow, repeat, chance, alternation]
+group: sequencing
+subgroup: patterns
+icon: Music
+tagline: Sequences, polyrhythms, and pattern modifiers.
+subfeatures:
+  - name: Sequences
+    anchor: sequences
+    tagline: Bracketed step sequences.
+    snippet: "[c4 e4 g4 c5]"
+  - name: Polyrhythms
+    anchor: polyrhythms
+    tagline: Stacked patterns at different lengths.
+    snippet: "[c4 e4, g4 b4 d5]"
+  - name: Alternation
+    anchor: alternation
+    tagline: Round-robin and probabilistic choice.
+    snippet: "[c4 <e4 g4>]"
+  - name: Modifiers
+    anchor: modifiers
+    tagline: Speed, repeat, and chance operators.
+    snippet: "[c4*2 e4 g4?]"
 ---
 
 # Mini-Notation

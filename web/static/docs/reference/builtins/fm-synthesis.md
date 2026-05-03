@@ -3,6 +3,10 @@ title: FM Synthesis
 category: builtins
 order: 14
 keywords: [fm, frequency, modulation, carrier, modulator, ratio, index, sideband, harmonic, synthesis]
+group: instruments
+subgroup: synthesis
+icon: Radio
+tagline: Carrier/modulator frequency modulation with rational ratios.
 ---
 
 # FM Synthesis

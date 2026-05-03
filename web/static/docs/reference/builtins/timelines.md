@@ -3,6 +3,24 @@ title: Timelines
 category: builtins
 order: 19
 keywords: [timeline, breakpoint, automation, envelope, curve, curve-notation, scheduled, clock, sync, breakpoints, parameter]
+group: sequencing
+subgroup: timing
+icon: Clock
+tagline: Time-driven automation with breakpoints and curves.
+subfeatures:
+  - name: Timeline
+    anchor: timeline
+    tagline: Sample-accurate parameter automation.
+    snippet: timeline [0 1] 4
+  - name: Breakpoints
+    anchor: breakpoint
+    tagline: Linear and curved segments.
+  - name: Curves
+    anchor: curve
+    tagline: Curve interpolation between values.
+  - name: Automation
+    anchor: automation
+    tagline: Synced parameter automation.
 ---
 
 # Timelines

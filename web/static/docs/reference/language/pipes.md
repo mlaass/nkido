@@ -3,6 +3,10 @@ title: Pipes & Holes
 category: language
 order: 1
 keywords: [pipe, hole, "|>", "%", signal flow, graph, connection, routing]
+group: language
+subgroup: syntax
+icon: Plug
+tagline: Forward composition with -> and |>; the % hole.
 ---
 
 # Pipes & Holes

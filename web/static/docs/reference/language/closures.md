@@ -3,6 +3,10 @@ title: Closures
 category: language
 order: 4
 keywords: [closures, functions, lambda, anonymous, arrow, callback, partial, compose, factory, underscore, placeholder]
+group: language
+subgroup: syntax
+icon: Parentheses
+tagline: Anonymous functions and partial application.
 ---
 
 # Closures

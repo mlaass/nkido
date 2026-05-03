@@ -3,6 +3,10 @@ title: Samples Loading
 category: builtins
 order: 17
 keywords: [samples, loading, bank, github, http, url, file, drag-drop, asset, registry, samples-directive, dirt-samples]
+group: instruments
+subgroup: sample-based
+icon: FolderOpen
+tagline: Pull sample banks from GitHub, HTTP, or local files.
 ---
 
 # Samples Loading

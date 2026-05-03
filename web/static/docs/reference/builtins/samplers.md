@@ -3,6 +3,10 @@ title: Samplers
 category: builtins
 order: 15
 keywords: [sampler, sample, sample_loop, drum, kit, "808", "909", bd, sd, hh, oh, cp, percussion, playback, one-shot, loop]
+group: instruments
+subgroup: sample-based
+icon: Drum
+tagline: One-shot and looping playback with kit shortcuts.
 ---
 
 # Samplers

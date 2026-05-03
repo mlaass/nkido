@@ -3,6 +3,33 @@ title: Sequencing & Timing
 category: builtins
 order: 4
 keywords: [sequencing, timing, lfo, trigger, euclid, euclidean, clock, rhythm, pattern, early, late, palindrome, compress, ply, linger, zoom, segment, swing, swingBy, iter, iterBack, run, binary, binaryN]
+group: sequencing
+subgroup: timing
+icon: ListMusic
+tagline: Clocks, LFOs, triggers, and pattern transforms.
+subfeatures:
+  - name: Clock
+    anchor: clock
+    tagline: Master tempo source.
+    snippet: clock 120
+  - name: LFO
+    anchor: lfo
+    tagline: Bipolar low-frequency oscillator.
+    snippet: lfo 1/4
+  - name: Trigger
+    anchor: trigger
+    tagline: Edge-triggered gate generator.
+    snippet: clock 120 -> trigger
+  - name: Euclidean
+    anchor: euclid
+    tagline: Euclidean rhythm generator.
+    snippet: euclid 5 8
+  - name: Pattern Transforms
+    anchor: pattern-transforms
+    tagline: early, late, swing, palindrome, ply.
+  - name: Pattern Generators
+    anchor: pattern-generators
+    tagline: binary, run, iter, iterBack.
 ---
 
 # Sequencing & Timing

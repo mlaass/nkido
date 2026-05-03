@@ -4,6 +4,10 @@ category: language
 order: 4
 index_headings: true
 keywords: [conditional, conditionals, logic, comparison, select, gt, lt, gte, lte, eq, neq, band, bor, bnot, ternary, if, else, boolean, and, or, not, equal, equality, greater, less, threshold, gate]
+group: language
+subgroup: syntax
+icon: GitBranch
+tagline: select, comparison, and boolean primitives.
 ---
 
 # Conditionals & Logic

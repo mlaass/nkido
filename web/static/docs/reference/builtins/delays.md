@@ -3,6 +3,23 @@ title: Delays
 category: builtins
 order: 5
 keywords: [delay, delay_ms, delay_smp, tap_delay, tap_delay_ms, tap_delay_smp, echo, feedback, time, fb, effect, comb]
+group: effects
+subgroup: time-based
+icon: Repeat2
+tagline: Single- and multi-tap delay lines.
+subfeatures:
+  - name: Delay
+    anchor: delay
+    tagline: Beat-synced feedback delay.
+    snippet: saw 110 -> delay 1/4 .5
+  - name: Delay (ms)
+    anchor: delay_ms
+    tagline: Time-domain delay with millisecond control.
+    snippet: saw 110 -> delay_ms 250 .5
+  - name: Tap Delay
+    anchor: tap_delay
+    tagline: Multi-tap, beat-synced.
+    snippet: saw 110 -> tap_delay [1/4 1/8] .6
 ---
 
 # Delays

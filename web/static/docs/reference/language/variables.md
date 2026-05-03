@@ -3,6 +3,10 @@ title: Variables & Assignment
 category: language
 order: 2
 keywords: [variables, assignment, let, binding, scope, identifier]
+group: language
+subgroup: syntax
+icon: Variable
+tagline: Bind values and signal nodes to identifiers.
 ---
 
 # Variables & Assignment

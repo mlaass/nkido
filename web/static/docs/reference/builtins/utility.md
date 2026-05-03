@@ -3,6 +3,10 @@ title: Utility
 category: builtins
 order: 11
 keywords: [utility, out, output, mtof, midi, frequency, dc, slew, sah, sample, hold, clock]
+group: tools
+subgroup: audio-plumbing
+icon: Wrench
+tagline: Output, MIDI-to-frequency, slew, DC, and more.
 ---
 
 # Utility

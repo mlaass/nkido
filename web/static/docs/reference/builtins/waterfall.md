@@ -3,6 +3,9 @@ title: Waterfall
 category: builtins
 order: 23
 keywords: [waterfall, spectrogram, fft, visualization, viz, gradient, magma, viridis, inferno, thermal, grayscale, time-frequency, scrolling, angle, speed, minDb, maxDb]
+group: visualizations
+icon: AreaChart
+tagline: Scrolling time-frequency spectrogram.
 ---
 
 # Waterfall

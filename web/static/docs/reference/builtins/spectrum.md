@@ -3,6 +3,9 @@ title: Spectrum Analyzer
 category: builtins
 order: 22
 keywords: [spectrum, fft, frequency, visualization, viz, analyzer, logScale, minDb, maxDb, frequency-domain, display, monitor]
+group: visualizations
+icon: BarChart
+tagline: Real-time FFT magnitude display.
 ---
 
 # Spectrum Analyzer

@@ -3,6 +3,10 @@ title: Oscillators
 category: builtins
 order: 1
 keywords: [oscillator, osc, sin, sine, tri, triangle, saw, sawtooth, sqr, square, phasor, ramp, noise, waveform, tone, frequency]
+group: instruments
+subgroup: synthesis
+icon: Waves
+tagline: Sine, saw, square, triangle, phasor, ramp, and noise sources.
 ---
 
 # Oscillators

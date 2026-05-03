@@ -3,6 +3,10 @@ title: Method Calls (UFCS)
 category: language
 order: 7
 keywords: [method, dot, ufcs, call, syntax, chain]
+group: language
+subgroup: data
+icon: Workflow
+tagline: Universal function call syntax via dot.
 ---
 
 # Method Calls (UFCS)

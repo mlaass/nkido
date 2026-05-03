@@ -3,6 +3,29 @@ title: Math Functions
 category: builtins
 order: 10
 keywords: [math, add, sub, mul, div, pow, neg, abs, sqrt, log, exp, floor, ceil, min, max, clamp, wrap, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, trigonometry, hyperbolic]
+group: tools
+subgroup: math
+icon: Sigma
+tagline: Function families for signal processing and control logic.
+subfeatures:
+  - name: Arithmetic
+    anchor: arithmetic
+    tagline: Add, subtract, multiply, divide, power.
+  - name: Unary
+    anchor: unary-math
+    tagline: abs, sqrt, log, exp, floor, ceil, sign.
+  - name: Binary
+    anchor: binary-math
+    tagline: min, max, mod, pow.
+  - name: Ternary
+    anchor: ternary-math
+    tagline: clamp, wrap.
+  - name: Trigonometry
+    anchor: trigonometric-functions
+    tagline: sin, cos, tan, asin, acos, atan, atan2.
+  - name: Hyperbolic
+    anchor: hyperbolic-functions
+    tagline: sinh, cosh, tanh.
 ---
 
 # Math Functions

@@ -4,6 +4,10 @@ category: mini-notation
 order: 2
 keywords: [microtonal, tuning, edo, quarter tone, 17edo, 24edo, 31edo, tune,
            xenharmonic, cents, micro-step, step up, step down, caret]
+group: sequencing
+subgroup: patterns
+icon: KeyRound
+tagline: EDO tunings and per-note micro-step adjustments.
 ---
 
 # Microtonal Notation

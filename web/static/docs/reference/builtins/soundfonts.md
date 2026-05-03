@@ -3,6 +3,10 @@ title: SoundFonts
 category: builtins
 order: 16
 keywords: [soundfont, sf2, sf3, gm, general-midi, preset, voice, polyphonic, instrument, piano, fluidsynth, timgm6mb, fluidr3, musescore]
+group: instruments
+subgroup: sample-based
+icon: Piano
+tagline: General MIDI preset playback via SF2/SF3 fonts.
 ---
 
 # SoundFonts

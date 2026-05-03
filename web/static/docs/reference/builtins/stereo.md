@@ -3,6 +3,10 @@ title: Stereo
 category: builtins
 order: 12
 keywords: [stereo, mono, left, right, pan, width, ms_encode, ms_decode, pingpong, downmix, channels, auto-lift]
+group: tools
+subgroup: audio-plumbing
+icon: Headphones
+tagline: Pan, width, M/S encoding, and stereo plumbing.
 ---
 
 # Stereo

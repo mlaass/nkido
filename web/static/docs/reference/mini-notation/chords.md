@@ -3,6 +3,25 @@ title: Chords
 category: mini-notation
 order: 3
 keywords: [chord, chords, voicing, voicings, anchor, mode, addVoicings, drop2, drop3, close, open, inversion, m7, maj7, dim, aug, sus2, sus4, triad, seventh]
+group: sequencing
+subgroup: patterns
+icon: Music2
+tagline: Triads, sevenths, voicings, and drops.
+subfeatures:
+  - name: Triads
+    anchor: triad
+    tagline: Major, minor, dim, aug.
+    snippet: triad cmaj
+  - name: Sevenths
+    anchor: seventh
+    tagline: Maj7, m7, dom7, dim7.
+    snippet: seventh cmaj7
+  - name: Voicings
+    anchor: voicing
+    tagline: Inversions and spread voicings.
+  - name: Drop voicings
+    anchor: drop2
+    tagline: Drop-2 and drop-3 jazz voicings.
 ---
 
 # Chords

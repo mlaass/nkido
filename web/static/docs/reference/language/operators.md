@@ -3,6 +3,10 @@ title: Operators
 category: language
 order: 3
 keywords: [operators, precedence, arithmetic, plus, minus, multiply, divide, power, pipe, comparison, logic, conditional, gt, lt, gte, lte, eq, neq, equal, equality, greater, less, and, or, not, boolean, ternary]
+group: language
+subgroup: syntax
+icon: Calculator
+tagline: Arithmetic, comparison, logic, and pipe operators with precedence.
 ---
 
 # Operators

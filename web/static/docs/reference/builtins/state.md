@@ -3,6 +3,10 @@ title: State Cells
 category: builtins
 order: 11
 keywords: [state, get, set, cell, persistent, register, slot, memory, counter, accumulator, hold, store]
+group: tools
+subgroup: state-io
+icon: Database
+tagline: Persistent cells with get/set for counters and accumulators.
 ---
 
 # State Cells
