@@ -321,13 +321,15 @@ int run_serve_mode(const Options& opts) {
         2,
     };
 
-    if (!engine->init(audio_config)) {
-        emit_error("failed to initialize audio");
-        return EXIT_FAILURE;
-    }
-
     install_signal_handlers();
 
+    // Defer engine->init() (which calls SDL_OpenAudioDevice) until the first
+    // `load` arrives. Opening the device early and leaving it paused for the
+    // many seconds it takes the user to evaluate causes PulseAudio /
+    // pipewire-pulse to cork the stream; when start() finally unpauses, the
+    // audio thread runs but no samples reach the sink. play mode never trips
+    // this because it opens, loads, and unpauses back-to-back.
+    bool audio_initialized = false;
     bool playing = false;
     emit_event("ready");
 
@@ -392,6 +394,14 @@ int run_serve_mode(const Options& opts) {
                     continue;
                 }
             } else {
+                if (!audio_initialized) {
+                    if (!engine->init(audio_config)) {
+                        emit_error("failed to initialize audio");
+                        emit_compiled(false);
+                        continue;
+                    }
+                    audio_initialized = true;
+                }
                 if (!engine->vm().load_program_immediate(instructions)) {
                     emit_error("failed to load program (invalid bytecode?)");
                     emit_compiled(false);

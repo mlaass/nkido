@@ -54,7 +54,7 @@ void print_usage(const char* program) {
               << "  -h, --help         Show this help\n\n"
               << "Examples:\n"
               << "  " << program << " play song.akkado\n"
-              << "  " << program << " --source \"sin(440) |> out(%,%)\" play\n"
+              << "  " << program << " --source \"sine(440) |> out(%,%)\" play\n"
               << "  cat song.akkado | " << program << " play -\n"
               << "  " << program << " dump song.cedar\n"
               << "  " << program << " compile -o out.cedar song.akkado\n"
