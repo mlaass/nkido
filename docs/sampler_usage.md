@@ -91,16 +91,40 @@ out(kick + snare)
 
 ### Direct Function Calls
 
-```akkado
-// One-shot playback
-sample(trigger(4), 1.0, 1)  // trigger, pitch, sample_id
+The third argument of `sample()` and `sample_loop()` accepts either a sample-name string (recommended) or a numeric sample-bank ID (advanced).
 
-// Looping playback
-sample_loop(gate, 1.0, 2)   // gate, pitch, sample_id
+```akkado
+// Trigger a named sample on a button press
+hit = button("Hit!")
+sample(hit, 1.0, "bd") |> out(@)
+
+// Variant suffix selects bd2, bd3, ... from the default kit
+sample(hit, 1.0, "bd:3") |> out(@)
+
+// Bank-qualified name routes to a sample bank loaded via samples("...")
+samples("github:tidalcycles/Dirt-Samples")
+sample(beat(2), 1.0, "Dirt-Samples/amencutup:0") |> out(@)
+
+// Looping playback (gate signal)
+sample_loop(gate, 1.0, "pad") |> out(@)
 
 // With pitch modulation
-sample(trig, lfo(0.5) + 1.0, 1)  // Pitch modulation
+sample(trig, lfo(0.5) + 1.0, "bd")
 ```
+
+#### When to use which form
+
+- **Mini-notation `s"bd sd hh"` / `pat("bd sd hh")`** — when you want a *sequence* of samples driven by the cycle clock. The compiler handles trigger generation and per-step sample-name resolution.
+- **Direct `sample(trig, pitch, "name")`** — when you want a *one-shot* on an arbitrary trigger source (button, envelope, edge detector, custom clock). The same name resolution is used; the compiler emits a placeholder PUSH_CONST that the host patches with the bank-resolved ID once samples are loaded.
+- **Direct `sample(trig, pitch, <int>)`** — only when you've already programmatically registered samples with specific IDs (e.g. embedding nkido in a host that pre-populates the bank). Most patches should never need this.
+
+For the string form, the third argument's syntax is `[bank/]name[:variant]`:
+
+| Form                                | Bank          | Name        | Variant |
+|-------------------------------------|---------------|-------------|---------|
+| `"bd"`                              | _default_     | `bd`        | 0       |
+| `"bd:3"`                            | _default_     | `bd`        | 3       |
+| `"Dirt-Samples/amencutup:0"`        | `Dirt-Samples`| `amencutup` | 0       |
 
 ## Complete Example
 

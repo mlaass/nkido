@@ -809,6 +809,57 @@ WASM_EXPORT void akkado_resolve_sample_ids() {
     }
 }
 
+/**
+ * Patch sample-id placeholder constants in the bytecode buffer using the
+ * currently loaded sample bank. Walks `g_compile_result.scalar_sample_mappings`
+ * (populated by codegen for `sample(trig, pitch, "name")` calls), looks up each
+ * sample's qualified name in the bank, and overwrites the recorded PUSH_CONST
+ * instruction's `state_id` immediate (which is bit_cast'd to a float at run
+ * time) with the resolved sample ID.
+ *
+ * Call AFTER the sample bank has been populated and BEFORE
+ * `cedar_load_program(bytecode_ptr, ...)` so the loaded program reflects the
+ * patches.
+ *
+ * `bytecode_ptr` and `byte_count` describe the in-WASM bytecode buffer that is
+ * about to be passed to `cedar_load_program`. The buffer is interpreted as a
+ * contiguous array of `cedar::Instruction`.
+ *
+ * Returns the number of instructions patched (or 0 if the VM is uninitialized
+ * or the buffer is malformed).
+ */
+WASM_EXPORT uint32_t akkado_patch_sample_ids_in_bytecode(uint8_t* bytecode_ptr,
+                                                          uint32_t byte_count) {
+    if (!g_vm || !bytecode_ptr) return 0;
+    if (byte_count == 0 || (byte_count % sizeof(cedar::Instruction)) != 0) return 0;
+
+    auto* instructions = reinterpret_cast<cedar::Instruction*>(bytecode_ptr);
+    uint32_t inst_count = byte_count / sizeof(cedar::Instruction);
+    uint32_t patched = 0;
+
+    for (const auto& m : g_compile_result.scalar_sample_mappings) {
+        if (m.instruction_index >= inst_count) continue;
+        cedar::Instruction& inst = instructions[m.instruction_index];
+        if (inst.opcode != cedar::Opcode::PUSH_CONST) continue;
+
+        std::string lookup;
+        if (m.bank.empty() || m.bank == "default") {
+            lookup = m.variant > 0
+                ? m.name + ":" + std::to_string(m.variant)
+                : m.name;
+        } else {
+            lookup = m.bank + "_" + m.name + "_" + std::to_string(m.variant);
+        }
+
+        std::uint32_t id = g_vm->sample_bank().get_sample_id(lookup);
+        float as_float = static_cast<float>(id);
+        std::memcpy(&inst.state_id, &as_float, sizeof(float));
+        ++patched;
+    }
+
+    return patched;
+}
+
 // ============================================================================
 // State Initialization API
 // ============================================================================

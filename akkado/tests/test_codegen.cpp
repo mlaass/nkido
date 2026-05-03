@@ -7493,3 +7493,87 @@ TEST_CASE("samples() emits no audio-time instruction", "[samples-builtin]") {
     // samples() is a compile-time directive; bytecode size must be unchanged
     CHECK(with.size() == without.size());
 }
+
+// =============================================================================
+// sample() with string sample name — direct trigger-driven sampler call.
+// `sample(trig, pitch, "name")` registers the name in required_samples_extended
+// and emits a PUSH_CONST placeholder whose state_id is patched at runtime by
+// `akkado_patch_sample_ids_in_bytecode()` once the sample bank is populated.
+// =============================================================================
+TEST_CASE("sample() accepts a sample-name string", "[codegen][sample][string-arg]") {
+    SECTION("plain name registers required_sample and emits placeholder PUSH_CONST") {
+        auto result = akkado::compile(
+            "trig = button(\"hit\")\n"
+            "sample(trig, 1.0, \"bd\") |> out(%, %)"
+        );
+        REQUIRE(result.success);
+
+        REQUIRE(result.required_samples_extended.size() == 1);
+        CHECK(result.required_samples_extended[0].bank.empty());
+        CHECK(result.required_samples_extended[0].name == "bd");
+        CHECK(result.required_samples_extended[0].variant == 0);
+
+        REQUIRE(result.scalar_sample_mappings.size() == 1);
+        const auto& mapping = result.scalar_sample_mappings[0];
+        CHECK(mapping.bank.empty());
+        CHECK(mapping.name == "bd");
+        CHECK(mapping.variant == 0);
+
+        auto insts = get_instructions(result);
+        REQUIRE(mapping.instruction_index < insts.size());
+        const auto& push = insts[mapping.instruction_index];
+        CHECK(push.opcode == cedar::Opcode::PUSH_CONST);
+        // Codegen records 0 as the placeholder; host patches at load time.
+        CHECK(decode_const_float(push) == 0.0f);
+
+        // Find the SAMPLE_PLAY and verify its sample_id input wires to this
+        // PUSH_CONST's output buffer.
+        const cedar::Instruction* sp = find_instruction(insts, cedar::Opcode::SAMPLE_PLAY);
+        REQUIRE(sp != nullptr);
+        CHECK(sp->inputs[2] == push.out_buffer);
+    }
+
+    SECTION("name with variant suffix") {
+        auto result = akkado::compile(
+            "trig = button(\"hit\")\n"
+            "sample(trig, 1.0, \"bd:3\") |> out(%, %)"
+        );
+        REQUIRE(result.success);
+
+        REQUIRE(result.required_samples_extended.size() == 1);
+        CHECK(result.required_samples_extended[0].name == "bd");
+        CHECK(result.required_samples_extended[0].variant == 3);
+
+        REQUIRE(result.scalar_sample_mappings.size() == 1);
+        CHECK(result.scalar_sample_mappings[0].name == "bd");
+        CHECK(result.scalar_sample_mappings[0].variant == 3);
+    }
+
+    SECTION("bank-qualified name") {
+        auto result = akkado::compile(
+            "trig = button(\"hit\")\n"
+            "sample(trig, 1.0, \"Dirt-Samples/amencutup:0\") |> out(%, %)"
+        );
+        REQUIRE(result.success);
+
+        REQUIRE(result.required_samples_extended.size() == 1);
+        CHECK(result.required_samples_extended[0].bank == "Dirt-Samples");
+        CHECK(result.required_samples_extended[0].name == "amencutup");
+        CHECK(result.required_samples_extended[0].variant == 0);
+
+        REQUIRE(result.scalar_sample_mappings.size() == 1);
+        CHECK(result.scalar_sample_mappings[0].bank == "Dirt-Samples");
+        CHECK(result.scalar_sample_mappings[0].name == "amencutup");
+    }
+
+    SECTION("numeric arg form still works (back-compat)") {
+        auto result = akkado::compile(
+            "trig = button(\"hit\")\n"
+            "sample(trig, 1.0, 5) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+        // Numeric ID does not register a sample name and emits no scalar mapping.
+        CHECK(result.required_samples_extended.empty());
+        CHECK(result.scalar_sample_mappings.empty());
+    }
+}

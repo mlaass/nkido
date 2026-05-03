@@ -106,6 +106,7 @@ if(EMSCRIPTEN)
         _akkado_get_required_samples_count
         _akkado_get_required_sample
         _akkado_resolve_sample_ids
+        _akkado_patch_sample_ids_in_bytecode
         # Required SoundFonts
         _akkado_get_required_soundfonts_count
         _akkado_get_required_soundfont_filename

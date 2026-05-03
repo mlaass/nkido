@@ -213,6 +213,7 @@ struct CodeGenResult {
     std::vector<StateInitData> state_inits;  // State initialization data
     std::vector<std::string> required_samples;  // Unique sample names used - legacy
     std::vector<RequiredSample> required_samples_extended;  // Sample refs with bank/variant info
+    std::vector<ScalarSampleMapping> scalar_sample_mappings;  // Direct sample("name") references requiring runtime ID patching
     std::vector<RequiredSoundFont> required_soundfonts;  // SoundFont files needed at runtime
     // Input source strings collected from in('...') calls (per-call, not deduplicated).
     // Empty means in() was called with no argument (host uses UI default).
@@ -707,6 +708,10 @@ private:
     // Track samples with bank/variant info for extended sample resolution
     std::set<std::string> required_samples_extended_keys_;  // For deduplication
     std::vector<RequiredSample> required_samples_extended_;
+    // Direct sample("name", ...) calls record the instruction index of the
+    // PUSH_CONST that holds the sample-id placeholder, plus the sample name
+    // to resolve. Patched by the host after the sample bank is populated.
+    std::vector<ScalarSampleMapping> scalar_sample_mappings_;
     // Track required SoundFont files
     std::vector<RequiredSoundFont> required_soundfonts_;
     // Track required wavetable banks from compile-time wt_load() directives

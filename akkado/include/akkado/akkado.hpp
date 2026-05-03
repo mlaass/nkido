@@ -47,6 +47,7 @@ struct CompileResult {
     std::vector<StateInitData> state_inits;  // State initialization data for patterns
     std::vector<std::string> required_samples;  // Sample names used (for runtime loading) - legacy
     std::vector<RequiredSample> required_samples_extended;  // Sample refs with bank/variant info
+    std::vector<ScalarSampleMapping> scalar_sample_mappings;  // Direct sample("name") calls needing runtime ID patching
     std::vector<RequiredSoundFont> required_soundfonts;  // SoundFont files needed at runtime
     // Source strings collected from in('...') calls in compile order (one entry per call,
     // empty string if the call had no argument). Hosts use this to switch input source.

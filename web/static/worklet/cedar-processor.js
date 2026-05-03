@@ -797,6 +797,15 @@ class CedarProcessor extends AudioWorkletProcessor {
 		try {
 			this.writeByteArray(bytecodePtr, bytecode);
 
+			// Patch direct sample("name") references in the bytecode using the
+			// currently loaded sample bank. Codegen emits a PUSH_CONST 0 placeholder
+			// for each such call and records its instruction index; this walks the
+			// scalar_sample_mappings ledger and writes the resolved sample ID into
+			// each PUSH_CONST's state_id immediate before the VM sees the program.
+			if (this.module._akkado_patch_sample_ids_in_bytecode) {
+				this.module._akkado_patch_sample_ids_in_bytecode(bytecodePtr, bytecode.length);
+			}
+
 			// Load program into Cedar VM
 			const result = this.module._cedar_load_program(bytecodePtr, bytecode.length);
 

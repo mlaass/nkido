@@ -44,6 +44,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     required_samples_.clear();
     required_samples_extended_keys_.clear();
     required_samples_extended_.clear();
+    scalar_sample_mappings_.clear();
     required_soundfonts_.clear();
     required_wavetables_.clear();
     required_uris_.clear();
@@ -66,7 +67,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     if (!ast.valid()) {
         error("E100", "Invalid AST", {});
-        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false};
+        return {{}, {}, std::move(diagnostics_), {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false};
     }
 
     // Visit root (Program node)
@@ -89,6 +90,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
 
     return {std::move(instructions_), std::move(source_locations_), std::move(diagnostics_),
             std::move(state_inits_), std::move(required_samples_vec), std::move(required_samples_extended_),
+            std::move(scalar_sample_mappings_),
             std::move(required_soundfonts_), std::move(required_input_sources_),
             std::move(param_decls_), std::move(viz_decls_), std::move(builtin_var_overrides_),
             std::move(required_wavetables_), std::move(required_uris_), success};
@@ -1046,6 +1048,69 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                     }
                 } else {
                     TypedValue arg_tv = visit(arg_value);
+
+                    // sample("name"[, ...]) form: parse the sample-name string,
+                    // register it for runtime loading, and emit a PUSH_CONST
+                    // placeholder whose state_id immediate is patched to the
+                    // bank-assigned sample ID after samples are loaded. The
+                    // numeric `sample(t, p, <int>)` form falls through.
+                    if (func_name == "sample" && arg_idx == 2 &&
+                        arg_tv.type == ValueType::String &&
+                        val_node.type == NodeType::StringLit) {
+                        const std::string& raw = val_node.as_string();
+                        std::string bank, after_bank, name;
+                        int variant = 0;
+                        auto slash = raw.find('/');
+                        if (slash != std::string::npos) {
+                            bank = raw.substr(0, slash);
+                            after_bank = raw.substr(slash + 1);
+                        } else {
+                            after_bank = raw;
+                        }
+                        auto colon = after_bank.rfind(':');
+                        if (colon != std::string::npos) {
+                            std::string vstr = after_bank.substr(colon + 1);
+                            bool all_digits = !vstr.empty() &&
+                                std::all_of(vstr.begin(), vstr.end(),
+                                    [](char c){ return std::isdigit(static_cast<unsigned char>(c)); });
+                            if (all_digits) {
+                                variant = std::stoi(vstr);
+                                name = after_bank.substr(0, colon);
+                            } else {
+                                name = after_bank;
+                            }
+                        } else {
+                            name = after_bank;
+                        }
+
+                        if (name.empty()) {
+                            error("E161", "sample() name string is empty", val_node.location);
+                        } else {
+                            publish_sample_refs({RequiredSample{bank, name, variant}});
+
+                            std::uint16_t buf = buffers_.allocate();
+                            if (buf == BufferAllocator::BUFFER_UNUSED) {
+                                error("E101", "Buffer pool exhausted", val_node.location);
+                            } else {
+                                cedar::Instruction push_inst{};
+                                push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                                push_inst.out_buffer = buf;
+                                push_inst.inputs[0] = 0xFFFF;
+                                push_inst.inputs[1] = 0xFFFF;
+                                push_inst.inputs[2] = 0xFFFF;
+                                push_inst.inputs[3] = 0xFFFF;
+                                encode_const_value(push_inst, 0.0f);
+
+                                std::uint32_t inst_idx =
+                                    static_cast<std::uint32_t>(instructions_.size());
+                                scalar_sample_mappings_.push_back(
+                                    ScalarSampleMapping{inst_idx, bank, name, variant});
+
+                                emit(push_inst);
+                                arg_tv = TypedValue::signal(buf);
+                            }
+                        }
+                    }
 
                     // PRD prd-patterns-as-scalar-values §5.3: implicit
                     // Pattern→Signal coerce. arg_tv.buffer is already the

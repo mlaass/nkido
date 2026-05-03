@@ -589,7 +589,7 @@
           "required": true
         }
       ],
-      "description": "One-shot sample playback",
+      "description": "One-shot sample playback. id accepts a sample name (\\\"bd\\\", \\\"bd:3\\\", \\\"Bank/name:variant\\\") or numeric sample-bank ID.",
       "requires_state": true
     },
     "sample_loop": {
@@ -607,7 +607,7 @@
           "required": true
         }
       ],
-      "description": "Looping sample playback",
+      "description": "Looping sample playback. id accepts a sample name or numeric sample-bank ID.",
       "requires_state": true
     },
     "soundfont": {

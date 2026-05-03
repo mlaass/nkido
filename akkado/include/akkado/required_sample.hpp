@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 namespace akkado {
@@ -29,6 +30,18 @@ struct RequiredSample {
         }
         return bank + "_" + name + "_" + std::to_string(variant);
     }
+};
+
+/// Mapping from a PUSH_CONST instruction (whose output buffer feeds
+/// SAMPLE_PLAY's `id` input) to the sample-name reference that must be
+/// resolved at runtime. Emitted by codegen for `sample(trig, pitch, "name")`
+/// calls. After samples are loaded the host patches the instruction's
+/// `state_id` immediate to the bank-assigned sample ID.
+struct ScalarSampleMapping {
+    std::uint32_t instruction_index = 0;  // Index of PUSH_CONST in instructions_
+    std::string bank;                     // Bank name (empty = default)
+    std::string name;                     // Sample name (e.g., "bd")
+    int variant = 0;                      // Variant index (0 = first)
 };
 
 } // namespace akkado

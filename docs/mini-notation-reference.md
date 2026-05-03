@@ -89,6 +89,8 @@ s"amencutup:0 amencutup:1".bank("Dirt-Samples").out()
 
 URI schemes (`file://`, `http(s)://`, `github:user/repo`, `bundled://`) are resolved by the unified URI resolver — see [URI Schemes](uri-schemes.md) for the full list and caching behaviour.
 
+**Trigger-driven one-shots:** for samples fired by an arbitrary trigger source (a button, an envelope, a custom edge detector) rather than the cycle clock, use `sample(trig, pitch, "name")` directly — it accepts the same `[bank/]name[:variant]` syntax as the mini-notation forms above. See [`sample()`](builtins/samplers.md#sample) for details.
+
 ### Chords
 
 Chords start with an uppercase note letter followed by an optional accidental and quality.

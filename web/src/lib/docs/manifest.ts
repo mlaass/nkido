@@ -2411,6 +2411,11 @@ export const lookup: Record<string, { slug: string; category: string; title: str
 		"category": "builtins",
 		"title": "Samplers"
 	},
+	"button": {
+		"slug": "samplers",
+		"category": "builtins",
+		"title": "Samplers"
+	},
 	"tri": {
 		"slug": "oscillators",
 		"category": "builtins",
@@ -2942,21 +2947,21 @@ export const previews: Record<string, string> = {
 	"utility": "Utility functions for common audio tasks like output, MIDI conversion, and signal processing helpers.",
 	"envelopes": "Envelopes shape the amplitude or other parameters of a sound over time. They respond to gates (sustained signals) or triggers (momentary pulses).",
 	"modulation": "Modulation effects use time-varying delays to add movement and spatial width to sounds.",
-	"pianoroll": "A pattern-event visualizer that draws notes as rectangles on a pitch-time grid. Inserted as a pass-through node in the signal chain.",
+	"pianoroll": "A pattern-event visualizer that draws notes as rectangles on a pitch-time grid. It sits in the signal chain as a pass-through.",
 	"math": "Mathematical operations for signal processing and control logic.",
-	"samplers": "Samplers play recorded audio. The most common path is a sample pattern —  — which triggers events from the loaded sample bank. nkido ships with a...",
+	"samplers": "Samplers play recorded audio. The common path is a sample pattern like , which triggers events from the loaded sample bank. nkido ships with a...",
 	"oscillators": "Oscillators are the primary sound sources in synthesis. The  function is the unified interface for all oscillator types.",
 	"state": "State cells let you persist a single floating-point value across audio blocks from inside a closure. They are the building block for writing your...",
 	"edge": "Edge primitives detect transitions in trigger / control signals and accumulate counts. All four variants share one backing opcode () for cache...",
 	"dynamics": "Dynamics processors control the volume envelope of signals, reducing dynamic range or removing unwanted quiet sections.",
-	"oscilloscope": "A time-domain visualizer that draws the signal as a waveform with trigger stabilization. Inserted as a pass-through node in the signal chain — the...",
-	"soundfonts": "SoundFonts (.sf2 / .sf3) are bundled instrument banks — typically General MIDI piano, strings, brass, drums. The  builtin plays a pattern through...",
-	"timelines": "Breakpoint automation envelopes synced to the clock. Use  to define smooth parameter curves with arbitrary shapes — slower than an , more...",
-	"waterfall": "A scrolling spectrogram visualizer: time on one axis, frequency on the other, color for amplitude. Inserted as a pass-through node in the signal...",
-	"spectrum": "A frequency-domain visualizer using FFT analysis. Inserted as a pass-through node in the signal chain.",
-	"waveform": "A time-domain envelope visualizer that draws the min/max amplitude of the signal over time. Inserted as a pass-through node in the signal chain.",
+	"oscilloscope": "A time-domain visualizer that draws the signal as a waveform with trigger stabilization. It sits in the signal chain as a pass-through, so audio...",
+	"soundfonts": "SoundFonts (.sf2 / .sf3) are bundled instrument banks, usually General MIDI piano, strings, brass, drums. The  builtin plays a pattern through a...",
+	"timelines": "Breakpoint automation envelopes synced to the clock. Use  to define smooth parameter curves with arbitrary shapes: slower than an  and more...",
+	"waterfall": "A scrolling spectrogram visualizer: time on one axis, frequency on the other, color for amplitude. It sits in the chain as a pass-through, so...",
+	"spectrum": "A frequency-domain visualizer that runs an FFT on the signal. It sits in the chain as a pass-through, so audio flows through unchanged.",
+	"waveform": "A time-domain envelope visualizer that draws the min/max amplitude of the signal over time. It sits in the chain as a pass-through, so audio flows...",
 	"reverbs": "Reverbs simulate acoustic spaces by generating many delayed, filtered reflections. Each algorithm has its own character.",
 	"fm-synthesis": "Frequency modulation (FM) synthesizes complex timbres by modulating the frequency of one oscillator (the carrier) with the output of another (the...",
-	"visualizations": "Inline visualizations render directly in the editor. Each visualization is inserted as a pass-through node in the signal chain — the audio passes...",
+	"visualizations": "Inline visualizations render directly in the editor. Each visualization is a pass-through node in the signal chain: audio flows through unchanged.",
 	"DOCUMENTATION_GUIDE": "This guide outlines standards and practices for writing NKIDO documentation."
 };
