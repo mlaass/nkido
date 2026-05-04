@@ -302,16 +302,19 @@ void AudioEngine::audio_callback(void* userdata, std::uint8_t* stream, int len) 
 
         engine->vm_.process_block(left, right);
 
+        const float gain = engine->master_volume_.load(std::memory_order_relaxed);
+
         // Interleave to output buffer
         for (std::size_t i = 0; i < chunk; ++i) {
-            output[(offset + i) * 2]     = left[i];
-            output[(offset + i) * 2 + 1] = right[i];
+            output[(offset + i) * 2]     = left[i] * gain;
+            output[(offset + i) * 2 + 1] = right[i] * gain;
         }
 
-        // Capture waveform for visualization (mix to mono)
+        // Capture waveform for visualization (mix to mono, post-gain so the
+        // on-screen meter matches what the user hears).
         std::size_t write_pos = engine->waveform_write_pos_.load(std::memory_order_relaxed);
         for (std::size_t i = 0; i < chunk; ++i) {
-            float mono = (left[i] + right[i]) * 0.5f;
+            float mono = (left[i] + right[i]) * 0.5f * gain;
             engine->waveform_buffer_[write_pos % WAVEFORM_SIZE] = mono;
             write_pos++;
         }
@@ -319,6 +322,13 @@ void AudioEngine::audio_callback(void* userdata, std::uint8_t* stream, int len) 
 
         offset += chunk;
     }
+}
+
+void AudioEngine::set_master_volume(float v) {
+    if (!(v == v)) v = 1.0f;            // NaN guard
+    if (v < 0.0f) v = 0.0f;
+    if (v > 2.0f) v = 2.0f;
+    master_volume_.store(v, std::memory_order_relaxed);
 }
 
 void AudioEngine::get_waveform(float* out, std::size_t count) const {

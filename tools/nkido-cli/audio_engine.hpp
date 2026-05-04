@@ -65,8 +65,16 @@ public:
     // Get current config
     [[nodiscard]] const Config& config() const { return config_; }
 
-    // Waveform visualization (thread-safe)
-    static constexpr std::size_t WAVEFORM_SIZE = 512;  // ~10ms at 48kHz
+    // Master output gain applied in the audio callback. Thread-safe.
+    // Clamped to [0, 2] so a runaway slider can't blow up downstream gear.
+    void set_master_volume(float v);
+    [[nodiscard]] float master_volume() const {
+        return master_volume_.load(std::memory_order_relaxed);
+    }
+
+    // Waveform visualization (thread-safe). Size is enough for the serve-mode
+    // oscilloscope to find a trigger point and still display ~1024 samples.
+    static constexpr std::size_t WAVEFORM_SIZE = 2048;
     void get_waveform(float* out, std::size_t count) const;
 
 private:
@@ -91,6 +99,8 @@ private:
     // Waveform ring buffer for visualization
     std::array<float, WAVEFORM_SIZE> waveform_buffer_{};
     std::atomic<std::size_t> waveform_write_pos_{0};
+
+    std::atomic<float> master_volume_{1.0f};
 
     // Lock-free SPSC ring buffer for captured audio (stereo interleaved L,R,L,R...).
     // Sized for ~170ms at 48kHz so a slow consumer never starves the producer in
