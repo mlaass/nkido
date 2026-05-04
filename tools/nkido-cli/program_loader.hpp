@@ -37,6 +37,13 @@ void apply_state_inits(cedar::VM& vm,
                        const akkado::CompileResult& cr,
                        std::vector<std::vector<cedar::Sequence>>& seq_storage);
 
+// Apply compile-time builtin variable overrides (e.g., `bpm = 140`) to the
+// VM. Today this only handles `bpm` (via cedar::VM::set_bpm, which syncs
+// ctx.bpm, the __bpm env param, and __spb). Other names are ignored — extend
+// here when more settable builtins are added in akkado/builtins.hpp.
+void apply_builtin_var_overrides(cedar::VM& vm,
+                                 const akkado::CompileResult& cr);
+
 // Used by non-hot-swap callers (render mode, the initial-load branches of
 // play/serve/ui). Performs: assets → load_program_immediate → state inits.
 //

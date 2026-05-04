@@ -43,7 +43,7 @@ void print_usage(const char* program) {
               << "  -v, --verbose      Show compilation stats\n"
               << "  -o, --output <f>   Output file (for compile/render mode)\n"
               << "  --seconds <f>      Render duration in seconds (default: 4)\n"
-              << "  --bpm <f>          BPM for render mode (default: 120)\n"
+              << "  --bpm <f>          Override patch BPM in render mode (default: from patch, fallback 120)\n"
               << "  --trace-poly <f>   Write per-block poly voice state to JSONL\n"
               << "  --list-devices     List audio capture devices and exit\n"
               << "  --input-device <n> Capture device name for in() (default: system default)\n"
@@ -318,11 +318,14 @@ int handle_render_mode(const nkido::Options& opts) {
 
     auto vm = std::make_unique<cedar::VM>();
     vm->set_sample_rate(static_cast<float>(opts.sample_rate));
-    vm->set_bpm(opts.render_bpm);
 
     std::vector<std::vector<cedar::Sequence>> seq_storage;
     if (!nkido::load_and_prepare_immediate(*vm, opts, load, seq_storage, std::cerr)) {
         return EXIT_FAILURE;
+    }
+    // CLI --bpm wins over the patch's `bpm = ...` when explicitly set.
+    if (opts.render_bpm) {
+        vm->set_bpm(*opts.render_bpm);
     }
 
     // Find PolyAllocState IDs (for tracing)

@@ -362,6 +362,7 @@ struct ToolbarLayout {
     SDL_Rect mode_btn;       // outer rect spanning Wave|Osc
     SDL_Rect mode_wave_half; // left half (Wave)
     SDL_Rect mode_osc_half;  // right half (Osc)
+    SDL_Rect bpm_label;      // "120 BPM" readout
     SDL_Rect slider_track;
     SDL_Rect readout;
     int      slider_x_min;   // pixel range the thumb can occupy
@@ -386,7 +387,10 @@ ToolbarLayout compute_layout(int w, int h) {
     const int readout_w = 44;
     L.readout = {w - readout_w - pad, btn_y, readout_w, btn_h};
 
-    const int track_x = L.mode_btn.x + L.mode_btn.w + pad;
+    const int bpm_w = 64;
+    L.bpm_label = {L.mode_btn.x + L.mode_btn.w + pad, btn_y, bpm_w, btn_h};
+
+    const int track_x = L.bpm_label.x + L.bpm_label.w + pad;
     const int track_w = L.readout.x - pad - track_x;
     const int track_h = 4;
     L.slider_track = {track_x, btn_y + (btn_h - track_h) / 2, track_w, track_h};
@@ -704,7 +708,8 @@ void fill_triangle_play(SDL_Renderer* ren, SDL_Rect r, SDL_Color c) {
 
 void render_toolbar(SDL_Renderer* ren, ui::BitmapFont* font,
                     const ToolbarLayout& L, DisplayMode mode,
-                    bool playing, bool has_program, float volume) {
+                    bool playing, bool has_program, float volume,
+                    float bpm) {
     // Toolbar background.
     SDL_SetRenderDrawColor(ren, 22, 22, 26, 255);
     SDL_RenderFillRect(ren, &L.toolbar);
@@ -769,6 +774,17 @@ void render_toolbar(SDL_Renderer* ren, ui::BitmapFont* font,
             text_y, text);
     }
 
+    // BPM readout, left of the slider.
+    if (font) {
+        char buf[20];
+        std::snprintf(buf, sizeof(buf), "%d BPM",
+                      static_cast<int>(bpm + 0.5f));
+        SDL_Color text{200, 200, 200, 255};
+        int tw = font->string_width(buf);
+        int ty = L.bpm_label.y + (L.bpm_label.h - font->line_height()) / 2;
+        font->draw_string(buf, L.bpm_label.x + L.bpm_label.w - tw, ty, text);
+    }
+
     // Slider track.
     SDL_SetRenderDrawColor(ren, 50, 50, 56, 255);
     SDL_RenderFillRect(ren, &L.slider_track);
@@ -811,6 +827,7 @@ struct RenderInputs {
     bool                   has_program;
     DisplayMode            mode;
     float                  volume;
+    float                  bpm;
     WaveformViewState*     wave_state;
     OscilloscopeViewState* osc_state;
 };
@@ -846,7 +863,7 @@ void render_frame(SDL_Renderer* ren, ui::BitmapFont* font,
         render_waveform(ren, buf, N, viz, in.playing, *in.wave_state);
     }
     render_level_meter(ren, peak, meter);
-    render_toolbar(ren, font, L, in.mode, in.playing, in.has_program, in.volume);
+    render_toolbar(ren, font, L, in.mode, in.playing, in.has_program, in.volume, in.bpm);
 }
 
 // ----------------------------------------------------------------------------
@@ -980,6 +997,7 @@ void handle_command_line(ServeState& s, const std::string& line) {
             }
             s.seq_storage_history.emplace_back();
             apply_state_inits(s.engine->vm(), cr, s.seq_storage_history.back());
+            apply_builtin_var_overrides(s.engine->vm(), cr);
         } else {
             if (!s.audio_initialized) {
                 if (!s.engine->init(s.audio_config)) {
@@ -1199,6 +1217,7 @@ int run_serve_mode(const Options& opts) {
                 state.has_program,
                 state.display_mode,
                 state.master_volume,
+                state.engine->vm().context().bpm,
                 &state.wave_view,
                 &state.osc_view,
             };

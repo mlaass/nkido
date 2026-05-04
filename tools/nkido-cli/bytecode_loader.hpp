@@ -49,7 +49,7 @@ struct Options {
 
     // Render mode options
     float render_seconds = 4.0f;                  // Duration for render mode
-    float render_bpm = 120.0f;                    // BPM for render mode
+    std::optional<float> render_bpm;              // CLI --bpm override (renders honor patch BPM otherwise)
     std::optional<std::string> trace_poly_file;   // Optional path for poly state JSONL trace
 
     // Audio input options (Play/UI modes)

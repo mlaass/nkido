@@ -177,6 +177,15 @@ void resolve_sample_ids_in_events(cedar::VM& vm, akkado::CompileResult& cr) {
     }
 }
 
+void apply_builtin_var_overrides(cedar::VM& vm,
+                                 const akkado::CompileResult& cr) {
+    for (const auto& ov : cr.builtin_var_overrides) {
+        if (ov.name == "bpm") {
+            vm.set_bpm(ov.value);
+        }
+    }
+}
+
 void apply_state_inits(cedar::VM& vm,
                        const akkado::CompileResult& result,
                        std::vector<std::vector<cedar::Sequence>>& seq_storage) {
@@ -242,6 +251,7 @@ bool load_and_prepare_immediate(cedar::VM& vm,
 
     if (load.compile_result) {
         apply_state_inits(vm, *load.compile_result, seq_storage);
+        apply_builtin_var_overrides(vm, *load.compile_result);
     }
     return true;
 }
