@@ -1,5 +1,5 @@
 [build]
-  publish = "build"
+  publish = "web/build"
 
 # SharedArrayBuffer requires these headers (for AudioWorklet)
 [[headers]]
@@ -14,14 +14,14 @@
   [headers.values]
     Content-Type = "application/wasm"
 
-# SPA routing
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-
 # Cache immutable assets
 [[headers]]
   for = "/_app/immutable/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# SPA routing
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
