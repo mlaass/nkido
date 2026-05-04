@@ -933,7 +933,17 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
             auto handler_it = special_handlers.find(func_name);
             if (handler_it != special_handlers.end()) {
-                return (this->*(handler_it->second))(node, n);
+                TypedValue tv = (this->*(handler_it->second))(node, n);
+                // Most handlers cache via cache_and_return on success, but
+                // several pattern-transform handlers (handle_fast_call et al.)
+                // leave error paths uncached. Without this defensive write a
+                // re-visit (e.g. the channel-type check below at the
+                // !auto_lift loop) cache-misses, re-runs the handler, and
+                // duplicates its diagnostics.
+                if (node_types_.find(node) == node_types_.end()) {
+                    node_types_[node] = tv;
+                }
+                return tv;
             }
 
             // Special handling for mtof() - propagate multi-buffers
