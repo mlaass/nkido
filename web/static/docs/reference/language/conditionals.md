@@ -137,8 +137,8 @@ Equivalent to the `==` operator. The epsilon protects against floating-point dri
 
 ```akk
 // Trigger only on exact step matches
-note = pat("c4 e4 g4 c5") |> %.note
-hit = eq(note, 60)  // 1.0 only on c4
+freq = pat("c4 e4 g4 c5") |> %.freq
+hit = eq(freq, 261.6)  // 1.0 only on c4 (~261.6 Hz)
 ```
 
 ---
@@ -156,8 +156,8 @@ Equivalent to the `!=` operator. The exact inverse of `eq` (same epsilon).
 
 ```akk
 // Drop a voice on the rest steps only
-note = pat("c4 ~ g4 c5") |> %.note
-voice = osc("saw", note) * neq(note, 0)
+freq = pat("c4 ~ g4 c5") |> %.freq
+voice = osc("saw", freq) * neq(freq, 0)
 voice |> out(%, %)
 ```
 

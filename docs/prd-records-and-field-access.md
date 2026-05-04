@@ -1,9 +1,9 @@
-> **Status: DONE** — Record literals, field access, pipe bindings, pattern fields.
+> **Status: PARTIAL** — §1–2, §4–6 done; §3 extended pattern fields pending. See `docs/audits/prd-records-and-field-access_audit_2026-05-05.md`.
 
 # PRD: Records and Field Access in Akkado
 
 **Version:** 1.0
-**Status:** Draft
+**Status:** Partial (§1–2, §4–6 done; §3 extended fields pending)
 **Author:** Claude
 **Date:** 2026-01-28
 
