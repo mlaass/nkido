@@ -9,22 +9,30 @@
 
 samples("github:tidalcycles/Dirt-Samples")
 
-bpm = 174  // classic drum'n'bass tempo
+bpm = 176
 
 // 32-step amen-cut chop. Variants 0..7 spread across 8 sixteenth notes,
 // then an alternating fill of higher slices in the last beat.
 s"amencutup:0 amencutup:1 amencutup:2 amencutup:3 amencutup:4 amencutup:5 amencutup:6 <amencutup:7*2 amencutup:15 amencutup:7 amencutup:15*4>"
-    .bank("Dirt-Samples").fast(2)
+    .fast(4)
+    .bank("Dirt-Samples")
+    .saturate(1.2)
+    .limiter()
     .out()
 
 // Jungle sub-bass: short attack, deep saturated sine on the kick beats.
 s"jungbass:0 ~ "
-    .bank("Dirt-Samples").fast(2)
-    |> out(@*.7)
+    .bank("Dirt-Samples")
+    .fast(2)
+    |> out(@*.5)
+
 
 // bass with modulated resonance and saturation
-osc("saw", n"d1 d#1".slow(16))  
+osc("saw", n"d1 d1 d1 d#1".slow(4))  
     * ar(euclid(3, 8), 0.005, 0.45)
-    |> lp(@, 420, (osc("sin", 1/spb,0.5, trigger(1))+1)*3)
+    |> lp(@, 420, (osc("sin", 1/spb,0, trigger(1/2))+2)*3  |> oscilloscope(@))
     |> saturate(@, 4)
-    |> out(@ * 0.4)
+    |> @*.7 + freeverb(@)*.15
+    .saturate(2)
+    .limiter()
+    |> out(@ * 0.5)
