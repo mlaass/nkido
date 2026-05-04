@@ -1,5 +1,6 @@
 #pragma once
 
+#include "akkado/akkado.hpp"
 #include "cedar/vm/instruction.hpp"
 #include <vector>
 #include <string>
@@ -83,6 +84,12 @@ struct LoadResult {
     std::vector<cedar::Instruction> instructions;
     std::string error_message;
     std::optional<LoadStats> stats;
+
+    // Populated when input came from source (file / inline / stdin-as-source).
+    // Empty for .cedar precompiled bytecode — that format does not carry the
+    // RequiredSample / state-init metadata, so callers must skip asset
+    // resolution for those inputs.
+    std::optional<akkado::CompileResult> compile_result;
 };
 
 // Load bytecode based on options

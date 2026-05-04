@@ -1,9 +1,11 @@
 #include "serve_mode.hpp"
 
 #include "audio_engine.hpp"
+#include "program_loader.hpp"
 #include "akkado/akkado.hpp"
 #include "akkado/diagnostics.hpp"
 #include "cedar/vm/vm.hpp"
+#include "cedar/opcodes/dsp_state.hpp"
 
 #include <SDL2/SDL.h>
 
@@ -385,6 +387,18 @@ struct ServeState {
     bool                      audio_initialized = false;
     bool                      playing           = false;
     bool                      should_quit       = false;
+
+    // Original Options carried in so --bank/--soundfont/--sample (URI Resolver
+    // PRD §4.5) flags propagate from the CLI invocation into per-load asset
+    // resolution.
+    Options                   opts;
+
+    // Backing memory for SequenceProgram inits, one entry per successful
+    // hot-swap. Append-only — the audio thread may still hold pointers into
+    // a previous program's events during the crossfade window. Memory grows
+    // linearly with edit count (kilobytes per swap) which is fine for an
+    // editor session.
+    std::vector<std::vector<std::vector<cedar::Sequence>>> seq_storage_history;
 };
 
 void handle_command_line(ServeState& s, const std::string& line) {
@@ -418,22 +432,30 @@ void handle_command_line(ServeState& s, const std::string& line) {
             filename = uri_it->second.str;
         }
 
-        auto cr = akkado::compile(src_it->second.str, filename);
-        if (!cr.success) {
-            for (const auto& diag : cr.diagnostics) {
-                emit_diagnostic(diag);
+        LoadResult load = compile_source(src_it->second.str, filename);
+        if (!load.success) {
+            if (load.compile_result) {
+                for (const auto& diag : load.compile_result->diagnostics) {
+                    emit_diagnostic(diag);
+                }
             }
             emit_compiled(false);
             return;
         }
-
-        const std::size_t n = cr.bytecode.size() / sizeof(cedar::Instruction);
-        std::vector<cedar::Instruction> instructions(n);
-        std::memcpy(instructions.data(), cr.bytecode.data(), cr.bytecode.size());
+        // compile_source always populates compile_result on success.
+        auto& cr = *load.compile_result;
 
         if (s.playing) {
-            // Hot-swap: state is preserved via Cedar's crossfade path.
-            auto load_result = s.engine->vm().load_program(instructions);
+            // Hot-swap: register any new assets first so the new program sees
+            // them, then crossfade in the new bytecode, then write the new
+            // program's state inits into a freshly allocated storage slot.
+            if (!prepare_program_assets(s.engine->vm(), s.opts, cr, std::cerr)) {
+                emit_error("asset load failed");
+                emit_compiled(false);
+                return;
+            }
+            resolve_sample_ids_in_events(s.engine->vm(), cr);
+            auto load_result = s.engine->vm().load_program(load.instructions);
             if (load_result != cedar::VM::LoadResult::Success) {
                 const char* reason = "load failed";
                 switch (load_result) {
@@ -445,6 +467,8 @@ void handle_command_line(ServeState& s, const std::string& line) {
                 emit_compiled(false);
                 return;
             }
+            s.seq_storage_history.emplace_back();
+            apply_state_inits(s.engine->vm(), cr, s.seq_storage_history.back());
         } else {
             if (!s.audio_initialized) {
                 if (!s.engine->init(s.audio_config)) {
@@ -454,8 +478,10 @@ void handle_command_line(ServeState& s, const std::string& line) {
                 }
                 s.audio_initialized = true;
             }
-            if (!s.engine->vm().load_program_immediate(instructions)) {
-                emit_error("failed to load program (invalid bytecode?)");
+            s.seq_storage_history.emplace_back();
+            if (!load_and_prepare_immediate(s.engine->vm(), s.opts, load,
+                                            s.seq_storage_history.back(), std::cerr)) {
+                emit_error("failed to load program");
                 emit_compiled(false);
                 return;
             }
@@ -511,6 +537,7 @@ int run_serve_mode(const Options& opts) {
     ServeState state;
     state.engine       = engine.get();
     state.audio_config = AudioEngine::Config{opts.sample_rate, opts.buffer_size, 2};
+    state.opts         = opts;
 
     install_signal_handlers();
 

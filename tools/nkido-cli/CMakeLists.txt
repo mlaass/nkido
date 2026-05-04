@@ -8,6 +8,7 @@ add_executable(nkido-cli
     asset_loader.cpp
     bytecode_loader.cpp
     bytecode_dump.cpp
+    program_loader.cpp
     serve_mode.cpp
     ui/bitmap_font.cpp
     ui/text_buffer.cpp
@@ -34,3 +35,7 @@ endif()
 install(TARGETS nkido-cli
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+if(NKIDO_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

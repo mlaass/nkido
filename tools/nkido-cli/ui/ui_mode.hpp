@@ -3,6 +3,8 @@
 #include "bitmap_font.hpp"
 #include "text_buffer.hpp"
 #include "../audio_engine.hpp"
+#include "../bytecode_loader.hpp"
+#include "cedar/opcodes/dsp_state.hpp"
 #include <SDL2/SDL.h>
 #include <string>
 #include <vector>
@@ -18,7 +20,7 @@ public:
     UIMode(const UIMode&) = delete;
     UIMode& operator=(const UIMode&) = delete;
 
-    bool init(std::uint32_t sample_rate, std::uint32_t buffer_size);
+    bool init(const Options& opts);
     int run();  // Main loop, returns exit code
 
 private:
@@ -48,6 +50,13 @@ private:
     // Components
     TextBuffer buffer_;
     AudioEngine engine_;
+
+    // CLI options (for --bank/--soundfont/--sample asset URIs)
+    Options opts_;
+
+    // Backing memory for SequenceProgram inits, one entry per successful
+    // compile-and-play. Append-only — see ServeState comment for rationale.
+    std::vector<std::vector<std::vector<cedar::Sequence>>> seq_storage_history_;
 
     // State
     bool should_quit_ = false;

@@ -1,0 +1,7 @@
+// Mini-notation sample pattern. Loads a one-key local manifest declared via
+// the test runner's --bank flag and triggers the "bd" sample on each cycle.
+// Exercises the asset-loading path (manifest fetch + RequiredSample resolution
+// + sequence-event sample_id wiring) that play/serve previously skipped.
+
+bpm = 120
+s"bd ~ ~ ~".out()

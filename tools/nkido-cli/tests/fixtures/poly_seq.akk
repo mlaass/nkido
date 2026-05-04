@@ -1,0 +1,13 @@
+// Polyphonic sequence with percussive AR envelopes — exercises both
+// SequenceProgram and PolyAlloc state inits, with notes that fully decay
+// between attacks so a transient detector can count them.
+
+bpm = 240
+
+pluck = (freq, gate, vel) -> {
+    saw(freq) * ar(gate, 0.005, 0.12) * vel * 0.4
+}
+
+note("c4 e4 g4 b4")
+    |> poly(@, pluck)
+    |> out(%, %)

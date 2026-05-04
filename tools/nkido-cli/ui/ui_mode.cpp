@@ -1,7 +1,9 @@
 #include "ui_mode.hpp"
 #include "../bytecode_loader.hpp"
+#include "../program_loader.hpp"
 #include "akkado/akkado.hpp"
 #include <cstring>
+#include <iostream>
 #include <sstream>
 
 namespace nkido::ui {
@@ -17,7 +19,11 @@ UIMode::~UIMode() {
     SDL_Quit();
 }
 
-bool UIMode::init(std::uint32_t sample_rate, std::uint32_t buffer_size) {
+bool UIMode::init(const Options& opts) {
+    opts_ = opts;
+    const std::uint32_t sample_rate = opts.sample_rate;
+    const std::uint32_t buffer_size = opts.buffer_size;
+
     // Initialize SDL with video and audio
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) < 0) {
         return false;
@@ -251,34 +257,37 @@ void UIMode::compile_and_play() {
         return;
     }
 
-    // Compile
-    auto result = akkado::compile(source, "<editor>");
-
-    if (!result.success) {
-        // Collect error lines
+    LoadResult load = compile_source(source, "<editor>");
+    if (!load.success) {
         error_lines_.clear();
         std::ostringstream err;
-        for (const auto& diag : result.diagnostics) {
-            if (diag.location.line > 0) {
-                error_lines_.push_back(diag.location.line - 1);  // 0-indexed
+        if (load.compile_result) {
+            for (const auto& diag : load.compile_result->diagnostics) {
+                if (diag.location.line > 0) {
+                    error_lines_.push_back(diag.location.line - 1);
+                }
+                if (err.tellp() > 0) err << "; ";
+                err << diag.message;
             }
-            if (err.tellp() > 0) err << "; ";
-            err << diag.message;
         }
         status_message_ = "Error: " + err.str();
         // Don't change playing_ - old program keeps running if it was playing
         return;
     }
 
-    // Convert bytecode to instructions
-    std::size_t num_instructions = result.bytecode.size() / sizeof(cedar::Instruction);
-    std::vector<cedar::Instruction> instructions(num_instructions);
-    std::memcpy(instructions.data(), result.bytecode.data(), result.bytecode.size());
+    auto& cr = *load.compile_result;
+    const std::size_t num_instructions = load.instructions.size();
 
-    // Load into VM - use immediate load if not playing, hot-swap if playing
     if (playing_) {
-        // Hot-swap for glitch-free transition while playing
-        auto load_result = engine_.vm().load_program(instructions);
+        // Hot-swap path: register any new assets, crossfade in the bytecode,
+        // then write state inits into a freshly allocated history slot so any
+        // concurrent reads of the previous program's events stay valid.
+        if (!prepare_program_assets(engine_.vm(), opts_, cr, std::cerr)) {
+            status_message_ = "Error: asset load failed";
+            return;
+        }
+        resolve_sample_ids_in_events(engine_.vm(), cr);
+        auto load_result = engine_.vm().load_program(load.instructions);
         if (load_result != cedar::VM::LoadResult::Success) {
             switch (load_result) {
                 case cedar::VM::LoadResult::SlotBusy:
@@ -293,16 +302,15 @@ void UIMode::compile_and_play() {
             }
             return;
         }
+        seq_storage_history_.emplace_back();
+        apply_state_inits(engine_.vm(), cr, seq_storage_history_.back());
     } else {
-        // Immediate load when stopped (resets VM, avoids slot exhaustion)
-        if (!engine_.vm().load_program_immediate(instructions)) {
-            status_message_ = "Error: Failed to load program (invalid bytecode?)";
+        seq_storage_history_.emplace_back();
+        if (!load_and_prepare_immediate(engine_.vm(), opts_, load,
+                                        seq_storage_history_.back(), std::cerr)) {
+            status_message_ = "Error: Failed to load program";
             return;
         }
-    }
-
-    // Start audio if not already playing
-    if (!playing_) {
         if (!engine_.start()) {
             status_message_ = "Error: Failed to start audio";
             return;

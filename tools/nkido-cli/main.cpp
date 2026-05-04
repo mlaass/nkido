@@ -2,6 +2,7 @@
 #include "bytecode_loader.hpp"
 #include "bytecode_dump.hpp"
 #include "audio_engine.hpp"
+#include "program_loader.hpp"
 #include "serve_mode.hpp"
 #include "ui/ui_mode.hpp"
 #include "akkado/akkado.hpp"
@@ -304,247 +305,29 @@ bool write_wav_16(const std::string& path, const std::vector<float>& interleaved
     return out.good();
 }
 
-// Apply state_inits from a CompileResult to the VM (mirrors web/wasm)
-void apply_state_inits(cedar::VM& vm, const akkado::CompileResult& result,
-                       std::vector<std::vector<cedar::Sequence>>& seq_storage) {
-    seq_storage.reserve(result.state_inits.size());
-    for (const auto& init : result.state_inits) {
-        if (init.type == akkado::StateInitData::Type::SequenceProgram) {
-            std::vector<cedar::Sequence> seq_copy = init.sequences;
-            for (std::size_t i = 0; i < seq_copy.size() && i < init.sequence_events.size(); ++i) {
-                if (!init.sequence_events[i].empty()) {
-                    seq_copy[i].events = const_cast<cedar::Event*>(init.sequence_events[i].data());
-                    seq_copy[i].num_events = static_cast<std::uint32_t>(init.sequence_events[i].size());
-                    seq_copy[i].capacity = static_cast<std::uint32_t>(init.sequence_events[i].size());
-                }
-            }
-            seq_storage.push_back(std::move(seq_copy));
-            auto& stored = seq_storage.back();
-            vm.init_sequence_program_state(
-                init.state_id, stored.data(), stored.size(),
-                init.cycle_length, init.is_sample_pattern, init.total_events);
-            if (init.iter_n > 0) {
-                vm.init_sequence_iter_state(init.state_id, init.iter_n, init.iter_dir);
-            }
-        } else if (init.type == akkado::StateInitData::Type::PolyAlloc) {
-            vm.init_poly_state(init.state_id, init.poly_seq_state_id,
-                               init.poly_max_voices, init.poly_mode,
-                               init.poly_steal_strategy);
-        } else if (init.type == akkado::StateInitData::Type::Timeline) {
-            auto& state = vm.states().get_or_create<cedar::TimelineState>(init.state_id);
-            state.num_points = std::min(
-                static_cast<std::uint32_t>(init.timeline_breakpoints.size()),
-                static_cast<std::uint32_t>(cedar::TimelineState::MAX_BREAKPOINTS));
-            for (std::uint32_t i = 0; i < state.num_points; ++i) {
-                state.points[i] = init.timeline_breakpoints[i];
-            }
-            state.loop = init.timeline_loop;
-            state.loop_length = init.timeline_loop_length;
-        }
-    }
-}
-
-// Derive a bank name from a manifest URI. Mirrors the web
-// `BankRegistry.extractBankName` heuristic: the last URL/path segment with
-// any trailing `.json` / `.strudel.json` removed, or — if that segment is
-// "strudel" — the parent segment (so `…/Dirt-Samples/strudel.json` →
-// `Dirt-Samples`). For bare `github:user/repo` URIs the last `/`-separated
-// segment is the repo name.
-std::string derive_bank_name(const std::string& uri) {
-    std::string last;
-    std::string parent;
-    std::size_t pos = 0;
-    while (pos < uri.size()) {
-        auto slash = uri.find('/', pos);
-        if (slash == std::string::npos) {
-            parent = last;
-            last = uri.substr(pos);
-            break;
-        }
-        if (slash > pos) {
-            parent = last;
-            last = uri.substr(pos, slash - pos);
-        }
-        pos = slash + 1;
-    }
-    auto strip_ext = [](std::string& s, const std::string& ext) {
-        if (s.size() > ext.size() &&
-            s.compare(s.size() - ext.size(), ext.size(), ext) == 0) {
-            s.resize(s.size() - ext.size());
-        }
-    };
-    strip_ext(last, ".strudel.json");
-    strip_ext(last, ".json");
-    if (last == "strudel" && !parent.empty()) return parent;
-    if (last.empty()) return "unnamed";
-    return last;
-}
-
-// Resolve and register every asset declared via CLI flags (`--bank`,
-// `--soundfont`, `--sample`) and via top-level akkado directives
-// (`samples()`'s required_uris, `required_samples_extended`). Returns
-// false if any *required* fetch failed in a way that should abort the
-// run; warnings are printed to stderr but not propagated.
-bool load_program_assets(cedar::VM& vm,
-                          const nkido::Options& opts,
-                          const akkado::CompileResult& cr) {
-    // Build the bank list. Order matters: --bank flags first, then
-    // samples() declarations in source order. Each bank is registered
-    // both into `default_banks` (searched first-hit-wins for unqualified
-    // RequiredSample lookups) and `named_banks` (keyed by derived bank
-    // name for `.bank("Name")` qualified lookups).
-    std::vector<nkido::BankManifest> default_banks;
-    std::unordered_map<std::string, nkido::BankManifest> named_banks;
-
-    auto load_bank = [&](const std::string& uri) -> bool {
-        try {
-            auto m = nkido::fetch_bank_manifest(uri);
-            std::string name = derive_bank_name(uri);
-            std::cerr << "Loaded bank manifest '" << name << "' from " << uri
-                      << " (" << m.samples.size() << " samples)\n";
-            default_banks.push_back(m);
-            named_banks[std::move(name)] = std::move(m);
-            return true;
-        } catch (const std::exception& e) {
-            std::cerr << "error: bank '" << uri << "' failed to load: " << e.what() << "\n";
-            return false;
-        }
-    };
-
-    for (const auto& uri : opts.bank_uris) {
-        if (!load_bank(uri)) return false;
-    }
-    for (const auto& req : cr.required_uris) {
-        if (req.kind == akkado::UriKind::SampleBank) {
-            if (!load_bank(req.uri)) return false;
-        }
-    }
-
-    // SoundFonts (one fetch each, registered under their URI tail as
-    // display name).
-    for (const auto& uri : opts.soundfont_uris) {
-        std::string display = uri;
-        auto last = uri.find_last_of('/');
-        if (last != std::string::npos) display = uri.substr(last + 1);
-        const int sf_id = nkido::load_soundfont_uri(vm, uri, display);
-        if (sf_id < 0) {
-            std::cerr << "error: SoundFont '" << uri << "' failed to load\n";
-            return false;
-        }
-    }
-
-    // Single-sample URIs (`--sample name=uri` or `--sample uri`; uri
-    // tail used as the registry name when no explicit name).
-    for (const auto& spec : opts.sample_uris) {
-        std::string name, uri;
-        auto eq = spec.find('=');
-        if (eq != std::string::npos) {
-            name = spec.substr(0, eq);
-            uri  = spec.substr(eq + 1);
-        } else {
-            uri = spec;
-            auto last = uri.find_last_of('/');
-            std::string filename = last == std::string::npos ? uri : uri.substr(last + 1);
-            auto dot = filename.find_last_of('.');
-            name = dot == std::string::npos ? filename : filename.substr(0, dot);
-        }
-        if (nkido::load_sample_uri(vm, uri, name) == 0) {
-            std::cerr << "error: sample '" << uri << "' failed to load\n";
-            return false;
-        }
-    }
-
-    // Resolve every RequiredSample referenced by the program against the
-    // loaded bank list. Default-bank events search `default_banks`
-    // first-hit-wins; events qualified with `.bank("Name")` look up
-    // `named_banks` by the derived bank name.
-    if (!cr.required_samples_extended.empty()) {
-        nkido::register_required_samples(
-            vm, cr.required_samples_extended, default_banks, named_banks);
-    }
-
-    return true;
-}
-
 int handle_render_mode(const nkido::Options& opts) {
-    // Read source
-    std::string source, filename;
-    if (opts.input_type == nkido::InputType::InlineSource) {
-        source = opts.input;
-        filename = "<inline>";
-    } else if (opts.input_type == nkido::InputType::Stdin) {
-        std::string line;
-        while (std::getline(std::cin, line)) source += line + "\n";
-        filename = "<stdin>";
-    } else if (opts.input_type == nkido::InputType::SourceFile) {
-        std::ifstream file(opts.input);
-        if (!file) {
-            std::cerr << "error: cannot open file: " << opts.input << "\n";
-            return EXIT_FAILURE;
-        }
-        source.assign((std::istreambuf_iterator<char>(file)),
-                      std::istreambuf_iterator<char>());
-        filename = opts.input;
-    } else {
+    auto load = nkido::load_bytecode(opts);
+    if (!load.success) {
+        std::cerr << load.error_message << "\n";
+        return EXIT_FAILURE;
+    }
+    if (!load.compile_result) {
         std::cerr << "error: render mode needs source input (.akkado / inline / stdin)\n";
         return EXIT_FAILURE;
     }
 
-    // Compile
-    auto cr = akkado::compile(source, filename);
-    if (!cr.success) {
-        for (const auto& diag : cr.diagnostics) {
-            std::cerr << akkado::format_diagnostic(diag, source) << "\n";
-        }
-        return EXIT_FAILURE;
-    }
-
-    // Build instruction vector
-    std::vector<cedar::Instruction> instructions;
-    std::size_t num_instructions = cr.bytecode.size() / sizeof(cedar::Instruction);
-    instructions.resize(num_instructions);
-    std::memcpy(instructions.data(), cr.bytecode.data(), cr.bytecode.size());
-
-    // VM setup (heap-allocate — VM is large)
     auto vm = std::make_unique<cedar::VM>();
     vm->set_sample_rate(static_cast<float>(opts.sample_rate));
     vm->set_bpm(opts.render_bpm);
 
-    // Resolve every URI-keyed asset (banks, soundfonts, samples) declared
-    // via CLI flags or via top-level akkado directives.
-    if (!load_program_assets(*vm, opts, cr)) {
-        return EXIT_FAILURE;
-    }
-
-    // Load any wavetable banks declared via wt_load() in source order, so
-    // their runtime slot IDs match the inst.rate values the compiler baked
-    // into the bytecode. Path is interpreted relative to CWD if not absolute.
-    for (const auto& wt : cr.required_wavetables) {
-        std::string err;
-        const int id = vm->wavetable_registry().load_from_file(
-            wt.name, wt.path, &err);
-        if (id < 0) {
-            std::cerr << "error: " << err << "\n";
-            return EXIT_FAILURE;
-        }
-        if (id != wt.id) {
-            std::cerr << "warning: wavetable '" << wt.name
-                      << "' got runtime slot " << id
-                      << " but compiler expected " << wt.id << "\n";
-        }
-    }
-
-    if (!vm->load_program_immediate(std::span<const cedar::Instruction>(instructions))) {
-        std::cerr << "error: failed to load program into VM\n";
-        return EXIT_FAILURE;
-    }
-
     std::vector<std::vector<cedar::Sequence>> seq_storage;
-    apply_state_inits(*vm, cr, seq_storage);
+    if (!nkido::load_and_prepare_immediate(*vm, opts, load, seq_storage, std::cerr)) {
+        return EXIT_FAILURE;
+    }
 
     // Find PolyAllocState IDs (for tracing)
     std::vector<std::uint32_t> poly_state_ids;
-    for (const auto& init : cr.state_inits) {
+    for (const auto& init : load.compile_result->state_inits) {
         if (init.type == akkado::StateInitData::Type::PolyAlloc) {
             poly_state_ids.push_back(init.state_id);
         }
@@ -664,7 +447,7 @@ int main(int argc, char* argv[]) {
     // Handle UI mode
     if (opts->mode == nkido::Mode::UI) {
         nkido::ui::UIMode ui;
-        if (!ui.init(opts->sample_rate, opts->buffer_size)) {
+        if (!ui.init(*opts)) {
             std::cerr << "error: failed to initialize UI\n";
             return EXIT_FAILURE;
         }
@@ -751,10 +534,12 @@ int main(int argc, char* argv[]) {
         engine.init_capture(dev);
     }
 
-    // Load program into VM
-    auto load_result = engine.vm().load_program_immediate(result.instructions);
-    if (!load_result) {
-        std::cerr << "error: failed to load program into VM\n";
+    // Resolve assets, load program, and apply state inits in one pass.
+    // seq_storage is a local of main(); engine.stop() (below) joins the audio
+    // thread before this scope exits, so the sequence backing memory the VM
+    // reads during playback stays alive for the entire run.
+    std::vector<std::vector<cedar::Sequence>> seq_storage;
+    if (!nkido::load_and_prepare_immediate(engine.vm(), *opts, result, seq_storage, std::cerr)) {
         return EXIT_FAILURE;
     }
 

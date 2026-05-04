@@ -89,6 +89,7 @@ LoadResult compile_source(std::string_view source, std::string_view filename) {
         num_instructions,
         static_cast<float>(duration.count()) / 1000.0f
     };
+    result.compile_result = std::move(compile_result);
 
     return result;
 }
@@ -191,8 +192,11 @@ LoadResult load_bytecode(const Options& opts) {
         case InputType::InlineSource:
             return compile_source(opts.input, "<inline>");
 
-        default:
-            return LoadResult{false, {}, "error: unknown input type", std::nullopt};
+        default: {
+            LoadResult result;
+            result.error_message = "error: unknown input type";
+            return result;
+        }
     }
 }
 
