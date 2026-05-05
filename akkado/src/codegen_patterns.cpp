@@ -790,6 +790,18 @@ private:
                 be.source_offset = static_cast<std::uint16_t>(
                     n.location.offset - pattern_base_offset_);
                 be.source_length = static_cast<std::uint16_t>(n.location.length);
+                // Mirror compile_atom_event(): record-suffix `{vel:V, dur:D}`
+                // must apply on the polyrhythm flatten path too, otherwise
+                // `[hh, bd{vel:0.25}]` silently drops the velocity. Custom
+                // property slots (cutoff, bend, …) are still dropped here —
+                // out of scope for the velocity fix.
+                for (const auto& [key, value] : ad.properties) {
+                    if (key == "vel") {
+                        be.velocity = std::clamp(value, 0.0f, 1.0f);
+                    } else if (key == "dur") {
+                        if (value > 0.0f) be.duration = value * t_span;
+                    }
+                }
                 if (ad.kind == Node::MiniAtomKind::Rest) {
                     be.is_rest = true;
                 } else if (ad.kind == Node::MiniAtomKind::Sample) {
@@ -884,6 +896,15 @@ private:
 
             bool primary_set = false;
             float min_dur = std::numeric_limits<float>::max();
+            // The merged DATA event carries one velocity for all voices in
+            // the polyrhythm slot (SAMPLE_PLAY scales every voice by the same
+            // event velocity — there is no per-voice velocity). Take the
+            // minimum across non-rest hits so that any branch with an
+            // explicit `{vel:V}` attenuation actually lowers the audible
+            // output: `[hh, bd{vel:0.25}]` plays the whole stack at 0.25.
+            // Default velocity is 1.0 so a stack of un-annotated hits
+            // (`[hh, bd]`) still plays at full volume.
+            float min_velocity = std::numeric_limits<float>::max();
             for (std::size_t i = 0; i < branch_count; ++i) {
                 const BranchEvent* hit = nullptr;
                 for (const auto& ev : branches[i]) {
@@ -896,8 +917,8 @@ private:
 
                 e.values[i] = static_cast<float>(hit->sample_id);
                 min_dur = std::min(min_dur, hit->duration);
+                min_velocity = std::min(min_velocity, hit->velocity);
                 if (!primary_set) {
-                    e.velocity = hit->velocity;
                     e.type_id = hit->type_id;
                     e.source_offset = hit->source_offset;
                     e.source_length = hit->source_length;
@@ -917,6 +938,9 @@ private:
             }
             if (min_dur < std::numeric_limits<float>::max()) {
                 e.duration = min_dur;
+            }
+            if (min_velocity < std::numeric_limits<float>::max()) {
+                e.velocity = min_velocity;
             }
 
             add_event_to_sequence(seq_idx, e);
@@ -1166,18 +1190,19 @@ private:
 // End Compilers
 // ============================================================================
 
-// Emit PUSH_CONST(1.0) + SAMPLE_PLAY for a sample pattern. See declaration in
-// codegen.hpp for the full contract.
+// Emit PUSH_CONST(1.0) + SAMPLE_PLAY + MUL(velocity) for a sample pattern.
+// See declaration in codegen.hpp for the full contract.
 //
 // IMPORTANT: An equivalent block lives inline in the static helper
 // `emit_pattern_with_state()` further down in this file (search for
 // "Mirrors CodeGenerator::emit_sampler_wrapper"). That copy exists because
 // the static helper cannot call class members. Keep both in sync if you
-// change the in3/in4 state-id-split layout, the pitch default, or the
-// `state_id + 1` sampler-id offset.
+// change the in3/in4 state-id-split layout, the pitch default, the
+// `state_id + 1` sampler-id offset, or the post-MUL velocity application.
 std::uint16_t CodeGenerator::emit_sampler_wrapper(std::uint32_t seq_state_id,
                                                   std::uint16_t value_buf,
                                                   std::uint16_t trigger_buf,
+                                                  std::uint16_t velocity_buf,
                                                   SourceLocation loc) {
     std::uint16_t pitch_buf = buffers_.allocate();
     std::uint16_t output_buf = buffers_.allocate();
@@ -1215,7 +1240,31 @@ std::uint16_t CodeGenerator::emit_sampler_wrapper(std::uint32_t seq_state_id,
     sample_inst.state_id = seq_state_id + 1;
     emit(sample_inst);
 
-    return output_buf;
+    // Apply per-event velocity as a post-multiply. SAMPLE_PLAY has no
+    // velocity input (5 slots already used by trigger / pitch / sample_id /
+    // seq-state-id-low / seq-state-id-high), so we scale the sampler output
+    // by the velocity_buf produced by SEQPAT_STEP. SEQPAT_STEP holds the
+    // current event's velocity for the entire block, so this scales any
+    // ongoing voice tail by the latest event's velocity — for one-shot
+    // drum hits (the common sampler use case) this matches user
+    // expectations; if/when significantly overlapping sample tails
+    // matter, capture velocity per-voice at trigger time instead.
+    std::uint16_t scaled_buf = buffers_.allocate();
+    if (scaled_buf == BufferAllocator::BUFFER_UNUSED) {
+        error("E101", "Buffer pool exhausted", loc);
+        return BufferAllocator::BUFFER_UNUSED;
+    }
+    cedar::Instruction mul_inst{};
+    mul_inst.opcode = cedar::Opcode::MUL;
+    mul_inst.out_buffer = scaled_buf;
+    mul_inst.inputs[0] = output_buf;
+    mul_inst.inputs[1] = velocity_buf;
+    mul_inst.inputs[2] = 0xFFFF;
+    mul_inst.inputs[3] = 0xFFFF;
+    mul_inst.inputs[4] = 0xFFFF;
+    emit(mul_inst);
+
+    return scaled_buf;
 }
 
 // Handle MiniLiteral (pattern) nodes
@@ -1337,7 +1386,8 @@ TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
     // Handle sample patterns - need to wire to SAMPLE_PLAY
     if (is_sample_pattern) {
         std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, n.location);
+                                                        trigger_buf, velocity_buf,
+                                                        n.location);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             pop_path();
             return TypedValue::signal(value_buf);  // Return value buffer as fallback
@@ -1595,7 +1645,8 @@ TypedValue CodeGenerator::handle_pattern_reference(const std::string& name,
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
         std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, loc);
+                                                        trigger_buf, velocity_buf,
+                                                        loc);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             pop_path();
             return TypedValue::void_val();
@@ -2725,7 +2776,8 @@ static TypedValue emit_pattern_with_state(
     // CodeGenerator::emit_sampler_wrapper() — kept inline here because this
     // is a static helper using an emit_fn callback and cannot call the class
     // member. Keep the two in sync if you change the in3/in4 state-id-split
-    // layout, the pitch default, or the `state_id + 1` sampler-id offset.
+    // layout, the pitch default, the `state_id + 1` sampler-id offset, or
+    // the post-MUL velocity application.
     if (is_sample_pattern) {
         std::uint16_t pitch_buf = buffers.allocate();
         std::uint16_t output_buf = buffers.allocate();
@@ -2759,7 +2811,23 @@ static TypedValue emit_pattern_with_state(
         sample_inst.state_id = state_id + 1;
         emit_fn(instructions, sample_inst);
 
-        result_buf = output_buf;
+        // Apply per-event velocity as a post-multiply (SAMPLE_PLAY has no
+        // velocity input). See emit_sampler_wrapper() for full rationale.
+        std::uint16_t scaled_buf = buffers.allocate();
+        if (scaled_buf == BufferAllocator::BUFFER_UNUSED) {
+            return TypedValue::void_val();
+        }
+        cedar::Instruction mul_inst{};
+        mul_inst.opcode = cedar::Opcode::MUL;
+        mul_inst.out_buffer = scaled_buf;
+        mul_inst.inputs[0] = output_buf;
+        mul_inst.inputs[1] = velocity_buf;
+        mul_inst.inputs[2] = 0xFFFF;
+        mul_inst.inputs[3] = 0xFFFF;
+        mul_inst.inputs[4] = 0xFFFF;
+        emit_fn(instructions, mul_inst);
+
+        result_buf = scaled_buf;
     }
 
     // Build PatternPayload
@@ -3366,8 +3434,12 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     // emit_sampler_wrapper() docstring.
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
+        // Use scaled_velocity_buf so velocity(s"...", 0.5) actually halves
+        // the sampler output amplitude. Without this, sample patterns would
+        // ignore the user's velocity() multiplier.
         std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, n.location);
+                                                        trigger_buf, scaled_velocity_buf,
+                                                        n.location);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             pop_path();
             return TypedValue::void_val();
@@ -3746,7 +3818,8 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
         std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, n.location);
+                                                        trigger_buf, velocity_buf,
+                                                        n.location);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             pop_path();
             return TypedValue::void_val();
@@ -3946,7 +4019,8 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
         std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, n.location);
+                                                        trigger_buf, velocity_buf,
+                                                        n.location);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             pop_path();
             return TypedValue::void_val();
@@ -4144,7 +4218,8 @@ TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
         std::uint16_t output_buf = emit_sampler_wrapper(seq_state_id, value_buf,
-                                                        trigger_buf, n.location);
+                                                        trigger_buf, velocity_buf,
+                                                        n.location);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             pop_path();
             return TypedValue::void_val();

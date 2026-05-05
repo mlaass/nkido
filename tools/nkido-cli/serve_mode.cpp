@@ -1,5 +1,6 @@
 #include "serve_mode.hpp"
 
+#include "asset_loader.hpp"
 #include "audio_engine.hpp"
 #include "program_loader.hpp"
 #include "ui/bitmap_font.hpp"
@@ -112,6 +113,17 @@ void emit_param_changed(std::string_view name, float value, bool ok) {
     out += buf;
     out += R"(,"ok":)";
     out += ok ? "true" : "false";
+    out += "}";
+    emit(out);
+}
+
+void emit_bank_registered(std::string_view uri, std::size_t sample_count) {
+    std::string out;
+    out.reserve(uri.size() + 64);
+    out += R"({"event":"bank_registered","uri":")";
+    out += escape_json(uri);
+    out += R"(","sample_count":)";
+    out += std::to_string(sample_count);
     out += "}";
     emit(out);
 }
@@ -1052,6 +1064,42 @@ void handle_command_line(ServeState& s, const std::string& line) {
         const float v = static_cast<float>(value_it->second.num);
         const bool ok = s.engine->vm().set_param(name_it->second.str.c_str(), v);
         emit_param_changed(name_it->second.str, v, ok);
+
+    } else if (cmd == "load_bank") {
+        // Register a sample-bank manifest URI with the same machinery `--bank`
+        // uses on the CLI. The VS Code "Nkido extension" needs this because it
+        // spawns `nkido-cli serve` without flags; without this command, sample
+        // patches typed in the editor produce only "sample 'X' not found in
+        // any loaded bank" warnings.
+        //
+        // The URI is appended to `s.opts.bank_uris` so every subsequent `load`
+        // command picks it up via prepare_program_assets(). We also fetch the
+        // manifest immediately so the caller gets synchronous success/failure
+        // feedback (and so the CLI logs "Loaded bank manifest 'X' from ..."
+        // exactly once, when registered, instead of on every subsequent load).
+        auto uri_it = obj.find("uri");
+        if (uri_it == obj.end() || uri_it->second.kind != JsonValue::Kind::String) {
+            emit_error("'load_bank' requires 'uri' (string)");
+            return;
+        }
+        const std::string& uri = uri_it->second.str;
+        auto& uris = s.opts.bank_uris;
+        if (std::find(uris.begin(), uris.end(), uri) != uris.end()) {
+            // Already registered — re-emit the event so the caller can treat
+            // load_bank as idempotent.
+            emit_bank_registered(uri, 0);
+            return;
+        }
+        try {
+            auto manifest = fetch_bank_manifest(uri);
+            const std::size_t sample_count = manifest.samples.size();
+            uris.push_back(uri);
+            std::cerr << "Loaded bank manifest '" << uri
+                      << "' (" << sample_count << " samples)\n";
+            emit_bank_registered(uri, sample_count);
+        } catch (const std::exception& e) {
+            emit_error(std::string("bank '") + uri + "' failed to load: " + e.what());
+        }
 
     } else if (cmd == "quit") {
         s.should_quit = true;

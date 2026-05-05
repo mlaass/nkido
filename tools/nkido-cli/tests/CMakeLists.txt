@@ -36,6 +36,7 @@ configure_file(
 
 add_executable(nkido_cli_tests
     test_render.cpp
+    test_serve.cpp
 )
 
 # Make sure the CLI binary is built before tests try to invoke it.

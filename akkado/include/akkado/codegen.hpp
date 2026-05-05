@@ -407,16 +407,22 @@ private:
         bool is_sample_pattern, SourceLocation loc,
         std::uint16_t clock_override = 0xFFFF);
 
-    /// Emit PUSH_CONST(pitch=1.0) + SAMPLE_PLAY for a sample pattern, wiring
-    /// the sampler to the upstream SequenceState identified by `seq_state_id`.
+    /// Emit PUSH_CONST(pitch=1.0) + SAMPLE_PLAY + MUL(velocity) for a sample
+    /// pattern, wiring the sampler to the upstream SequenceState identified
+    /// by `seq_state_id`.
     /// Caller is responsible for guarding the call with `is_sample_pattern`.
     /// @param seq_state_id state_id of the SEQPAT_QUERY/STEP that produced
     ///        `value_buf`. Encoded into SAMPLE_PLAY inputs[3]/[4] so the
     ///        sampler can read polyphonic events from evt.values[].
     /// @param value_buf Buffer holding sample IDs (SEQPAT_STEP output).
     /// @param trigger_buf Buffer holding the trigger signal.
+    /// @param velocity_buf Buffer holding the per-event velocity (SEQPAT_STEP
+    ///        output). The sampler output is post-multiplied by this so that
+    ///        `s"bd{vel:0.5}"` and `[hh,bd{vel:0.25}]` attenuate audibly.
+    ///        SAMPLE_PLAY itself has no velocity input (5 slots all in use),
+    ///        so velocity is applied as a MUL after playback.
     /// @param loc Source location for error reporting.
-    /// @return The audio output buffer of SAMPLE_PLAY, or
+    /// @return The audio output buffer of the velocity-scaled sampler, or
     ///         BufferAllocator::BUFFER_UNUSED on allocator exhaustion (caller
     ///         must check and propagate). The sampler's own state_id is
     ///         `seq_state_id + 1`.
@@ -427,6 +433,7 @@ private:
     std::uint16_t emit_sampler_wrapper(std::uint32_t seq_state_id,
                                        std::uint16_t value_buf,
                                        std::uint16_t trigger_buf,
+                                       std::uint16_t velocity_buf,
                                        SourceLocation loc);
 
 public:
