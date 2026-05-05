@@ -607,12 +607,15 @@ std::optional<MiniToken> MiniLexer::try_lex_chord_symbol() {
         velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
     }
 
+    auto props = try_lex_record_suffix();
+
     MiniChordData chord_data{
         chord_info->root,
         chord_info->quality,
         static_cast<std::uint8_t>(chord_info->root_midi),
         std::move(interval_vec),
-        velocity
+        velocity,
+        std::move(props)
     };
 
     return make_token(MiniTokenType::ChordToken, std::move(chord_data));
@@ -696,100 +699,6 @@ MiniToken MiniLexer::lex_pitch() {
     auto props = try_lex_record_suffix();
     return make_token(MiniTokenType::PitchToken,
                       MiniPitchData{midi, has_octave, velocity, micro_offset, std::move(props)});
-}
-
-MiniToken MiniLexer::lex_pitch_or_sample() {
-    // Consume identifier-like characters
-    while (!is_at_end()) {
-        char c = peek();
-        if (is_alpha(c) || is_digit(c) || c == '#') {
-            advance();
-        } else {
-            break;
-        }
-    }
-
-    std::string_view text = pattern_.substr(start_, current_ - start_);
-
-    // Try to parse as pitch: [a-gA-G][#b]?[0-9]*
-    if (text.size() >= 1 && is_pitch_letter(text[0])) {
-        std::size_t pos = 1;
-        int accidental = 0;
-        int octave = 4; // Default octave for mini-notation
-        bool has_octave = false;
-
-        // Check for accidental
-        if (pos < text.size()) {
-            if (text[pos] == '#') {
-                accidental = 1;
-                pos++;
-            } else if (text[pos] == 'b' && (pos + 1 >= text.size() || !is_alpha(text[pos + 1]))) {
-                // 'b' is flat only if not followed by more letters (to distinguish from samples like "bd")
-                accidental = -1;
-                pos++;
-            }
-        }
-
-        // Check for octave
-        if (pos < text.size() && is_digit(text[pos])) {
-            has_octave = true;
-            octave = text[pos] - '0';
-            pos++;
-
-            // Double-digit octave
-            if (pos < text.size() && is_digit(text[pos])) {
-                octave = octave * 10 + (text[pos] - '0');
-                pos++;
-            }
-        }
-
-        // If we consumed everything, it's a pitch
-        if (pos == text.size()) {
-            std::uint8_t midi = parse_pitch_to_midi(text[0], accidental, octave);
-            float velocity = 1.0f;
-
-            // Check for :velocity suffix (e.g., c4:0.8)
-            if (peek() == ':' && (is_digit(peek_next()) || peek_next() == '.')) {
-                advance(); // consume ':'
-                std::size_t vel_start = current_;
-                if (peek() == '.') advance();
-                while (is_digit(peek())) advance();
-                if (pattern_[vel_start] != '.' && peek() == '.' && is_digit(peek_next())) {
-                    advance(); // consume '.'
-                    while (is_digit(peek())) advance();
-                }
-                std::string_view vel_text = pattern_.substr(vel_start, current_ - vel_start);
-                std::string vel_buf(vel_text);
-                char* vel_end = nullptr;
-                double vel_val = std::strtod(vel_buf.c_str(), &vel_end);
-                if (vel_end == vel_buf.c_str()) vel_val = 0.0;
-                velocity = static_cast<float>(std::clamp(vel_val, 0.0, 1.0));
-            }
-
-            auto props = try_lex_record_suffix();
-            return make_token(MiniTokenType::PitchToken,
-                              MiniPitchData{midi, has_octave, velocity, 0, std::move(props)});
-        }
-    }
-
-    // Not a pitch - treat as sample token
-    // Check for variant suffix (e.g., :2)
-    std::uint8_t variant = 0;
-    if (peek() == ':' && is_digit(peek_next())) {
-        advance(); // consume ':'
-        std::size_t var_start = current_;
-        while (is_digit(peek())) {
-            advance();
-        }
-        std::string_view var_text = pattern_.substr(var_start, current_ - var_start);
-        int var_val = 0;
-        std::from_chars(var_text.data(), var_text.data() + var_text.size(), var_val);
-        variant = static_cast<std::uint8_t>(var_val);
-    }
-
-    auto props = try_lex_record_suffix();
-    return make_token(MiniTokenType::SampleToken,
-                      MiniSampleData{std::string(text), variant, "", std::move(props)});
 }
 
 std::vector<std::pair<std::string, float>> MiniLexer::try_lex_record_suffix() {
@@ -896,7 +805,9 @@ MiniToken MiniLexer::lex_sample_only() {
         variant = static_cast<std::uint8_t>(var_val);
     }
 
-    return make_token(MiniTokenType::SampleToken, MiniSampleData{std::string(text), variant});
+    auto props = try_lex_record_suffix();
+    return make_token(MiniTokenType::SampleToken,
+                      MiniSampleData{std::string(text), variant, "", std::move(props)});
 }
 
 // Convenience function

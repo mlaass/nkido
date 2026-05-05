@@ -3,6 +3,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include "akkado/akkado.hpp"
 #include "akkado/pattern_eval.hpp"
+#include "akkado/mini_lexer.hpp"
 #include "akkado/mini_parser.hpp"
 #include "akkado/sample_registry.hpp"
 #include <cedar/vm/instruction.hpp>
@@ -2257,6 +2258,111 @@ TEST_CASE("Mini-notation record suffix: dur sets event.duration",
     std::sort(pairs.begin(), pairs.end());
     CHECK(pairs[0].second == Catch::Approx(0.25f).margin(0.001f));   // c4 dur 0.5 * 0.5
     CHECK(pairs[1].second == Catch::Approx(0.5f).margin(0.001f));    // e4 dur 1.0 * 0.5
+}
+
+TEST_CASE("Mini-notation record suffix: works on sample atoms in pat()",
+          "[codegen][patterns][phase2][record_suffix][sample]") {
+    // Before fix: lex_sample_only() returned without calling try_lex_record_suffix(),
+    // so `bd{vel:0.5}` was a parse error in any sample-mode context.
+    auto result = akkado::compile(R"(pat("bd{vel:0.5} sd{vel:0.7}"))");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 2);
+    std::vector<std::pair<float, float>> by_time;
+    for (const auto& e : events) by_time.emplace_back(e.time, e.velocity);
+    std::sort(by_time.begin(), by_time.end());
+    CHECK(by_time[0].second == Catch::Approx(0.5f).margin(0.01f));
+    CHECK(by_time[1].second == Catch::Approx(0.7f).margin(0.01f));
+}
+
+TEST_CASE("Mini-notation record suffix: works on samples inside [...] groups",
+          "[codegen][patterns][phase2][record_suffix][sample]") {
+    // The user's actual reported failure: `[hh,bd{vel:0.5}]` errored with
+    // "Expected ']' after group" / "Expected '}' after polymeter" because the
+    // `{` was tokenized as polymeter-open instead of a record-suffix.
+    auto result = akkado::compile(R"(pat("[hh,bd{vel:0.5}] hh"))");
+    REQUIRE(result.success);
+}
+
+TEST_CASE("Mini-notation record suffix: works in s\"...\" sample-mode prefix",
+          "[codegen][patterns][phase2][record_suffix][sample]") {
+    // `s"..."` token forces MiniParseMode::Sample. Same lexer bug affected
+    // it: lex_sample_only() never called try_lex_record_suffix().
+    auto result = akkado::compile(R"(s"bd{vel:0.5} sd")");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 2);
+    std::vector<std::pair<float, float>> by_time;
+    for (const auto& e : events) by_time.emplace_back(e.time, e.velocity);
+    std::sort(by_time.begin(), by_time.end());
+    CHECK(by_time[0].second == Catch::Approx(0.5f).margin(0.01f));
+}
+
+TEST_CASE("Mini-notation record suffix: full s\"...\" pattern from bug report",
+          "[codegen][patterns][phase2][record_suffix][sample]") {
+    // Verbatim from the user's bug report (with `vel: 0.5` instead of the
+    // typo `vel: 05`, which would clamp to 1.0).
+    const char* src = R"(s"[hh,bd] hh [hh,sd] [hh ~ ~ rim] [hh,bd{vel:0.5}] [hh,bd] [hh,sd] oh" |> out(%, %))";
+    auto result = akkado::compile(src);
+    REQUIRE(result.success);
+}
+
+TEST_CASE("Mini-notation record suffix: chord atoms carry properties",
+          "[codegen][patterns][phase2][record_suffix][chord]") {
+    // try_lex_chord_symbol() was missing the try_lex_record_suffix() call too,
+    // so `Am{vel:0.5}` parsed as `Am` followed by polymeter-open `{` and errored.
+    // Chord patterns require poly() at codegen time; we just verify the parser
+    // no longer chokes on the record-suffix.
+    auto [tokens, diags] = akkado::lex_mini("Am{vel:0.5}");
+    REQUIRE(diags.empty());
+    REQUIRE(tokens.size() >= 1);
+    REQUIRE(tokens[0].type == akkado::MiniTokenType::ChordToken);
+    const auto& chord = tokens[0].as_chord();
+    REQUIRE(chord.properties.size() == 1);
+    CHECK(chord.properties[0].first == "vel");
+    CHECK(chord.properties[0].second == Catch::Approx(0.5f).margin(0.001f));
+}
+
+TEST_CASE("Mini-notation record suffix: whitespace tolerance",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // Lexer skips whitespace around `:` and `,`. Worth testing post-fix on
+    // sample atoms too, since they go through a different lex path.
+    auto a = akkado::compile(R"(s"bd{vel: 0.5}")");
+    auto b = akkado::compile(R"(s"bd{vel : 0.5}")");
+    auto c = akkado::compile(R"(s"bd{vel:0.5 , bend:0.3}")");
+    CHECK(a.success);
+    CHECK(b.success);
+    CHECK(c.success);
+}
+
+TEST_CASE("Mini-notation record suffix: bare-integer values accepted",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // `{vel:1}` (no decimal) — lexer accepts integers; codegen clamps to [0,1].
+    auto result = akkado::compile(R"(s"bd{vel:1}")");
+    REQUIRE(result.success);
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].velocity == Catch::Approx(1.0f).margin(0.001f));
+}
+
+TEST_CASE("Mini-notation record suffix: negative regressions still work",
+          "[codegen][patterns][phase2][record_suffix]") {
+    // {bd hh}%3 — `{` not preceded by an atom, must still parse as polymeter.
+    SECTION("polymeter unaffected by sample-mode record-suffix support") {
+        auto r = akkado::compile(R"(s"{bd hh}%3")");
+        CHECK(r.success);
+    }
+    // `bd {hh sd}%3` — whitespace before `{` keeps it as polymeter, not record.
+    SECTION("whitespace before brace keeps polymeter") {
+        auto r = akkado::compile(R"(s"bd {hh sd}%3")");
+        CHECK(r.success);
+    }
+    // Chord disambiguation (Am vs A4) untouched by the fix.
+    SECTION("A4 still parses as pitch, not chord") {
+        auto [tokens, diags] = akkado::lex_mini("A4");
+        REQUIRE(diags.empty());
+        CHECK(tokens[0].type == akkado::MiniTokenType::PitchToken);
+    }
 }
 
 // =============================================================================

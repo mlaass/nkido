@@ -74,7 +74,6 @@ private:
     MiniToken lex_token();
     MiniToken lex_number();
     MiniToken lex_pitch();          // Character-by-character pitch parsing (handles ^v+x modifiers)
-    MiniToken lex_pitch_or_sample();
     MiniToken lex_sample_only();    // For sample_only mode
     MiniToken lex_value_atom();     // For value mode: numeric literal (incl. negative, scientific)
 
