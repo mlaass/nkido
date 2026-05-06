@@ -20,6 +20,8 @@ namespace akkado {
 using codegen::encode_const_value;
 using codegen::unwrap_argument;
 using codegen::emit_zero;
+using codegen::SamplePatternEmitCtx;
+using codegen::emit_sample_chain;
 
 // Project per-event SequenceSampleMappings to a deduped Pattern-level
 // sample_refs vector. One entry per (bank, name, variant) tuple — the global
@@ -1196,125 +1198,10 @@ private:
 // End Compilers
 // ============================================================================
 
-// ============================================================================
-// SAMPLE_PLAY emission helper (single source of truth)
-// ============================================================================
-// All SAMPLE_PLAY emission for sample patterns goes through emit_sample_chain.
-// See docs/prd-sample-emission-unification.md for the full contract.
-//
-// Phase 1 adds the helper alongside the existing emit_sampler_wrapper /
-// emit_pattern_with_state inline mirror. Phases 2-4 migrate every call site
-// over and finally delete the duplicates.
-struct SamplePatternEmitCtx {
-    enum class Kind {
-        Pattern,  // pat / chord / velocity / bank / variant / transport-clock
-        Scalar,   // builtin sample(trig, pitch, "bd")
-    };
-    Kind            kind            = Kind::Pattern;
-    // Pattern mode: linked SequenceState id; emitted SAMPLE_PLAY's own
-    // state_id is `seq_state_id + 1` (preserving the offset emit_sampler_wrapper
-    // uses today).
-    // Scalar mode: caller passes the value compute_state_id() produces from
-    // the active semantic-path stack so hot-swap behavior matches the
-    // generic-builtin-emission path.
-    std::uint32_t   seq_state_id    = 0;
-    std::uint16_t   value_buf       = BufferAllocator::BUFFER_UNUSED; // sample-id buffer
-    std::uint16_t   trigger_buf     = BufferAllocator::BUFFER_UNUSED;
-    // BUFFER_UNUSED → emit no MUL (used by Scalar mode today, which has no
-    // velocity input on the sample() builtin).
-    std::uint16_t   velocity_buf    = BufferAllocator::BUFFER_UNUSED;
-    // BUFFER_UNUSED → helper allocates and emits its own PUSH_CONST 1.0.
-    // Scalar callers can pass the user-supplied pitch arg buffer.
-    std::uint16_t   pitch_buf       = BufferAllocator::BUFFER_UNUSED;
-    // Scalar callers pass builtin->inst_rate to preserve the rate-field
-    // bytecode the generic-builtin-emission path sets. Pattern callers leave
-    // it at 0 (current pattern path emits SAMPLE_PLAY with rate=0).
-    std::uint8_t    rate            = 0;
-    SourceLocation  loc             = {};
-};
-
-// Free helper used by both class methods (via a thunk that appends to
-// instructions_ and tracks source_locations_) and the static
-// emit_pattern_with_state. emit_fn matches the existing helper signature so
-// the static-caller can pass &emit_instruction_helper directly.
-//
-// Returns the final audio output buffer, or BufferAllocator::BUFFER_UNUSED on
-// allocation failure (caller is responsible for diagnostic emission — both
-// existing call sites already short-circuit on this sentinel).
-static std::uint16_t emit_sample_chain(
-    BufferAllocator& buffers,
-    std::vector<cedar::Instruction>& instructions,
-    void (*emit_fn)(std::vector<cedar::Instruction>&, const cedar::Instruction&),
-    const SamplePatternEmitCtx& ctx) {
-
-    // 1. Pitch input. Scalar callers may already have a pitch buffer; Pattern
-    //    callers always allocate a fresh PUSH_CONST 1.0 to match the existing
-    //    emit_sampler_wrapper layout.
-    std::uint16_t pitch_buf = ctx.pitch_buf;
-    if (pitch_buf == BufferAllocator::BUFFER_UNUSED) {
-        pitch_buf = buffers.allocate();
-        if (pitch_buf == BufferAllocator::BUFFER_UNUSED) {
-            return BufferAllocator::BUFFER_UNUSED;
-        }
-        cedar::Instruction pitch_inst{};
-        pitch_inst.opcode = cedar::Opcode::PUSH_CONST;
-        pitch_inst.out_buffer = pitch_buf;
-        pitch_inst.inputs[0] = 0xFFFF;
-        pitch_inst.inputs[1] = 0xFFFF;
-        pitch_inst.inputs[2] = 0xFFFF;
-        pitch_inst.inputs[3] = 0xFFFF;
-        encode_const_value(pitch_inst, 1.0f);
-        emit_fn(instructions, pitch_inst);
-    }
-
-    // 2. SAMPLE_PLAY. inputs[3]/[4] split the linked SequenceState id in half
-    //    (Pattern mode) or BUFFER_UNUSED (Scalar mode, falls back to the
-    //    scalar sample_id buffer in op_sample_play).
-    std::uint16_t output_buf = buffers.allocate();
-    if (output_buf == BufferAllocator::BUFFER_UNUSED) {
-        return BufferAllocator::BUFFER_UNUSED;
-    }
-    cedar::Instruction sample_inst{};
-    sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
-    sample_inst.out_buffer = output_buf;
-    sample_inst.inputs[0] = ctx.trigger_buf;
-    sample_inst.inputs[1] = pitch_buf;
-    sample_inst.inputs[2] = ctx.value_buf;
-    sample_inst.rate      = ctx.rate;
-    if (ctx.kind == SamplePatternEmitCtx::Kind::Pattern) {
-        sample_inst.inputs[3] = static_cast<std::uint16_t>(ctx.seq_state_id & 0xFFFFu);
-        sample_inst.inputs[4] = static_cast<std::uint16_t>((ctx.seq_state_id >> 16) & 0xFFFFu);
-        sample_inst.state_id  = ctx.seq_state_id + 1;
-    } else {
-        sample_inst.inputs[3] = 0xFFFF;
-        sample_inst.inputs[4] = 0xFFFF;
-        sample_inst.state_id  = ctx.seq_state_id;
-    }
-    emit_fn(instructions, sample_inst);
-
-    // 3. Velocity post-multiply. Skipped if velocity_buf is BUFFER_UNUSED
-    //    (Scalar mode today). Per-voice velocity is already applied inside
-    //    op_sample_play via evt.velocities[v]; the post-MUL exists only to
-    //    let `velocity(pat, runtime_expr)` scale the sampler output at
-    //    runtime via velocity_buf.
-    if (ctx.velocity_buf == BufferAllocator::BUFFER_UNUSED) {
-        return output_buf;
-    }
-    std::uint16_t scaled_buf = buffers.allocate();
-    if (scaled_buf == BufferAllocator::BUFFER_UNUSED) {
-        return BufferAllocator::BUFFER_UNUSED;
-    }
-    cedar::Instruction mul_inst{};
-    mul_inst.opcode = cedar::Opcode::MUL;
-    mul_inst.out_buffer = scaled_buf;
-    mul_inst.inputs[0] = output_buf;
-    mul_inst.inputs[1] = ctx.velocity_buf;
-    mul_inst.inputs[2] = 0xFFFF;
-    mul_inst.inputs[3] = 0xFFFF;
-    mul_inst.inputs[4] = 0xFFFF;
-    emit_fn(instructions, mul_inst);
-    return scaled_buf;
-}
+// SamplePatternEmitCtx + emit_sample_chain live in
+// akkado/codegen/helpers.hpp so both this file and codegen.cpp's scalar
+// sample() builtin path call the same code. See
+// docs/prd-sample-emission-unification.md.
 
 // Emit PUSH_CONST(1.0) + SAMPLE_PLAY + MUL(velocity) for a sample pattern.
 // See declaration in codegen.hpp for the full contract.
@@ -1511,10 +1398,17 @@ TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
 
     // Handle sample patterns - need to wire to SAMPLE_PLAY
     if (is_sample_pattern) {
-        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, velocity_buf,
-                                                        n.location);
+        SamplePatternEmitCtx ctx;
+        ctx.kind = SamplePatternEmitCtx::Kind::Pattern;
+        ctx.seq_state_id = state_id;
+        ctx.value_buf = value_buf;
+        ctx.trigger_buf = trigger_buf;
+        ctx.velocity_buf = velocity_buf;
+        ctx.loc = n.location;
+        std::uint16_t output_buf = emit_sample_chain(
+            buffers_, [this](const cedar::Instruction& i){ emit(i); }, ctx);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return TypedValue::signal(value_buf);  // Return value buffer as fallback
         }
@@ -1766,14 +1660,20 @@ TypedValue CodeGenerator::handle_pattern_reference(const std::string& name,
     publish_sample_refs(pattern_payload->sample_refs);
 
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
-    // buffer would be raw sample-IDs (DC), not audio — see
-    // emit_sampler_wrapper() docstring.
+    // buffer would be raw sample-IDs (DC), not audio.
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
-        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, velocity_buf,
-                                                        loc);
+        SamplePatternEmitCtx ctx;
+        ctx.kind = SamplePatternEmitCtx::Kind::Pattern;
+        ctx.seq_state_id = state_id;
+        ctx.value_buf = value_buf;
+        ctx.trigger_buf = trigger_buf;
+        ctx.velocity_buf = velocity_buf;
+        ctx.loc = loc;
+        std::uint16_t output_buf = emit_sample_chain(
+            buffers_, [this](const cedar::Instruction& i){ emit(i); }, ctx);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", loc);
             pop_path();
             return TypedValue::void_val();
         }
@@ -3555,18 +3455,23 @@ TypedValue CodeGenerator::handle_velocity_call(NodeIndex node, const Node& n) {
     seq_init.sequence_sample_mappings = compiler.sample_mappings();
     state_inits_.push_back(std::move(seq_init));
 
-    // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
-    // buffer would be raw sample-IDs (DC), not audio — see
-    // emit_sampler_wrapper() docstring.
+    // Wire up SAMPLE_PLAY for sample patterns. Use scaled_velocity_buf so
+    // velocity(s"...", 0.5) actually halves the sampler output amplitude;
+    // without this, sample patterns would ignore the user's velocity()
+    // multiplier.
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
-        // Use scaled_velocity_buf so velocity(s"...", 0.5) actually halves
-        // the sampler output amplitude. Without this, sample patterns would
-        // ignore the user's velocity() multiplier.
-        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, scaled_velocity_buf,
-                                                        n.location);
+        SamplePatternEmitCtx ctx;
+        ctx.kind = SamplePatternEmitCtx::Kind::Pattern;
+        ctx.seq_state_id = state_id;
+        ctx.value_buf = value_buf;
+        ctx.trigger_buf = trigger_buf;
+        ctx.velocity_buf = scaled_velocity_buf;
+        ctx.loc = n.location;
+        std::uint16_t output_buf = emit_sample_chain(
+            buffers_, [this](const cedar::Instruction& i){ emit(i); }, ctx);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return TypedValue::void_val();
         }
@@ -3939,14 +3844,20 @@ TypedValue CodeGenerator::handle_bank_call(NodeIndex node, const Node& n) {
     state_inits_.push_back(std::move(seq_init));
 
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
-    // buffer would be raw sample-IDs (DC), not audio — see
-    // emit_sampler_wrapper() docstring.
+    // buffer would be raw sample-IDs (DC), not audio.
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
-        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, velocity_buf,
-                                                        n.location);
+        SamplePatternEmitCtx ctx;
+        ctx.kind = SamplePatternEmitCtx::Kind::Pattern;
+        ctx.seq_state_id = state_id;
+        ctx.value_buf = value_buf;
+        ctx.trigger_buf = trigger_buf;
+        ctx.velocity_buf = velocity_buf;
+        ctx.loc = n.location;
+        std::uint16_t output_buf = emit_sample_chain(
+            buffers_, [this](const cedar::Instruction& i){ emit(i); }, ctx);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return TypedValue::void_val();
         }
@@ -4140,14 +4051,20 @@ TypedValue CodeGenerator::handle_variant_call(NodeIndex node, const Node& n) {
     state_inits_.push_back(std::move(seq_init));
 
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
-    // buffer would be raw sample-IDs (DC), not audio — see
-    // emit_sampler_wrapper() docstring.
+    // buffer would be raw sample-IDs (DC), not audio.
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
-        std::uint16_t output_buf = emit_sampler_wrapper(state_id, value_buf,
-                                                        trigger_buf, velocity_buf,
-                                                        n.location);
+        SamplePatternEmitCtx ctx;
+        ctx.kind = SamplePatternEmitCtx::Kind::Pattern;
+        ctx.seq_state_id = state_id;
+        ctx.value_buf = value_buf;
+        ctx.trigger_buf = trigger_buf;
+        ctx.velocity_buf = velocity_buf;
+        ctx.loc = n.location;
+        std::uint16_t output_buf = emit_sample_chain(
+            buffers_, [this](const cedar::Instruction& i){ emit(i); }, ctx);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return TypedValue::void_val();
         }
@@ -4339,14 +4256,20 @@ TypedValue CodeGenerator::handle_transport_call(NodeIndex node, const Node& n) {
     publish_sample_refs(pattern_payload->sample_refs);
 
     // Wire up SAMPLE_PLAY for sample patterns. Without this the returned
-    // buffer would be raw sample-IDs (DC), not audio — see
-    // emit_sampler_wrapper() docstring.
+    // buffer would be raw sample-IDs (DC), not audio.
     std::uint16_t result_buf = value_buf;
     if (is_sample_pattern) {
-        std::uint16_t output_buf = emit_sampler_wrapper(seq_state_id, value_buf,
-                                                        trigger_buf, velocity_buf,
-                                                        n.location);
+        SamplePatternEmitCtx ctx;
+        ctx.kind = SamplePatternEmitCtx::Kind::Pattern;
+        ctx.seq_state_id = seq_state_id;
+        ctx.value_buf = value_buf;
+        ctx.trigger_buf = trigger_buf;
+        ctx.velocity_buf = velocity_buf;
+        ctx.loc = n.location;
+        std::uint16_t output_buf = emit_sample_chain(
+            buffers_, [this](const cedar::Instruction& i){ emit(i); }, ctx);
         if (output_buf == BufferAllocator::BUFFER_UNUSED) {
+            error("E101", "Buffer pool exhausted", n.location);
             pop_path();
             return TypedValue::void_val();
         }

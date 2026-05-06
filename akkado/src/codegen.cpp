@@ -20,6 +20,8 @@ using codegen::unwrap_argument;
 using codegen::is_audio_rate_producer;
 using codegen::is_upgradeable_oscillator;
 using codegen::upgrade_for_fm;
+using codegen::SamplePatternEmitCtx;
+using codegen::emit_sample_chain;
 
 std::uint16_t BufferAllocator::allocate() {
     if (next_ >= MAX_ALLOCATABLE) {
@@ -1540,6 +1542,44 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
                     arg_buffers.push_back(default_buf);
                 }
+            }
+
+            // Scalar SAMPLE_PLAY (the `sample()` builtin) routes through
+            // emit_sample_chain so all SAMPLE_PLAY emission sits behind one
+            // helper. Pre-migration, this path emitted a single SAMPLE_PLAY
+            // here with inputs[3]/[4] populated from arg_buffers (always
+            // BUFFER_UNUSED for the 3-input sample() builtin) and state_id
+            // from compute_state_id(). emit_sample_chain Kind::Scalar
+            // produces the same instruction; verified by golden test G10.
+            if (builtin->opcode == cedar::Opcode::SAMPLE_PLAY) {
+                SamplePatternEmitCtx ctx;
+                ctx.kind = SamplePatternEmitCtx::Kind::Scalar;
+                ctx.trigger_buf = arg_buffers.size() > 0 ? arg_buffers[0] : static_cast<std::uint16_t>(0xFFFF);
+                // Caller-supplied pitch buffer (the 2nd arg) — helper skips
+                // its own PUSH_CONST 1.0 emission when this is set.
+                ctx.pitch_buf   = arg_buffers.size() > 1 ? arg_buffers[1] : BufferAllocator::BUFFER_UNUSED;
+                ctx.value_buf   = arg_buffers.size() > 2 ? arg_buffers[2] : static_cast<std::uint16_t>(0xFFFF);
+                ctx.velocity_buf = BufferAllocator::BUFFER_UNUSED;  // no MUL on scalar path
+                ctx.rate = builtin->inst_rate;
+                ctx.loc = n.location;
+                if (pushed_path) {
+                    ctx.seq_state_id = compute_state_id();
+                    pop_path();
+                } else {
+                    ctx.seq_state_id = 0;
+                }
+                std::uint16_t out = emit_sample_chain(
+                    buffers_, [this](const cedar::Instruction& i){ emit(i); }, ctx);
+                if (out == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    return TypedValue::error_val();
+                }
+                TypedValue result = TypedValue::signal(out);
+                result.channels = builtin->output_channels;
+                if (result.channels == ChannelCount::Stereo) {
+                    result.right_buffer = static_cast<std::uint16_t>(out + 1);
+                }
+                return cache_and_return(node, result);
             }
 
             // Allocate output buffer
