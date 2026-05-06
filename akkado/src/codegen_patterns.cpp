@@ -1247,87 +1247,8 @@ private:
 // End Compilers
 // ============================================================================
 
-// SamplePatternEmitCtx + emit_sample_chain live in
-// akkado/codegen/helpers.hpp so both this file and codegen.cpp's scalar
-// sample() builtin path call the same code. See
-// docs/prd-sample-emission-unification.md.
-
-// Emit PUSH_CONST(1.0) + SAMPLE_PLAY + MUL(velocity) for a sample pattern.
-// See declaration in codegen.hpp for the full contract.
-//
-// IMPORTANT: An equivalent block lives inline in the static helper
-// `emit_pattern_with_state()` further down in this file (search for
-// "Mirrors CodeGenerator::emit_sampler_wrapper"). That copy exists because
-// the static helper cannot call class members. Keep both in sync if you
-// change the in3/in4 state-id-split layout, the pitch default, the
-// `state_id + 1` sampler-id offset, or the post-MUL velocity application.
-std::uint16_t CodeGenerator::emit_sampler_wrapper(std::uint32_t seq_state_id,
-                                                  std::uint16_t value_buf,
-                                                  std::uint16_t trigger_buf,
-                                                  std::uint16_t velocity_buf,
-                                                  SourceLocation loc) {
-    std::uint16_t pitch_buf = buffers_.allocate();
-    std::uint16_t output_buf = buffers_.allocate();
-
-    if (pitch_buf == BufferAllocator::BUFFER_UNUSED ||
-        output_buf == BufferAllocator::BUFFER_UNUSED) {
-        error("E101", "Buffer pool exhausted", loc);
-        return BufferAllocator::BUFFER_UNUSED;
-    }
-
-    // Set pitch to 1.0 for sample playback
-    cedar::Instruction pitch_inst{};
-    pitch_inst.opcode = cedar::Opcode::PUSH_CONST;
-    pitch_inst.out_buffer = pitch_buf;
-    pitch_inst.inputs[0] = 0xFFFF;
-    pitch_inst.inputs[1] = 0xFFFF;
-    pitch_inst.inputs[2] = 0xFFFF;
-    pitch_inst.inputs[3] = 0xFFFF;
-    encode_const_value(pitch_inst, 1.0f);
-    emit(pitch_inst);
-
-    // Wire up sample player.
-    // inputs[3]/[4] carry the upstream SequenceState's state_id (split into
-    // low/high 16-bit halves) so the sampler can read polyphonic events
-    // (e.g. merged [bd, hh] polyrhythms) directly from evt.values[] on
-    // trigger, instead of being limited to the scalar sample_id buffer.
-    cedar::Instruction sample_inst{};
-    sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
-    sample_inst.out_buffer = output_buf;
-    sample_inst.inputs[0] = trigger_buf;   // trigger
-    sample_inst.inputs[1] = pitch_buf;     // pitch
-    sample_inst.inputs[2] = value_buf;     // sample_id (fallback / voice 0)
-    sample_inst.inputs[3] = static_cast<std::uint16_t>(seq_state_id & 0xFFFFu);
-    sample_inst.inputs[4] = static_cast<std::uint16_t>((seq_state_id >> 16) & 0xFFFFu);
-    sample_inst.state_id = seq_state_id + 1;
-    emit(sample_inst);
-
-    // Apply per-event velocity as a post-multiply. SAMPLE_PLAY has no
-    // velocity input (5 slots already used by trigger / pitch / sample_id /
-    // seq-state-id-low / seq-state-id-high), so we scale the sampler output
-    // by the velocity_buf produced by SEQPAT_STEP. SEQPAT_STEP holds the
-    // current event's velocity for the entire block, so this scales any
-    // ongoing voice tail by the latest event's velocity — for one-shot
-    // drum hits (the common sampler use case) this matches user
-    // expectations; if/when significantly overlapping sample tails
-    // matter, capture velocity per-voice at trigger time instead.
-    std::uint16_t scaled_buf = buffers_.allocate();
-    if (scaled_buf == BufferAllocator::BUFFER_UNUSED) {
-        error("E101", "Buffer pool exhausted", loc);
-        return BufferAllocator::BUFFER_UNUSED;
-    }
-    cedar::Instruction mul_inst{};
-    mul_inst.opcode = cedar::Opcode::MUL;
-    mul_inst.out_buffer = scaled_buf;
-    mul_inst.inputs[0] = output_buf;
-    mul_inst.inputs[1] = velocity_buf;
-    mul_inst.inputs[2] = 0xFFFF;
-    mul_inst.inputs[3] = 0xFFFF;
-    mul_inst.inputs[4] = 0xFFFF;
-    emit(mul_inst);
-
-    return scaled_buf;
-}
+// All SAMPLE_PLAY emission goes through emit_sample_chain, defined in
+// akkado/codegen/helpers.hpp. See docs/prd-sample-emission-unification.md.
 
 // Handle MiniLiteral (pattern) nodes
 TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
@@ -2847,62 +2768,26 @@ static TypedValue emit_pattern_with_state(
 
     std::uint16_t result_buf = value_buf;
 
-    // Wire up SAMPLE_PLAY for sample patterns. Mirrors
-    // CodeGenerator::emit_sampler_wrapper() — kept inline here because this
-    // is a static helper using an emit_fn callback and cannot call the class
-    // member. Keep the two in sync if you change the in3/in4 state-id-split
-    // layout, the pitch default, the `state_id + 1` sampler-id offset, or
-    // the post-MUL velocity application.
+    // All SAMPLE_PLAY emission goes through emit_sample_chain. See
+    // docs/prd-sample-emission-unification.md.
     if (is_sample_pattern) {
-        std::uint16_t pitch_buf = buffers.allocate();
-        std::uint16_t output_buf = buffers.allocate();
-
-        if (pitch_buf == BufferAllocator::BUFFER_UNUSED ||
-            output_buf == BufferAllocator::BUFFER_UNUSED) {
+        SamplePatternEmitCtx ctx;
+        ctx.kind = SamplePatternEmitCtx::Kind::Pattern;
+        ctx.seq_state_id = state_id;
+        ctx.value_buf = value_buf;
+        ctx.trigger_buf = trigger_buf;
+        ctx.velocity_buf = velocity_buf;
+        ctx.loc = call_loc;
+        std::uint16_t output_buf = emit_sample_chain(
+            buffers,
+            [&instructions, emit_fn](const cedar::Instruction& i) {
+                emit_fn(instructions, i);
+            },
+            ctx);
+        if (output_buf == BufferAllocator::BUFFER_UNUSED) {
             return TypedValue::void_val();
         }
-
-        // Set pitch to 1.0 for sample playback
-        cedar::Instruction pitch_inst{};
-        pitch_inst.opcode = cedar::Opcode::PUSH_CONST;
-        pitch_inst.out_buffer = pitch_buf;
-        pitch_inst.inputs[0] = 0xFFFF;
-        pitch_inst.inputs[1] = 0xFFFF;
-        pitch_inst.inputs[2] = 0xFFFF;
-        pitch_inst.inputs[3] = 0xFFFF;
-        encode_const_value(pitch_inst, 1.0f);
-        emit_fn(instructions, pitch_inst);
-
-        // Wire up sample player (see handle_mini_literal for details on the
-        // in3/in4 encoding of the linked SequenceState's state_id).
-        cedar::Instruction sample_inst{};
-        sample_inst.opcode = cedar::Opcode::SAMPLE_PLAY;
-        sample_inst.out_buffer = output_buf;
-        sample_inst.inputs[0] = trigger_buf;   // trigger
-        sample_inst.inputs[1] = pitch_buf;     // pitch
-        sample_inst.inputs[2] = value_buf;     // sample_id (fallback / voice 0)
-        sample_inst.inputs[3] = static_cast<std::uint16_t>(state_id & 0xFFFFu);
-        sample_inst.inputs[4] = static_cast<std::uint16_t>((state_id >> 16) & 0xFFFFu);
-        sample_inst.state_id = state_id + 1;
-        emit_fn(instructions, sample_inst);
-
-        // Apply per-event velocity as a post-multiply (SAMPLE_PLAY has no
-        // velocity input). See emit_sampler_wrapper() for full rationale.
-        std::uint16_t scaled_buf = buffers.allocate();
-        if (scaled_buf == BufferAllocator::BUFFER_UNUSED) {
-            return TypedValue::void_val();
-        }
-        cedar::Instruction mul_inst{};
-        mul_inst.opcode = cedar::Opcode::MUL;
-        mul_inst.out_buffer = scaled_buf;
-        mul_inst.inputs[0] = output_buf;
-        mul_inst.inputs[1] = velocity_buf;
-        mul_inst.inputs[2] = 0xFFFF;
-        mul_inst.inputs[3] = 0xFFFF;
-        mul_inst.inputs[4] = 0xFFFF;
-        emit_fn(instructions, mul_inst);
-
-        result_buf = scaled_buf;
+        result_buf = output_buf;
     }
 
     // Build PatternPayload

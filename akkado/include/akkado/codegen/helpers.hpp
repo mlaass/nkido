@@ -162,9 +162,9 @@ struct SamplePatternEmitCtx {
         Scalar,   // builtin sample(trig, pitch, "bd")
     };
     Kind            kind            = Kind::Pattern;
-    // Pattern mode: linked SequenceState id; emitted SAMPLE_PLAY's own
-    // state_id is `seq_state_id + 1` (preserving the offset emit_sampler_wrapper
-    // uses today).
+    // Pattern mode: linked SequenceState id. The emitted SAMPLE_PLAY's own
+    // state_id is `seq_state_id + 1` so the sampler can read its upstream
+    // SEQPAT events without colliding state ids.
     // Scalar mode: caller passes the value compute_state_id() produces from
     // the active semantic-path stack so hot-swap behavior matches the
     // generic-builtin-emission path.
@@ -198,8 +198,8 @@ inline std::uint16_t emit_sample_chain(
     const SamplePatternEmitCtx& ctx) {
 
     // 1. Pitch input. Scalar callers may already have a pitch buffer; Pattern
-    //    callers always allocate a fresh PUSH_CONST 1.0 to match the existing
-    //    emit_sampler_wrapper layout.
+    //    callers always allocate a fresh PUSH_CONST 1.0 (sample patterns play
+    //    at original pitch — pitch shifting is reserved for sample()).
     std::uint16_t pitch_buf = ctx.pitch_buf;
     if (pitch_buf == BufferAllocator::BUFFER_UNUSED) {
         pitch_buf = buffers.allocate();

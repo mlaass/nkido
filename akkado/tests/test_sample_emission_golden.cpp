@@ -122,7 +122,7 @@ TEST_CASE("Golden: G1 bare sample pattern s\"bd ~ ~ ~\"",
     check_pattern_tail(r);
 }
 
-// G2 — polyrhythm path (compile_polyrhythm_events + emit_sampler_wrapper site).
+// G2 — polyrhythm path (compile_polyrhythm_events → emit_sample_chain).
 TEST_CASE("Golden: G2 polyrhythm s\"[hh,bd] ~ ~ ~\"",
           "[golden][sample][emission][polyrhythm]") {
     auto r = akkado::compile(R"(s"[hh,bd] ~ ~ ~")");

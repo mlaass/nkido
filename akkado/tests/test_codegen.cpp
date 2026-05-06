@@ -2318,11 +2318,10 @@ TEST_CASE("Sample velocity: {vel:V} inside polyrhythm reaches merged event",
 
 TEST_CASE("Sample velocity: SAMPLE_PLAY output is post-multiplied by velocity",
           "[codegen][patterns][record_suffix][sample][velocity]") {
-    // Bug B regression: SAMPLE_PLAY has no velocity input and op_sample_play()
-    // ignores per-event velocity entirely. emit_sampler_wrapper() must emit a
-    // MUL after SAMPLE_PLAY whose inputs are the sampler output buffer and
-    // the velocity_buf produced by SEQPAT_STEP. Without that MUL, no amount
-    // of {vel:V} suffixes affect audible amplitude.
+    // Bug B regression: SAMPLE_PLAY has no velocity input. emit_sample_chain
+    // emits a MUL after SAMPLE_PLAY whose inputs are the sampler output buffer
+    // and the velocity_buf produced by SEQPAT_STEP, so `velocity()` can scale
+    // the sampler output at runtime via the velocity_buf signal.
     auto result = akkado::compile(R"(s"bd{vel:0.25}")");
     REQUIRE(result.success);
     auto insts = get_instructions(result);
