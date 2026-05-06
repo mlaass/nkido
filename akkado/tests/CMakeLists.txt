@@ -42,6 +42,7 @@ add_executable(akkado_tests
     test_methods.cpp
     test_state.cpp
     test_pattern_scalar.cpp
+    test_sample_emission_golden.cpp
 )
 
 target_link_libraries(akkado_tests
