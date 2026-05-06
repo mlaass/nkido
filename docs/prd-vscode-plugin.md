@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — VS Code extension for Akkado live coding. Depends on a `nkido-cli serve` mode (headless JSON-over-stdio) that does not yet exist; see §11.1.
+> **Status: DONE (v0.1.0)** — VS Code extension shipped in sibling repo [`nkido-vscode`](https://github.com/mlaass/nkido-vscode). Packaged as `nkido-0.1.0.vsix` with TextMate grammar, language config, autocomplete/diagnostics/signature-help providers, command palette integration, and `nkido-cli serve` integration. The required `serve` mode now exists in this repo.
 
 # PRD: VS Code Extension for Nkido/Akkado
 

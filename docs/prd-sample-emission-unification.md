@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — SAMPLE_PLAY codegen wiring is duplicated across 6 class-method call sites, 1 static-helper inline mirror, and a separate SequenceCompiler property-extraction path. The two most recent sample fixes (`b4aeef4` lexer record-suffix, `05c1150` velocity post-MUL) each had to touch all three paths. A header comment at `codegen_patterns.cpp:1196-1201` explicitly warns implementers to keep the duplicates in sync. This PRD unifies them.
+> **Status: DONE** — Unified SAMPLE_PLAY codegen emission shipped in commits `6d81038` (emit_sample_chain helper + golden bytecode test), `64686f8` (route 6 class-method sites + scalar sample() through emit_sample_chain), `3604ae3` (apply_atom_properties helper for atom property extraction), and `0852117` (delete inline mirror + emit_sampler_wrapper). All previously duplicated emission sites now go through a single path.
 
 # PRD: Unify SAMPLE_PLAY Codegen Emission
 
