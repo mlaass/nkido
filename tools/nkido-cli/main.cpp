@@ -52,6 +52,8 @@ void print_usage(const char* program) {
               << "                     Bare paths are treated as file://.\n"
               << "  --soundfont <uri>  SoundFont (SF2) URI. May repeat.\n"
               << "  --sample <uri>     Single-sample URI ('name=uri' or just URI). May repeat.\n"
+              << "  --no-default-bank  Suppress the built-in default 808 kit.\n"
+              << "                     (Override path with NKIDO_DEFAULT_KIT env var.)\n"
               << "  -h, --help         Show this help\n\n"
               << "Examples:\n"
               << "  " << program << " play song.akkado\n"
@@ -167,6 +169,8 @@ std::optional<nkido::Options> parse_args(int argc, char* argv[]) {
                 return std::nullopt;
             }
             opts.sample_uris.push_back(argv[i]);
+        } else if (arg == "--no-default-bank") {
+            opts.no_default_bank = true;
         } else if (arg == "--dump-bytecode") {
             opts.dump_bytecode = true;
         } else if (arg == "--json") {

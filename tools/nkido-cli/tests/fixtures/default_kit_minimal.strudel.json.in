@@ -1,0 +1,5 @@
+{
+  "_name": "default_kit_minimal",
+  "_base": "@NKIDO_REPO_ROOT@/web/static/samples/bpb_808_clean/",
+  "bd": ["kick01rr1.wav"]
+}

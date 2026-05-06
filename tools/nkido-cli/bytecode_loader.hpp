@@ -63,6 +63,12 @@ struct Options {
     std::vector<std::string> soundfont_uris;      // SoundFont (SF2/SF3) URIs
     std::vector<std::string> sample_uris;         // Single-sample URIs ("name=uri" or just "uri")
 
+    // Built-in default sample kit (matches the web UI's DEFAULT_DRUM_KIT). When
+    // false, prepare_program_assets() appends the discoverable bpb_808_clean
+    // kit as a low-priority default bank so bare names like `bd`/`hh`/`sd`
+    // resolve without an explicit --bank flag. Set true to suppress.
+    bool no_default_bank = false;
+
     // Check if input needs compilation
     [[nodiscard]] bool needs_compilation() const {
         return input_type == InputType::SourceFile ||

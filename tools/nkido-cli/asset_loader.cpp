@@ -8,10 +8,21 @@
 
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+#if defined(__linux__)
+#include <unistd.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace nkido {
 
@@ -297,6 +308,115 @@ std::size_t register_required_samples(
     }
 
     return loaded;
+}
+
+namespace {
+
+constexpr const char* kDefaultKitRelative =
+    "web/static/samples/bpb_808_clean/strudel.json";
+
+// Convert a filesystem path to a file:// URI. Already-URI inputs (with a
+// "scheme://" prefix) pass through unchanged.
+std::string path_to_uri(const std::string& path) {
+    if (path.find("://") != std::string::npos) return path;
+    if (path.empty()) return path;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path absolute = fs::absolute(fs::path(path), ec);
+    if (ec) absolute = fs::path(path);
+    std::string s = absolute.generic_string();
+    if (!s.empty() && s.front() != '/') s.insert(s.begin(), '/');
+    return "file://" + s;
+}
+
+bool path_exists(const std::string& path) {
+    std::error_code ec;
+    return std::filesystem::exists(std::filesystem::path(path), ec) && !ec;
+}
+
+// Resolve the path of the running executable. Used for the install-relative
+// fallback (`<binary_dir>/../share/nkido/default_kit/strudel.json`).
+std::optional<std::filesystem::path> executable_dir() {
+#if defined(__linux__)
+    char buf[4096];
+    ssize_t n = ::readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return std::nullopt;
+    buf[n] = '\0';
+    return std::filesystem::path(buf).parent_path();
+#elif defined(__APPLE__)
+    char buf[4096];
+    std::uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) != 0) return std::nullopt;
+    std::error_code ec;
+    auto canon = std::filesystem::canonical(std::filesystem::path(buf), ec);
+    if (ec) canon = std::filesystem::path(buf);
+    return canon.parent_path();
+#elif defined(_WIN32)
+    char buf[4096];
+    DWORD n = GetModuleFileNameA(nullptr, buf, sizeof(buf));
+    if (n == 0) return std::nullopt;
+    return std::filesystem::path(std::string(buf, n)).parent_path();
+#else
+    return std::nullopt;
+#endif
+}
+
+}  // namespace
+
+std::optional<std::string> find_default_bank_uri(std::ostream& diag) {
+    namespace fs = std::filesystem;
+
+    // 1. Env var override. Empty = explicit silent opt-out.
+    if (const char* env = std::getenv("NKIDO_DEFAULT_KIT")) {
+        std::string value(env);
+        if (value.empty()) return std::nullopt;
+        if (value.find("://") == std::string::npos && !path_exists(value)) {
+            diag << "info: NKIDO_DEFAULT_KIT='" << value
+                 << "' does not exist on disk; will still attempt fetch\n";
+        }
+        return path_to_uri(value);
+    }
+
+    // 2. Compile-time macro (in-tree dev builds).
+#ifdef NKIDO_DEFAULT_KIT_PATH
+    {
+        std::string p(NKIDO_DEFAULT_KIT_PATH);
+        if (!p.empty() && path_exists(p)) {
+            return path_to_uri(p);
+        }
+    }
+#endif
+
+    // 3. Walk up from CWD looking for web/static/samples/bpb_808_clean/strudel.json.
+    {
+        std::error_code ec;
+        fs::path cwd = fs::current_path(ec);
+        if (!ec) {
+            for (fs::path dir = cwd; !dir.empty(); ) {
+                fs::path candidate = dir / kDefaultKitRelative;
+                if (fs::exists(candidate, ec) && !ec) {
+                    return path_to_uri(candidate.generic_string());
+                }
+                fs::path parent = dir.parent_path();
+                if (parent == dir) break;
+                dir = std::move(parent);
+            }
+        }
+    }
+
+    // 4. Install-relative fallback.
+    if (auto exe_dir = executable_dir()) {
+        fs::path candidate = *exe_dir / ".." / "share" / "nkido"
+                             / "default_kit" / "strudel.json";
+        std::error_code ec;
+        if (fs::exists(candidate, ec) && !ec) {
+            fs::path canon = fs::canonical(candidate, ec);
+            if (ec) canon = candidate;
+            return path_to_uri(canon.generic_string());
+        }
+    }
+
+    return std::nullopt;
 }
 
 }  // namespace nkido

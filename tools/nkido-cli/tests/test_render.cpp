@@ -31,6 +31,12 @@ int run_cli(const std::string& args) {
     return std::system(cmd.c_str());
 }
 
+int run_cli_env(const std::string& env_prefix, const std::string& args) {
+    std::string cmd = env_prefix + " " + std::string(nkido::test::CLI_BINARY) +
+                      " " + args;
+    return std::system(cmd.c_str());
+}
+
 struct Wav {
     std::uint32_t sample_rate = 0;
     std::uint16_t channels = 0;
@@ -206,4 +212,28 @@ TEST_CASE("render mode loads samples from a local bank manifest", "[render][samp
     auto left = channel(w, 0);
     CHECK(peak(left) > 0.1f);
     CHECK(rms(left) > 0.005f);
+}
+
+TEST_CASE("render mode resolves bare sample names via built-in default kit",
+          "[render][sample][default_kit]") {
+    // Parity check: `s"bd"` must produce non-silent audio with neither a
+    // `--bank` flag nor a `samples()` call in the source. The default kit
+    // is auto-loaded from NKIDO_DEFAULT_KIT (set here to a one-entry
+    // fixture so the test is self-contained).
+    const std::string wav = out_path("default_kit_render");
+    std::filesystem::remove(wav);
+
+    std::ostringstream args;
+    args << "render --seconds 2 --bpm 120"
+         << " --source 's\"bd ~ ~ ~\".out()'"
+         << " -o " << wav;
+
+    const std::string env_prefix = std::string("NKIDO_DEFAULT_KIT=") +
+                                   nkido::test::DEFAULT_KIT_FIXTURE;
+    REQUIRE(run_cli_env(env_prefix, args.str()) == 0);
+    REQUIRE(std::filesystem::exists(wav));
+
+    Wav w = read_wav(wav);
+    auto left = channel(w, 0);
+    CHECK(peak(left) > 0.05f);
 }

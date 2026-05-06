@@ -26,6 +26,22 @@ configure_file(
     @ONLY
 )
 
+# Minimal default-kit manifest used as a fake NKIDO_DEFAULT_KIT in tests so
+# they don't depend on the full 38-entry kit being discoverable.
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/default_kit_minimal.strudel.json.in
+    ${CMAKE_CURRENT_BINARY_DIR}/fixtures/default_kit_minimal.strudel.json
+    @ONLY
+)
+
+# User-supplied bank that maps `bd` to a different file than the default
+# kit. Used to verify user banks shadow the default kit.
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/user_override_bank.strudel.json.in
+    ${CMAKE_CURRENT_BINARY_DIR}/fixtures/user_override_bank.strudel.json
+    @ONLY
+)
+
 # Generate the test_paths header so the test binary knows where to find the
 # CLI executable, fixture sources, and the configured manifest.
 configure_file(

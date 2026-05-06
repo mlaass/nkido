@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <ostream>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -83,6 +84,51 @@ bool prepare_program_assets(cedar::VM& vm,
     for (const auto& req : cr.required_uris) {
         if (req.kind == akkado::UriKind::SampleBank) {
             if (!load_bank(req.uri)) return false;
+        }
+    }
+
+    // Built-in default kit (bpb_808_clean). Appended last so user-provided
+    // banks always shadow it for unqualified lookups, but bare names like
+    // `bd`, `hh`, `sd` still resolve when the user supplies nothing.
+    // Suppressed by --no-default-bank, or when NKIDO_DEFAULT_KIT="".
+    //
+    // Note on variant aliasing: this kit uses single-element variant arrays
+    // per name (`"bd": ["kick01rr1.wav"]`), so `s"bd:N"` for any N aliases
+    // back to `bd` via `lookup_variant`'s modulo. This matches the web's
+    // current DEFAULT_DRUM_KIT behavior. Users who want true variant
+    // indexing should supply their own bank manifest.
+    //
+    // Only emit "not available" diagnostics when the program actually
+    // references samples — silent otherwise to keep load output clean for
+    // pure-synth patches.
+    if (!opts.no_default_bank) {
+        const bool has_required = !cr.required_samples_extended.empty();
+        // Discovery diagnostics go to a sink for synth-only patches so the
+        // load output stays clean; only emit them when the program actually
+        // references samples.
+        std::ostringstream sink;
+        std::ostream& diag = has_required ? err : static_cast<std::ostream&>(sink);
+        if (auto uri = find_default_bank_uri(diag)) {
+            try {
+                auto m = fetch_bank_manifest(*uri);
+                std::string name = derive_bank_name(*uri);
+                if (has_required) {
+                    err << "Loaded default kit '" << name << "' from "
+                        << *uri << " (" << m.samples.size() << " samples)\n";
+                }
+                default_banks.push_back(m);
+                // Don't clobber a user-named bank with the same key.
+                named_banks.try_emplace(std::move(name), std::move(m));
+            } catch (const std::exception& e) {
+                if (has_required) {
+                    err << "info: default kit '" << *uri
+                        << "' could not be loaded: " << e.what()
+                        << " (bare sample names will not resolve)\n";
+                }
+            }
+        } else if (has_required) {
+            err << "info: no default sample kit available, bare sample"
+                   " names will not resolve (suppress with --no-default-bank)\n";
         }
     }
 

@@ -4,7 +4,9 @@
 #include "cedar/io/file_cache.hpp"
 #include "cedar/vm/vm.hpp"
 
+#include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -52,5 +54,17 @@ std::size_t register_required_samples(
     const std::vector<akkado::RequiredSample>& required,
     const std::vector<BankManifest>& default_banks,
     const std::unordered_map<std::string, BankManifest>& named_banks);
+
+/// Discover the built-in default sample-kit manifest URI. Tries (in order):
+///   1. `NKIDO_DEFAULT_KIT` env var (URI or bare path → file://).
+///      An empty value is treated as an explicit silent opt-out.
+///   2. `NKIDO_DEFAULT_KIT_PATH` compile-time macro (in-tree builds).
+///   3. Walk-up from the current working directory looking for
+///      `web/static/samples/bpb_808_clean/strudel.json`.
+///   4. Install-relative `<binary_dir>/../share/nkido/default_kit/strudel.json`.
+///
+/// Returns `std::nullopt` if nothing is found (after which the caller should
+/// emit a one-line info diagnostic and continue without a default kit).
+std::optional<std::string> find_default_bank_uri(std::ostream& diag);
 
 }  // namespace nkido

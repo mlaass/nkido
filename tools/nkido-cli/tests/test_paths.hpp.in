@@ -16,4 +16,10 @@ inline constexpr const char* GENERATED_FIXTURES_DIR =
 inline constexpr const char* LOCAL_BANK_MANIFEST =
     "@CMAKE_CURRENT_BINARY_DIR@/fixtures/local_bank.strudel.json";
 
+inline constexpr const char* DEFAULT_KIT_FIXTURE =
+    "@CMAKE_CURRENT_BINARY_DIR@/fixtures/default_kit_minimal.strudel.json";
+
+inline constexpr const char* USER_OVERRIDE_BANK_MANIFEST =
+    "@CMAKE_CURRENT_BINARY_DIR@/fixtures/user_override_bank.strudel.json";
+
 }  // namespace nkido::test

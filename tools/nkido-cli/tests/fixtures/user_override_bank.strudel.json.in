@@ -1,0 +1,5 @@
+{
+  "_name": "user_override",
+  "_base": "@NKIDO_REPO_ROOT@/web/static/samples/bpb_808_clean/",
+  "bd": ["kick02.wav"]
+}

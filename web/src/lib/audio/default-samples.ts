@@ -1,6 +1,12 @@
 /**
  * Default 808 drum kit sample definitions
- * These samples are auto-loaded when the audio engine initializes
+ * These samples are auto-loaded when the audio engine initializes.
+ *
+ * The canonical source is web/static/samples/bpb_808_clean/strudel.json,
+ * which is also consumed by nkido-cli (program_loader.cpp::find_default_bank_uri).
+ * This list MUST stay in sync — any name added/removed here must also be
+ * applied to the JSON, or the CLI and web will resolve different sample
+ * sets for the same patch.
  */
 
 const BASE = '/samples/bpb_808_clean';

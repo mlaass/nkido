@@ -27,6 +27,13 @@ target_include_directories(nkido-cli
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Built-in default sample kit. The compile-time path makes in-tree builds
+# resolve `s"bd"` etc. without setup; installed builds fall back to the
+# `share/nkido/default_kit/strudel.json` rule below.
+target_compile_definitions(nkido-cli PRIVATE
+    NKIDO_DEFAULT_KIT_PATH="${CMAKE_SOURCE_DIR}/web/static/samples/bpb_808_clean/strudel.json"
+)
+
 # Platform-specific: SDL2main needed on Windows
 if(WIN32)
     target_link_libraries(nkido-cli PRIVATE SDL2::SDL2main)
@@ -34,6 +41,13 @@ endif()
 
 install(TARGETS nkido-cli
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/web/static/samples/bpb_808_clean/
+    DESTINATION share/nkido/default_kit
+    FILES_MATCHING
+        PATTERN "*.wav"
+        PATTERN "strudel.json"
 )
 
 if(NKIDO_BUILD_TESTS)
