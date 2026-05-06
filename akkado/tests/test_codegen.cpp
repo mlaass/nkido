@@ -4335,6 +4335,113 @@ TEST_CASE("Codegen: Pipe expressions", "[codegen]") {
     }
 }
 
+// PRD docs/prd-records-and-field-access.md §3.1–§3.3: every canonical pattern
+// field plus its aliases must compile cleanly. Audit
+// docs/audits/prd-records-and-field-access_audit_2026-04-24-… cited each of
+// these as failing E136 before this change.
+TEST_CASE("Codegen: Extended pattern fields", "[codegen][records]") {
+    auto compile_field = [](const std::string& field) {
+        return akkado::compile(
+            "pat(\"c4 e4 g4\") |> osc(\"sin\", %." + field + ") |> out(%, %)"
+        );
+    };
+
+    SECTION("canonical extended fields compile") {
+        for (const char* f : {"note", "dur", "chance", "time", "phase", "sample_id"}) {
+            CAPTURE(f);
+            auto r = compile_field(f);
+            CHECK(r.success);
+        }
+    }
+
+    SECTION("freq aliases compile") {
+        for (const char* f : {"freq", "frequency", "pitch", "f", "p"}) {
+            CAPTURE(f);
+            auto r = compile_field(f);
+            CHECK(r.success);
+        }
+    }
+
+    SECTION("note aliases compile") {
+        for (const char* f : {"note", "midi", "n"}) {
+            CAPTURE(f);
+            auto r = compile_field(f);
+            CHECK(r.success);
+        }
+    }
+
+    SECTION("dur aliases compile") {
+        for (const char* f : {"dur", "duration"}) {
+            CAPTURE(f);
+            auto r = compile_field(f);
+            CHECK(r.success);
+        }
+    }
+
+    SECTION("time aliases compile") {
+        for (const char* f : {"time", "t0", "start"}) {
+            CAPTURE(f);
+            auto r = compile_field(f);
+            CHECK(r.success);
+        }
+    }
+
+    SECTION("phase aliases compile") {
+        for (const char* f : {"phase", "cycle", "co"}) {
+            CAPTURE(f);
+            auto r = compile_field(f);
+            CHECK(r.success);
+        }
+    }
+
+    SECTION("sample_id aliases compile") {
+        for (const char* f : {"sample_id", "sample", "s"}) {
+            CAPTURE(f);
+            auto r = compile_field(f);
+            CHECK(r.success);
+        }
+    }
+
+    SECTION("E136 lists the new canonical names") {
+        auto r = akkado::compile(R"(pat("c4") |> osc("sin", %.bogus))");
+        REQUIRE_FALSE(r.success);
+        bool saw_e136 = false;
+        for (const auto& d : r.diagnostics) {
+            if (d.code != "E136") continue;
+            saw_e136 = true;
+            // Truthful diagnostic must mention every canonical name now wired.
+            for (const char* canonical : {"note", "dur", "chance", "time",
+                                          "phase", "sample_id"}) {
+                CAPTURE(canonical);
+                CHECK(d.message.find(canonical) != std::string::npos);
+            }
+        }
+        CHECK(saw_e136);
+    }
+
+    SECTION("SEQPAT_FIELD and SEQPAT_PHASE opcodes are emitted") {
+        auto r = akkado::compile(R"(pat("c4") |> osc("sin", %.freq))");
+        REQUIRE(r.success);
+        auto insts = get_instructions(r);
+        // SEQPAT_FIELD appears five times (DUR, CHANCE, TIME, NOTE, SAMPLE_ID).
+        CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_FIELD) == 5);
+        CHECK(count_instructions(insts, cedar::Opcode::SEQPAT_PHASE) == 1);
+    }
+
+    SECTION("`as` binding propagates extended fields") {
+        auto r = akkado::compile(
+            "pat(\"c4 e4 g4\") as e |> "
+            "osc(\"sin\", e.freq) * (0.1 + e.phase * 0.9) |> out(%, %)"
+        );
+        CHECK(r.success);
+    }
+
+    SECTION("sample pattern with %.sample_id") {
+        auto r = akkado::compile("pat(\"bd sd bd sd\") |> %.sample_id |> out(%, %)");
+        CHECK(r.success);
+    }
+}
+
 TEST_CASE("Codegen: >> and @ aliases", "[codegen]") {
     SECTION(">> and @ produce same bytecode as |> and %") {
         auto r1 = akkado::compile("osc(\"sin\", 440) |> out(%, %)");

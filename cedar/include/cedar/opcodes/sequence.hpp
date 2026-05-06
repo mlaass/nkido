@@ -45,6 +45,11 @@ struct Event {
     float velocity;          // 0.0-1.0, 1.0 = full velocity. Sample patterns
                              // pin this to 1.0 and use velocities[] per voice;
                              // pitched/value events use this scalar field.
+    float midi_note;         // MIDI note number (0..127) for the primary voice;
+                             // 0 for sample-only events without pitch. Carries
+                             // microtonal precision so %.note round-trips the
+                             // user-written note rather than reconstructing
+                             // from frequency.
     EventType type;
     std::uint8_t num_values; // For DATA type (max 4)
     std::uint16_t type_id;   // Type identifier for routing (0 = no type, 1+ = sample types)
@@ -64,6 +69,7 @@ struct Event {
     float prop_vals[MAX_PROPS_PER_EVENT];
 
     Event() : time(0.0f), duration(1.0f), chance(1.0f), velocity(1.0f),
+              midi_note(0.0f),
               type(EventType::DATA), num_values(0), type_id(0),
               source_offset(0), source_length(0) {
         values[0] = 0.0f;
@@ -115,6 +121,8 @@ struct OutputEvents {
         float time;
         float duration;
         float velocity;
+        float chance;                 // Mirrors Event::chance for %.chance access.
+        float midi_note;              // Mirrors Event::midi_note for %.note access.
         float values[MAX_VALUES_PER_EVENT];
         // Per-voice velocity, parallel to values[]. Mirrors Event::velocities.
         float velocities[MAX_VALUES_PER_EVENT];
@@ -132,12 +140,15 @@ struct OutputEvents {
 
     void add(float time, float duration, const float* vals, std::uint8_t count,
              float velocity = 1.0f, std::uint16_t type_id = 0,
-             std::uint16_t src_off = 0, std::uint16_t src_len = 0) {
+             std::uint16_t src_off = 0, std::uint16_t src_len = 0,
+             float chance = 1.0f, float midi_note = 0.0f) {
         if (num_events < capacity) {
             auto& e = events[num_events++];
             e.time = time;
             e.duration = duration;
             e.velocity = velocity;
+            e.chance = chance;
+            e.midi_note = midi_note;
             e.num_values = std::min(count, static_cast<std::uint8_t>(MAX_VALUES_PER_EVENT));
             e.type_id = type_id;
             e.source_offset = src_off;
@@ -298,7 +309,8 @@ inline void process_event(SequenceState& state, const Event& e, std::uint64_t se
         // Add concrete event
         out.add(time_offset, e.duration * time_scale,
                 e.values, e.num_values, e.velocity, e.type_id,
-                e.source_offset, e.source_length);
+                e.source_offset, e.source_length,
+                e.chance, e.midi_note);
         // Copy custom property values onto the just-added OutputEvent
         // (PRD §11.1 / §11.2 — surfaced via SEQPAT_PROP).
         // Also copy per-voice velocities so op_sample_play can apply them.

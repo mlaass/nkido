@@ -1,9 +1,9 @@
-> **Status: PARTIAL** — §1–2, §4–6 done; §3 extended pattern fields pending. See `docs/audits/prd-records-and-field-access_audit_2026-05-05.md`.
+> **Status: DONE** — All §3 fields shipped (2026-05-07) except `voice` (deferred under the polyphony pivot recorded in the audit) and `sample` as a String (Signal buffers are numeric only; `sample`/`s` alias to the numeric `sample_id`). Last audit: `docs/audits/prd-records-and-field-access_audit_2026-05-05.md`.
 
 # PRD: Records and Field Access in Akkado
 
 **Version:** 1.0
-**Status:** Partial (§1–2, §4–6 done; §3 extended fields pending)
+**Status:** Done (§3 extended fields shipped 2026-05-07; `voice` deferred — see audit)
 **Author:** Claude
 **Date:** 2026-01-28
 

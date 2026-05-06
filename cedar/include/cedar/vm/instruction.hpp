@@ -164,6 +164,8 @@ enum class Opcode : std::uint8_t {
     SEQPAT_GATE = 155,       // Gate signal (1 during event, 0 otherwise): out=gate, in[0]=voice_idx
     SEQPAT_TRANSPORT = 156,  // Trigger-driven clock: out=beat_pos, in[0]=trig, in[1]=step, in[2]=reset, cycle_length packed in in[3]+in[4]
     SEQPAT_PROP = 157,       // Custom-property signal: out=value, rate=slot (0..3), in[0]=voice_idx, in[1]=clock_override
+    SEQPAT_FIELD = 158,      // Built-in event field: out=value, rate=field (0=dur, 1=chance, 2=time, 3=note, 4=sample_id), in[0]=voice_idx, in[1]=clock_override
+    SEQPAT_PHASE = 159,      // Event-scoped 0..1 phasor (linear ramp across active event's duration): out=phase, in[0]=voice_idx, in[1]=clock_override
 
     // Array Operations (160-169)
     // Arrays reuse existing BufferPool buffers - elements stored at indices 0..length-1

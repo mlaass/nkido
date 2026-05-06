@@ -446,10 +446,16 @@ private:
             // Convert MIDI note + micro_offset to frequency using tuning context
             float freq = tuning_.resolve_hz(atom_data.midi_note, atom_data.micro_offset);
             e.values[0] = freq;
+            // Records-and-fields PRD §3.1: %.note returns the MIDI note the
+            // user wrote (with microtonal offset). 0 for non-pitch events.
+            e.midi_note = static_cast<float>(atom_data.midi_note) +
+                          atom_data.micro_offset;
         } else if (atom_data.kind == Node::MiniAtomKind::Chord) {
             // Chord symbol: expand intervals to frequencies
             // Root MIDI is at octave 4 by default
             int root_midi = static_cast<int>(atom_data.chord_root_midi);
+            // %.note on a chord returns the root MIDI (primary voice).
+            e.midi_note = static_cast<float>(root_midi);
             std::size_t num_notes = std::min(atom_data.chord_intervals.size(),
                                               static_cast<std::size_t>(8));  // Max 8 values
             e.num_values = static_cast<std::uint8_t>(num_notes);
@@ -1431,18 +1437,33 @@ TypedValue CodeGenerator::handle_mini_literal(NodeIndex node, const Node& n) {
 }
 
 
-// Emit single-voice SEQPAT_STEP/GATE/TYPE (voice 0) and build PatternPayload
+// Emit single-voice SEQPAT_STEP/GATE/TYPE/FIELD/PHASE (voice 0) and build
+// PatternPayload. The five SEQPAT_FIELD selectors (DUR, CHANCE, TIME, NOTE,
+// SAMPLE_ID) plus SEQPAT_PHASE expose the extended event fields enumerated by
+// the records-and-field-access PRD §3.1–§3.3.
 std::shared_ptr<PatternPayload> CodeGenerator::emit_per_voice_seqpat(NodeIndex node, std::uint32_t state_id,
                                            std::uint8_t max_voices,
                                            std::uint16_t value_buf, std::uint16_t velocity_buf,
                                            std::uint16_t trigger_buf,
                                            bool is_sample_pattern, SourceLocation loc,
                                            std::uint16_t clock_override) {
-    std::uint16_t gate_buf = buffers_.allocate();
-    std::uint16_t type_buf = buffers_.allocate();
+    std::uint16_t gate_buf      = buffers_.allocate();
+    std::uint16_t type_buf      = buffers_.allocate();
+    std::uint16_t note_buf      = buffers_.allocate();
+    std::uint16_t dur_buf       = buffers_.allocate();
+    std::uint16_t chance_buf    = buffers_.allocate();
+    std::uint16_t time_buf      = buffers_.allocate();
+    std::uint16_t phase_buf     = buffers_.allocate();
+    std::uint16_t sample_id_buf = buffers_.allocate();
 
     if (gate_buf == BufferAllocator::BUFFER_UNUSED ||
-        type_buf == BufferAllocator::BUFFER_UNUSED) {
+        type_buf == BufferAllocator::BUFFER_UNUSED ||
+        note_buf == BufferAllocator::BUFFER_UNUSED ||
+        dur_buf == BufferAllocator::BUFFER_UNUSED ||
+        chance_buf == BufferAllocator::BUFFER_UNUSED ||
+        time_buf == BufferAllocator::BUFFER_UNUSED ||
+        phase_buf == BufferAllocator::BUFFER_UNUSED ||
+        sample_id_buf == BufferAllocator::BUFFER_UNUSED) {
         error("E101", "Buffer pool exhausted", loc);
         return nullptr;
     }
@@ -1480,13 +1501,51 @@ std::shared_ptr<PatternPayload> CodeGenerator::emit_per_voice_seqpat(NodeIndex n
     type_inst.state_id = state_id;
     emit(type_inst);
 
+    // SEQPAT_FIELD: rate selects the Event field. Selectors must match
+    // op_seqpat_field in cedar/include/cedar/opcodes/sequencing.hpp.
+    auto emit_field = [&](std::uint16_t out_buf, std::uint8_t selector) {
+        cedar::Instruction inst{};
+        inst.opcode = cedar::Opcode::SEQPAT_FIELD;
+        inst.out_buffer = out_buf;
+        inst.rate = selector;
+        inst.inputs[0] = 0;  // voice 0
+        inst.inputs[1] = clock_override;
+        inst.inputs[2] = 0xFFFF;
+        inst.inputs[3] = 0xFFFF;
+        inst.inputs[4] = 0xFFFF;
+        inst.state_id = state_id;
+        emit(inst);
+    };
+    emit_field(dur_buf,       0);  // duration
+    emit_field(chance_buf,    1);  // chance
+    emit_field(time_buf,      2);  // time
+    emit_field(note_buf,      3);  // midi_note
+    emit_field(sample_id_buf, 4);  // type_id
+
+    cedar::Instruction phase_inst{};
+    phase_inst.opcode = cedar::Opcode::SEQPAT_PHASE;
+    phase_inst.out_buffer = phase_buf;
+    phase_inst.inputs[0] = 0;  // voice 0
+    phase_inst.inputs[1] = clock_override;
+    phase_inst.inputs[2] = 0xFFFF;
+    phase_inst.inputs[3] = 0xFFFF;
+    phase_inst.inputs[4] = 0xFFFF;
+    phase_inst.state_id = state_id;
+    emit(phase_inst);
+
     // Build PatternPayload with monophonic fields (voice 0)
     auto payload = std::make_shared<PatternPayload>();
-    payload->fields[PatternPayload::FREQ] = value_buf;
-    payload->fields[PatternPayload::VEL] = velocity_buf;
-    payload->fields[PatternPayload::TRIG] = trigger_buf;
-    payload->fields[PatternPayload::GATE] = gate_buf;
-    payload->fields[PatternPayload::TYPE] = type_buf;
+    payload->fields[PatternPayload::FREQ]      = value_buf;
+    payload->fields[PatternPayload::VEL]       = velocity_buf;
+    payload->fields[PatternPayload::TRIG]      = trigger_buf;
+    payload->fields[PatternPayload::GATE]      = gate_buf;
+    payload->fields[PatternPayload::TYPE]      = type_buf;
+    payload->fields[PatternPayload::NOTE]      = note_buf;
+    payload->fields[PatternPayload::DUR]       = dur_buf;
+    payload->fields[PatternPayload::CHANCE]    = chance_buf;
+    payload->fields[PatternPayload::TIME]      = time_buf;
+    payload->fields[PatternPayload::PHASE]     = phase_buf;
+    payload->fields[PatternPayload::SAMPLE_ID] = sample_id_buf;
     payload->is_sample_pattern = is_sample_pattern;
     payload->max_voices = max_voices;
     return payload;

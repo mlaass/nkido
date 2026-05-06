@@ -749,4 +749,165 @@ inline void op_seqpat_prop(ExecutionContext& ctx, const Instruction& inst) {
     }
 }
 
+// ============================================================================
+// SEQPAT_FIELD - Per-event built-in scalar field signal
+// ============================================================================
+// out_buffer: float buffer receiving the active event's field value
+// rate: field selector
+//   0 = duration (beats)
+//   1 = chance   (0..1)
+//   2 = time     (event start within cycle, beats)
+//   3 = midi_note (0..127, may be fractional for microtonal)
+//   4 = type_id  (sample id; 0 for pitch events)
+// inputs[0]: voice index for polyphonic patterns (0..7, default 0 if 0xFFFF)
+// inputs[1]: external clock buffer (0xFFFF = use internal)
+// state_id: must match the SEQPAT_QUERY that populated the SequenceState
+//
+// Active-event scan logic mirrors op_seqpat_type / op_seqpat_prop. Voices
+// without a value for the active event read 0.0 (consistent with SEQPAT_TYPE).
+[[gnu::always_inline]]
+inline void op_seqpat_field(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    auto& state = ctx.states->get_or_create<SequenceState>(inst.state_id);
+    std::uint8_t field = static_cast<std::uint8_t>(inst.rate);
+
+    std::uint8_t voice_index = (inst.inputs[0] != BUFFER_UNUSED)
+        ? static_cast<std::uint8_t>(inst.inputs[0]) : 0;
+
+    if (state.output.num_events == 0) {
+        std::fill_n(out, BLOCK_SIZE, 0.0f);
+        return;
+    }
+
+    bool external_clock = (inst.inputs[1] != BUFFER_UNUSED);
+    const float* ext_beat_pos = external_clock ? ctx.buffers->get(inst.inputs[1]) : nullptr;
+    const float spb = external_clock ? 1.0f : ctx.samples_per_beat();
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        float beat_pos;
+        if (external_clock) {
+            beat_pos = std::fmod(ext_beat_pos[i], state.cycle_length);
+            if (beat_pos < 0.0f) beat_pos += state.cycle_length;
+        } else {
+            beat_pos = std::fmod(
+                static_cast<float>(ctx.global_sample_counter + i) / spb,
+                state.cycle_length
+            );
+        }
+
+        std::uint32_t event_index = 0;
+        for (std::uint32_t e = 0; e < state.output.num_events; ++e) {
+            if (state.output.events[e].time <= beat_pos) {
+                event_index = e;
+            } else {
+                break;
+            }
+        }
+        if (state.output.num_events > 0 && beat_pos < state.output.events[0].time) {
+            event_index = state.output.num_events - 1;
+        }
+
+        const auto& evt = state.output.events[event_index];
+
+        if (voice_index >= evt.num_values) {
+            out[i] = 0.0f;
+            continue;
+        }
+
+        switch (field) {
+            case 0: out[i] = evt.duration; break;
+            case 1: out[i] = evt.chance; break;
+            case 2: out[i] = evt.time; break;
+            case 3: out[i] = evt.midi_note; break;
+            case 4: out[i] = static_cast<float>(evt.type_id); break;
+            default: out[i] = 0.0f; break;
+        }
+    }
+}
+
+// ============================================================================
+// SEQPAT_PHASE - Event-scoped 0..1 phasor (linear ramp)
+// ============================================================================
+// out_buffer: phase output, 0.0 at event start, ramping to 1.0 at event end
+// inputs[0]: voice index (default 0 if 0xFFFF)
+// inputs[1]: external clock buffer (0xFFFF = use internal)
+// state_id: must match the SEQPAT_QUERY that populated the SequenceState
+//
+// phase = clamp((beat_pos - evt.time) / evt.duration, 0, 1). Wrap-around
+// handled the same way as SEQPAT_GATE: events whose end overflows
+// state.cycle_length re-anchor on the wrapped half.
+[[gnu::always_inline]]
+inline void op_seqpat_phase(ExecutionContext& ctx, const Instruction& inst) {
+    float* out = ctx.buffers->get(inst.out_buffer);
+    auto& state = ctx.states->get_or_create<SequenceState>(inst.state_id);
+
+    std::uint8_t voice_index = (inst.inputs[0] != BUFFER_UNUSED)
+        ? static_cast<std::uint8_t>(inst.inputs[0]) : 0;
+
+    if (state.output.num_events == 0) {
+        std::fill_n(out, BLOCK_SIZE, 0.0f);
+        return;
+    }
+
+    bool external_clock = (inst.inputs[1] != BUFFER_UNUSED);
+    const float* ext_beat_pos = external_clock ? ctx.buffers->get(inst.inputs[1]) : nullptr;
+    const float spb = external_clock ? 1.0f : ctx.samples_per_beat();
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        float beat_pos;
+        if (external_clock) {
+            beat_pos = std::fmod(ext_beat_pos[i], state.cycle_length);
+            if (beat_pos < 0.0f) beat_pos += state.cycle_length;
+        } else {
+            beat_pos = std::fmod(
+                static_cast<float>(ctx.global_sample_counter + i) / spb,
+                state.cycle_length
+            );
+        }
+
+        // Find the active event that contains beat_pos in [time, time+duration).
+        // Wrap-aware: if no normal event matches, fall back to the most-recent
+        // event that started before beat_pos (matches SEQPAT_TYPE/PROP fallback).
+        float phase_val = 0.0f;
+        bool found = false;
+
+        for (std::uint32_t e = 0; e < state.output.num_events; ++e) {
+            const auto& evt = state.output.events[e];
+            if (voice_index >= evt.num_values) continue;
+            if (evt.duration <= 0.0f) continue;
+
+            float event_start = evt.time;
+            float event_end = evt.time + evt.duration;
+
+            if (event_end > state.cycle_length) {
+                // Event wraps around cycle boundary
+                if (beat_pos >= event_start) {
+                    phase_val = (beat_pos - event_start) / evt.duration;
+                    found = true;
+                    break;
+                }
+                if (beat_pos < (event_end - state.cycle_length)) {
+                    phase_val = (beat_pos + state.cycle_length - event_start) / evt.duration;
+                    found = true;
+                    break;
+                }
+            } else {
+                if (beat_pos >= event_start && beat_pos < event_end) {
+                    phase_val = (beat_pos - event_start) / evt.duration;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found) {
+            phase_val = 0.0f;
+        } else {
+            if (phase_val < 0.0f) phase_val = 0.0f;
+            else if (phase_val > 1.0f) phase_val = 1.0f;
+        }
+        out[i] = phase_val;
+    }
+}
+
 }  // namespace cedar

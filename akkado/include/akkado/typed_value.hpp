@@ -39,8 +39,13 @@ struct TypedValue;
 
 /// Pattern payload: field buffers + state metadata
 struct PatternPayload {
-    /// Fixed-position field buffers: [freq, vel, trig, gate, type]
-    std::array<std::uint16_t, 5> fields = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+    /// Fixed-position field buffers indexed by the FREQ..SAMPLE_ID constants
+    /// declared at the bottom of this struct. 0xFFFF = field has no buffer
+    /// allocated (e.g. `voice` slot reserved but not surfaced today).
+    std::array<std::uint16_t, 11> fields = {
+        0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
+        0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF
+    };
 
     /// Phase 2.1 PRD §11: custom property buffers populated by SEQPAT_PROP.
     /// Keyed by source name (e.g. "cutoff"); value is the buffer index.
@@ -74,11 +79,17 @@ struct PatternPayload {
     std::vector<RequiredSample> sample_refs;
 
     /// Field index constants
-    static constexpr std::size_t FREQ = 0;
-    static constexpr std::size_t VEL  = 1;
-    static constexpr std::size_t TRIG = 2;
-    static constexpr std::size_t GATE = 3;
-    static constexpr std::size_t TYPE = 4;
+    static constexpr std::size_t FREQ      = 0;
+    static constexpr std::size_t VEL       = 1;
+    static constexpr std::size_t TRIG      = 2;
+    static constexpr std::size_t GATE      = 3;
+    static constexpr std::size_t TYPE      = 4;
+    static constexpr std::size_t NOTE      = 5;
+    static constexpr std::size_t DUR       = 6;
+    static constexpr std::size_t CHANCE    = 7;
+    static constexpr std::size_t TIME      = 8;
+    static constexpr std::size_t PHASE     = 9;
+    static constexpr std::size_t SAMPLE_ID = 10;
 };
 
 /// Build a human-readable list of available pattern field names: the five

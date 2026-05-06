@@ -27,17 +27,39 @@ std::vector<std::uint16_t> buffers_of(const TypedValue& tv) {
     }
 }
 
+namespace {
+// Single source of truth for pattern field name → PatternPayload index.
+// First entry of each row is the canonical name (used by available_fields()
+// in E136 diagnostics); remaining entries are aliases.
+struct FieldRow {
+    std::size_t index;
+    std::initializer_list<const char*> names;
+};
+
+inline const auto& pattern_field_table() {
+    static const std::array<FieldRow, 11> kTable = {{
+        {PatternPayload::FREQ,      {"freq", "frequency", "pitch", "f", "p"}},
+        {PatternPayload::VEL,       {"vel", "velocity", "v"}},
+        {PatternPayload::TRIG,      {"trig", "trigger", "t"}},
+        {PatternPayload::GATE,      {"gate", "g"}},
+        {PatternPayload::TYPE,      {"type"}},
+        {PatternPayload::NOTE,      {"note", "midi", "n"}},
+        {PatternPayload::DUR,       {"dur", "duration"}},
+        {PatternPayload::CHANCE,    {"chance"}},
+        {PatternPayload::TIME,      {"time", "t0", "start"}},
+        {PatternPayload::PHASE,     {"phase", "cycle", "co"}},
+        {PatternPayload::SAMPLE_ID, {"sample_id", "sample", "s"}},
+    }};
+    return kTable;
+}
+} // namespace
+
 int pattern_field_index(const std::string& name) {
-    // freq / pitch / f → 0
-    if (name == "freq" || name == "pitch" || name == "f") return PatternPayload::FREQ;
-    // vel / velocity / v → 1
-    if (name == "vel" || name == "velocity" || name == "v") return PatternPayload::VEL;
-    // trig / trigger / t → 2
-    if (name == "trig" || name == "trigger" || name == "t") return PatternPayload::TRIG;
-    // gate / g → 3
-    if (name == "gate" || name == "g") return PatternPayload::GATE;
-    // type → 4
-    if (name == "type") return PatternPayload::TYPE;
+    for (const auto& row : pattern_field_table()) {
+        for (const char* alias : row.names) {
+            if (name == alias) return static_cast<int>(row.index);
+        }
+    }
     return -1;
 }
 
@@ -62,10 +84,25 @@ TypedValue pattern_field(const TypedValue& tv, const std::string& name) {
 }
 
 std::string available_fields(const PatternPayload& payload) {
-    std::string s = "freq, vel, trig, gate, type";
-    for (const auto& [key, _] : payload.custom_fields) {
-        s += ", ";
+    std::string s;
+    bool first = true;
+    for (const auto& row : pattern_field_table()) {
+        // Skip rows with no buffer wired up (e.g. reserved slots that the
+        // codegen hasn't allocated). Today every row except potential future
+        // additions populates a buffer, but this keeps the message truthful.
+        if (row.index >= payload.fields.size() ||
+            payload.fields[row.index] == 0xFFFF) {
+            continue;
+        }
+        if (!first) s += ", ";
+        s += *row.names.begin();  // canonical name
+        first = false;
+    }
+    for (const auto& [key, buf] : payload.custom_fields) {
+        if (buf == 0xFFFF) continue;
+        if (!first) s += ", ";
         s += key;
+        first = false;
     }
     return s;
 }
