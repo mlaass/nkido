@@ -2355,6 +2355,57 @@ TEST_CASE("Sample velocity: SAMPLE_PLAY output is post-multiplied by velocity",
     CHECK(found_velocity_mul);
 }
 
+TEST_CASE("Sample property: custom slots propagate through polyrhythm",
+          "[codegen][patterns][record_suffix][sample][polyrhythm][prop_vals]") {
+    // Phase 3 fix: previously flatten_to_timelines() dropped unrecognized
+    // record-suffix keys (cutoff, bend, aftertouch, ...) on the polyrhythm
+    // path. compile_polyrhythm_events then had no way to surface them on the
+    // merged event. Now BranchEvent carries prop_vals + a populated bitmap,
+    // and the merge does a bitmap-aware copy that propagates each slot from
+    // the first branch that set it.
+    auto result = akkado::compile(R"(s"[hh,bd{cutoff:0.3}]")");
+    REQUIRE(result.success);
+    REQUIRE(!result.state_inits.empty());
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(!events.empty());
+    const auto& evt = events[0];
+    REQUIRE(evt.num_values == 2);
+    // The cutoff slot is allocated lazily by allocate_property_slot. Find any
+    // prop slot that carries 0.3 — there's only one custom property in this
+    // pattern so a single non-zero entry is unambiguous.
+    bool found_cutoff = false;
+    for (std::size_t s = 0; s < cedar::MAX_PROPS_PER_EVENT; ++s) {
+        if (std::fabs(evt.prop_vals[s] - 0.3f) < 1e-4f) found_cutoff = true;
+    }
+    CHECK(found_cutoff);
+}
+
+TEST_CASE("Sample property: explicit {key:0} survives merge",
+          "[codegen][patterns][record_suffix][sample][polyrhythm][prop_vals]") {
+    // Bitmap-aware merge: a branch can deliberately set a prop slot to 0.0
+    // and that explicit zero must reach the merged event (a "first non-zero"
+    // policy would silently misroute the case where one branch wants to
+    // disable a parameter the other branch doesn't touch).
+    auto result = akkado::compile(R"(s"[hh{cutoff:0},bd{cutoff:0.5}]")");
+    REQUIRE(result.success);
+    REQUIRE(!result.state_inits.empty());
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(!events.empty());
+    const auto& evt = events[0];
+    REQUIRE(evt.num_values == 2);
+    // Bitmap-aware merge takes the first branch's slot, so we expect 0.0
+    // on the (single) cutoff slot — not bd's 0.5.
+    bool found_explicit_zero = false;
+    for (std::size_t s = 0; s < cedar::MAX_PROPS_PER_EVENT; ++s) {
+        // Slot is "populated by the first branch with cutoff:0" if its value
+        // equals 0.0f exactly AND another slot or the same slot was set by
+        // bd. We just check no slot ended up at bd's 0.5 — if first-wins
+        // is correctly applied, the merged event has no 0.5 in any slot.
+        if (std::fabs(evt.prop_vals[s] - 0.5f) < 1e-4f) found_explicit_zero = true;
+    }
+    CHECK_FALSE(found_explicit_zero);  // 0.5 should NOT win — hh's explicit 0 came first
+}
+
 TEST_CASE("Sample velocity: per-voice velocity in polyrhythm — [cp,bd{vel:0.05}]",
           "[codegen][patterns][record_suffix][sample][velocity][polyrhythm]") {
     // The user's reported bug: in `s"[cp, bd{vel:0.05}]"`, cp was attenuated

@@ -408,30 +408,24 @@ private:
         e.time = time_offset;
         e.duration = time_span;
         e.chance = 1.0f;
-        e.velocity = atom_data.velocity;
-        e.velocities[0] = atom_data.velocity;  // per-voice (used by sample path)
         e.num_values = 1;
         // Use pattern-relative offset for UI highlighting
         e.source_offset = static_cast<std::uint16_t>(n.location.offset - pattern_base_offset_);
         e.source_length = static_cast<std::uint16_t>(n.location.length);
 
-        // Phase 2 PRD §5.5: apply recognized short-form record-suffix keys
-        // (vel, dur) to fixed cedar::Event fields. Phase 2.1 PRD §11.1:
-        // unrecognized keys (e.g. cutoff, bend, aftertouch) get a slot
-        // assigned and their value lands on event.prop_vals[slot] for
-        // SEQPAT_PROP to surface at runtime via PatternPayload.custom_fields.
-        for (const auto& [key, value] : atom_data.properties) {
-            if (key == "vel") {
-                float v = std::clamp(value, 0.0f, 1.0f);
-                e.velocity = v;
-                e.velocities[0] = v;
-            } else if (key == "dur") {
-                if (value > 0.0f) e.duration = value * time_span;
-            } else {
-                int slot = allocate_property_slot(key);
-                if (slot >= 0) {
-                    e.prop_vals[slot] = value;
-                }
+        // Phase 2 PRD §5.5 / Phase 2.1 §11.1: apply record-suffix keys.
+        // apply_atom_properties is the single extraction path used by both
+        // this scalar/pitched event builder and flatten_to_timelines (the
+        // polyrhythm flatten path). Recognized short-form keys (vel/dur)
+        // map to fixed cedar::Event fields; unrecognized keys (cutoff,
+        // bend, aftertouch, …) map to prop_vals slots.
+        AtomPropertiesOut props = apply_atom_properties(atom_data);
+        e.velocity = props.velocity;
+        e.velocities[0] = props.velocity;
+        if (props.duration_mul != 1.0f) e.duration = props.duration_mul * time_span;
+        for (std::size_t s = 0; s < cedar::MAX_PROPS_PER_EVENT; ++s) {
+            if (props.prop_vals_used & (1u << s)) {
+                e.prop_vals[s] = props.prop_vals[s];
             }
         }
 
@@ -653,8 +647,53 @@ private:
         std::string sample_name;     // for sample_mappings_ deferred resolution
         std::string sample_bank;
         std::uint8_t sample_variant;
+        // Custom property slots carried through the polyrhythm flatten/merge
+        // path (see apply_atom_properties / compile_polyrhythm_events). Width
+        // matches cedar::Event::prop_vals so per-voice {cutoff:V, bend:V, ...}
+        // suffixes propagate to the merged event.
+        std::array<float, cedar::MAX_PROPS_PER_EVENT> prop_vals{};
+        // Bitmap of populated slots — bit S set means prop_vals[S] was
+        // explicitly assigned by an atom in this branch (bitmap-aware merge
+        // preserves explicit `{cutoff:0}` against unset zeros, see PRD §10 E3).
+        std::uint32_t prop_vals_used = 0;
     };
+    static_assert(cedar::MAX_PROPS_PER_EVENT <= 32,
+                  "BranchEvent::prop_vals_used bitmap is uint32_t; widen if "
+                  "MAX_PROPS_PER_EVENT exceeds 32.");
     using BranchTimeline = std::vector<BranchEvent>;
+
+    // Output of apply_atom_properties() — single source of truth for
+    // {vel, dur, cutoff, bend, ...} extraction from a MiniAtomData.
+    struct AtomPropertiesOut {
+        float velocity     = 1.0f;
+        float duration_mul = 1.0f;  // multiplied by t_span by caller
+        std::array<float, cedar::MAX_PROPS_PER_EVENT> prop_vals{};
+        std::uint32_t prop_vals_used = 0;
+    };
+
+    // Single source of truth for `{vel, dur, cutoff, bend, ...}` on atoms.
+    // `compile_atom_event` writes the result to a cedar::Event directly;
+    // `flatten_to_timelines` writes it to a BranchEvent and the polyrhythm
+    // merge propagates prop_vals onto the merged Event. Slots that overflow
+    // cedar::MAX_PROPS_PER_EVENT silently drop (matches today's behavior).
+    AtomPropertiesOut apply_atom_properties(const Node::MiniAtomData& ad) {
+        AtomPropertiesOut out;
+        out.velocity = ad.velocity;
+        for (const auto& [key, value] : ad.properties) {
+            if (key == "vel") {
+                out.velocity = std::clamp(value, 0.0f, 1.0f);
+            } else if (key == "dur") {
+                if (value > 0.0f) out.duration_mul = value;
+            } else {
+                int slot = allocate_property_slot(key);
+                if (slot >= 0 && slot < static_cast<int>(cedar::MAX_PROPS_PER_EVENT)) {
+                    out.prop_vals[static_cast<std::size_t>(slot)] = value;
+                    out.prop_vals_used |= (1u << slot);
+                }
+            }
+        }
+        return out;
+    }
 
     // True if the subtree contains only sample/rest atoms inside group /
     // polyrhythm / polymeter / euclidean structures (with optional Repeat /
@@ -797,22 +836,17 @@ private:
                 BranchEvent be{};
                 be.time = t_offset;
                 be.duration = t_span;
-                be.velocity = ad.velocity;
                 be.source_offset = static_cast<std::uint16_t>(
                     n.location.offset - pattern_base_offset_);
                 be.source_length = static_cast<std::uint16_t>(n.location.length);
-                // Mirror compile_atom_event(): record-suffix `{vel:V, dur:D}`
-                // must apply on the polyrhythm flatten path too, otherwise
-                // `[hh, bd{vel:0.25}]` silently drops the velocity. Custom
-                // property slots (cutoff, bend, …) are still dropped here —
-                // out of scope for the velocity fix.
-                for (const auto& [key, value] : ad.properties) {
-                    if (key == "vel") {
-                        be.velocity = std::clamp(value, 0.0f, 1.0f);
-                    } else if (key == "dur") {
-                        if (value > 0.0f) be.duration = value * t_span;
-                    }
-                }
+                // Single property-extraction path — see apply_atom_properties.
+                // Custom slots (cutoff, bend, ...) ride on be.prop_vals so the
+                // polyrhythm merge can propagate them onto the merged event.
+                AtomPropertiesOut props = apply_atom_properties(ad);
+                be.velocity = props.velocity;
+                if (props.duration_mul != 1.0f) be.duration = props.duration_mul * t_span;
+                be.prop_vals = props.prop_vals;
+                be.prop_vals_used = props.prop_vals_used;
                 if (ad.kind == Node::MiniAtomKind::Rest) {
                     be.is_rest = true;
                 } else if (ad.kind == Node::MiniAtomKind::Sample) {
@@ -913,6 +947,11 @@ private:
 
             bool primary_set = false;
             float min_dur = std::numeric_limits<float>::max();
+            // Track which prop slots have been populated on the merged event
+            // so the bitmap-aware merge takes the *first* branch with each
+            // slot set rather than the last (preserves explicit `{cutoff:0}`
+            // — see PRD §10 E3).
+            std::uint32_t merged_props_used = 0;
             for (std::size_t i = 0; i < branch_count; ++i) {
                 const BranchEvent* hit = nullptr;
                 for (const auto& ev : branches[i]) {
@@ -935,6 +974,16 @@ private:
                     e.source_length = hit->source_length;
                     primary_set = true;
                 }
+                // Bitmap-aware prop_vals merge: for each slot set in this
+                // branch but not yet on the merged event, copy the value.
+                std::uint32_t new_bits = hit->prop_vals_used & ~merged_props_used;
+                while (new_bits) {
+                    int s = __builtin_ctz(new_bits);
+                    e.prop_vals[static_cast<std::size_t>(s)] =
+                        hit->prop_vals[static_cast<std::size_t>(s)];
+                    new_bits &= new_bits - 1;
+                }
+                merged_props_used |= hit->prop_vals_used;
                 if (!hit->sample_name.empty()) {
                     sample_names_.insert(hit->sample_name);
                     sample_mappings_.push_back(SequenceSampleMapping{
