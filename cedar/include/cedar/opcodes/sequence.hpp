@@ -42,7 +42,9 @@ struct Event {
     float time;              // Position in cycle (beats)
     float duration;          // Event duration (beats)
     float chance;            // 0.0-1.0, 1.0 = always plays
-    float velocity;          // 0.0-1.0, 1.0 = full velocity
+    float velocity;          // 0.0-1.0, 1.0 = full velocity. Sample patterns
+                             // pin this to 1.0 and use velocities[] per voice;
+                             // pitched/value events use this scalar field.
     EventType type;
     std::uint8_t num_values; // For DATA type (max 4)
     std::uint16_t type_id;   // Type identifier for routing (0 = no type, 1+ = sample types)
@@ -52,6 +54,10 @@ struct Event {
         float values[MAX_VALUES_PER_EVENT]; // DATA: up to 4 voices
         std::uint16_t seq_id;               // SUB_SEQ: which sequence to call
     };
+    // Per-voice velocity, parallel to values[]. Required by sample patterns
+    // so `[cp, bd{vel:0.05}]` plays cp at 1.0 and bd at 0.05 independently
+    // (op_sample_play applies velocities[v] per voice). Default 1.0.
+    float velocities[MAX_VALUES_PER_EVENT];
     // Custom property values (Phase 2.1, PRD §11). Slot indices are assigned
     // at compile time by SequenceCompiler; semantics are pattern-local.
     // Default 0.0f means "not set".
@@ -61,6 +67,9 @@ struct Event {
               type(EventType::DATA), num_values(0), type_id(0),
               source_offset(0), source_length(0) {
         values[0] = 0.0f;
+        for (std::size_t i = 0; i < MAX_VALUES_PER_EVENT; ++i) {
+            velocities[i] = 1.0f;
+        }
         for (std::size_t i = 0; i < MAX_PROPS_PER_EVENT; ++i) {
             prop_vals[i] = 0.0f;
         }
@@ -107,6 +116,8 @@ struct OutputEvents {
         float duration;
         float velocity;
         float values[MAX_VALUES_PER_EVENT];
+        // Per-voice velocity, parallel to values[]. Mirrors Event::velocities.
+        float velocities[MAX_VALUES_PER_EVENT];
         std::uint8_t num_values;
         std::uint16_t type_id;        // Type identifier for routing
         std::uint16_t source_offset;
@@ -133,6 +144,11 @@ struct OutputEvents {
             e.source_length = src_len;
             for (std::uint8_t i = 0; i < e.num_values; ++i) {
                 e.values[i] = vals[i];
+            }
+            // Default per-voice velocity to the event-wide value; callers that
+            // want per-voice control overwrite e.velocities[] after add().
+            for (std::size_t i = 0; i < MAX_VALUES_PER_EVENT; ++i) {
+                e.velocities[i] = velocity;
             }
         }
     }
@@ -285,8 +301,12 @@ inline void process_event(SequenceState& state, const Event& e, std::uint64_t se
                 e.source_offset, e.source_length);
         // Copy custom property values onto the just-added OutputEvent
         // (PRD §11.1 / §11.2 — surfaced via SEQPAT_PROP).
+        // Also copy per-voice velocities so op_sample_play can apply them.
         if (out.num_events > 0) {
             auto& last = out.events[out.num_events - 1];
+            for (std::size_t i = 0; i < MAX_VALUES_PER_EVENT; ++i) {
+                last.velocities[i] = e.velocities[i];
+            }
             for (std::size_t i = 0; i < MAX_PROPS_PER_EVENT; ++i) {
                 last.prop_vals[i] = e.prop_vals[i];
             }

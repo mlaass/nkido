@@ -466,6 +466,7 @@ struct PhaserState {
 struct SamplerVoice {
     float position = 0.0f;      // Current playback position in samples
     float speed = 1.0f;         // Playback speed (1.0 = original pitch)
+    float velocity = 1.0f;      // Per-voice velocity baked at trigger time
     std::uint32_t sample_id = 0; // Which sample is playing
     bool active = false;        // Whether this voice is currently playing
 

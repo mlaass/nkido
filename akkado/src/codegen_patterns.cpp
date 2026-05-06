@@ -407,6 +407,7 @@ private:
         e.duration = time_span;
         e.chance = 1.0f;
         e.velocity = atom_data.velocity;
+        e.velocities[0] = atom_data.velocity;  // per-voice (used by sample path)
         e.num_values = 1;
         // Use pattern-relative offset for UI highlighting
         e.source_offset = static_cast<std::uint16_t>(n.location.offset - pattern_base_offset_);
@@ -419,7 +420,9 @@ private:
         // SEQPAT_PROP to surface at runtime via PatternPayload.custom_fields.
         for (const auto& [key, value] : atom_data.properties) {
             if (key == "vel") {
-                e.velocity = std::clamp(value, 0.0f, 1.0f);
+                float v = std::clamp(value, 0.0f, 1.0f);
+                e.velocity = v;
+                e.velocities[0] = v;
             } else if (key == "dur") {
                 if (value > 0.0f) e.duration = value * time_span;
             } else {
@@ -471,6 +474,12 @@ private:
         } else {
             // Sample
             is_sample_pattern_ = true;
+            // Sample patterns route per-atom velocity through evt.velocities[0]
+            // (consumed by op_sample_play per voice). Pin event.velocity to 1.0
+            // so the codegen post-MUL on the sampler output is a no-op for
+            // bare sample patterns; `velocity(pat, V)` still scales velocity_buf
+            // at runtime via the per-builtin MUL.
+            e.velocity = 1.0f;
             std::uint32_t sample_id = 0;
             // Always collect sample name for runtime resolution
             if (!atom_data.sample_name.empty()) {
@@ -885,10 +894,16 @@ private:
             e.time = t;
             e.duration = time_span;
             e.chance = 1.0f;
+            // Sample-merge polyrhythm: event-wide velocity is unused (op_sample_play
+            // applies per-voice velocities[v]). Pinning to 1.0 keeps the codegen
+            // post-MUL on the sampler output a no-op unless `velocity(pat, V)`
+            // scales velocity_buf at runtime.
             e.velocity = 1.0f;
             e.num_values = static_cast<std::uint8_t>(branch_count);
-            for (std::size_t s = 0; s < cedar::MAX_VALUES_PER_EVENT; ++s)
+            for (std::size_t s = 0; s < cedar::MAX_VALUES_PER_EVENT; ++s) {
                 e.values[s] = 0.0f;
+                e.velocities[s] = 1.0f;
+            }
 
             std::uint16_t event_idx = static_cast<std::uint16_t>(
                 seq_idx < sequence_events_.size()
@@ -896,15 +911,6 @@ private:
 
             bool primary_set = false;
             float min_dur = std::numeric_limits<float>::max();
-            // The merged DATA event carries one velocity for all voices in
-            // the polyrhythm slot (SAMPLE_PLAY scales every voice by the same
-            // event velocity — there is no per-voice velocity). Take the
-            // minimum across non-rest hits so that any branch with an
-            // explicit `{vel:V}` attenuation actually lowers the audible
-            // output: `[hh, bd{vel:0.25}]` plays the whole stack at 0.25.
-            // Default velocity is 1.0 so a stack of un-annotated hits
-            // (`[hh, bd]`) still plays at full volume.
-            float min_velocity = std::numeric_limits<float>::max();
             for (std::size_t i = 0; i < branch_count; ++i) {
                 const BranchEvent* hit = nullptr;
                 for (const auto& ev : branches[i]) {
@@ -916,8 +922,11 @@ private:
                 if (!hit) continue;
 
                 e.values[i] = static_cast<float>(hit->sample_id);
+                // Per-voice velocity: each branch's atom velocity (including
+                // {vel:V} overrides) lands on its own slot, so
+                // [cp, bd{vel:0.05}] plays cp at 1.0 and bd at 0.05.
+                e.velocities[i] = hit->velocity;
                 min_dur = std::min(min_dur, hit->duration);
-                min_velocity = std::min(min_velocity, hit->velocity);
                 if (!primary_set) {
                     e.type_id = hit->type_id;
                     e.source_offset = hit->source_offset;
@@ -938,9 +947,6 @@ private:
             }
             if (min_dur < std::numeric_limits<float>::max()) {
                 e.duration = min_dur;
-            }
-            if (min_velocity < std::numeric_limits<float>::max()) {
-                e.velocity = min_velocity;
             }
 
             add_event_to_sequence(seq_idx, e);

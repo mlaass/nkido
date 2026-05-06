@@ -56,7 +56,9 @@ inline void op_sample_play(ExecutionContext& ctx, const Instruction& inst, Sampl
 
     // Spawn a single voice. Shared by the scalar and polyphonic trigger paths
     // so both honor identical voice-allocation and micro-fade behavior.
-    auto spawn_voice = [&](std::uint32_t sample_id, float voice_pitch) {
+    // voice_velocity is baked at trigger time (per-voice, from
+    // evt.velocities[v] in the polyphonic path; 1.0 in the scalar path).
+    auto spawn_voice = [&](std::uint32_t sample_id, float voice_pitch, float voice_velocity) {
         if (sample_id == 0 || !sample_bank) return;
         const SampleData* sample = sample_bank->get_sample(sample_id);
         if (!sample || sample->frames == 0) return;
@@ -64,6 +66,7 @@ inline void op_sample_play(ExecutionContext& ctx, const Instruction& inst, Sampl
         if (!voice) return;
         voice->position = 0.0f;
         voice->speed = voice_pitch;
+        voice->velocity = voice_velocity;
         voice->sample_id = sample_id;
         voice->active = true;
         voice->fading_out = false;
@@ -87,18 +90,22 @@ inline void op_sample_play(ExecutionContext& ctx, const Instruction& inst, Sampl
         if (trigger_on) {
             if (linked_seq && linked_seq->output.num_events > 0) {
                 // Polyphonic path: spawn one voice per values[] entry of the
-                // event SEQPAT_STEP just crossed. A scalar event (num_values==1)
-                // behaves exactly like the old path.
+                // event SEQPAT_STEP just crossed. Each voice gets its own
+                // velocity from evt.velocities[v], so [cp, bd{vel:0.05}]
+                // plays cp at 1.0 and bd at 0.05 independently.
                 std::uint32_t event_index = (linked_seq->current_index > 0)
                     ? linked_seq->current_index - 1
                     : linked_seq->output.num_events - 1;
                 const auto& evt = linked_seq->output.events[event_index];
                 for (std::uint8_t v = 0; v < evt.num_values; ++v) {
-                    spawn_voice(static_cast<std::uint32_t>(evt.values[v]), current_pitch);
+                    spawn_voice(static_cast<std::uint32_t>(evt.values[v]),
+                                current_pitch, evt.velocities[v]);
                 }
             } else {
                 // Scalar path (user-facing sample() builtin, or unlinked pat()).
-                spawn_voice(current_sample_id, current_pitch);
+                // Velocity scaling is handled by the codegen post-MUL on the
+                // sampler output (legacy behavior); spawn at 1.0.
+                spawn_voice(current_sample_id, current_pitch, 1.0f);
             }
         }
 
@@ -134,7 +141,7 @@ inline void op_sample_play(ExecutionContext& ctx, const Instruction& inst, Sampl
                 voice.attack_counter++;
             }
 
-            output += sample_value * attack_env;
+            output += sample_value * attack_env * voice.velocity;
 
             // Advance playback position
             // Account for sample rate difference

@@ -2264,12 +2264,14 @@ TEST_CASE("Mini-notation record suffix: works on sample atoms in pat()",
           "[codegen][patterns][phase2][record_suffix][sample]") {
     // Before fix: lex_sample_only() returned without calling try_lex_record_suffix(),
     // so `bd{vel:0.5}` was a parse error in any sample-mode context.
+    // Per-voice velocity: sample atoms route per-atom velocity through
+    // velocities[0] (event.velocity is pinned to 1.0 so the post-MUL is a no-op).
     auto result = akkado::compile(R"(pat("bd{vel:0.5} sd{vel:0.7}"))");
     REQUIRE(result.success);
     const auto& events = result.state_inits[0].sequence_events[0];
     REQUIRE(events.size() == 2);
     std::vector<std::pair<float, float>> by_time;
-    for (const auto& e : events) by_time.emplace_back(e.time, e.velocity);
+    for (const auto& e : events) by_time.emplace_back(e.time, e.velocities[0]);
     std::sort(by_time.begin(), by_time.end());
     CHECK(by_time[0].second == Catch::Approx(0.5f).margin(0.01f));
     CHECK(by_time[1].second == Catch::Approx(0.7f).margin(0.01f));
@@ -2286,24 +2288,32 @@ TEST_CASE("Mini-notation record suffix: works on samples inside [...] groups",
 
 TEST_CASE("Sample velocity: {vel:V} inside polyrhythm reaches merged event",
           "[codegen][patterns][record_suffix][sample][velocity]") {
-    // Bug A regression: flatten_to_timelines() built BranchEvents from
-    // ad.velocity (always 1.0 for sample atoms — the lexer never sets it)
-    // but never iterated ad.properties, silently losing the {vel:0.5}
-    // record-suffix. The merged polyrhythm event would then carry
-    // velocity=1.0, regardless of what the user wrote.
+    // Per-voice velocity: `[hh,bd{vel:0.5}]` merges into one event with
+    // num_values=2; velocities[0]=hh's vel (1.0), velocities[1]=bd's (0.5).
+    // event.velocity is pinned to 1.0 (post-MUL no-op); op_sample_play applies
+    // velocities[v] per voice so cp/hh play unattenuated and bd plays at 0.5.
+    // Before this fix the merged event carried min(1.0, 0.5) = 0.5 which
+    // attenuated the *whole stack* including hh — see the [cp, bd{vel:0.05}]
+    // bug report.
     auto result = akkado::compile(R"(pat("[hh,bd{vel:0.5}] hh"))");
     REQUIRE(result.success);
     REQUIRE(!result.state_inits.empty());
     const auto& events = result.state_inits[0].sequence_events[0];
     // Two top-level steps -> two events. The first is the polyrhythm-merged
-    // event (carrying {vel:0.5}); the second is the bare `hh`.
+    // event; the second is the bare `hh`.
     REQUIRE(events.size() == 2);
-    std::vector<float> velocities_by_time;
-    std::vector<std::pair<float, float>> pairs;
-    for (const auto& e : events) pairs.emplace_back(e.time, e.velocity);
-    std::sort(pairs.begin(), pairs.end());
-    CHECK(pairs[0].second == Catch::Approx(0.5f).margin(0.01f));
-    CHECK(pairs[1].second == Catch::Approx(1.0f).margin(0.01f));
+    // Sort by event time so order is stable.
+    std::vector<const cedar::Event*> by_time;
+    for (const auto& e : events) by_time.push_back(&e);
+    std::sort(by_time.begin(), by_time.end(),
+              [](const cedar::Event* a, const cedar::Event* b) { return a->time < b->time; });
+    // Polyrhythm event: hh at full velocity, bd at 0.5.
+    REQUIRE(by_time[0]->num_values == 2);
+    CHECK(by_time[0]->velocity == Catch::Approx(1.0f).margin(0.01f));
+    CHECK(by_time[0]->velocities[0] == Catch::Approx(1.0f).margin(0.01f));
+    CHECK(by_time[0]->velocities[1] == Catch::Approx(0.5f).margin(0.01f));
+    // Bare hh: scalar event, velocities[0] = 1.0.
+    CHECK(by_time[1]->velocities[0] == Catch::Approx(1.0f).margin(0.01f));
 }
 
 TEST_CASE("Sample velocity: SAMPLE_PLAY output is post-multiplied by velocity",
@@ -2345,6 +2355,31 @@ TEST_CASE("Sample velocity: SAMPLE_PLAY output is post-multiplied by velocity",
     CHECK(found_velocity_mul);
 }
 
+TEST_CASE("Sample velocity: per-voice velocity in polyrhythm — [cp,bd{vel:0.05}]",
+          "[codegen][patterns][record_suffix][sample][velocity][polyrhythm]") {
+    // The user's reported bug: in `s"[cp, bd{vel:0.05}]"`, cp was attenuated
+    // along with bd because the merged Event carried min(velocity)=0.05 and
+    // the codegen post-MUL multiplied the entire summed sampler output by it.
+    //
+    // After the per-voice velocity fix:
+    //   - event.velocity = 1.0 (post-MUL no-op for sample patterns)
+    //   - event.velocities[0] = cp's velocity (1.0)
+    //   - event.velocities[1] = bd's velocity (0.05)
+    //   - op_sample_play applies velocities[v] per voice at trigger time
+    //
+    // Both voices play independently: cp at full amplitude, bd at 5%.
+    auto result = akkado::compile(R"(s"[cp,bd{vel:0.05}]")");
+    REQUIRE(result.success);
+    REQUIRE(!result.state_inits.empty());
+    const auto& events = result.state_inits[0].sequence_events[0];
+    REQUIRE(!events.empty());
+    const auto& evt = events[0];
+    REQUIRE(evt.num_values == 2);
+    CHECK(evt.velocity == Catch::Approx(1.0f).margin(0.001f));
+    CHECK(evt.velocities[0] == Catch::Approx(1.0f).margin(0.001f));
+    CHECK(evt.velocities[1] == Catch::Approx(0.05f).margin(0.001f));
+}
+
 TEST_CASE("Sample velocity: bd{vel:0.25} attenuates rendered audio amplitude",
           "[codegen][patterns][record_suffix][sample][velocity]") {
     // End-to-end check: compile the same pattern twice — once with
@@ -2363,11 +2398,14 @@ TEST_CASE("Sample velocity: bd{vel:0.25} attenuates rendered audio amplitude",
     REQUIRE(loud.success);
     REQUIRE(quiet.success);
 
-    // The {vel:0.25} pattern's first event must carry velocity 0.25.
+    // The {vel:0.25} pattern's first event must carry velocities[0] = 0.25.
+    // event.velocity stays at 1.0 (post-MUL no-op for sample patterns); the
+    // per-atom velocity rides on velocities[0] and op_sample_play applies it
+    // per-voice.
     REQUIRE(!quiet.state_inits.empty());
     const auto& events = quiet.state_inits[0].sequence_events[0];
     REQUIRE(!events.empty());
-    CHECK(events[0].velocity == Catch::Approx(0.25f).margin(0.001f));
+    CHECK(events[0].velocities[0] == Catch::Approx(0.25f).margin(0.001f));
 
     // Both should emit one SAMPLE_PLAY each followed by a MUL.
     auto loud_insts = get_instructions(loud);
@@ -2380,12 +2418,13 @@ TEST_CASE("Mini-notation record suffix: works in s\"...\" sample-mode prefix",
           "[codegen][patterns][phase2][record_suffix][sample]") {
     // `s"..."` token forces MiniParseMode::Sample. Same lexer bug affected
     // it: lex_sample_only() never called try_lex_record_suffix().
+    // Per-voice velocity: per-atom vel rides on velocities[0].
     auto result = akkado::compile(R"(s"bd{vel:0.5} sd")");
     REQUIRE(result.success);
     const auto& events = result.state_inits[0].sequence_events[0];
     REQUIRE(events.size() == 2);
     std::vector<std::pair<float, float>> by_time;
-    for (const auto& e : events) by_time.emplace_back(e.time, e.velocity);
+    for (const auto& e : events) by_time.emplace_back(e.time, e.velocities[0]);
     std::sort(by_time.begin(), by_time.end());
     CHECK(by_time[0].second == Catch::Approx(0.5f).margin(0.01f));
 }
