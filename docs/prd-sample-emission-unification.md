@@ -1,10 +1,10 @@
-> **Status: NOT STARTED** — SAMPLE_PLAY codegen wiring is duplicated across 6 class-method call sites, 1 static-helper inline mirror, and a separate SequenceCompiler property-extraction path. The two most recent sample fixes (`b4aeef4` lexer record-suffix, `05c1150` velocity post-MUL) each had to touch all three paths. A header comment at `codegen_patterns.cpp:1198-1208` explicitly warns implementers to keep the duplicates in sync. This PRD unifies them.
+> **Status: NOT STARTED** — SAMPLE_PLAY codegen wiring is duplicated across 6 class-method call sites, 1 static-helper inline mirror, and a separate SequenceCompiler property-extraction path. The two most recent sample fixes (`b4aeef4` lexer record-suffix, `05c1150` velocity post-MUL) each had to touch all three paths. A header comment at `codegen_patterns.cpp:1196-1201` explicitly warns implementers to keep the duplicates in sync. This PRD unifies them.
 
 # PRD: Unify SAMPLE_PLAY Codegen Emission
 
 ## 1. Executive Summary
 
-The compiler emits `SAMPLE_PLAY` for sample patterns from **eight distinct sites** in `akkado/src/codegen_patterns.cpp`, plus the SequenceCompiler builds pattern events from MiniAtomData via **two non-overlapping property-extraction paths** (`compile_atom_event` for non-polyrhythm atoms, `flatten_to_timelines` for polyrhythm atoms). Property handling for `{vel:V, dur:D, cutoff:V, ...}` lives in three places, and the SAMPLE_PLAY emission lives in seven. A pre-existing comment in the source warns to keep the duplicates synchronized.
+The compiler emits `SAMPLE_PLAY` for sample patterns from **eight distinct sites** — seven in `akkado/src/codegen_patterns.cpp` (6 class-method calls into `emit_sampler_wrapper` + 1 inline mirror inside the static `emit_pattern_with_state`) plus the scalar `sample()` builtin which emits `SAMPLE_PLAY` via the generic builtin codegen path in `akkado/src/codegen.cpp`. The SequenceCompiler also builds pattern events from MiniAtomData via **two non-overlapping property-extraction paths** (`compile_atom_event` for non-polyrhythm atoms, `flatten_to_timelines` for polyrhythm atoms). Property handling for `{vel:V, dur:D, cutoff:V, ...}` is split across three places: the two extraction sites above, plus `compile_polyrhythm_events` (line 833+) which currently applies only velocity/duration to the merged event via `min()` reduction and silently drops custom slots — the third application site this PRD unifies. A pre-existing comment in the source warns to keep the duplicates synchronized.
 
 This PRD proposes unifying all sample-pattern emission into a **single canonical free function** (`emit_sample_chain`) and a **single property-extraction helper** (`apply_atom_properties`) that both `compile_atom_event` and `flatten_to_timelines` consume. The change is **bit-identical at the bytecode level** — all existing tests pass unchanged — and is protected by a new **golden bytecode characterization test** that captures the emitted instruction sequence for ~10 representative sample-pattern shapes before the refactor and re-asserts them afterwards.
 
@@ -26,10 +26,10 @@ Out of scope: `SAMPLE_PLAY_LOOP` (the looping sampler used by `sample_loop()`), 
 
 | Aspect | Current | Proposed |
 |--------|---------|----------|
-| **SAMPLE_PLAY emission sites** | 7 (6 class methods + 1 static helper inline mirror) | 1 free function |
+| **SAMPLE_PLAY emission sites** | 8 (6 class methods + 1 static helper inline mirror + scalar `sample()` via generic builtin codegen) | 1 free function |
 | **Property extraction (vel/dur/custom)** | 2 paths: `compile_atom_event`, `flatten_to_timelines` (latter only handles vel/dur) | 1 helper `apply_atom_properties`, fully covers custom slots |
-| **Adding a new SAMPLE_PLAY input** | Requires edits at 7+ sites; the pre-existing `// Keep both in sync` comment is the only guardrail | One edit in `emit_sample_chain` + golden test regenerate |
-| **Adding a new property kind on patterns** | Requires edits at 3 sites or one path silently drops it | One edit in `apply_atom_properties` |
+| **Adding a new SAMPLE_PLAY input** | Requires edits at 8+ sites; the pre-existing `// Keep both in sync` comment is the only guardrail | One edit in `emit_sample_chain` + golden test regenerate |
+| **Adding a new property kind on patterns** | Requires edits at 3 sites (2 extraction + 1 polyrhythm merge) or one path silently drops it | One edit in `apply_atom_properties` + one explicit copy in `compile_polyrhythm_events` merge |
 | **Polyrhythm-internal `{cutoff:0.3}`** | Silently dropped (BranchEvent has no slot fields) | Propagated to merged event |
 | **Scalar `sample()` builtin** | Emits SAMPLE_PLAY via generic builtin codegen; diverges from pattern path | Calls same `emit_sample_chain` with scalar-mode discriminator |
 
@@ -39,9 +39,9 @@ Three independent decisions accumulated into the current shape:
 
 **(A) Pattern-transform proliferation.** Each pattern transform (`pat`, chord patterns, `velocity()`, `bank()`, `variant()`, transport-clock) was added as its own `handle_*_call` method that compiles its inner pattern via `SequenceCompiler` and then must emit a SAMPLE_PLAY tail when `is_sample_pattern == true`. Each handler grew its own copy of the `if (is_sample_pattern) { emit_sampler_wrapper(...) }` block. The current `emit_sampler_wrapper` is class member-only, so callers must already be class members.
 
-**(B) Static helper / class member split.** `emit_pattern_with_state` was extracted as a free static helper to share pattern-compile boilerplate across `every`, `fast`, `slow`, etc. (`codegen_patterns.cpp:2620+`). Because it can't call class members, its SAMPLE_PLAY emission was duplicated inline (`codegen_patterns.cpp:2776+`). The header comment at `codegen_patterns.cpp:1198-1208` documents this duplication and asks future maintainers to keep the two in sync — but this is the bug factory, not a fix.
+**(B) Static helper / class member split.** `emit_pattern_with_state` was extracted as a free static helper to share pattern-compile boilerplate across `every`, `fast`, `slow`, etc. (`codegen_patterns.cpp:2661+`). Because it can't call class members, its SAMPLE_PLAY emission was duplicated inline (`codegen_patterns.cpp:2775+`). The header comment at `codegen_patterns.cpp:1196-1201` documents this duplication and asks future maintainers to keep the two in sync — but this is the bug factory, not a fix.
 
-**(C) BranchEvent vs Event split.** `SequenceCompiler::compile_atom_event` builds a `cedar::Event` directly from `MiniAtomData` and applies `{vel, dur, cutoff, ...}` properties at line 420-440. The polyrhythm path at `codegen_patterns.cpp:687+` builds an intermediate `BranchEvent` struct via `flatten_to_timelines`, then merges branches into a single Event in `compile_polyrhythm_events`. The properties application was originally implemented only in `compile_atom_event`; the polyrhythm path silently dropped everything. The recent fix (commit `05c1150`) added `vel` and `dur` to `flatten_to_timelines` — but custom slots are still dropped, and now the same property logic exists in two places.
+**(C) BranchEvent vs Event split.** `SequenceCompiler::compile_atom_event` builds a `cedar::Event` directly from `MiniAtomData` and applies `{vel, dur, cutoff, ...}` properties at line 420-431. The polyrhythm path at `codegen_patterns.cpp:833+` (`compile_polyrhythm_events`) consumes intermediate `BranchEvent` structs produced by `flatten_to_timelines` (line 687+) and merges branches into a single Event. The properties application was originally implemented only in `compile_atom_event`; the polyrhythm path silently dropped everything. The recent fix (commit `05c1150`) added `vel` and `dur` to `flatten_to_timelines` (line 798) — but custom slots are still dropped, and now the same property logic exists in two extraction sites with a third application site (`compile_polyrhythm_events`'s `min(velocity)` reduction at line 907+) that has no path for custom slots at all.
 
 ### 2.3 Concrete Evidence: Recent Bug History
 
@@ -58,12 +58,13 @@ Three independent decisions accumulated into the current shape:
 | Component | Location | Reuse |
 |-----------|----------|-------|
 | `emit_sampler_wrapper` | `akkado/src/codegen_patterns.cpp:1202`, decl `akkado/include/akkado/codegen.hpp:433` | **Replace** with free `emit_sample_chain` |
-| Inline mirror in `emit_pattern_with_state` | `codegen_patterns.cpp:2776-2825` | **Delete**; both paths call the new helper |
-| `compile_atom_event` property loop | `codegen_patterns.cpp:420-441` | **Extract** body into `apply_atom_properties` helper |
-| `flatten_to_timelines` MiniAtom case | `codegen_patterns.cpp:792-829` | **Replace** ad-hoc property loop with call to `apply_atom_properties` |
+| Inline mirror in `emit_pattern_with_state` | `codegen_patterns.cpp:2775-2831` | **Delete**; both paths call the new helper |
+| `compile_atom_event` property loop | `codegen_patterns.cpp:420-431` | **Extract** body into `apply_atom_properties` helper |
+| `flatten_to_timelines` MiniAtom case | `codegen_patterns.cpp:784-820` | **Replace** ad-hoc property loop with call to `apply_atom_properties` |
 | `BranchEvent` struct | `codegen_patterns.cpp:633-645` | **Extend** with `prop_vals` array to carry custom slots through the merge; alternative considered and rejected (see §6) |
-| `SamplePatternEmitCtx` | NEW | Bundle state_id / value_buf / trigger_buf / velocity_buf / loc |
-| Scalar `sample()` builtin | `akkado/src/codegen.cpp:1067` (resolution); generic builtin emission via `BUILTINS["sample"]` in `akkado/include/akkado/builtins.hpp:315` | **Route through** `emit_sample_chain` with `kind = Scalar` |
+| `compile_polyrhythm_events` merge | `codegen_patterns.cpp:833-948` (`min(velocity)` reduction at line 907+) | **Extend** merge to copy `prop_vals` from `BranchEvent` onto the merged `cedar::Event` |
+| `SamplePatternEmitCtx` | NEW | Bundle state_id / value_buf / trigger_buf / velocity_buf / pitch_buf / rate / loc |
+| Scalar `sample()` builtin | `akkado/src/codegen.cpp:1067` (sample-name resolution); generic builtin emission `inst.opcode = builtin->opcode` at `codegen.cpp:1394/1477/1555`; entry in `akkado/include/akkado/builtins.hpp:315` | **Route through** `emit_sample_chain` with `kind = Scalar`. Caller passes `compute_state_id()` as `ctx.seq_state_id` and `builtin->inst_rate` as `ctx.rate` to preserve hot-swap and rate-field semantics. |
 
 ---
 
@@ -72,10 +73,10 @@ Three independent decisions accumulated into the current shape:
 ### 3.1 Goals
 
 - **G1:** All SAMPLE_PLAY (and the post-MUL velocity scaling) bytecode is emitted from exactly one function.
-- **G2:** All `MiniAtomData → cedar::Event` property extraction lives in exactly one helper.
+- **G2:** All `MiniAtomData` property *extraction* (reading `ad.properties`) lives in exactly one helper, `apply_atom_properties`. Merging `BranchEvent.prop_vals` onto the polyrhythm-merged `cedar::Event` is a separate, single-site step in `compile_polyrhythm_events`.
 - **G3:** Bytecode emitted for every existing test case is **byte-identical** before and after the refactor. Existing test suites (akkado, cedar, nkido_cli, web Vitest) pass with no changes.
 - **G4:** A new golden-bytecode characterization test asserts the emitted instruction sequence for ≥ 10 representative sample-pattern shapes (bare `s"bd"`, polyrhythm, chord-form, `velocity()`-scaled, `bank()`-routed, `variant()`-routed, `fast()`-transformed, transport-clock, scalar `sample()`, polyrhythm with `{cutoff:V}` after the custom-slot fix lands).
-- **G5:** Custom property slots (cutoff, bend, aftertouch, etc.) propagate uniformly through both `compile_atom_event` and the polyrhythm flatten path. Each slot reaches `cedar::Event.prop_vals[slot]` regardless of pattern shape.
+- **G5:** Custom property slots (cutoff, bend, aftertouch, etc.) propagate uniformly through both `compile_atom_event` and the polyrhythm flatten/merge path, up to `cedar::MAX_PROPS_PER_EVENT` slots. Each slot reaches `cedar::Event.prop_vals[slot]` regardless of pattern shape, and explicit `{key:0}` is preserved (bitmap-aware merge — see §10 E3).
 - **G6:** The `// Keep both in sync` comment block is removed; a single inline reference replaces the duplication warning.
 - **G7:** Phased rollout with 4 reviewable commits, each independently reverting cleanly.
 
@@ -98,7 +99,7 @@ Three independent decisions accumulated into the current shape:
                           │   SamplePatternEmitCtx          │
                           │   { state_id, value_buf,        │
                           │     trigger_buf, velocity_buf,  │
-                          │     loc, kind }                 │
+                          │     pitch_buf, rate, loc, kind }│
                           └──────────────┬──────────────────┘
                                          │
                                          ▼
@@ -120,13 +121,13 @@ Three independent decisions accumulated into the current shape:
 ```
 
 ```
-                          ┌──────────────────────────────────┐
-                          │  apply_atom_properties(           │
-                          │      const MiniAtomData&,         │
-                          │      cedar::Event& out,            │
-                          │      float t_span,                 │
-                          │      PropertySlotAllocator& slots) │
-                          └──────────────┬───────────────────┘
+                          ┌───────────────────────────────────────┐
+                          │  apply_atom_properties(                │
+                          │      const MiniAtomData&,              │
+                          │      SequenceCompiler& compiler,       │
+                          │      float t_span)                     │
+                          │      -> AtomPropertiesOut              │
+                          └──────────────┬────────────────────────┘
                   ┌──────────────────────┴──────────────────────┐
                   │                                             │
                   ▼                                             ▼
@@ -144,11 +145,21 @@ struct SamplePatternEmitCtx {
         Scalar,   // builtin sample(trig, pitch, "bd")
     };
     Kind            kind            = Kind::Pattern;
-    std::uint32_t   seq_state_id    = 0;            // 0 in Scalar mode
+    // In Pattern mode: linked SequenceState id; emitted SAMPLE_PLAY's own
+    // state_id is `seq_state_id + 1` (preserving the existing offset).
+    // In Scalar mode: caller MUST pass `compute_state_id()` from the
+    // CodeGenerator's semantic-path stack so hot-swap behavior matches
+    // the current generic-builtin-emission path.
+    std::uint32_t   seq_state_id    = 0;
     std::uint16_t   value_buf       = BUFFER_UNUSED; // sample-id buffer
     std::uint16_t   trigger_buf     = BUFFER_UNUSED;
     std::uint16_t   velocity_buf    = BUFFER_UNUSED; // BUFFER_UNUSED → emit no MUL
     std::uint16_t   pitch_buf       = BUFFER_UNUSED; // BUFFER_UNUSED → helper allocates PUSH_CONST 1.0
+    // Scalar callers pass `builtin->inst_rate` to preserve the rate-field
+    // bytecode that the generic builtin-emission path sets today. Pattern
+    // callers leave it at 0 (current pattern path emits SAMPLE_PLAY with
+    // rate=0).
+    std::uint8_t    rate            = 0;
     SourceLocation  loc             = {};
 };
 ```
@@ -195,6 +206,7 @@ static std::uint16_t emit_sample_chain(
     si.inputs[0] = ctx.trigger_buf;
     si.inputs[1] = pitch_buf;
     si.inputs[2] = ctx.value_buf;
+    si.rate      = ctx.rate;  // Scalar: builtin->inst_rate; Pattern: 0.
     if (ctx.kind == Kind::Pattern) {
         si.inputs[3] = static_cast<std::uint16_t>(ctx.seq_state_id & 0xFFFFu);
         si.inputs[4] = static_cast<std::uint16_t>((ctx.seq_state_id >> 16) & 0xFFFFu);
@@ -202,7 +214,8 @@ static std::uint16_t emit_sample_chain(
     } else {
         si.inputs[3] = BUFFER_UNUSED;
         si.inputs[4] = BUFFER_UNUSED;
-        si.state_id  = ctx.seq_state_id;  // caller supplies a unique scalar state id
+        // Scalar callers pass compute_state_id() to preserve hot-swap.
+        si.state_id  = ctx.seq_state_id;
     }
     emit_fn(instructions, si);
 
@@ -230,18 +243,26 @@ static std::uint16_t emit_sample_chain(
 // Single source of truth for {vel, dur, cutoff, bend, ...} on sample atoms.
 // Caller decides whether to use the result on a `cedar::Event` directly
 // (compile_atom_event) or unpack its fields onto a BranchEvent
-// (flatten_to_timelines). Custom-slot allocation is delegated to the slot
-// allocator owned by SequenceCompiler.
+// (flatten_to_timelines). Custom-slot allocation is delegated through the
+// existing SequenceCompiler::allocate_property_slot(key) API.
+//
+// CAPACITY: prop_vals is sized to cedar::MAX_PROPS_PER_EVENT (the same
+// constant that bounds cedar::Event::prop_vals). prop_vals_used is widened
+// from uint8_t to a type wide enough to cover that constant — currently
+// std::uint32_t — so the bitmap doesn't silently overflow if
+// MAX_PROPS_PER_EVENT grows past 8. If allocate_property_slot returns a
+// slot >= MAX_PROPS_PER_EVENT, the helper drops it (matches current
+// behavior) and emits diagnostic E1XX (new code: see §10 edge case E5).
 struct AtomPropertiesOut {
     float velocity     = 1.0f;
     float duration_mul = 1.0f;  // multiplied by t_span in caller
-    std::array<float, MAX_PROP_SLOTS> prop_vals{};
-    std::uint8_t prop_vals_used = 0;  // bitmap of populated slots
+    std::array<float, cedar::MAX_PROPS_PER_EVENT> prop_vals{};
+    std::uint32_t prop_vals_used = 0;  // bitmap of populated slots
 };
 
 static AtomPropertiesOut apply_atom_properties(
         const MiniAtomData& ad,
-        PropertySlotAllocator& slots) {
+        SequenceCompiler& compiler) {
     AtomPropertiesOut out;
     out.velocity = ad.velocity;
     for (const auto& [key, value] : ad.properties) {
@@ -250,8 +271,8 @@ static AtomPropertiesOut apply_atom_properties(
         } else if (key == "dur") {
             if (value > 0.0f) out.duration_mul = value;
         } else {
-            int slot = slots.allocate(key);
-            if (slot >= 0 && slot < MAX_PROP_SLOTS) {
+            int slot = compiler.allocate_property_slot(key);
+            if (slot >= 0 && slot < static_cast<int>(cedar::MAX_PROPS_PER_EVENT)) {
                 out.prop_vals[slot] = value;
                 out.prop_vals_used |= (1u << slot);
             }
@@ -277,12 +298,19 @@ struct BranchEvent {
     std::string    sample_bank;
     std::uint8_t   sample_variant;
     // NEW: carry custom property slots through polyrhythm merge.
-    // Indexed by slot id from PropertySlotAllocator. When two branches both
-    // populate the same slot at the same time, the merge takes the first
-    // non-zero value (mirrors current `velocity` and `type_id` semantics).
-    std::array<float, MAX_PROP_SLOTS> prop_vals{};
-    std::uint8_t   prop_vals_used = 0;
+    // Indexed by slot id from SequenceCompiler::allocate_property_slot.
+    // Width matches cedar::MAX_PROPS_PER_EVENT (the same bound that
+    // Event::prop_vals uses). The merge in compile_polyrhythm_events takes
+    // the first branch that has prop_vals_used bit S set — see §10 E3 for
+    // the bitmap-aware merge policy. The bitmap is widened to uint32_t so
+    // it covers any MAX_PROPS_PER_EVENT up to 32; a static_assert pins the
+    // relationship.
+    std::array<float, cedar::MAX_PROPS_PER_EVENT> prop_vals{};
+    std::uint32_t  prop_vals_used = 0;
 };
+static_assert(cedar::MAX_PROPS_PER_EVENT <= 32,
+              "BranchEvent::prop_vals_used bitmap is uint32_t; widen if "
+              "MAX_PROPS_PER_EVENT exceeds 32.");
 ```
 
 ---
@@ -322,7 +350,7 @@ struct BranchEvent {
 | `akkado/src/codegen.cpp` | Route scalar `sample()` builtin emission through `emit_sample_chain` (Kind::Scalar) | 2 |
 | `akkado/include/akkado/codegen.hpp` | Remove `emit_sampler_wrapper` declaration | 2 (final cleanup) or 4 |
 | `akkado/src/codegen_patterns.cpp` | Migrate `compile_atom_event` and `flatten_to_timelines` to `apply_atom_properties`; extend `BranchEvent` with `prop_vals`; merge `prop_vals` in `compile_polyrhythm_events` | 3 |
-| `akkado/src/codegen_patterns.cpp` | Migrate `emit_pattern_with_state` static helper to call `emit_sample_chain`; delete inline mirror; remove the `// Keep both in sync` comment block at lines 1198-1208 | 4 |
+| `akkado/src/codegen_patterns.cpp` | Migrate `emit_pattern_with_state` static helper to call `emit_sample_chain`; delete inline mirror (currently `codegen_patterns.cpp:2775-2831`); remove the `// Keep both in sync` comment block at `codegen_patterns.cpp:1196-1201` | 4 |
 
 Files **explicitly NOT touched**:
 
@@ -350,6 +378,7 @@ Each phase is a single commit, independently reviewable, leaves the tree green.
 **Verification:**
 - Build clean: `cmake --build build --target akkado_tests`
 - New golden test passes against current code (since no call sites use the new helpers yet, this baselines current bytecode).
+- **Phase 1 self-check:** add a small unit test that constructs a `SamplePatternEmitCtx` matching one existing call site (e.g. `handle_mini_literal`'s args), invokes `emit_sample_chain` standalone, and asserts the emitted instruction sequence is byte-identical to the live `emit_sampler_wrapper` output for the same inputs. Catches divergence between the new helper and the existing wrapper *before* Phase 2 touches real call sites.
 - All existing suites still pass.
 
 ### Phase 2 — Migrate class-method call sites + scalar sample()
@@ -366,7 +395,7 @@ Each phase is a single commit, independently reviewable, leaves the tree green.
 
 ### Phase 3 — Unify SequenceCompiler property handling
 
-**Goal:** Extract the property loop in `compile_atom_event` into `apply_atom_properties`. Migrate `flatten_to_timelines` to call the same helper. Extend `BranchEvent` with `prop_vals` + `prop_vals_used`. Update `compile_polyrhythm_events` merge to copy `prop_vals` onto the emitted `cedar::Event`.
+**Goal:** Extract the property loop in `compile_atom_event` into `apply_atom_properties`. Migrate `flatten_to_timelines` to call the same helper. Extend `BranchEvent` with `prop_vals` (sized to `cedar::MAX_PROPS_PER_EVENT`) + `prop_vals_used` (`uint32_t` bitmap with a `static_assert` pinning the relationship). Update `compile_polyrhythm_events` merge to copy `prop_vals` onto the emitted `cedar::Event` using a **bitmap-aware** merge: for slot S, take the first branch with bit S set in `prop_vals_used`. This preserves an explicit `{cutoff:0}` (a "first non-zero" merge would drop it; see §10 E3).
 
 This phase changes one observable behavior: custom property slots (cutoff, bend, etc.) that were previously dropped on the polyrhythm path now propagate. Add a targeted akkado test for `pat("[hh, bd{cutoff:0.3}]")` asserting the merged event's `prop_vals[cutoff_slot] == 0.3`.
 
@@ -408,12 +437,13 @@ This phase changes one observable behavior: custom property slots (cutoff, bend,
 | G3 | `s"bd{vel:0.25} ~ ~ ~".out()` | Property propagation, single atom |
 | G4 | `s"[hh,bd{vel:0.25}] ~ ~ ~".out()` | Property propagation through polyrhythm |
 | G5 | `velocity(s"bd ~ ~ ~", 0.5).out()` | handle_velocity_call site |
-| G6 | `s"bd".bank("X")` (with stub bank) | handle_bank_call site |
+| G6 | `s"bd".bank("Demo")` using the `Demo` fixture bank already wired up in `akkado_tests` (search existing `[bank]` test for the canonical fixture path) | handle_bank_call site |
 | G7 | `s"bd".variant(2)` | handle_variant_call site |
 | G8 | `s"bd ~".fast(2).out()` | Goes through emit_pattern_with_state inline mirror |
-| G9 | `pat("c4 e4 g4") |> chord(%)` (chord-form) | handle_chord_call sample-mode path |
-| G10 | `sample(t, 1, "bd")` (scalar) | Scalar sample() builtin path |
+| G9 | `s"[bd, hh, sn]"` polyrhythm sample chord (genuinely sample-mode, exercises the SAMPLE_PLAY-emitting chord path; NB: `chord(...)` builtin in `handle_chord_call` is *non*-sample (sets `is_sample_pattern=false` at codegen_patterns.cpp:1809) and therefore not a SAMPLE_PLAY emission site) | sample-mode polyphonic chord-form |
+| G10 | `sample(t, 1, "bd")` (scalar) | Scalar sample() builtin path. Golden assertion explicitly pins `inst.rate == BUILTINS["sample"].inst_rate` and `inst.state_id == compute_state_id()` of the call site |
 | G11 | (Phase 3+) `s"[hh,bd{cutoff:0.3}]"` | Custom slot through polyrhythm |
+| G12 | (Phase 3+) `s"[hh{cutoff:0}, bd]"` | Bitmap-aware merge: `prop_vals[cutoff_slot]` must be 0.0 (explicitly-set zero), not bd's unset zero |
 
 Golden values are checked in. If a phase changes behavior unintentionally, the test fails with the exact opcode/buffer that drifted. The Phase 3 commit explicitly updates G11's expected bytecode (the only intentional change).
 
@@ -438,7 +468,7 @@ After Phase 4, render `web/static/patches/test.akk` (the user's pattern from the
 | **EmitFn callback overhead in hot paths** | Codegen is not a hot path (per-compile, not per-block). Function-pointer overhead is negligible. |
 | **Phase 3 changes observable behavior** (custom slots through polyrhythm) | Behavior change is intentional and documented (currently silently broken). Targeted test pins the new behavior. Golden test for G11 added in Phase 3 to capture the new bytecode. |
 | **emit_pattern_with_state has additional callers I missed** | Phase 1 grep + golden test for G8 (fast()) catches mismatches. |
-| **Scalar sample() routing changes its bytecode** | Phase 2 golden test for G10 catches any drift; the scalar path's emission today is the same shape as the pattern path's `if !pattern { ... }` branch in `emit_sample_chain`. |
+| **Scalar sample() routing changes its bytecode** | The current scalar path goes through generic builtin codegen (`codegen.cpp:1394/1477/1555`) which sets `inst.rate = builtin->inst_rate` and `inst.state_id = compute_state_id()` from the active semantic-path stack. Phase 2 routing replaces that with `emit_sample_chain(Kind::Scalar)` and the caller MUST pass those same values via `ctx.rate` and `ctx.seq_state_id` for the bytecode to be bit-identical. Golden test G10 explicitly pins both fields, so any miswiring shows up immediately. |
 | **Reviewers cannot bisect cleanly** | 4-commit phasing with each commit independently buildable+testable. Each commit message states which sites it migrates. |
 | **Future contributors miss the new conventions** | Add a one-paragraph comment at the top of `emit_sample_chain` explaining the role and pointing back at this PRD. Replace the deleted `// Keep both in sync` block with a one-line `// All SAMPLE_PLAY emission goes through emit_sample_chain. See docs/prd-sample-emission-unification.md.` |
 
@@ -457,20 +487,22 @@ After Phase 4, render `web/static/patches/test.akk` (the user's pattern from the
 ### E3. Polyrhythm where one branch has `{vel:0.25}` and another has `{cutoff:0.3}`
 
 Phase 3 behavior:
-- `apply_atom_properties` populates each branch's `prop_vals` independently.
+- `apply_atom_properties` populates each branch's `prop_vals` and sets the corresponding bit in `prop_vals_used`.
 - Merge takes `min(velocity)` (existing behavior, preserved).
-- Merge takes the first non-zero value per property slot, mirroring the existing `type_id` / `source_offset` merge semantics.
+- For each slot S in `0..cedar::MAX_PROPS_PER_EVENT`, the merge walks branches in order and takes the first branch where `prop_vals_used & (1u << S)` is set, copying that branch's `prop_vals[S]` to the merged event. This **bitmap-aware** merge correctly preserves an explicit `{cutoff:0}` (a branch can deliberately set the slot to 0.0); a "first non-zero value" merge policy would silently misroute that case.
 - Result: the merged event has `velocity = 0.25` AND `prop_vals[cutoff_slot] = 0.3`.
 
 This is the most subtle case the refactor enables. Captured in golden test G11+ and documented in the PRD as the **intentional behavior change** of Phase 3.
 
 ### E4. Scalar sample() with no velocity
 
-`sample(trig, pitch, "bd")` — `Kind::Scalar`, `velocity_buf = BUFFER_UNUSED`, helper skips the post-MUL and returns the raw SAMPLE_PLAY output. Bit-identical to today.
+`sample(trig, pitch, "bd")` — `Kind::Scalar`, `velocity_buf = BUFFER_UNUSED`, helper skips the post-MUL and returns the raw SAMPLE_PLAY output. Bit-identical to today **provided** the scalar caller in `codegen.cpp` passes `compute_state_id()` (from the live semantic-path stack at the call site) as `ctx.seq_state_id` and `BUILTINS["sample"].inst_rate` as `ctx.rate`. The caller also supplies the existing `pitch_buf` (the user-passed `pitch` arg buffer) so the helper does *not* allocate its own `PUSH_CONST 1.0` pitch buffer in scalar mode.
 
 ### E5. Custom slot allocator collision
 
-Two patterns in the same program both use `{cutoff:V}`. The slot allocator currently assigns the same slot (correct, by key). `apply_atom_properties` consults the same allocator instance so both patterns see the same slot ID. **No change.**
+Two patterns in the same program both use `{cutoff:V}`. The slot allocator currently assigns the same slot (correct, by key). `apply_atom_properties` consults the same `SequenceCompiler::allocate_property_slot` instance so both patterns see the same slot ID. **No change.**
+
+If a program references more distinct property keys than `cedar::MAX_PROPS_PER_EVENT` permits, `allocate_property_slot` already returns -1 / a slot >= cap (existing behavior). `apply_atom_properties` checks `slot < cedar::MAX_PROPS_PER_EVENT` and silently drops the value (matches today). The PRD does not introduce a new diagnostic in this commit — that's a future-work item and out of scope for the unification refactor.
 
 ### E6. Bytecode format change between phases
 
