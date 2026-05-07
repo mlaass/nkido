@@ -158,7 +158,10 @@ struct Node {
     struct StringData { std::string value; };
     struct IdentifierData { std::string name; };
     struct BinaryOpData { BinOp op; };
-    struct ArgumentData { std::optional<std::string> name; };  // Named arg
+    struct ArgumentData {
+        std::optional<std::string> name;        // Named arg
+        NodeIndex spread_source = NULL_NODE;    // ..expr — set when arg is spread; expression hung here, not added as child
+    };
     struct PitchData { std::uint8_t midi_note; };
     struct ChordData { std::uint8_t root_midi; std::vector<std::int8_t> intervals; };
     struct ClosureParamData {
@@ -344,6 +347,10 @@ struct Node {
 
     [[nodiscard]] const std::optional<std::string>& as_arg_name() const {
         return std::get<ArgumentData>(data).name;
+    }
+
+    [[nodiscard]] const ArgumentData& as_argument() const {
+        return std::get<ArgumentData>(data);
     }
 
     [[nodiscard]] std::uint8_t as_pitch() const {

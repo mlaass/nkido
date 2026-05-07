@@ -609,11 +609,21 @@ NodeIndex Parser::parse_array() {
         return node;
     }
 
-    // Parse elements
+    // Parse elements (with optional ..spread)
     do {
-        NodeIndex elem = parse_expression();
-        if (elem != NULL_NODE) {
-            arena_.add_child(node, elem);
+        if (check(TokenType::DotDot)) {
+            Token dot_tok = advance();  // consume '..'
+            NodeIndex spread_expr = parse_expression();
+            if (spread_expr != NULL_NODE) {
+                NodeIndex wrapper = arena_.alloc(NodeType::Argument, dot_tok.location);
+                arena_[wrapper].data = Node::ArgumentData{std::nullopt, spread_expr};
+                arena_.add_child(node, wrapper);
+            }
+        } else {
+            NodeIndex elem = parse_expression();
+            if (elem != NULL_NODE) {
+                arena_.add_child(node, elem);
+            }
         }
     } while (match(TokenType::Comma));
 
@@ -1091,6 +1101,14 @@ NodeIndex Parser::parse_argument() {
     Token start = current();
     NodeIndex node = make_node(NodeType::Argument, start);
 
+    // Check for spread argument: ..expr
+    if (check(TokenType::DotDot)) {
+        advance();  // consume '..'
+        NodeIndex spread_expr = parse_expression();
+        arena_[node].data = Node::ArgumentData{std::nullopt, spread_expr};
+        return node;
+    }
+
     // Check for named argument: identifier ':'
     if (check(TokenType::Identifier)) {
         std::size_t saved = current_idx_;
@@ -1098,7 +1116,7 @@ NodeIndex Parser::parse_argument() {
 
         if (check(TokenType::Colon)) {
             advance();  // consume ':'
-            arena_[node].data = Node::ArgumentData{std::string(name.lexeme)};
+            arena_[node].data = Node::ArgumentData{std::string(name.lexeme), NULL_NODE};
             NodeIndex value = parse_expression();
             if (value != NULL_NODE) {
                 arena_.add_child(node, value);
@@ -1111,7 +1129,7 @@ NodeIndex Parser::parse_argument() {
     }
 
     // Positional argument
-    arena_[node].data = Node::ArgumentData{std::nullopt};
+    arena_[node].data = Node::ArgumentData{std::nullopt, NULL_NODE};
     NodeIndex value = parse_expression();
     if (value != NULL_NODE) {
         arena_.add_child(node, value);

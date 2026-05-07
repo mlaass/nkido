@@ -21,7 +21,7 @@ static Ast parse_ok(std::string_view source) {
     auto [ast, parse_diags] = parse(std::move(tokens), source);
     if (!parse_diags.empty()) {
         for (const auto& d : parse_diags) {
-            INFO("Parse error: " << d.message);
+            UNSCOPED_INFO("Parse error: " << d.message << " at line " << d.location.line);
         }
     }
     REQUIRE(parse_diags.empty());
@@ -1513,6 +1513,239 @@ TEST_CASE("Parser record spreading", "[parser][records]") {
         REQUIRE(ast.arena[record].type == NodeType::RecordLit);
         REQUIRE(std::holds_alternative<Node::RecordLitData>(ast.arena[record].data));
         CHECK(ast.arena[record].as_record_lit().spread_source == NULL_NODE);
+    }
+}
+
+// =============================================================================
+// Parser: Argument and array spread (..expr)
+// =============================================================================
+
+TEST_CASE("Parser spread arguments", "[parser][spread]") {
+    SECTION("record-style spread arg in call") {
+        auto ast = parse_ok(R"(
+            r = {a: 1, b: 2}
+            f(..r)
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex call = ast.arena[stmt1].next_sibling;
+        REQUIRE(ast.arena[call].type == NodeType::Call);
+
+        NodeIndex arg = ast.arena[call].first_child;
+        REQUIRE(arg != NULL_NODE);
+        REQUIRE(ast.arena[arg].type == NodeType::Argument);
+        REQUIRE(std::holds_alternative<Node::ArgumentData>(ast.arena[arg].data));
+        const auto& adata = ast.arena[arg].as_argument();
+        CHECK_FALSE(adata.name.has_value());
+        CHECK(adata.spread_source != NULL_NODE);
+        // Spread source should be the identifier 'r'
+        CHECK(ast.arena[adata.spread_source].type == NodeType::Identifier);
+        // No child on the spread arg (expression hung off spread_source instead)
+        CHECK(ast.arena[arg].first_child == NULL_NODE);
+        // Only one arg
+        CHECK(ast.arena[arg].next_sibling == NULL_NODE);
+    }
+
+    SECTION("array-style spread arg in call") {
+        auto ast = parse_ok(R"(
+            arr = [1, 2, 3]
+            f(..arr)
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex call = ast.arena[stmt1].next_sibling;
+        REQUIRE(ast.arena[call].type == NodeType::Call);
+
+        NodeIndex arg = ast.arena[call].first_child;
+        REQUIRE(arg != NULL_NODE);
+        REQUIRE(ast.arena[arg].type == NodeType::Argument);
+        const auto& adata = ast.arena[arg].as_argument();
+        CHECK_FALSE(adata.name.has_value());
+        CHECK(adata.spread_source != NULL_NODE);
+        CHECK(ast.arena[adata.spread_source].type == NodeType::Identifier);
+    }
+
+    SECTION("inline record spread") {
+        auto ast = parse_ok("f(..{a: 1, b: 2})");
+        NodeIndex root = ast.root;
+        NodeIndex call = ast.arena[root].first_child;
+        REQUIRE(ast.arena[call].type == NodeType::Call);
+
+        NodeIndex arg = ast.arena[call].first_child;
+        REQUIRE(arg != NULL_NODE);
+        const auto& adata = ast.arena[arg].as_argument();
+        CHECK(adata.spread_source != NULL_NODE);
+        CHECK(ast.arena[adata.spread_source].type == NodeType::RecordLit);
+    }
+
+    SECTION("positional + spread + named arguments mixed") {
+        auto ast = parse_ok(R"(
+            r = {b: 2}
+            f(1, ..r, c: 3)
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex call = ast.arena[stmt1].next_sibling;
+        REQUIRE(ast.arena[call].type == NodeType::Call);
+
+        // arg 1: positional 1
+        NodeIndex arg1 = ast.arena[call].first_child;
+        REQUIRE(arg1 != NULL_NODE);
+        const auto& a1 = ast.arena[arg1].as_argument();
+        CHECK_FALSE(a1.name.has_value());
+        CHECK(a1.spread_source == NULL_NODE);
+
+        // arg 2: spread
+        NodeIndex arg2 = ast.arena[arg1].next_sibling;
+        REQUIRE(arg2 != NULL_NODE);
+        const auto& a2 = ast.arena[arg2].as_argument();
+        CHECK_FALSE(a2.name.has_value());
+        CHECK(a2.spread_source != NULL_NODE);
+
+        // arg 3: named c: 3
+        NodeIndex arg3 = ast.arena[arg2].next_sibling;
+        REQUIRE(arg3 != NULL_NODE);
+        const auto& a3 = ast.arena[arg3].as_argument();
+        REQUIRE(a3.name.has_value());
+        CHECK(*a3.name == "c");
+        CHECK(a3.spread_source == NULL_NODE);
+
+        CHECK(ast.arena[arg3].next_sibling == NULL_NODE);
+    }
+
+    SECTION("multiple spreads in one call") {
+        auto ast = parse_ok(R"(
+            r1 = {a: 1}
+            r2 = {b: 2}
+            f(..r1, ..r2)
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex stmt2 = ast.arena[stmt1].next_sibling;
+        NodeIndex call = ast.arena[stmt2].next_sibling;
+        REQUIRE(ast.arena[call].type == NodeType::Call);
+
+        NodeIndex arg1 = ast.arena[call].first_child;
+        NodeIndex arg2 = ast.arena[arg1].next_sibling;
+        CHECK(ast.arena[arg1].as_argument().spread_source != NULL_NODE);
+        CHECK(ast.arena[arg2].as_argument().spread_source != NULL_NODE);
+    }
+
+    SECTION("no spread - regular positional has NULL spread_source") {
+        auto ast = parse_ok("f(1, 2)");
+        NodeIndex root = ast.root;
+        NodeIndex call = ast.arena[root].first_child;
+        NodeIndex arg1 = ast.arena[call].first_child;
+        CHECK(ast.arena[arg1].as_argument().spread_source == NULL_NODE);
+    }
+
+    SECTION("no spread - named arg has NULL spread_source") {
+        auto ast = parse_ok("f(x: 1)");
+        NodeIndex root = ast.root;
+        NodeIndex call = ast.arena[root].first_child;
+        NodeIndex arg = ast.arena[call].first_child;
+        const auto& a = ast.arena[arg].as_argument();
+        REQUIRE(a.name.has_value());
+        CHECK(*a.name == "x");
+        CHECK(a.spread_source == NULL_NODE);
+    }
+}
+
+TEST_CASE("Parser array literal spread", "[parser][spread][array]") {
+    // Note: tests use `b = [..a, ...]` (assignment) rather than bare expressions
+    // because a bare `[...]` following another `]` would be parsed as indexing.
+
+    SECTION("spread followed by literal element") {
+        auto ast = parse_ok(R"(
+            a = [1, 2]
+            b = [..a, 3]
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex stmt2 = ast.arena[stmt1].next_sibling;
+        REQUIRE(ast.arena[stmt2].type == NodeType::Assignment);
+        NodeIndex arr = ast.arena[stmt2].first_child;
+        REQUIRE(ast.arena[arr].type == NodeType::ArrayLit);
+
+        // Element 1: spread wrapper Argument
+        NodeIndex el1 = ast.arena[arr].first_child;
+        REQUIRE(el1 != NULL_NODE);
+        REQUIRE(ast.arena[el1].type == NodeType::Argument);
+        const auto& a1 = ast.arena[el1].as_argument();
+        CHECK(a1.spread_source != NULL_NODE);
+        CHECK(ast.arena[a1.spread_source].type == NodeType::Identifier);
+
+        // Element 2: bare number literal 3
+        NodeIndex el2 = ast.arena[el1].next_sibling;
+        REQUIRE(el2 != NULL_NODE);
+        CHECK(ast.arena[el2].type == NodeType::NumberLit);
+    }
+
+    SECTION("multiple spreads in array literal") {
+        auto ast = parse_ok(R"(
+            a = [1, 2]
+            b = [3, 4]
+            c = [..a, ..b]
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex stmt2 = ast.arena[stmt1].next_sibling;
+        NodeIndex stmt3 = ast.arena[stmt2].next_sibling;
+        REQUIRE(ast.arena[stmt3].type == NodeType::Assignment);
+        NodeIndex arr = ast.arena[stmt3].first_child;
+        REQUIRE(ast.arena[arr].type == NodeType::ArrayLit);
+
+        NodeIndex el1 = ast.arena[arr].first_child;
+        REQUIRE(el1 != NULL_NODE);
+        CHECK(ast.arena[el1].as_argument().spread_source != NULL_NODE);
+
+        NodeIndex el2 = ast.arena[el1].next_sibling;
+        REQUIRE(el2 != NULL_NODE);
+        CHECK(ast.arena[el2].as_argument().spread_source != NULL_NODE);
+    }
+
+    SECTION("inline array spread") {
+        auto ast = parse_ok("[..[1, 2], 3]");
+        NodeIndex root = ast.root;
+        NodeIndex arr = ast.arena[root].first_child;
+        REQUIRE(ast.arena[arr].type == NodeType::ArrayLit);
+
+        NodeIndex el1 = ast.arena[arr].first_child;
+        REQUIRE(el1 != NULL_NODE);
+        const auto& a1 = ast.arena[el1].as_argument();
+        CHECK(a1.spread_source != NULL_NODE);
+        CHECK(ast.arena[a1.spread_source].type == NodeType::ArrayLit);
+    }
+
+    SECTION("regular array still has bare children") {
+        auto ast = parse_ok("[1, 2, 3]");
+        NodeIndex root = ast.root;
+        NodeIndex arr = ast.arena[root].first_child;
+        REQUIRE(ast.arena[arr].type == NodeType::ArrayLit);
+
+        NodeIndex el1 = ast.arena[arr].first_child;
+        REQUIRE(el1 != NULL_NODE);
+        // Plain number literal — not an Argument wrapper
+        CHECK(ast.arena[el1].type == NodeType::NumberLit);
+    }
+
+    SECTION("spread at end of array") {
+        auto ast = parse_ok(R"(
+            a = [2, 3]
+            b = [1, ..a]
+        )");
+        NodeIndex root = ast.root;
+        NodeIndex stmt1 = ast.arena[root].first_child;
+        NodeIndex stmt2 = ast.arena[stmt1].next_sibling;
+        NodeIndex arr = ast.arena[stmt2].first_child;
+        REQUIRE(ast.arena[arr].type == NodeType::ArrayLit);
+
+        NodeIndex el1 = ast.arena[arr].first_child;
+        CHECK(ast.arena[el1].type == NodeType::NumberLit);
+        NodeIndex el2 = ast.arena[el1].next_sibling;
+        REQUIRE(el2 != NULL_NODE);
+        REQUIRE(ast.arena[el2].type == NodeType::Argument);
+        CHECK(ast.arena[el2].as_argument().spread_source != NULL_NODE);
     }
 }
 
