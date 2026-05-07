@@ -1204,46 +1204,57 @@ void SemanticAnalyzer::resolve_and_validate(NodeIndex node) {
             // Validate user function call
             const auto& fn = sym->user_function;
 
-            // Reorder named arguments if any
-            {
+            // Spread arguments are statically unsized — defer arg-count and
+            // reorder validation to codegen, which expands ..record / ..array
+            // sources into concrete args via expand_call_arguments().
+            const bool spread = has_spread_arg(node);
+
+            if (!spread) {
+                // Reorder named arguments if any
                 std::vector<std::string> pnames;
                 for (const auto& p : fn.params) pnames.push_back(p.name);
                 reorder_named_arguments(node, pnames, func_name);
-            }
 
-            // Count arguments
-            std::size_t arg_count = 0;
-            NodeIndex arg = output_arena_[node].first_child;
-            while (arg != NULL_NODE) {
-                arg_count++;
-                arg = output_arena_[arg].next_sibling;
-            }
-
-            // Count required args (params without defaults or rest)
-            std::size_t min_args = 0;
-            for (const auto& param : fn.params) {
-                if (!param.default_value.has_value() &&
-                    !param.default_string.has_value() &&
-                    param.default_node == NULL_NODE &&
-                    !param.is_rest) {
-                    min_args++;
+                // Count arguments
+                std::size_t arg_count = 0;
+                NodeIndex arg = output_arena_[node].first_child;
+                while (arg != NULL_NODE) {
+                    arg_count++;
+                    arg = output_arena_[arg].next_sibling;
                 }
-            }
 
-            if (arg_count < min_args) {
-                error("E006", "Function '" + func_name + "' expects at least " +
-                      std::to_string(min_args) + " argument(s), got " +
-                      std::to_string(arg_count), n.location);
-            } else if (!fn.has_rest_param) {
-                // Only enforce max if no rest param
-                std::size_t max_args = fn.params.size();
-                if (arg_count > max_args) {
-                    error("E007", "Function '" + func_name + "' expects at most " +
-                          std::to_string(max_args) + " argument(s), got " +
+                // Count required args (params without defaults or rest)
+                std::size_t min_args = 0;
+                for (const auto& param : fn.params) {
+                    if (!param.default_value.has_value() &&
+                        !param.default_string.has_value() &&
+                        param.default_node == NULL_NODE &&
+                        !param.is_rest) {
+                        min_args++;
+                    }
+                }
+
+                if (arg_count < min_args) {
+                    error("E006", "Function '" + func_name + "' expects at least " +
+                          std::to_string(min_args) + " argument(s), got " +
                           std::to_string(arg_count), n.location);
+                } else if (!fn.has_rest_param) {
+                    // Only enforce max if no rest param
+                    std::size_t max_args = fn.params.size();
+                    if (arg_count > max_args) {
+                        error("E007", "Function '" + func_name + "' expects at most " +
+                              std::to_string(max_args) + " argument(s), got " +
+                              std::to_string(arg_count), n.location);
+                    }
                 }
             }
         } else if (sym->kind == SymbolKind::Builtin) {
+            // Spread arguments are statically unsized — defer validation to
+            // codegen, which expands ..record / ..array sources before the
+            // builtin handler runs (Phase 6).
+            if (has_spread_arg(node)) {
+                // Skip arg-count and reorder for spread calls.
+            } else
             if (func_name == "tap_delay" || func_name == "tap_delay_ms" || func_name == "tap_delay_smp") {
                 // Validate tap_delay(in, time, fb, processor, [dry], [wet])
                 std::size_t arg_count = 0;
@@ -1933,6 +1944,21 @@ void SemanticAnalyzer::check_closure_captures(NodeIndex node,
         check_closure_captures(child, params, closure_loc);
         child = output_arena_[child].next_sibling;
     }
+}
+
+bool SemanticAnalyzer::has_spread_arg(NodeIndex call_node) const {
+    if (call_node == NULL_NODE) return false;
+    NodeIndex arg = output_arena_[call_node].first_child;
+    while (arg != NULL_NODE) {
+        const Node& a = output_arena_[arg];
+        if (a.type == NodeType::Argument &&
+            std::holds_alternative<Node::ArgumentData>(a.data) &&
+            a.as_argument().spread_source != NULL_NODE) {
+            return true;
+        }
+        arg = output_arena_[arg].next_sibling;
+    }
+    return false;
 }
 
 bool SemanticAnalyzer::reorder_named_arguments(NodeIndex call_node,

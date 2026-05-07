@@ -106,6 +106,11 @@ private:
                                  const std::vector<std::string>& param_names,
                                  const std::string& func_name);
 
+    // Helper: Returns true if any child of the call node is a spread argument
+    // (Argument with spread_source != NULL_NODE). When spread is present,
+    // argument count and reordering are deferred to codegen.
+    bool has_spread_arg(NodeIndex call_node) const;
+
     // Helper: Verify that an expression is pure (allowed in const context)
     void verify_const_purity(NodeIndex node, const std::string& context);
 

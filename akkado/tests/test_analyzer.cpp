@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <akkado/akkado.hpp>
 #include <akkado/analyzer.hpp>
+#include <akkado/lexer.hpp>
 #include <akkado/parser.hpp>
 #include <string>
 
@@ -251,5 +252,64 @@ TEST_CASE("Analyzer: Match expression analysis", "[analyzer]") {
     SECTION("match with number patterns") {
         auto result = compile("match(5) { 0: 0, 1: 1, _: 99 }");
         CHECK(result.success);
+    }
+}
+
+// =============================================================================
+// Analyzer: Spread arguments — Phase 2 validation
+// =============================================================================
+
+// Helper: run lexer + parser + analyzer only (no codegen).
+// Codegen for spread args is implemented in later phases; analyzer-only tests
+// verify that argument-count and reordering checks are deferred when spread
+// is present, without exercising the still-unimplemented codegen path.
+static std::vector<Diagnostic> analyze_only(std::string_view src) {
+    auto [tokens, lex_diags] = lex(src);
+    auto [ast, parse_diags] = parse(std::move(tokens), src);
+    SemanticAnalyzer analyzer;
+    auto result = analyzer.analyze(ast, "<input>");
+    return result.diagnostics;
+}
+
+TEST_CASE("Analyzer: Spread arg defers count check", "[analyzer][spread]") {
+    SECTION("user fn with too many args is rejected without spread") {
+        auto diags = analyze_only(
+            "fn f(a, b) -> a + b\n"
+            "f(1, 2, 3)");
+        CHECK(has_error(diags, "E007"));
+    }
+
+    SECTION("user fn with spread skips E007 max-arg check") {
+        // r could expand to fewer or more than 'too many' fields — analyzer
+        // must NOT statically reject. Codegen handles the actual binding.
+        auto diags = analyze_only(
+            "fn f(a, b) -> a + b\n"
+            "r = {a: 1, b: 2}\n"
+            "f(..r)");
+        CHECK_FALSE(has_error(diags, "E007"));
+        CHECK_FALSE(has_error(diags, "E006"));
+    }
+
+    SECTION("user fn with spread skips E006 min-arg check") {
+        auto diags = analyze_only(
+            "fn f(a, b, c) -> a + b + c\n"
+            "r = {a: 1, b: 2, c: 3}\n"
+            "f(..r)");
+        CHECK_FALSE(has_error(diags, "E006"));
+    }
+
+    SECTION("builtin tap_delay with spread skips E301") {
+        // Without spread, tap_delay needs 4-6 args.
+        auto diags = analyze_only(
+            "config = {time: 0.5, fb: 0.5}\n"
+            "tap_delay(osc(\"sin\", 440), ..config, (x) -> x)");
+        CHECK_FALSE(has_error(diags, "E301"));
+    }
+
+    SECTION("user fn without spread still validates min-arg") {
+        auto diags = analyze_only(
+            "fn f(a, b, c) -> a + b + c\n"
+            "f(1)");
+        CHECK(has_error(diags, "E006"));
     }
 }
