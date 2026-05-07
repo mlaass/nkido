@@ -259,17 +259,57 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
                 return cache_and_return(node, TypedValue::make_array({}, out));
             }
 
-            // Visit all elements and collect TypedValues
+            // Visit all elements, flattening any ..array spread elements.
             std::vector<TypedValue> elements;
+            bool had_spread = false;
             NodeIndex elem = first_elem;
             while (elem != NULL_NODE) {
-                TypedValue elem_tv = visit(elem);
-                elements.push_back(elem_tv);
+                const Node& en = ast_->arena[elem];
+                if (en.type == NodeType::Argument &&
+                    std::holds_alternative<Node::ArgumentData>(en.data) &&
+                    en.as_argument().spread_source != NULL_NODE) {
+                    had_spread = true;
+                    NodeIndex src_node = en.as_argument().spread_source;
+                    TypedValue src_tv = visit(src_node);
+                    if (src_tv.type != ValueType::Array || !src_tv.array) {
+                        error("E140", "Spread source is not an array",
+                              ast_->arena[src_node].location);
+                        return TypedValue::error_val();
+                    }
+                    for (const auto& el : src_tv.array->elements) {
+                        elements.push_back(el);
+                    }
+                } else {
+                    TypedValue elem_tv = visit(elem);
+                    elements.push_back(elem_tv);
+                }
                 elem = ast_->arena[elem].next_sibling;
             }
 
-            if (elements.size() == 1) {
-                // Single element - return directly
+            if (elements.empty()) {
+                // All spreads were empty — emit a zero placeholder buffer like the
+                // empty-array branch above.
+                std::uint16_t out = buffers_.allocate();
+                if (out == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    return TypedValue::error_val();
+                }
+                cedar::Instruction inst{};
+                inst.opcode = cedar::Opcode::PUSH_CONST;
+                inst.out_buffer = out;
+                inst.inputs[0] = 0xFFFF;
+                inst.inputs[1] = 0xFFFF;
+                inst.inputs[2] = 0xFFFF;
+                inst.inputs[3] = 0xFFFF;
+                encode_const_value(inst, 0.0f);
+                emit(inst);
+                return cache_and_return(node, TypedValue::make_array({}, out));
+            }
+
+            // Single non-spread element: return its value directly so the
+            // call site stays a Signal/Number/etc. With a spread we always
+            // wrap, even at length 1, since the user wrote `[..a, ...]`.
+            if (elements.size() == 1 && !had_spread) {
                 return cache_and_return(node, elements[0]);
             }
 

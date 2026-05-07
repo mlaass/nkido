@@ -8102,3 +8102,67 @@ TEST_CASE("Mixed record + array spread emits E180", "[codegen][spread]") {
     for (const auto& d : result.diagnostics) if (d.code == "E180") got_e180 = true;
     CHECK(got_e180);
 }
+
+// =============================================================================
+// Phase 5: Array literal spread (..arr inside [..])
+// =============================================================================
+
+TEST_CASE("Array literal spread flattens elements", "[codegen][spread][array]") {
+    SECTION("simple ..arr at front") {
+        auto result = akkado::compile(
+            "a = [1, 2]\n"
+            "b = [..a, 3]\n"
+            "len(b)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("spread at end") {
+        auto result = akkado::compile(
+            "a = [2, 3]\n"
+            "b = [1, ..a]\n"
+            "len(b)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("multiple spreads") {
+        auto result = akkado::compile(
+            "a = [1, 2]\n"
+            "b = [3, 4]\n"
+            "c = [..a, ..b]\n"
+            "len(c)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("inline array spread") {
+        auto result = akkado::compile(
+            "x = [..[1, 2], 3]\n"
+            "len(x)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("empty array spread is valid") {
+        auto result = akkado::compile(
+            "empty = []\n"
+            "y = [..empty, 1, 2]\n"
+            "len(y)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("non-array spread emits E140") {
+        auto result = akkado::compile(
+            "x = 42\n"
+            "y = [..x, 1]\n"
+            "len(y)"
+        );
+        REQUIRE_FALSE(result.success);
+        bool got_e140 = false;
+        for (const auto& d : result.diagnostics) if (d.code == "E140") got_e140 = true;
+        CHECK(got_e140);
+    }
+}
+
