@@ -8207,3 +8207,73 @@ TEST_CASE("Builtin call accepts ..record spread", "[codegen][spread][builtin]") 
     }
 }
 
+// =============================================================================
+// Phase 7: Spread integration tests (PRD §10.4)
+// =============================================================================
+
+TEST_CASE("Spread integration: multi-spread combinations", "[codegen][spread][integration]") {
+    SECTION("multiple record spreads — later wins") {
+        auto result = akkado::compile(
+            "fn f(a, b) -> a + b\n"
+            "r1 = {a: 1, b: 2}\n"
+            "r2 = {b: 99}\n"
+            "f(..r1, ..r2) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("nested array spread in array literal") {
+        // Note: single-element arrays collapse to scalars in this codebase
+        // (existing semantics), so spread sources must be ≥ 2 elements.
+        auto result = akkado::compile(
+            "a = [1, 2]\n"
+            "b = [3, 4]\n"
+            "c = [5, 6]\n"
+            "all = [..a, ..b, ..c]\n"
+            "len(all)"
+        );
+        REQUIRE(result.success);
+    }
+}
+
+TEST_CASE("Spread integration: closure call with spread", "[codegen][spread][integration]") {
+    SECTION("record spread into closure assigned to var") {
+        auto result = akkado::compile(
+            "g = (x, y) -> x * y\n"
+            "r = {x: 3, y: 7}\n"
+            "g(..r) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("array spread into closure") {
+        auto result = akkado::compile(
+            "g = (x, y) -> x + y\n"
+            "arr = [1, 2]\n"
+            "g(..arr) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+}
+
+TEST_CASE("Spread integration: edge cases", "[codegen][spread][integration]") {
+    SECTION("empty record spread falls back to defaults") {
+        auto result = akkado::compile(
+            "fn f(a = 1, b = 2) -> a + b\n"
+            "r = {}\n"
+            "f(..r) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("spread with only named arg afterward") {
+        auto result = akkado::compile(
+            "fn f(a, b) -> a + b\n"
+            "r = {a: 1}\n"
+            "f(..r, b: 99) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+}
+
+
