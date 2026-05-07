@@ -1,24 +1,22 @@
-// Stepper Demo — userspace `step` and `step_dir` written entirely in Akkado.
+// Stepper Demo: userspace `step` and `step_dir` written entirely in Akkado.
 //
-// Both operators are implemented here using only primitives introduced by
-// the userspace-state PRD: `counter()` for index advancement, `state()` for
-// per-instance storage, `gateup()` for trigger detection, and UFCS so
-// `array.step(trig)` reads naturally as a method call.
-//
-// No C++ opcode changes are needed for either operator — they ship as
-// .akk closures and load like any other patch.
+// Both operators are implemented here using only primitives : 
+// `counter()` for index advancement, `state()` for
+// per-instance storage, `gateup()` for trigger detection.
+// Uniform Function Call Syntax (UFCS) makes `array.step(trig)` read naturally as a method call.
+
 
 bpm = 120
 
-// step(arr, trig) — walks `arr` cyclically on every rising edge of `trig`.
+// step(arr, trig): walks `arr` cyclically on every rising edge of `trig`.
 // ARRAY_INDEX wraps by default, so an unbounded `counter` index is fine —
 // no need for an explicit wrap(..., 0, len(arr)) here.
-step = (arr, trig) -> arr[counter(trig)]
+fn step (arr, trig) -> arr[counter(trig)]
 
-// step_dir(arr, trig, dir) — like step, but advances by `dir` each tick
+// step_dir(arr, trig, dir): like step, but advances by `dir` each tick
 // (use 1 for forward, -1 for backward, etc.). Uses a state cell directly
 // to carry the index across blocks.
-step_dir = (arr, trig, dir) -> {
+fn step_dir (arr, trig, dir) -> {
   idx = state(0)
   idx.set(select(gateup(trig), idx.get() + dir, idx.get()))
   arr[idx.get()]
@@ -35,7 +33,9 @@ melody = notes.step(trigger(4))
 bass = notes.step_dir(trigger(2), -1)
 
 // Render the two voices into a stereo mix.
-melody |> mtof(%) as f1 |> sine(f1) * 0.25 as L
-bass   |> mtof(%) as f2 |> sine(f2 / 2) * 0.25 as R
-
-L + R |> out(%, %)
+melody 
+  |> mtof(%) as f1 
+  |> sine(f1) * 0.5 as L
+bass   
+  |> mtof(%) as f2 
+  |> tri(f2 / 2) * 0.5 as R

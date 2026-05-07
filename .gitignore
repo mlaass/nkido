@@ -49,3 +49,4 @@ web/static/soundfonts/
 
 docs/*proposal.md
 .claude/*.lock
+*__dont_commit__*
