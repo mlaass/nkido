@@ -136,17 +136,39 @@ TypedValue CodeGenerator::handle_user_function_call(
     }
 
 
-    // Collect call arguments
-    std::vector<NodeIndex> args;
-    NodeIndex arg = n.first_child;
-    while (arg != NULL_NODE) {
-        const Node& arg_node = ast_->arena[arg];
-        NodeIndex arg_value = arg;
-        if (arg_node.type == NodeType::Argument) {
-            arg_value = arg_node.first_child;
+    // Detect ..record / ..array spread arguments. Spread expansion handles
+    // its own arg-to-param binding (positional + name match) inline below,
+    // bypassing the legacy positional-only path.
+    bool has_spread = false;
+    {
+        NodeIndex it = n.first_child;
+        while (it != NULL_NODE) {
+            const Node& a = ast_->arena[it];
+            if (a.type == NodeType::Argument &&
+                std::holds_alternative<Node::ArgumentData>(a.data) &&
+                a.as_argument().spread_source != NULL_NODE) {
+                has_spread = true;
+                break;
+            }
+            it = ast_->arena[it].next_sibling;
         }
-        args.push_back(arg_value);
-        arg = ast_->arena[arg].next_sibling;
+    }
+
+    // Collect call arguments. Without spread, this is a flat NodeIndex list
+    // for the legacy binding path. With spread, args is left empty here and
+    // the spread-aware binding loop below builds param_bufs directly.
+    std::vector<NodeIndex> args;
+    if (!has_spread) {
+        NodeIndex arg = n.first_child;
+        while (arg != NULL_NODE) {
+            const Node& arg_node = ast_->arena[arg];
+            NodeIndex arg_value = arg;
+            if (arg_node.type == NodeType::Argument) {
+                arg_value = arg_node.first_child;
+            }
+            args.push_back(arg_value);
+            arg = ast_->arena[arg].next_sibling;
+        }
     }
 
     // Save param_literals, param_string_defaults, param_multi_buffer_sources, and param_function_refs for this scope
@@ -172,6 +194,166 @@ TypedValue CodeGenerator::handle_user_function_call(
     std::string rest_param_name;
     std::vector<std::uint16_t> rest_buffers;
 
+    if (has_spread) {
+        // Expand ..record / ..array sources into a flat list of (positional, named) entries.
+        auto expanded_opt = expand_call_arguments(node);
+        if (!expanded_opt) {
+            param_literals_ = std::move(saved_param_literals);
+            param_string_defaults_ = std::move(saved_param_string_defaults);
+            param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
+            param_function_refs_ = std::move(saved_param_function_refs);
+            return TypedValue::error_val();
+        }
+        std::vector<const ExpandedArg*> positional;
+        std::unordered_map<std::string, const ExpandedArg*> by_name;
+        for (const auto& ea : *expanded_opt) {
+            if (ea.name) {
+                by_name[*ea.name] = &ea;
+            } else {
+                positional.push_back(&ea);
+            }
+        }
+
+        // Bind each parameter from positional first, then by name, then default.
+        std::set<std::string> consumed_names;
+        for (std::size_t i = 0; i < func.params.size(); ++i) {
+            const auto& param = func.params[i];
+
+            if (param.is_rest) {
+                // Rest + spread is unsupported in this phase — keep semantics simple.
+                rest_param_name = param.name;
+                for (std::size_t j = i; j < positional.size(); ++j) {
+                    const ExpandedArg* ea = positional[j];
+                    std::uint16_t buf;
+                    if (ea->resolved) {
+                        buf = ea->resolved->buffer;
+                    } else {
+                        buf = visit(ea->source_node).buffer;
+                    }
+                    rest_buffers.push_back(buf);
+                }
+                positional.clear();  // consumed
+                std::uint16_t pbuf = rest_buffers.empty() ? BufferAllocator::BUFFER_UNUSED : rest_buffers[0];
+                param_bufs.push_back(pbuf);
+                break;
+            }
+
+            const ExpandedArg* arg_to_use = nullptr;
+            if (i < positional.size()) {
+                arg_to_use = positional[i];
+            } else if (auto it = by_name.find(param.name); it != by_name.end()) {
+                arg_to_use = it->second;
+                consumed_names.insert(param.name);
+            }
+
+            std::uint16_t param_buf = BufferAllocator::BUFFER_UNUSED;
+            if (arg_to_use) {
+                if (arg_to_use->resolved) {
+                    const TypedValue& tv = *arg_to_use->resolved;
+                    param_buf = tv.buffer;
+                    if (tv.type == ValueType::Array && tv.array &&
+                        tv.array->elements.size() > 1) {
+                        param_multi_bufs[i] = buffers_of(tv);
+                    }
+                } else {
+                    // Concrete arg coming through the spread call (positional or named).
+                    NodeIndex src = arg_to_use->source_node;
+                    const Node& arg_node = ast_->arena[src];
+                    if (arg_node.type == NodeType::StringLit ||
+                        arg_node.type == NodeType::NumberLit ||
+                        arg_node.type == NodeType::BoolLit) {
+                        std::uint32_t param_hash = fnv1a_hash(param.name);
+                        param_literals_[param_hash] = src;
+                    }
+                    TypedValue tv = visit(src);
+                    param_buf = tv.buffer;
+                    if (is_multi_buffer(src)) {
+                        std::uint32_t param_hash = fnv1a_hash(param.name);
+                        param_multi_buffer_sources_[param_hash] = src;
+                    }
+                    if (tv.type == ValueType::Array && tv.array &&
+                        tv.array->elements.size() > 1) {
+                        param_multi_bufs[i] = buffers_of(tv);
+                    }
+                }
+            } else if (param.default_value.has_value()) {
+                param_buf = buffers_.allocate();
+                if (param_buf == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    param_literals_ = std::move(saved_param_literals);
+                    param_string_defaults_ = std::move(saved_param_string_defaults);
+                    param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
+                    param_function_refs_ = std::move(saved_param_function_refs);
+                    return TypedValue::void_val();
+                }
+                cedar::Instruction push_inst{};
+                push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                push_inst.out_buffer = param_buf;
+                push_inst.inputs[0] = 0xFFFF;
+                push_inst.inputs[1] = 0xFFFF;
+                push_inst.inputs[2] = 0xFFFF;
+                push_inst.inputs[3] = 0xFFFF;
+                encode_const_value(push_inst, static_cast<float>(*param.default_value));
+                emit(push_inst);
+            } else if (param.default_string.has_value()) {
+                param_buf = BufferAllocator::BUFFER_UNUSED;
+                std::uint32_t param_hash = fnv1a_hash(param.name);
+                param_string_defaults_[param_hash] = *param.default_string;
+            } else if (param.default_node != NULL_NODE) {
+                ConstEvaluator evaluator(*ast_, *symbols_);
+                auto result = evaluator.evaluate(param.default_node);
+                for (const auto& diag : evaluator.diagnostics()) {
+                    diagnostics_.push_back(diag);
+                }
+                if (result && std::holds_alternative<double>(*result)) {
+                    float val = static_cast<float>(std::get<double>(*result));
+                    param_buf = emit_push_const(buffers_, instructions_, val);
+                } else {
+                    error("E105",
+                          "Cannot evaluate default expression at compile time for parameter '" +
+                          param.name + "'", n.location);
+                    param_literals_ = std::move(saved_param_literals);
+                    param_string_defaults_ = std::move(saved_param_string_defaults);
+                    param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
+                    param_function_refs_ = std::move(saved_param_function_refs);
+                    return TypedValue::void_val();
+                }
+            } else {
+                error("E105", "Missing required argument for parameter '" +
+                      param.name + "'", n.location);
+                param_literals_ = std::move(saved_param_literals);
+                param_string_defaults_ = std::move(saved_param_string_defaults);
+                param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
+                param_function_refs_ = std::move(saved_param_function_refs);
+                return TypedValue::void_val();
+            }
+            param_bufs.push_back(param_buf);
+        }
+
+        // Validate excess positional and unmatched named (W160).
+        if (!func.has_rest_param && positional.size() > func.params.size()) {
+            error("E107", "Too many arguments — function '" + func.name + "' takes " +
+                  std::to_string(func.params.size()) + ", got " +
+                  std::to_string(positional.size()), n.location);
+            param_literals_ = std::move(saved_param_literals);
+            param_string_defaults_ = std::move(saved_param_string_defaults);
+            param_multi_buffer_sources_ = std::move(saved_param_multi_buffer_sources);
+            param_function_refs_ = std::move(saved_param_function_refs);
+            return TypedValue::error_val();
+        }
+        for (const auto& [name, ea] : by_name) {
+            if (consumed_names.find(name) == consumed_names.end()) {
+                std::string params_sig;
+                for (std::size_t i = 0; i < func.params.size(); ++i) {
+                    if (i > 0) params_sig += ", ";
+                    params_sig += func.params[i].name;
+                }
+                warn("W160", "Spread field '" + name +
+                     "' has no matching parameter in " + func.name +
+                     "(" + params_sig + ")", ea->loc);
+            }
+        }
+    } else
     for (std::size_t i = 0; i < func.params.size(); ++i) {
         std::uint16_t param_buf;
 
@@ -482,17 +664,35 @@ TypedValue CodeGenerator::handle_user_function_call(
 TypedValue CodeGenerator::handle_function_value_call(
     NodeIndex node, const Node& n, const FunctionRef& func) {
 
-    // Collect call arguments
-    std::vector<NodeIndex> args;
-    NodeIndex arg = n.first_child;
-    while (arg != NULL_NODE) {
-        const Node& arg_node = ast_->arena[arg];
-        NodeIndex arg_value = arg;
-        if (arg_node.type == NodeType::Argument) {
-            arg_value = arg_node.first_child;
+    // Detect ..record / ..array spread in the call.
+    bool has_spread = false;
+    {
+        NodeIndex it = n.first_child;
+        while (it != NULL_NODE) {
+            const Node& a = ast_->arena[it];
+            if (a.type == NodeType::Argument &&
+                std::holds_alternative<Node::ArgumentData>(a.data) &&
+                a.as_argument().spread_source != NULL_NODE) {
+                has_spread = true;
+                break;
+            }
+            it = ast_->arena[it].next_sibling;
         }
-        args.push_back(arg_value);
-        arg = ast_->arena[arg].next_sibling;
+    }
+
+    // Collect call arguments (legacy positional-only path; spread takes a separate branch).
+    std::vector<NodeIndex> args;
+    if (!has_spread) {
+        NodeIndex arg = n.first_child;
+        while (arg != NULL_NODE) {
+            const Node& arg_node = ast_->arena[arg];
+            NodeIndex arg_value = arg;
+            if (arg_node.type == NodeType::Argument) {
+                arg_value = arg_node.first_child;
+            }
+            args.push_back(arg_value);
+            arg = ast_->arena[arg].next_sibling;
+        }
     }
 
     // Save param_literals and param_string_defaults for this scope
@@ -509,6 +709,124 @@ TypedValue CodeGenerator::handle_function_value_call(
     // ARRAY_PACK + ARRAY_INDEX with the correct length) instead of just the
     // first element's buffer with length=1.
     std::vector<std::vector<std::uint16_t>> param_multi_bufs(func.params.size());
+
+    if (has_spread) {
+        auto expanded_opt = expand_call_arguments(node);
+        if (!expanded_opt) {
+            param_literals_ = std::move(saved_param_literals);
+            param_string_defaults_ = std::move(saved_param_string_defaults);
+            return TypedValue::error_val();
+        }
+        std::vector<const ExpandedArg*> positional;
+        std::unordered_map<std::string, const ExpandedArg*> by_name;
+        for (const auto& ea : *expanded_opt) {
+            if (ea.name) by_name[*ea.name] = &ea;
+            else positional.push_back(&ea);
+        }
+        std::set<std::string> consumed_names;
+        for (std::size_t i = 0; i < func.params.size(); ++i) {
+            const auto& param = func.params[i];
+            const ExpandedArg* arg_to_use = nullptr;
+            if (i < positional.size()) {
+                arg_to_use = positional[i];
+            } else if (auto it = by_name.find(param.name); it != by_name.end()) {
+                arg_to_use = it->second;
+                consumed_names.insert(param.name);
+            }
+            std::uint16_t param_buf = BufferAllocator::BUFFER_UNUSED;
+            if (arg_to_use) {
+                if (arg_to_use->resolved) {
+                    const TypedValue& tv = *arg_to_use->resolved;
+                    param_buf = tv.buffer;
+                    if (tv.type == ValueType::Array && tv.array &&
+                        tv.array->elements.size() > 1) {
+                        param_multi_bufs[i] = buffers_of(tv);
+                    }
+                } else {
+                    NodeIndex src = arg_to_use->source_node;
+                    const Node& arg_node = ast_->arena[src];
+                    if (arg_node.type == NodeType::StringLit ||
+                        arg_node.type == NodeType::NumberLit ||
+                        arg_node.type == NodeType::BoolLit) {
+                        std::uint32_t param_hash = fnv1a_hash(param.name);
+                        param_literals_[param_hash] = src;
+                    }
+                    TypedValue tv = visit(src);
+                    param_buf = tv.buffer;
+                    if (tv.type == ValueType::Array && tv.array &&
+                        tv.array->elements.size() > 1) {
+                        param_multi_bufs[i] = buffers_of(tv);
+                    }
+                }
+            } else if (param.default_value.has_value()) {
+                param_buf = buffers_.allocate();
+                if (param_buf == BufferAllocator::BUFFER_UNUSED) {
+                    error("E101", "Buffer pool exhausted", n.location);
+                    param_literals_ = std::move(saved_param_literals);
+                    param_string_defaults_ = std::move(saved_param_string_defaults);
+                    return TypedValue::void_val();
+                }
+                cedar::Instruction push_inst{};
+                push_inst.opcode = cedar::Opcode::PUSH_CONST;
+                push_inst.out_buffer = param_buf;
+                push_inst.inputs[0] = 0xFFFF;
+                push_inst.inputs[1] = 0xFFFF;
+                push_inst.inputs[2] = 0xFFFF;
+                push_inst.inputs[3] = 0xFFFF;
+                encode_const_value(push_inst, static_cast<float>(*param.default_value));
+                emit(push_inst);
+            } else if (param.default_string.has_value()) {
+                param_buf = BufferAllocator::BUFFER_UNUSED;
+                std::uint32_t param_hash = fnv1a_hash(param.name);
+                param_string_defaults_[param_hash] = *param.default_string;
+            } else if (param.default_node != NULL_NODE) {
+                ConstEvaluator evaluator(*ast_, *symbols_);
+                auto result = evaluator.evaluate(param.default_node);
+                for (const auto& diag : evaluator.diagnostics()) {
+                    diagnostics_.push_back(diag);
+                }
+                if (result && std::holds_alternative<double>(*result)) {
+                    float val = static_cast<float>(std::get<double>(*result));
+                    param_buf = emit_push_const(buffers_, instructions_, val);
+                } else {
+                    error("E105",
+                          "Cannot evaluate default expression at compile time for parameter '" +
+                          param.name + "'", n.location);
+                    param_literals_ = std::move(saved_param_literals);
+                    param_string_defaults_ = std::move(saved_param_string_defaults);
+                    return TypedValue::void_val();
+                }
+            } else {
+                error("E105", "Missing required argument for parameter '" +
+                      param.name + "'", n.location);
+                param_literals_ = std::move(saved_param_literals);
+                param_string_defaults_ = std::move(saved_param_string_defaults);
+                return TypedValue::void_val();
+            }
+            param_bufs.push_back(param_buf);
+        }
+
+        if (positional.size() > func.params.size()) {
+            error("E107", "Too many arguments — closure takes " +
+                  std::to_string(func.params.size()) + ", got " +
+                  std::to_string(positional.size()), n.location);
+            param_literals_ = std::move(saved_param_literals);
+            param_string_defaults_ = std::move(saved_param_string_defaults);
+            return TypedValue::error_val();
+        }
+        for (const auto& [name, ea] : by_name) {
+            if (consumed_names.find(name) == consumed_names.end()) {
+                std::string params_sig;
+                for (std::size_t i = 0; i < func.params.size(); ++i) {
+                    if (i > 0) params_sig += ", ";
+                    params_sig += func.params[i].name;
+                }
+                warn("W160", "Spread field '" + name +
+                     "' has no matching parameter in closure(" + params_sig + ")",
+                     ea->loc);
+            }
+        }
+    } else
     for (std::size_t i = 0; i < func.params.size(); ++i) {
         std::uint16_t param_buf;
 

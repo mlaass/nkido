@@ -7971,3 +7971,134 @@ TEST_CASE("sample() accepts a sample-name string", "[codegen][sample][string-arg
         CHECK(result.scalar_sample_mappings.empty());
     }
 }
+
+// =============================================================================
+// Phase 4: Record / array spread in user-defined function calls
+// =============================================================================
+
+TEST_CASE("User fn record spread: name-based binding", "[codegen][spread]") {
+    SECTION("record fields fill all params by name") {
+        auto result = akkado::compile(
+            "fn myAdd(a, b) -> a + b\n"
+            "r = {a: 1, b: 2}\n"
+            "myAdd(..r) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("record field order is irrelevant — match is by name") {
+        auto result = akkado::compile(
+            "fn synth(freq, vel) -> freq * vel\n"
+            "r = {vel: 0.8, freq: 440}\n"
+            "synth(..r) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("positional arg + record spread") {
+        auto result = akkado::compile(
+            "fn f(a, b, c) -> a + b + c\n"
+            "r = {b: 2, c: 3}\n"
+            "f(1, ..r) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("record spread + named override") {
+        auto result = akkado::compile(
+            "fn f(a, b) -> a + b\n"
+            "r = {a: 1, b: 2}\n"
+            "f(..r, b: 99) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("inline record spread") {
+        auto result = akkado::compile(
+            "fn f(a, b) -> a + b\n"
+            "f(..{a: 1, b: 2}) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("missing required field emits E105") {
+        auto result = akkado::compile(
+            "fn f(a, b, c) -> a + b + c\n"
+            "r = {a: 1, b: 2}\n"
+            "f(..r) |> out(%, %)"
+        );
+        REQUIRE_FALSE(result.success);
+        bool got_e105 = false;
+        for (const auto& d : result.diagnostics) if (d.code == "E105") got_e105 = true;
+        CHECK(got_e105);
+    }
+
+    SECTION("extra field emits W160 warning but compiles") {
+        auto result = akkado::compile(
+            "fn f(a, b) -> a + b\n"
+            "r = {a: 1, b: 2, extra: 99}\n"
+            "f(..r) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+        bool got_w160 = false;
+        for (const auto& d : result.diagnostics) if (d.code == "W160") got_w160 = true;
+        CHECK(got_w160);
+    }
+
+    SECTION("non-record/array spread emits E140") {
+        auto result = akkado::compile(
+            "fn f(a) -> a\n"
+            "x = 42\n"
+            "f(..x) |> out(%, %)"
+        );
+        REQUIRE_FALSE(result.success);
+        bool got_e140 = false;
+        for (const auto& d : result.diagnostics) if (d.code == "E140") got_e140 = true;
+        CHECK(got_e140);
+    }
+}
+
+TEST_CASE("User fn array spread: positional binding", "[codegen][spread]") {
+    SECTION("array elements fill all params positionally") {
+        auto result = akkado::compile(
+            "fn add3(a, b, c) -> a + b + c\n"
+            "arr = [1, 2, 3]\n"
+            "add3(..arr) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("positional + array spread combined") {
+        auto result = akkado::compile(
+            "fn f(a, b, c) -> a + b + c\n"
+            "rest = [2, 3]\n"
+            "f(1, ..rest) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("too many array elements emits E107") {
+        auto result = akkado::compile(
+            "fn f(a, b) -> a + b\n"
+            "arr = [1, 2, 3]\n"
+            "f(..arr) |> out(%, %)"
+        );
+        REQUIRE_FALSE(result.success);
+        bool got_e107 = false;
+        for (const auto& d : result.diagnostics) if (d.code == "E107") got_e107 = true;
+        CHECK(got_e107);
+    }
+}
+
+TEST_CASE("Mixed record + array spread emits E180", "[codegen][spread]") {
+    auto result = akkado::compile(
+        "fn f(a, b, c) -> a + b + c\n"
+        "r = {a: 1}\n"
+        "arr = [2, 3]\n"
+        "f(..r, ..arr) |> out(%, %)"
+    );
+    REQUIRE_FALSE(result.success);
+    bool got_e180 = false;
+    for (const auto& d : result.diagnostics) if (d.code == "E180") got_e180 = true;
+    CHECK(got_e180);
+}

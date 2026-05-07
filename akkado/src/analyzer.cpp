@@ -866,6 +866,19 @@ NodeIndex SemanticAnalyzer::clone_subtree(NodeIndex src_idx) {
         }
     }
 
+    // Handle Argument spread_source — `..expr` arg or array element. The
+    // spread expression is hung on ArgumentData.spread_source rather than as
+    // a child, so it must be cloned/remapped here too.
+    if (src.type == NodeType::Argument &&
+        std::holds_alternative<Node::ArgumentData>(src.data)) {
+        const auto& arg_data = src.as_argument();
+        if (arg_data.spread_source != NULL_NODE) {
+            NodeIndex cloned_spread = clone_subtree(arg_data.spread_source);
+            auto& dst_data = std::get<Node::ArgumentData>(output_arena_[dst_idx].data);
+            dst_data.spread_source = cloned_spread;
+        }
+    }
+
     // Clone children
     NodeIndex src_child = src.first_child;
     NodeIndex prev_dst_child = NULL_NODE;
@@ -996,6 +1009,17 @@ NodeIndex SemanticAnalyzer::substitute_nodes(NodeIndex node, const SubstituteOpt
         if (rec_data.spread_source != NULL_NODE) {
             NodeIndex new_spread = substitute_nodes(rec_data.spread_source, opts);
             auto& dst_data = std::get<Node::RecordLitData>(output_arena_[new_node].data);
+            dst_data.spread_source = new_spread;
+        }
+    }
+
+    // Handle Argument spread_source specially (..expr arg or array element).
+    if (n.type == NodeType::Argument &&
+        std::holds_alternative<Node::ArgumentData>(n.data)) {
+        const auto& arg_data = n.as_argument();
+        if (arg_data.spread_source != NULL_NODE) {
+            NodeIndex new_spread = substitute_nodes(arg_data.spread_source, opts);
+            auto& dst_data = std::get<Node::ArgumentData>(output_arena_[new_node].data);
             dst_data.spread_source = new_spread;
         }
     }
