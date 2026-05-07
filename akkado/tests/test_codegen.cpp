@@ -8166,3 +8166,44 @@ TEST_CASE("Array literal spread flattens elements", "[codegen][spread][array]") 
     }
 }
 
+// =============================================================================
+// Phase 6: Spread into builtin / special-handler calls
+// =============================================================================
+
+TEST_CASE("Builtin call accepts ..record spread", "[codegen][spread][builtin]") {
+    SECTION("lp() with record spread fills cut+q by name") {
+        auto result = akkado::compile(
+            "cfg = {cut: 1000, q: 0.7}\n"
+            "lp(osc(\"sin\", 440), ..cfg) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("lp() with inline record spread") {
+        auto result = akkado::compile(
+            "lp(osc(\"sin\", 440), ..{cut: 1000, q: 0.7}) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("array spread fills positional builtin args") {
+        auto result = akkado::compile(
+            "args = [1000, 0.7]\n"
+            "lp(osc(\"sin\", 440), ..args) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+
+    SECTION("reusing same spread record across two calls") {
+        // The second call must successfully re-look-up the resolved record
+        // and not crash on stale state.
+        auto result = akkado::compile(
+            "cfg = {cut: 1000, q: 0.7}\n"
+            "a = lp(osc(\"sin\", 440), ..cfg)\n"
+            "b = lp(osc(\"saw\", 220), ..cfg)\n"
+            "(a + b) |> out(%, %)"
+        );
+        REQUIRE(result.success);
+    }
+}
+

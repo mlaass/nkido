@@ -727,6 +727,11 @@ private:
     // multi_buffers_, array_lengths_, pattern_state_ids_)
     std::unordered_map<NodeIndex, TypedValue> node_types_;
 
+    // Side-table for synthetic NodeType::PreResolved nodes inserted during
+    // call-arg spread expansion (Phase 6). visit() returns this TypedValue
+    // verbatim — the buffer is already allocated by the spread source's visit.
+    std::unordered_map<NodeIndex, TypedValue> pre_resolved_values_;
+
     // Map from parameter name hash to literal AST node (for inline match resolution)
     // Only populated during user function calls when the argument is a literal
     std::unordered_map<std::uint32_t, NodeIndex> param_literals_;

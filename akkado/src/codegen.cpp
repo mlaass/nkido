@@ -43,6 +43,7 @@ CodeGenResult CodeGenerator::generate(const Ast& ast, SymbolTable& symbols,
     source_locations_.clear();
     diagnostics_.clear();
     state_inits_.clear();
+    pre_resolved_values_.clear();
     required_samples_.clear();
     required_samples_extended_keys_.clear();
     required_samples_extended_.clear();
@@ -120,6 +121,19 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
 
     // Track source location for any instructions emitted while processing this node
     current_source_loc_ = n.location;
+
+    // Synthetic PreResolved node: TypedValue is in pre_resolved_values_ side
+    // table (populated during call-arg spread expansion). Returns the cached
+    // value with no instruction emission — the underlying buffer was already
+    // allocated when the spread source was first visited.
+    if (n.type == NodeType::PreResolved) {
+        auto pr_it = pre_resolved_values_.find(node);
+        if (pr_it != pre_resolved_values_.end()) {
+            return pr_it->second;
+        }
+        // Defensive: missing side-table entry shouldn't happen.
+        return TypedValue::error_val();
+    }
 
     switch (n.type) {
         case NodeType::Program: {
@@ -841,6 +855,88 @@ TypedValue CodeGenerator::visit(NodeIndex node) {
             if (sym && sym->kind == SymbolKind::FunctionValue) {
                 return handle_function_value_call(node, n, sym->function_ref);
             }
+
+            // Phase 6: builtin/special-handler spread expansion. If the call
+            // contains ..record / ..array spread args, materialize the
+            // expanded list as a synthetic Argument chain (with PreResolved
+            // children for spread-resolved values) and swap it into the call
+            // node before dispatch. RAII restores on exit.
+            NodeIndex saved_first_child = NULL_NODE;
+            bool did_spread_swap = false;
+            {
+                NodeIndex it = n.first_child;
+                bool has_spread = false;
+                while (it != NULL_NODE) {
+                    const Node& a = ast_->arena[it];
+                    if (a.type == NodeType::Argument &&
+                        std::holds_alternative<Node::ArgumentData>(a.data) &&
+                        a.as_argument().spread_source != NULL_NODE) {
+                        has_spread = true;
+                        break;
+                    }
+                    it = ast_->arena[it].next_sibling;
+                }
+                if (has_spread) {
+                    auto expanded_opt = expand_call_arguments(node);
+                    if (!expanded_opt) return TypedValue::error_val();
+
+                    AstArena& arena = const_cast<AstArena&>(ast_->arena);
+                    NodeIndex chain_head = NULL_NODE;
+                    NodeIndex prev = NULL_NODE;
+                    for (const auto& ea : *expanded_opt) {
+                        NodeIndex arg_idx = arena.alloc(NodeType::Argument, ea.loc);
+                        arena[arg_idx].data = Node::ArgumentData{ea.name, NULL_NODE};
+
+                        NodeIndex child_idx;
+                        if (ea.resolved) {
+                            child_idx = arena.alloc(NodeType::PreResolved, ea.loc);
+                            pre_resolved_values_[child_idx] = *ea.resolved;
+                        } else {
+                            child_idx = ea.source_node;
+                        }
+                        arena[arg_idx].first_child = child_idx;
+                        // Note: child_idx may have its own next_sibling (from
+                        // the original AST). Don't overwrite that — the
+                        // Argument-as-parent semantics treat first_child as
+                        // the value, and its sibling chain is irrelevant once
+                        // wrapped (each Argument has exactly one value).
+                        // But since AstArena stores siblings in-band, we
+                        // must defensively detach. Cloning avoids surprises;
+                        // here we simply clear next_sibling of the wrapped
+                        // child's NEW reference. Original AST already used
+                        // next_sibling to chain its parent's children — that
+                        // was needed only at the original parent (the call
+                        // node), and the value node's next_sibling was
+                        // already NULL_NODE by parser construction.
+
+                        if (prev == NULL_NODE) {
+                            chain_head = arg_idx;
+                        } else {
+                            arena[prev].next_sibling = arg_idx;
+                        }
+                        prev = arg_idx;
+                    }
+
+                    Node& mut_n = const_cast<Node&>(n);
+                    saved_first_child = mut_n.first_child;
+                    mut_n.first_child = chain_head;
+                    did_spread_swap = true;
+                }
+            }
+
+            // RAII: restore the call's child chain on every return path.
+            struct ChildRestore {
+                Node* node;
+                NodeIndex orig;
+                bool active;
+                ~ChildRestore() {
+                    if (active) node->first_child = orig;
+                }
+            } child_restore{
+                did_spread_swap ? const_cast<Node*>(&n) : nullptr,
+                saved_first_child,
+                did_spread_swap
+            };
 
             // Dispatch table for special function handlers
             using Handler = TypedValue (CodeGenerator::*)(NodeIndex, const Node&);
