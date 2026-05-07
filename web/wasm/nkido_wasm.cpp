@@ -18,6 +18,7 @@
 #include <akkado/builtins_json.hpp>
 #include <akkado/sample_registry.hpp>
 #include <akkado/pattern_debug.hpp>
+#include <akkado/shape_index.hpp>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -1031,6 +1032,32 @@ WASM_EXPORT const char* akkado_get_builtins_json() {
         g_builtins_json = akkado::serialize_builtins_json();
     }
     return g_builtins_json.c_str();
+}
+
+// Static buffer for shape-index JSON. Re-built on every call (debounced
+// 300 ms by the editor) — caching is on the JS side keyed by source hash.
+static std::string g_shape_index_json;
+
+/**
+ * Get the analyzer-driven shape index for editor autocomplete.
+ *
+ * `source` / `source_len` describe the current editor buffer (UTF-8 bytes,
+ * not null-terminated — pass the byte length explicitly). `cursor_offset`
+ * is the UTF-8 byte offset of the editor caret in `source`; pass UINT32_MAX
+ * (or any value past end-of-source) to skip patternHole resolution.
+ *
+ * Returns a pointer to a null-terminated JSON string with the shape index.
+ * The returned pointer is valid until the next call to this function.
+ *
+ * Phase 2 of records-system-unification PRD; see `docs/prd-records-system-
+ * unification.md` §5.2 for the JSON schema.
+ */
+WASM_EXPORT const char* akkado_get_shape_index(const char* source,
+                                                std::uint32_t source_len,
+                                                std::uint32_t cursor_offset) {
+    g_shape_index_json = akkado::shape_index_json(
+        std::string_view(source, source_len), cursor_offset);
+    return g_shape_index_json.c_str();
 }
 
 // ============================================================================

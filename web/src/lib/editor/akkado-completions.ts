@@ -15,6 +15,12 @@ import {
 	type BuiltinInfo,
 	type OptionFieldSpec
 } from '$stores/audio.svelte';
+import {
+	getShape,
+	getPatternHoleShape,
+	type Shape,
+	type ShapeField
+} from '$lib/editor/akkado-shape-index';
 
 // Cache for builtins data
 let builtinsCache: BuiltinsData | null = null;
@@ -274,6 +280,96 @@ function formatOptionDetail(f: OptionFieldSpec): string {
 	return parts.join(' ');
 }
 
+/**
+ * Detect a `.`-context immediately before the cursor.
+ *
+ * Walks backwards from `pos - 1`, skipping whitespace, and recognises:
+ *   - `<identifier>.` → kind: 'identifier', name: <identifier>
+ *   - `%.`             → kind: 'hole'
+ *
+ * Reuses the same string/comment guard from `detectRecordLiteralCtx` so we
+ * never trigger inside string literals (forward scan to confirm string
+ * state at `pos`).
+ */
+type DotCtx =
+	| { kind: 'identifier'; name: string; from: number }
+	| { kind: 'hole'; from: number };
+
+function isInString(text: string, pos: number): boolean {
+	let inString: '"' | "'" | null = null;
+	for (let i = 0; i < pos; i++) {
+		const ch = text[i];
+		if (inString) {
+			if (ch === '\\') { i++; continue; }
+			if (ch === inString) inString = null;
+			continue;
+		}
+		if (ch === '/' && text[i + 1] === '/') {
+			while (i < pos && text[i] !== '\n') i++;
+			continue;
+		}
+		if (ch === '"' || ch === "'") inString = ch;
+	}
+	return inString !== null;
+}
+
+function detectDotContext(text: string, pos: number): DotCtx | null {
+	if (isInString(text, pos)) return null;
+
+	// Walk backwards from pos to find an identifier-or-`%` then `.`.
+	let i = pos - 1;
+	// Skip identifier characters (the partial word the user is typing).
+	while (i >= 0 && /[a-zA-Z0-9_]/.test(text[i])) i--;
+	if (i < 0 || text[i] !== '.') return null;
+
+	const insertFrom = i + 1; // first character of the (possibly partial) field name
+	i--; // step before the dot
+	while (i >= 0 && /\s/.test(text[i])) i--;
+	if (i < 0) return null;
+
+	if (text[i] === '%') {
+		return { kind: 'hole', from: insertFrom };
+	}
+
+	// Walk back over the identifier preceding the dot.
+	let nameEnd = i + 1;
+	while (i >= 0 && /[a-zA-Z0-9_]/.test(text[i])) i--;
+	const nameStart = i + 1;
+	if (nameStart >= nameEnd) return null;
+
+	// The identifier could be a numeric index (e.g. `voices.0.x`); reject
+	// for v1 — Array-of-Record completion via `arr.0.` is deferred.
+	const name = text.slice(nameStart, nameEnd);
+	if (/^\d+$/.test(name)) return null;
+
+	return { kind: 'identifier', name, from: insertFrom };
+}
+
+function fieldDetailLabel(f: ShapeField): string {
+	if (f.aliasOf) return `${f.type} (alias of ${f.aliasOf})`;
+	if (f.source === 'set') return `${f.type} (custom)`;
+	return f.type;
+}
+
+function shapeFieldToCompletion(f: ShapeField): Completion {
+	return {
+		label: f.name,
+		type: 'property',
+		detail: fieldDetailLabel(f),
+		// Aliases rank below their canonical sibling so the popup shows
+		// canonical-first.
+		boost: f.aliasOf ? -0.25 : 0
+	};
+}
+
+function completionsFromShape(shape: Shape, from: number): CompletionResult {
+	return {
+		from,
+		options: shape.fields.map(shapeFieldToCompletion),
+		validFor: /^[a-zA-Z_][a-zA-Z0-9_]*$/
+	};
+}
+
 function createOptionFieldCompletion(f: OptionFieldSpec): Completion {
 	return {
 		label: f.name,
@@ -322,6 +418,21 @@ export async function akkadoCompletions(context: CompletionContext): Promise<Com
 				validFor: /^[a-zA-Z_][a-zA-Z0-9_]*$/
 			};
 		}
+	}
+
+	// Dot context: `r.` or `%.` — surface analyzer-driven shape fields when
+	// the editor has a cached shape index for the target binding / pattern
+	// hole. Phase 2 of records-system-unification PRD §5.2.
+	const dotCtx = detectDotContext(docText, context.pos);
+	if (dotCtx) {
+		const shape =
+			dotCtx.kind === 'identifier' ? getShape(dotCtx.name) : getPatternHoleShape();
+		if (shape && shape.fields.length > 0) {
+			return completionsFromShape(shape, dotCtx.from);
+		}
+		// Fall through if no shape — let the general completions try
+		// (they're harmless after a dot since they validate against the
+		// identifier regex).
 	}
 
 	const options: Completion[] = [];

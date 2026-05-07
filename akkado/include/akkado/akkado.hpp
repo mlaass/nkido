@@ -1,12 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <optional>
 #include <string_view>
 #include <string>
 #include <vector>
 #include <span>
 #include "diagnostics.hpp"
 #include "codegen.hpp"  // For StateInitData
+#include "symbol_table.hpp"  // For CompileResult::symbols (Phase 2 records-system-unification)
+#include "ast.hpp"           // For CompileResult::ast (shared_ptr<Ast>)
 
 namespace akkado {
 
@@ -62,6 +66,14 @@ struct CompileResult {
     // these in source order, dispatch each by `kind` to the appropriate
     // registry, and block bytecode swap until every URI resolves.
     std::vector<UriRequest> required_uris;
+
+    // Phase 2 records-system-unification: analyzer outputs retained for
+    // downstream tooling (e.g. shape index serialization). Populated by
+    // compile() whenever the corresponding pass runs, including on early-
+    // return paths so partial state can still be inspected. Not consumed by
+    // the audio runtime; safe to ignore for normal compile-and-play.
+    std::optional<SymbolTable> symbols;
+    std::shared_ptr<Ast>       ast;
 };
 
 /// Compile Akkado source code to Cedar bytecode

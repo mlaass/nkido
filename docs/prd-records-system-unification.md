@@ -1,9 +1,9 @@
-> **Status: PHASE 1 COMPLETE (2026-05-07)** — Static option-field schema landed for the 5 visualizers; editor now surfaces field-name completions inside record-typed builtin args. Phases 2–6 (analyzer shape index, destructuring, mutability, viz migration, audit) not started. Spread (soft prerequisite) decision deferred until Phase 3.
+> **Status: PHASES 1–2 COMPLETE (2026-05-07)** — Phase 1: static option-field schema landed for the 5 visualizers; editor now surfaces field-name completions inside record-typed builtin args. Phase 2: `akkado_get_shape_index(source, cursor)` WASM export ships an analyzer-driven shape JSON (top-level Record / Pattern / Array-of-Record bindings + `patternHole` for the cursor's enclosing pipe); editor pulls on idle (300 ms debounce) and surfaces field completions on `r.` and `%.`. Phases 3–6 (destructuring, mutability, viz migration, audit) not started. Spread (soft prerequisite) decision deferred until Phase 3.
 
 # PRD: Records System Unification — Editor Visibility, Destructuring, Options Convention, Mutability
 
 **Version:** 1.0
-**Status:** Phase 1 Complete (2026-05-07)
+**Status:** Phases 1–2 Complete (2026-05-07)
 **Author:** Claude (drafted with Moritz)
 **Date:** 2026-05-07
 

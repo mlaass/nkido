@@ -137,6 +137,9 @@ CompileResult compile(std::string_view source, std::string_view filename,
                               parse_diags.begin(), parse_diags.end());
 
     if (has_errors(parse_diags)) {
+        // Phase 2 records-system-unification: surface partial AST so callers
+        // (e.g. shape-index tooling) can still inspect what was parsed.
+        result.ast = std::make_shared<Ast>(std::move(ast));
         result.success = false;
         return result;
     }
@@ -155,6 +158,10 @@ CompileResult compile(std::string_view source, std::string_view filename,
                               analysis.diagnostics.end());
 
     if (!analysis.success) {
+        // Phase 2 records-system-unification: surface analyzer outputs so
+        // partial-bound symbols (records, patterns) remain inspectable.
+        result.ast = std::make_shared<Ast>(std::move(analysis.transformed_ast));
+        result.symbols = std::move(analysis.symbols);
         result.success = false;
         return result;
     }
@@ -168,6 +175,10 @@ CompileResult compile(std::string_view source, std::string_view filename,
                               gen.diagnostics.end());
 
     if (!gen.success) {
+        // Phase 2 records-system-unification: surface analyzer outputs even
+        // when codegen fails so shape-index tooling has a symbol table.
+        result.ast = std::make_shared<Ast>(std::move(analysis.transformed_ast));
+        result.symbols = std::move(analysis.symbols);
         result.success = false;
         return result;
     }
@@ -203,6 +214,11 @@ CompileResult compile(std::string_view source, std::string_view filename,
 
     // Copy builtin variable overrides
     result.builtin_var_overrides = std::move(gen.builtin_var_overrides);
+
+    // Phase 2 records-system-unification: retain analyzer outputs for
+    // downstream tooling (shape index, future LSP integrations).
+    result.ast = std::make_shared<Ast>(std::move(analysis.transformed_ast));
+    result.symbols = std::move(analysis.symbols);
 
     result.success = true;
     return result;

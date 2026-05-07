@@ -252,4 +252,17 @@ TypedValue pattern_field(const TypedValue& tv, const std::string& name);
 /// Returns -1 if name is not a known pattern field.
 int pattern_field_index(const std::string& name);
 
+/// One row in the pattern-field alias table.
+/// `index` is the slot in `PatternPayload::fields` (FREQ..SAMPLE_ID).
+/// `names[0]` is the canonical name; subsequent entries are aliases.
+struct PatternFieldAlias {
+    std::size_t index;
+    std::vector<const char*> names;
+};
+
+/// Public read-only access to the pattern-field alias table. Used by
+/// the shape-index serializer (Phase 2 of records-system-unification PRD)
+/// and by E136 diagnostic helpers.
+const std::vector<PatternFieldAlias>& pattern_field_aliases();
+
 } // namespace akkado

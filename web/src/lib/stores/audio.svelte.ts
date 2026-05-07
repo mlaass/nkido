@@ -22,6 +22,7 @@ import {
 	type InputSourceKind,
 	type InputStatus
 } from '$lib/audio/input-source';
+import type { ShapeIndex as ShapeIndexData } from '$lib/editor/akkado-shape-index';
 
 interface Diagnostic {
 	severity: number;
@@ -367,6 +368,11 @@ function createAudioEngine() {
 	let builtinsCache: BuiltinsData | null = null;
 	let builtinsResolve: ((data: BuiltinsData | null) => void) | null = null;
 
+	// Phase 2 records-system-unification: shape-index resolver. Single
+	// resolver pattern is fine — the editor coalesces calls by source hash
+	// and only emits one outstanding request at a time.
+	let shapeIndexResolve: ((data: ShapeIndexData | null) => void) | null = null;
+
 	// Pattern highlighting resolve functions
 	let patternInfoResolve: ((patterns: PatternInfo[]) => void) | null = null;
 	let patternPreviewResolve: ((events: PatternEvent[]) => void) | null = null;
@@ -619,6 +625,13 @@ function createAudioEngine() {
 				if (builtinsResolve) {
 					builtinsResolve(builtinsCache);
 					builtinsResolve = null;
+				}
+				break;
+			}
+			case 'shapeIndex': {
+				if (shapeIndexResolve) {
+					shapeIndexResolve(msg.success && msg.data ? (msg.data as ShapeIndexData) : null);
+					shapeIndexResolve = null;
 				}
 				break;
 			}
@@ -1716,6 +1729,51 @@ function createAudioEngine() {
 		});
 	}
 
+	/**
+	 * Get the analyzer-driven shape index for editor autocomplete.
+	 * Phase 2 of the records-system-unification PRD.
+	 *
+	 * @param source - editor buffer
+	 * @param cursorOffset - UTF-8 byte offset of the caret; pass `0xFFFFFFFF`
+	 *                      to skip patternHole resolution
+	 * @returns parsed shape index, or `null` on error / when the worklet
+	 *          isn't initialized yet.
+	 */
+	async function getShapeIndex(
+		source: string,
+		cursorOffset: number
+	): Promise<ShapeIndexData | null> {
+		if (!state.isInitialized) {
+			await initialize();
+		}
+		if (!workletNode) {
+			return null;
+		}
+
+		// If a previous request is still pending, resolve it with null so
+		// its caller doesn't hang. Only the latest request gets a real
+		// answer — debouncing on the editor side keeps this simple.
+		if (shapeIndexResolve) {
+			shapeIndexResolve(null);
+			shapeIndexResolve = null;
+		}
+
+		return new Promise((resolve) => {
+			shapeIndexResolve = resolve;
+			setTimeout(() => {
+				if (shapeIndexResolve === resolve) {
+					shapeIndexResolve = null;
+					resolve(null);
+				}
+			}, 2000);
+			workletNode!.port.postMessage({
+				type: 'getShapeIndex',
+				source,
+				cursor: cursorOffset
+			});
+		});
+	}
+
 	// =========================================================================
 	// Parameter Exposure API
 	// =========================================================================
@@ -2193,6 +2251,7 @@ function createAudioEngine() {
 		getBankSampleVariantCount,
 		hasBank,
 		getBuiltins,
+		getShapeIndex,
 		// Parameter exposure API
 		setParamValue,
 		getParamValue,

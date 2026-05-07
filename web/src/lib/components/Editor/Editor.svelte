@@ -11,7 +11,17 @@
 	import { triggerF1Help, getWordAtCursor } from '$lib/docs/lookup';
 	import { linterExtensions, updateEditorDiagnostics } from './editor-linter';
 	import { akkadoCompletions } from '$lib/editor/akkado-completions';
+	import {
+		scheduleShapeIndex,
+		setShapeIndexFetcher,
+		utf8ByteOffset
+	} from '$lib/editor/akkado-shape-index';
 	import { signatureHelp } from '$lib/editor/signature-help';
+
+	// Phase 2 records-system-unification: connect the shape-index module to
+	// the audio engine. The fetcher is wired once per Editor mount; the
+	// debounced scheduler in `EditorView.updateListener` calls it on idle.
+	setShapeIndexFetcher((source, cursor) => audioEngine.getShapeIndex(source, cursor));
 	import { stepHighlight } from '$lib/editor/step-highlight';
 	import { instructionHighlight, highlightInstruction } from '$lib/editor/instruction-highlight';
 	import { visualizationWidgets } from '$lib/editor/visualization-widgets';
@@ -183,6 +193,14 @@
 				EditorView.updateListener.of((update) => {
 					if (update.docChanged) {
 						editorStore.setCode(update.state.doc.toString());
+					}
+					// Phase 2 records-system-unification: refresh the shape
+					// index used by `r.` / `%.` completions on every doc /
+					// selection change. The scheduler debounces internally.
+					if (update.docChanged || update.selectionSet) {
+						const text = update.state.doc.toString();
+						const charPos = update.state.selection.main.head;
+						scheduleShapeIndex(text, utf8ByteOffset(text, charPos));
 					}
 				}),
 				// Linter for inline error display

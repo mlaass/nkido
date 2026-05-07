@@ -135,6 +135,9 @@ if(EMSCRIPTEN)
         _akkado_get_viz_source_offset
         _akkado_get_viz_source_length
         _akkado_get_viz_pattern_index
+        # Editor metadata APIs
+        _akkado_get_builtins_json
+        _akkado_get_shape_index
         # Probe data API
         _cedar_get_probe_sample_count
         _cedar_get_probe_data

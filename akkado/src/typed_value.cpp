@@ -27,17 +27,12 @@ std::vector<std::uint16_t> buffers_of(const TypedValue& tv) {
     }
 }
 
-namespace {
-// Single source of truth for pattern field name → PatternPayload index.
-// First entry of each row is the canonical name (used by available_fields()
-// in E136 diagnostics); remaining entries are aliases.
-struct FieldRow {
-    std::size_t index;
-    std::initializer_list<const char*> names;
-};
-
-inline const auto& pattern_field_table() {
-    static const std::array<FieldRow, 11> kTable = {{
+const std::vector<PatternFieldAlias>& pattern_field_aliases() {
+    // Single source of truth for pattern field name → PatternPayload index.
+    // First entry of each row is the canonical name (used by
+    // available_fields() in E136 diagnostics and by the shape-index
+    // serializer); remaining entries are aliases.
+    static const std::vector<PatternFieldAlias> kTable = {
         {PatternPayload::FREQ,      {"freq", "frequency", "pitch", "f", "p"}},
         {PatternPayload::VEL,       {"vel", "velocity", "v"}},
         {PatternPayload::TRIG,      {"trig", "trigger", "t"}},
@@ -49,13 +44,12 @@ inline const auto& pattern_field_table() {
         {PatternPayload::TIME,      {"time", "t0", "start"}},
         {PatternPayload::PHASE,     {"phase", "cycle", "co"}},
         {PatternPayload::SAMPLE_ID, {"sample_id", "sample", "s"}},
-    }};
+    };
     return kTable;
 }
-} // namespace
 
 int pattern_field_index(const std::string& name) {
-    for (const auto& row : pattern_field_table()) {
+    for (const auto& row : pattern_field_aliases()) {
         for (const char* alias : row.names) {
             if (name == alias) return static_cast<int>(row.index);
         }
@@ -86,7 +80,7 @@ TypedValue pattern_field(const TypedValue& tv, const std::string& name) {
 std::string available_fields(const PatternPayload& payload) {
     std::string s;
     bool first = true;
-    for (const auto& row : pattern_field_table()) {
+    for (const auto& row : pattern_field_aliases()) {
         // Skip rows with no buffer wired up (e.g. reserved slots that the
         // codegen hasn't allocated). Today every row except potential future
         // additions populates a buffer, but this keeps the message truthful.
@@ -95,7 +89,7 @@ std::string available_fields(const PatternPayload& payload) {
             continue;
         }
         if (!first) s += ", ";
-        s += *row.names.begin();  // canonical name
+        s += row.names.front();  // canonical name
         first = false;
     }
     for (const auto& [key, buf] : payload.custom_fields) {

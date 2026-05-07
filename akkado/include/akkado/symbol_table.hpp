@@ -232,6 +232,15 @@ public:
     /// Move a symbol from scopes_ to hidden_symbols_ for the given module
     void hide_symbol(std::string_view name, std::string_view module_path);
 
+    /// Read-only access to the global (depth=0) scope. Used by tooling that
+    /// needs to enumerate top-level bindings (e.g. shape-index serializer
+    /// for editor autocomplete). Returns an empty reference if the table is
+    /// in an unexpected state — callers should treat empty as "no globals".
+    [[nodiscard]] const std::unordered_map<std::uint32_t, Symbol>& globals() const {
+        static const std::unordered_map<std::uint32_t, Symbol> empty;
+        return scopes_.empty() ? empty : scopes_.front();
+    }
+
 private:
     /// Each scope is a hash map from name_hash to Symbol
     std::vector<std::unordered_map<std::uint32_t, Symbol>> scopes_;
