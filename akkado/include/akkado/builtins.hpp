@@ -72,6 +72,50 @@ inline bool type_compatible(ValueType actual, ParamValueType expected) {
     return false;
 }
 
+/// Concrete value type for an individual option field within a record-shaped
+/// parameter. Distinct from ParamValueType (which describes top-level function
+/// parameter types) — option fields are always one of: number, string, bool, enum.
+enum class OptionFieldType : std::uint8_t {
+    Number = 0,
+    String,
+    Bool,
+    Enum,
+};
+
+constexpr const char* option_field_type_name(OptionFieldType t) {
+    switch (t) {
+        case OptionFieldType::Number: return "number";
+        case OptionFieldType::String: return "string";
+        case OptionFieldType::Bool:   return "bool";
+        case OptionFieldType::Enum:   return "enum";
+    }
+    return "unknown";
+}
+
+/// One field of a record-shaped option parameter. The default_repr is the
+/// textual representation as it would appear in source — "180", "\"viridis\"",
+/// "true". Empty default_repr means "no default" (omitted from JSON).
+struct OptionField {
+    std::string_view name = {};
+    OptionFieldType  type = OptionFieldType::Number;
+    std::string_view default_repr = {};
+    std::string_view description = {};
+    std::string_view enum_values = {};  // comma-separated, only when type == Enum
+};
+
+constexpr std::size_t MAX_OPTION_FIELDS_PER_SCHEMA = 16;
+constexpr std::size_t MAX_OPTION_SCHEMAS_PER_BUILTIN = 2;
+
+/// Schema for one record-typed parameter slot of a builtin. param_index points
+/// at the parameter (0-based). field_count is the number of populated entries
+/// in fields[].
+struct OptionSchema {
+    std::uint8_t                                          param_index = 0;
+    std::array<OptionField, MAX_OPTION_FIELDS_PER_SCHEMA> fields = {};
+    std::uint8_t                                          field_count = 0;
+    bool                                                  accepts_spread = true;
+};
+
 /// Metadata for a built-in function
 struct BuiltinInfo {
     cedar::Opcode opcode;       // VM opcode to emit
@@ -109,6 +153,13 @@ struct BuiltinInfo {
     // `transpose`, `bend`, ...) opt out by setting `args_are_signal = false`
     // in their entry. Orthogonal to `auto_lift` (Mono→Stereo).
     bool args_are_signal = true;
+
+    // PRD prd-records-system-unification §5.1: option-field schemas for any
+    // record-typed parameter slot. Empty by default; populated for builtins
+    // whose record param has a known field shape (e.g. visualizers). Editor
+    // autocomplete consumes these to suggest fields inside record literals.
+    std::array<OptionSchema, MAX_OPTION_SCHEMAS_PER_BUILTIN> option_schemas = {};
+    std::uint8_t option_schema_count = 0;
 
     /// Get total parameter count (required + optional)
     [[nodiscard]] std::uint8_t total_params() const {
@@ -1099,26 +1150,95 @@ inline const std::unordered_map<std::string_view, BuiltinInfo> BUILTIN_FUNCTIONS
     // Visualization builtins (handled specially by codegen)
     // These create visualization widgets in the editor and pass signal through
     // Signature: viz(signal, name?, options?) where options is a record {width, height, ...}
-    {"pianoroll", {cedar::Opcode::COPY, 1, 2, false,
-                   {"signal", "name", "options", "", "", ""},
-                   {NAN, NAN, NAN, NAN, NAN},
-                   "Attach piano roll visualization. Signal passes through unchanged."}},
-    {"oscilloscope", {cedar::Opcode::COPY, 1, 2, true,
-                      {"signal", "name", "options", "", "", ""},
-                      {NAN, NAN, NAN, NAN, NAN},
-                      "Attach oscilloscope visualization. Signal passes through unchanged."}},
-    {"waveform", {cedar::Opcode::COPY, 1, 2, true,
-                  {"signal", "name", "options", "", "", ""},
-                  {NAN, NAN, NAN, NAN, NAN},
-                  "Attach waveform visualization. Signal passes through unchanged."}},
-    {"spectrum", {cedar::Opcode::COPY, 1, 2, true,
-                  {"signal", "name", "options", "", "", ""},
-                  {NAN, NAN, NAN, NAN, NAN},
-                  "Attach spectrum analyzer visualization. Signal passes through unchanged."}},
-    {"waterfall", {cedar::Opcode::COPY, 1, 2, true,
-                    {"signal", "name", "options", "", "", ""},
-                    {NAN, NAN, NAN, NAN, NAN},
-                    "Attach scrolling spectrogram visualization. Signal passes through unchanged."}},
+    // Option-field schemas are declared in viz_schemas (see further below in this header).
+    {"pianoroll", {.opcode = cedar::Opcode::COPY, .input_count = 1, .optional_count = 2, .requires_state = false,
+                   .param_names = {"signal", "name", "options", "", "", ""},
+                   .defaults = {NAN, NAN, NAN, NAN, NAN},
+                   .description = "Attach piano roll visualization. Signal passes through unchanged.",
+                   .param_types = {ParamValueType::Signal, ParamValueType::String, ParamValueType::Record},
+                   .option_schemas = {OptionSchema{
+                       /*param_index=*/2,
+                       /*fields=*/{{
+                           {"width",    OptionFieldType::Number, "200",        "Canvas width (pixels, or '%' string for relative)"},
+                           {"height",   OptionFieldType::Number, "50",         "Canvas height (pixels, or '%' string for relative)"},
+                           {"beats",    OptionFieldType::Number, "",           "Window duration in beats (defaults to cycle length)"},
+                           {"showGrid", OptionFieldType::Bool,   "true",       "Display vertical beat grid"},
+                           {"scale",    OptionFieldType::Enum,   "\"chromatic\"", "MIDI scale filter", "chromatic,pentatonic,octave"},
+                       }},
+                       /*field_count=*/5,
+                   }},
+                   .option_schema_count = 1}},
+    {"oscilloscope", {.opcode = cedar::Opcode::COPY, .input_count = 1, .optional_count = 2, .requires_state = true,
+                      .param_names = {"signal", "name", "options", "", "", ""},
+                      .defaults = {NAN, NAN, NAN, NAN, NAN},
+                      .description = "Attach oscilloscope visualization. Signal passes through unchanged.",
+                      .param_types = {ParamValueType::Signal, ParamValueType::String, ParamValueType::Record},
+                      .option_schemas = {OptionSchema{
+                          /*param_index=*/2,
+                          /*fields=*/{{
+                              {"width",        OptionFieldType::Number, "200",       "Canvas width (pixels, or '%' string for relative)"},
+                              {"height",       OptionFieldType::Number, "50",        "Canvas height (pixels, or '%' string for relative)"},
+                              {"triggerLevel", OptionFieldType::Number, "0",         "Trigger threshold (signal value)"},
+                              {"triggerEdge",  OptionFieldType::Enum,   "\"rising\"", "Trigger direction", "rising,falling"},
+                          }},
+                          /*field_count=*/4,
+                      }},
+                      .option_schema_count = 1}},
+    {"waveform", {.opcode = cedar::Opcode::COPY, .input_count = 1, .optional_count = 2, .requires_state = true,
+                  .param_names = {"signal", "name", "options", "", "", ""},
+                  .defaults = {NAN, NAN, NAN, NAN, NAN},
+                  .description = "Attach waveform visualization. Signal passes through unchanged.",
+                  .param_types = {ParamValueType::Signal, ParamValueType::String, ParamValueType::Record},
+                  .option_schemas = {OptionSchema{
+                      /*param_index=*/2,
+                      /*fields=*/{{
+                          {"width",    OptionFieldType::Number, "200",  "Canvas width (pixels, or '%' string for relative)"},
+                          {"height",   OptionFieldType::Number, "50",   "Canvas height (pixels, or '%' string for relative)"},
+                          {"scale",    OptionFieldType::Number, "1.0",  "Amplitude scaling factor"},
+                          {"filled",   OptionFieldType::Bool,   "true", "Use filled envelope vs outline"},
+                          {"duration", OptionFieldType::Number, "5",    "Time window in seconds"},
+                      }},
+                      /*field_count=*/5,
+                  }},
+                  .option_schema_count = 1}},
+    {"spectrum", {.opcode = cedar::Opcode::COPY, .input_count = 1, .optional_count = 2, .requires_state = true,
+                  .param_names = {"signal", "name", "options", "", "", ""},
+                  .defaults = {NAN, NAN, NAN, NAN, NAN},
+                  .description = "Attach spectrum analyzer visualization. Signal passes through unchanged.",
+                  .param_types = {ParamValueType::Signal, ParamValueType::String, ParamValueType::Record},
+                  .option_schemas = {OptionSchema{
+                      /*param_index=*/2,
+                      /*fields=*/{{
+                          {"width",    OptionFieldType::Number, "200",   "Canvas width (pixels, or '%' string for relative)"},
+                          {"height",   OptionFieldType::Number, "50",    "Canvas height (pixels, or '%' string for relative)"},
+                          {"logScale", OptionFieldType::Bool,   "false", "Log frequency axis vs linear"},
+                          {"minDb",    OptionFieldType::Number, "-90",   "Lower dB limit for normalization"},
+                          {"maxDb",    OptionFieldType::Number, "0",     "Upper dB limit for normalization"},
+                          {"fft",      OptionFieldType::Enum,   "1024",  "FFT bin count", "256,512,1024,2048"},
+                      }},
+                      /*field_count=*/6,
+                  }},
+                  .option_schema_count = 1}},
+    {"waterfall", {.opcode = cedar::Opcode::COPY, .input_count = 1, .optional_count = 2, .requires_state = true,
+                    .param_names = {"signal", "name", "options", "", "", ""},
+                    .defaults = {NAN, NAN, NAN, NAN, NAN},
+                    .description = "Attach scrolling spectrogram visualization. Signal passes through unchanged.",
+                    .param_types = {ParamValueType::Signal, ParamValueType::String, ParamValueType::Record},
+                    .option_schemas = {OptionSchema{
+                        /*param_index=*/2,
+                        /*fields=*/{{
+                            {"width",    OptionFieldType::Number, "300",      "Canvas width (pixels, or '%' string for relative)"},
+                            {"height",   OptionFieldType::Number, "150",      "Canvas height (pixels, or '%' string for relative)"},
+                            {"angle",    OptionFieldType::Number, "180",      "Scroll direction in degrees (0–360)"},
+                            {"speed",    OptionFieldType::Number, "40",       "Scroll speed in pixels/sec"},
+                            {"fft",      OptionFieldType::Enum,   "1024",     "FFT bin count", "256,512,1024,2048"},
+                            {"gradient", OptionFieldType::Enum,   "\"magma\"", "Color gradient preset", "magma,viridis,inferno,grayscale"},
+                            {"minDb",    OptionFieldType::Number, "-90",      "Lower dB limit for normalization"},
+                            {"maxDb",    OptionFieldType::Number, "0",        "Upper dB limit for normalization"},
+                        }},
+                        /*field_count=*/8,
+                    }},
+                    .option_schema_count = 1}},
 
     // Builtin variable getters (desugared from identifier reads like `bpm`, `spb`)
     // These are registered in BUILTIN_FUNCTIONS so the analyzer accepts them as builtins.

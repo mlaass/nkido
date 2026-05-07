@@ -181,10 +181,21 @@ interface CompileResult {
 }
 
 // Builtins metadata from the compiler
+interface OptionFieldSpec {
+	name: string;
+	type: 'number' | 'string' | 'bool' | 'enum';
+	default?: string;
+	description?: string;
+	values?: string;
+}
+
 interface BuiltinParam {
 	name: string;
 	required: boolean;
 	default?: number;
+	type?: string;
+	optionFields?: OptionFieldSpec[];
+	acceptsSpread?: boolean;
 }
 
 interface BuiltinInfo {
@@ -198,7 +209,7 @@ interface BuiltinsData {
 	keywords: string[];
 }
 
-export type { BuiltinsData, BuiltinInfo, BuiltinParam };
+export type { BuiltinsData, BuiltinInfo, BuiltinParam, OptionFieldSpec };
 
 // Pattern highlighting types
 interface PatternInfo {

@@ -1,9 +1,9 @@
-> **Status: NOT STARTED** — Phase 2 of Akkado's records system. Builds on the existing records-and-field-access work (now DONE as of 2026-05-07) and treats argument-spread (currently NOT STARTED) as a soft prerequisite.
+> **Status: PHASE 1 COMPLETE (2026-05-07)** — Static option-field schema landed for the 5 visualizers; editor now surfaces field-name completions inside record-typed builtin args. Phases 2–6 (analyzer shape index, destructuring, mutability, viz migration, audit) not started. Spread (soft prerequisite) decision deferred until Phase 3.
 
 # PRD: Records System Unification — Editor Visibility, Destructuring, Options Convention, Mutability
 
 **Version:** 1.0
-**Status:** Not Started
+**Status:** Phase 1 Complete (2026-05-07)
 **Author:** Claude (drafted with Moritz)
 **Date:** 2026-05-07
 
@@ -729,7 +729,7 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 
 ## 9. Implementation Phases
 
-### Phase 1 — Static Option Schema (3–4 days)
+### Phase 1 — Static Option Schema (3–4 days) — **SHIPPED 2026-05-07**
 
 **Goal:** Builtin record-shaped option params declare their fields; editor surfaces them on `, |` inside the record literal.
 

@@ -79,12 +79,12 @@ function parseStatefulOpcodes(source: string): Set<string> {
 
   const mapBody = mapMatch[1];
 
-  // Match each builtin entry to extract opcode and requires_state
-  // Pattern: {cedar::Opcode::OPCODE_NAME, input_count, optional_count, true/false,
-  const entryRegex = /\{cedar::Opcode::(\w+),\s*\d+,\s*\d+,\s*(true|false),/g;
+  // Positional aggregate-init form:
+  //   {cedar::Opcode::OPCODE_NAME, input_count, optional_count, true/false,
+  const positionalRegex = /\{cedar::Opcode::(\w+),\s*\d+,\s*\d+,\s*(true|false),/g;
   let match;
 
-  while ((match = entryRegex.exec(mapBody)) !== null) {
+  while ((match = positionalRegex.exec(mapBody)) !== null) {
     const opcodeName = match[1];
     const requiresState = match[2] === "true";
     if (requiresState) {
@@ -92,6 +92,23 @@ function parseStatefulOpcodes(source: string): Set<string> {
       // to specialized opcodes (POLY_BEGIN, etc.) which are listed explicitly
       // below. Marking NOP itself as stateful would incorrectly include every
       // compile-time-elided no-op.
+      if (opcodeName === "NOP") continue;
+      stateful.add(opcodeName);
+    }
+  }
+
+  // C++20 designated-init form:
+  //   {.opcode = cedar::Opcode::OPCODE_NAME, .input_count = N, .optional_count = N,
+  //    .requires_state = true|false, ...}
+  // Both designators must appear in declaration order — opcode first, then
+  // requires_state — so a forward-only regex on the slice between them works.
+  const designatedRegex =
+    /\.opcode\s*=\s*cedar::Opcode::(\w+),[\s\S]*?\.requires_state\s*=\s*(true|false)/g;
+
+  while ((match = designatedRegex.exec(mapBody)) !== null) {
+    const opcodeName = match[1];
+    const requiresState = match[2] === "true";
+    if (requiresState) {
       if (opcodeName === "NOP") continue;
       stateful.add(opcodeName);
     }

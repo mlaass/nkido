@@ -19,6 +19,7 @@ add_executable(akkado_tests
     test_akkado.cpp
     test_analyzer.cpp
     test_builtins.cpp
+    test_builtins_json.cpp
     test_codegen.cpp
     test_types.cpp
     test_const_eval.cpp

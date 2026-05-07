@@ -9,7 +9,12 @@
  */
 
 import type { CompletionContext, CompletionResult, Completion } from '@codemirror/autocomplete';
-import { audioEngine, type BuiltinsData, type BuiltinInfo } from '$stores/audio.svelte';
+import {
+	audioEngine,
+	type BuiltinsData,
+	type BuiltinInfo,
+	type OptionFieldSpec
+} from '$stores/audio.svelte';
 
 // Cache for builtins data
 let builtinsCache: BuiltinsData | null = null;
@@ -163,6 +168,130 @@ function createUserVariableCompletion(name: string): Completion {
 }
 
 /**
+ * Forward-scan the document to detect whether the cursor sits inside a record
+ * literal `{...}` whose parent paren is a call to a known builtin. Returns the
+ * matching builtin's option-field schema for that argument slot, or null when:
+ *   - the cursor is inside a string or line comment
+ *   - the innermost open bracket isn't `{`
+ *   - the parent of `{` isn't `(`
+ *   - the function being called isn't a known builtin
+ *   - the relevant parameter has no option-field schema
+ *
+ * Single forward pass, O(n) where n = cursor position. No regex backtracking.
+ */
+type RecordLiteralCtx = {
+	builtinName: string;
+	argIndex: number;
+	optionFields: OptionFieldSpec[];
+	acceptsSpread: boolean;
+};
+
+function detectRecordLiteralCtx(
+	text: string,
+	pos: number,
+	builtins: BuiltinsData
+): RecordLiteralCtx | null {
+	type Frame = { kind: '(' | '[' | '{'; openPos: number; argIndex: number };
+	const stack: Frame[] = [];
+	let inString: '"' | "'" | null = null;
+
+	for (let i = 0; i < pos; i++) {
+		const ch = text[i];
+
+		if (inString) {
+			if (ch === '\\') {
+				i++; // skip the escaped character
+				continue;
+			}
+			if (ch === inString) inString = null;
+			continue;
+		}
+
+		// Line comment runs to end of line
+		if (ch === '/' && text[i + 1] === '/') {
+			while (i < pos && text[i] !== '\n') i++;
+			continue;
+		}
+
+		if (ch === '"' || ch === "'") {
+			inString = ch;
+			continue;
+		}
+
+		if (ch === '(' || ch === '[' || ch === '{') {
+			stack.push({ kind: ch, openPos: i, argIndex: 0 });
+			continue;
+		}
+
+		if (ch === ')' || ch === ']' || ch === '}') {
+			stack.pop();
+			continue;
+		}
+
+		if (ch === ',' && stack.length > 0) {
+			stack[stack.length - 1].argIndex++;
+		}
+	}
+
+	if (inString) return null;
+	if (stack.length < 2) return null;
+
+	const top = stack[stack.length - 1];
+	if (top.kind !== '{') return null;
+
+	const parent = stack[stack.length - 2];
+	if (parent.kind !== '(') return null;
+
+	// Find the function name immediately before `parent.openPos`. Skip whitespace,
+	// then walk back over an identifier.
+	let j = parent.openPos - 1;
+	while (j >= 0 && /\s/.test(text[j])) j--;
+	let nameEnd = j + 1;
+	while (j >= 0 && /[a-zA-Z0-9_]/.test(text[j])) j--;
+	const nameStart = j + 1;
+	if (nameStart >= nameEnd) return null;
+
+	const fnName = text.slice(nameStart, nameEnd);
+	const canonical = builtins.aliases[fnName] ?? fnName;
+	const fn = builtins.functions[canonical];
+	if (!fn) return null;
+
+	const param = fn.params[parent.argIndex];
+	if (!param || !param.optionFields || param.optionFields.length === 0) return null;
+
+	return {
+		builtinName: canonical,
+		argIndex: parent.argIndex,
+		optionFields: param.optionFields,
+		acceptsSpread: param.acceptsSpread ?? true
+	};
+}
+
+function formatOptionDetail(f: OptionFieldSpec): string {
+	const parts: string[] = [f.type];
+	if (f.default !== undefined && f.default !== '') parts.push(`= ${f.default}`);
+	if (f.type === 'enum' && f.values) parts.push(`(${f.values})`);
+	return parts.join(' ');
+}
+
+function createOptionFieldCompletion(f: OptionFieldSpec): Completion {
+	return {
+		label: f.name,
+		type: 'property',
+		detail: formatOptionDetail(f),
+		info: f.description ?? '',
+		boost: 3, // Above user functions — record-literal context is precise
+		apply: (view, _completion, from, to) => {
+			const insert = `${f.name}: `;
+			view.dispatch({
+				changes: { from, to, insert },
+				selection: { anchor: from + insert.length }
+			});
+		}
+	};
+}
+
+/**
  * CodeMirror completion source for Akkado
  */
 export async function akkadoCompletions(context: CompletionContext): Promise<CompletionResult | null> {
@@ -176,10 +305,26 @@ export async function akkadoCompletions(context: CompletionContext): Promise<Com
 	if (word && word.text.length < 2 && !context.explicit) return null;
 
 	const from = word ? word.from : context.pos;
-	const options: Completion[] = [];
 
 	// Load builtins (async, may use cache)
 	const builtins = await loadBuiltins();
+	const docText = context.state.doc.toString();
+
+	// Record-literal context: cursor is inside `{...}` whose parent is a builtin
+	// call. Suppress all other completions and surface only the option fields
+	// declared in the builtin's schema (PRD prd-records-system-unification §5.1).
+	if (builtins) {
+		const recordCtx = detectRecordLiteralCtx(docText, context.pos, builtins);
+		if (recordCtx) {
+			return {
+				from,
+				options: recordCtx.optionFields.map(createOptionFieldCompletion),
+				validFor: /^[a-zA-Z_][a-zA-Z0-9_]*$/
+			};
+		}
+	}
+
+	const options: Completion[] = [];
 
 	if (builtins) {
 		// Add builtin functions
@@ -215,9 +360,6 @@ export async function akkadoCompletions(context: CompletionContext): Promise<Com
 	}
 
 	// Extract user-defined symbols from current document
-	const docText = context.state.doc.toString();
-
-	// Add user functions
 	const userFunctions = extractUserFunctions(docText);
 	for (const fn of userFunctions) {
 		options.push(createUserFunctionCompletion(fn));

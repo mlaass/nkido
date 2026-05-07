@@ -15,6 +15,7 @@
 #include <cedar/opcodes/dsp_state.hpp>
 #include <akkado/akkado.hpp>
 #include <akkado/builtins.hpp>
+#include <akkado/builtins_json.hpp>
 #include <akkado/sample_registry.hpp>
 #include <akkado/pattern_debug.hpp>
 #include <cstdint>
@@ -999,25 +1000,6 @@ WASM_EXPORT void nkido_free(void* ptr) {
 static std::string g_builtins_json;
 
 /**
- * Helper to escape a string for JSON
- */
-static std::string escape_json_string(std::string_view sv) {
-    std::string result;
-    result.reserve(sv.size());
-    for (char c : sv) {
-        switch (c) {
-            case '"': result += "\\\""; break;
-            case '\\': result += "\\\\"; break;
-            case '\n': result += "\\n"; break;
-            case '\r': result += "\\r"; break;
-            case '\t': result += "\\t"; break;
-            default: result += c; break;
-        }
-    }
-    return result;
-}
-
-/**
  * Get all builtin function metadata as JSON string
  * Returns pointer to null-terminated JSON string
  *
@@ -1042,56 +1024,12 @@ static std::string escape_json_string(std::string_view sv) {
  * }
  */
 WASM_EXPORT const char* akkado_get_builtins_json() {
-    // Build JSON only once (lazy initialization)
-    if (!g_builtins_json.empty()) {
-        return g_builtins_json.c_str();
+    // Build JSON only once (lazy initialization). Body is implemented in
+    // akkado/src/builtins_json.cpp so akkado-layer unit tests can call it
+    // without going through the WASM boundary.
+    if (g_builtins_json.empty()) {
+        g_builtins_json = akkado::serialize_builtins_json();
     }
-
-    std::ostringstream json;
-    json << "{\"functions\":{";
-
-    bool first_func = true;
-    for (const auto& [name, info] : akkado::BUILTIN_FUNCTIONS) {
-        if (!first_func) json << ",";
-        first_func = false;
-
-        json << "\"" << escape_json_string(name) << "\":{";
-        json << "\"params\":[";
-
-        bool first_param = true;
-        for (std::size_t i = 0; i < akkado::MAX_BUILTIN_PARAMS; ++i) {
-            if (info.param_names[i].empty()) break;
-
-            if (!first_param) json << ",";
-            first_param = false;
-
-            json << "{\"name\":\"" << escape_json_string(info.param_names[i]) << "\"";
-
-            bool is_required = i < info.input_count;
-            json << ",\"required\":" << (is_required ? "true" : "false");
-
-            if (!is_required && info.has_default(i)) {
-                float def = info.get_default(i);
-                json << ",\"default\":" << def;
-            }
-            json << "}";
-        }
-
-        json << "],\"description\":\"" << escape_json_string(info.description) << "\"}";
-    }
-
-    json << "},\"aliases\":{";
-
-    bool first_alias = true;
-    for (const auto& [alias, canonical] : akkado::BUILTIN_ALIASES) {
-        if (!first_alias) json << ",";
-        first_alias = false;
-        json << "\"" << escape_json_string(alias) << "\":\"" << escape_json_string(canonical) << "\"";
-    }
-
-    json << "},\"keywords\":[\"fn\",\"pat\",\"seq\",\"timeline\",\"note\",\"true\",\"false\",\"match\",\"post\"]}";
-
-    g_builtins_json = json.str();
     return g_builtins_json.c_str();
 }
 

@@ -119,8 +119,14 @@ function* iterEntries(body: string): Generator<{ raw: string; bodyStart: number 
  *             {NAN, 0.5f, NAN, NAN, NAN},
  *             "Description"...}}
  *
+ * Also handles C++20 designated-init style:
+ *   {"name", {.opcode = cedar::Opcode::FOO, .input_count = 1,
+ *             .optional_count = 2, .requires_state = false,
+ *             .param_names = {...}, .defaults = {...}, .description = "..."}}
+ *
  * Tolerates trailing fields (channel signatures, inst_rate, etc.) by reading
- * only the first 7 positional arguments.
+ * only the first 7 positional arguments OR the named subset for designated
+ * init.
  */
 function parseBuiltinEntry(raw: string): { name: string; info: BuiltinFunction } | null {
   // Strip outermost `{` `}`
@@ -194,18 +200,57 @@ function parseBuiltinEntry(raw: string): { name: string; info: BuiltinFunction }
   }
   if (cur.trim()) fields.push(cur.trim());
 
-  // Expect at least: opcode, input_count, optional_count, requires_state,
-  //                  param_names, defaults, description
-  if (fields.length < 7) return null;
+  // Detect designated-init style: every non-empty field begins with `.name = `.
+  const isDesignated = fields.length > 0 && fields.every((f) => /^\.[A-Za-z_][A-Za-z0-9_]*\s*=/.test(f));
 
-  const inputCount = parseInt(fields[1], 10);
-  const optionalCount = parseInt(fields[2], 10);
-  const requiresState = fields[3] === "true";
+  let inputCountStr: string;
+  let optionalCountStr: string;
+  let requiresStateStr: string;
+  let paramNamesField: string;
+  let defaultsField: string;
+  let descriptionField: string;
+
+  if (isDesignated) {
+    const named: Record<string, string> = {};
+    for (const f of fields) {
+      const m = f.match(/^\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]*)$/);
+      if (m) named[m[1]] = m[2].trim();
+    }
+    if (
+      named["input_count"] === undefined ||
+      named["optional_count"] === undefined ||
+      named["param_names"] === undefined ||
+      named["defaults"] === undefined ||
+      named["description"] === undefined
+    ) {
+      return null;
+    }
+    inputCountStr = named["input_count"];
+    optionalCountStr = named["optional_count"];
+    requiresStateStr = named["requires_state"] ?? "false";
+    paramNamesField = named["param_names"];
+    defaultsField = named["defaults"];
+    descriptionField = named["description"];
+  } else {
+    // Expect at least: opcode, input_count, optional_count, requires_state,
+    //                  param_names, defaults, description
+    if (fields.length < 7) return null;
+    inputCountStr = fields[1];
+    optionalCountStr = fields[2];
+    requiresStateStr = fields[3];
+    paramNamesField = fields[4];
+    defaultsField = fields[5];
+    descriptionField = fields[6];
+  }
+
+  const inputCount = parseInt(inputCountStr, 10);
+  const optionalCount = parseInt(optionalCountStr, 10);
+  const requiresState = requiresStateStr === "true";
   if (Number.isNaN(inputCount) || Number.isNaN(optionalCount)) return null;
 
-  const paramNames = parseStringArray(fields[4]);
-  const defaults = parseFloatArray(fields[5]);
-  const description = parseStringLiteral(fields[6]);
+  const paramNames = parseStringArray(paramNamesField);
+  const defaults = parseFloatArray(defaultsField);
+  const description = parseStringLiteral(descriptionField);
 
   // Build the params list: required up to inputCount, optional after.
   // defaults[i] applies to param at index inputCount + i.
