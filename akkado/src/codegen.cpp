@@ -1993,6 +1993,106 @@ bool CodeGenerator::bind_destructure_fields(
 // Array HOF implementations are in codegen_arrays.cpp
 
 // ============================================================================
+// Argument-spread expansion
+// ============================================================================
+
+std::optional<std::vector<CodeGenerator::ExpandedArg>>
+CodeGenerator::expand_call_arguments(NodeIndex call_node) {
+    std::vector<ExpandedArg> out;
+    bool saw_record_spread = false;
+    bool saw_array_spread = false;
+
+    NodeIndex arg = ast_->arena[call_node].first_child;
+    while (arg != NULL_NODE) {
+        const Node& a = ast_->arena[arg];
+
+        // Spread argument: `..expr` — Argument node with spread_source set.
+        if (a.type == NodeType::Argument &&
+            std::holds_alternative<Node::ArgumentData>(a.data) &&
+            a.as_argument().spread_source != NULL_NODE) {
+
+            NodeIndex src_node = a.as_argument().spread_source;
+            TypedValue src_tv = visit(src_node);
+            SourceLocation src_loc = ast_->arena[src_node].location;
+
+            if (src_tv.type == ValueType::Record && src_tv.record) {
+                if (saw_array_spread) {
+                    error("E180", "Cannot mix record and array spread in one call",
+                          src_loc);
+                    return std::nullopt;
+                }
+                saw_record_spread = true;
+
+                for (const auto& [name, tv] : src_tv.record->fields) {
+                    ExpandedArg ea;
+                    ea.name = name;
+                    ea.source_node = NULL_NODE;
+                    ea.resolved = tv;
+                    ea.loc = src_loc;
+                    out.push_back(std::move(ea));
+                }
+            } else if (src_tv.type == ValueType::Array && src_tv.array) {
+                if (saw_record_spread) {
+                    error("E180", "Cannot mix record and array spread in one call",
+                          src_loc);
+                    return std::nullopt;
+                }
+                saw_array_spread = true;
+
+                for (const auto& el : src_tv.array->elements) {
+                    ExpandedArg ea;
+                    ea.name = std::nullopt;
+                    ea.source_node = NULL_NODE;
+                    ea.resolved = el;
+                    ea.loc = src_loc;
+                    out.push_back(std::move(ea));
+                }
+            } else if (src_tv.type == ValueType::Pattern && src_tv.pattern) {
+                // Patterns expose record-like fields (freq, vel, trig, gate, type)
+                if (saw_array_spread) {
+                    error("E180", "Cannot mix record and array spread in one call",
+                          src_loc);
+                    return std::nullopt;
+                }
+                saw_record_spread = true;
+
+                static const char* field_names[] = {"freq", "vel", "trig", "gate", "type"};
+                for (std::size_t i = 0; i < 5; ++i) {
+                    if (src_tv.pattern->fields[i] != 0xFFFF) {
+                        ExpandedArg ea;
+                        ea.name = field_names[i];
+                        ea.source_node = NULL_NODE;
+                        ea.resolved = TypedValue::signal(src_tv.pattern->fields[i]);
+                        ea.loc = src_loc;
+                        out.push_back(std::move(ea));
+                    }
+                }
+            } else {
+                error("E140", "Spread source is not a record or array", src_loc);
+                return std::nullopt;
+            }
+        } else {
+            // Concrete argument: positional or named (..pass through).
+            ExpandedArg ea;
+            if (a.type == NodeType::Argument &&
+                std::holds_alternative<Node::ArgumentData>(a.data)) {
+                ea.name = a.as_argument().name;
+                ea.source_node = (a.first_child != NULL_NODE) ? a.first_child : arg;
+            } else {
+                // Bare expression (rare — record fields use RecordFieldData).
+                ea.source_node = arg;
+            }
+            ea.loc = a.location;
+            out.push_back(std::move(ea));
+        }
+
+        arg = ast_->arena[arg].next_sibling;
+    }
+
+    return out;
+}
+
+// ============================================================================
 // Record support implementation
 // ============================================================================
 

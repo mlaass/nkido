@@ -11,6 +11,7 @@
 #include <cedar/opcodes/sequence.hpp>
 #include <cedar/opcodes/dsp_state.hpp>
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -340,6 +341,26 @@ private:
     /// into the cell. First arg must be a StateCell. Returns the new value
     /// broadcast as a Signal so set() can be used in expression position.
     TypedValue handle_set_call(NodeIndex node, const Node& n);
+
+    /// Argument-spread expansion (record/array spread in function calls).
+    /// One entry per logical argument the call site provides. For concrete
+    /// args, source_node points at the value AST and resolved is empty. For
+    /// args produced by spreading a record/array, resolved holds the
+    /// pre-evaluated TypedValue and source_node is NULL_NODE.
+    struct ExpandedArg {
+        std::optional<std::string> name;     // None → positional
+        NodeIndex source_node = NULL_NODE;   // Concrete value AST, or NULL_NODE if spread-resolved
+        std::optional<TypedValue> resolved;  // Pre-evaluated TypedValue from spread expansion
+        SourceLocation loc;
+    };
+
+    /// Walks the call's children, expanding any ..record / ..array spread
+    /// argument by visiting its source once and emitting one ExpandedArg per
+    /// field/element. Concrete (named or positional) args pass through as-is.
+    /// Emits E140 (non-record/non-array source) and E180 (record + array
+    /// spread mixed in one call) on failure.
+    /// Returns nullopt on hard error.
+    std::optional<std::vector<ExpandedArg>> expand_call_arguments(NodeIndex call_node);
 
     /// Handle user-defined function calls - inline expansion
     TypedValue handle_user_function_call(NodeIndex node, const Node& n,
