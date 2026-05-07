@@ -1,4 +1,4 @@
-> **Status: NOT STARTED** — Phase 2 of Akkado's records system. Builds on the existing records-and-field-access work (PARTIAL) and treats argument-spread as a shipped prerequisite.
+> **Status: NOT STARTED** — Phase 2 of Akkado's records system. Builds on the existing records-and-field-access work (now DONE as of 2026-05-07) and treats argument-spread (currently NOT STARTED) as a soft prerequisite.
 
 # PRD: Records System Unification — Editor Visibility, Destructuring, Options Convention, Mutability
 
@@ -18,7 +18,7 @@ Akkado's records system landed piecewise. Record literals, field access, pipe bi
 - The "record-as-options" pattern works for visualizers (via `extract_options_json`) but is not declared as a convention for other builtin families (samplers, filters, delays).
 - Records are immutable by design — and there is no idiomatic "stateful record" form for cases where mutation would be natural. Users either reach for `{..r, x: v}` (which still produces a new value) or fall back to flat scalar state cells.
 
-This PRD owns Phase 2 of the records system: closing those four gaps. It does **not** absorb the held-open §3 work in `docs/prd-records-and-field-access.md` (extended pattern event fields), and it does **not** redescribe the spread spec from `docs/prd-record-argument-spread.md` — both stay authoritative for their original scope. Both are referenced as prerequisites where relevant.
+This PRD owns Phase 2 of the records system: closing those four gaps. It does **not** redescribe the spread spec from `docs/prd-record-argument-spread.md`, which stays authoritative for that work. The previously held-open §3 of `docs/prd-records-and-field-access.md` (extended pattern event fields) shipped on 2026-05-07 (commit `19feea2`) — its newly exposed fields are an upstream dependency this PRD's analyzer shape index will surface verbatim, no further coupling required.
 
 ### Key Design Decisions
 
@@ -36,15 +36,15 @@ This PRD owns Phase 2 of the records system: closing those four gaps. It does **
 | Capability | Today | Limitation |
 |---|---|---|
 | Record literal `{x: 1, y: 2}` | ✓ Works (`parser.cpp:1503–1577`, `codegen.cpp:1959–2070`) | — |
-| Spread `{..base, x: 1}` | ✓ Works (`codegen.cpp:2006–2067`) | — |
-| Field access `r.field`, `%.field`, nested | ✓ Works (`codegen.cpp:2072–2208`) | Pattern fields capped at five |
+| Spread `{..base, x: 1}` | ✓ Works (`codegen.cpp:2006–2072`) | — |
+| Field access `r.field`, `%.field`, nested | ✓ Works (`codegen.cpp:2112–2246`) | — (extended fields shipped 2026-05-07) |
 | Pipe binding `expr as e`, `as {x, y}` | ✓ Works (`parser.cpp:366–404`) | Pipe-only — no statement-level destructuring |
-| Records as builtin params | ✓ Works for viz (`builtins.hpp:36, 62–73`, `codegen_viz.cpp:42–121`) | Pattern not generalized; not advertised as a convention |
+| Records as builtin params | ✓ Works for viz (`builtins.hpp:70` `type_compatible(Record)`, `codegen_viz.cpp:42–121` `extract_options_json`) | Pattern not generalized; not advertised as a convention |
 | Argument spread `f(..r)`, `f(..arr)`, `[..a, b]` | ✗ Not started — see `prd-record-argument-spread.md` | Treated as a prerequisite for parts of this PRD |
 | Editor field autocomplete on `r.` / `%.` | ✗ None (`web/src/lib/editor/akkado-completions.ts:1–241`) | Functions/keywords/user-vars only — no record shape awareness |
 | Standalone `{x, y} = r` and `fn f({x, y})` | ✗ Not parseable | Only `as` form exists |
 | Record mutation `r.x = 5` | ✗ Not parseable; vars immutable (E150) | By design per existing PRD §1.3 — but no idiomatic alternative for stateful state either |
-| Extended pattern event fields (note/dur/chance/time/phase/voice/sample_id/…) | ✗ Held open in `audits/prd-records-and-field-access_audit_2026-05-05.md` | Out of scope here — stays under that audit's recommended next steps |
+| Extended pattern event fields (note/dur/chance/time/phase/sample_id/aliases) | ✓ Shipped 2026-05-07 (commit `19feea2`) | `voice` deferred under polyphony pivot; `sample` aliases the numeric `sample_id`. Surfaced automatically by this PRD's analyzer shape index. |
 
 ### 2.2 Root Causes
 
@@ -57,11 +57,11 @@ This PRD owns Phase 2 of the records system: closing those four gaps. It does **
 
 | Component | Location | Reuse |
 |---|---|---|
-| `BuiltinInfo` struct | `akkado/include/akkado/builtins.hpp:36–115` | Extend with `option_fields` |
-| `ParamValueType::Record` | `akkado/include/akkado/builtins.hpp:36, 62–73` | Already accepts Record/Pattern; extends to declare field schema |
+| `BuiltinInfo` struct | `akkado/include/akkado/builtins.hpp:76–150` | Extend with `option_fields` |
+| `ParamValueType::Record` | `akkado/include/akkado/builtins.hpp:36` (enum), `:70` (`type_compatible`) | Already accepts Record/Pattern; extends to declare field schema |
 | `extract_options_json` | `akkado/src/codegen_viz.cpp:42–121` | Generalize into a shared helper or schema-driven extractor |
-| `RecordPayload` | `akkado/include/akkado/typed_value.hpp:90–92` | Source-of-truth for analyzer-driven shape dump |
-| `PatternPayload::custom_fields` | `akkado/include/akkado/typed_value.hpp:48` | Surfaces source-derived attached props to autocomplete |
+| `RecordPayload` | `akkado/include/akkado/typed_value.hpp:101–103` | Source-of-truth for analyzer-driven shape dump |
+| `PatternPayload::custom_fields` | `akkado/include/akkado/typed_value.hpp:53` | Surfaces source-derived attached props to autocomplete |
 | `akkado_get_builtins_json` WASM export | per `prd-editor-autocomplete.md` | Extend to include option-field schema; add sibling `akkado_get_shape_index` |
 | `as {x, y}` destructuring parser/codegen | `parser.cpp:366–404`, `codegen.cpp:…` (pipe-binding paths) | Lift destructure logic into shared helper for the new statement/param forms |
 | `state()` / `get()` / `set()` and `TypedValue::StateCell` | `typed_value.hpp` (cell_state_id), state-cell plumbing | Sketch C of mutability lives here |
@@ -86,7 +86,7 @@ This PRD owns Phase 2 of the records system: closing those four gaps. It does **
 
 ### 3.2 Non-Goals
 
-- **§3 of `prd-records-and-field-access.md`** (extended pattern event fields). Held open under `audits/prd-records-and-field-access_audit_2026-05-05.md`. Editor autocomplete in this PRD will surface whatever fields the analyzer reports today; new fields appear automatically once §3 ships in its own track.
+- **Adding any new pattern event fields beyond what `prd-records-and-field-access.md` §3 already shipped (2026-05-07).** This PRD's analyzer shape index surfaces whatever fields are present in `PatternPayload` (currently 11 fixed slots — `freq, vel, trig, gate, type, note, dur, chance, time, phase, sample_id` — plus aliases). The `voice` slot remains deferred under the polyphony pivot; not adding it here.
 - **Argument spread itself** (record spread `f(..r)`, array spread `f(..arr)`, array literal spread `[..a, b]`). Owned by `prd-record-argument-spread.md`. Treated here as a prerequisite for parts of G6 and G8 — the option schema must model "this builtin accepts spread" so the editor produces correct hints when the user writes `f(..preset)`.
 - **Diagnostic-code reconciliation** between the records PRD's E062–E065 and the implementation's E135/E136/E140. Tracked in the audit's recommended next steps. Out of scope here.
 - **Migration of sampler/filter/delay/reverb config to record-as-options.** Convention is declared; per-family migration is future work.
@@ -101,7 +101,7 @@ This PRD owns Phase 2 of the records system: closing those four gaps. It does **
 |---|---|---|
 | `prd-record-argument-spread.md` | NOT STARTED | G6 (function-param destructuring composes with `f(..r)`), G8 (option schema marks spread-compatible builtins). Strongly recommended to ship before this PRD's Phase 3. If it slips, this PRD's destructuring still ships; spread-aware completions ship later as a follow-up. |
 | `prd-editor-autocomplete.md` | DONE | G1, G3 (extends the existing builtins JSON pipeline and CodeMirror completion source). |
-| `prd-records-and-field-access.md` §3 | HELD OPEN (audit) | Independent track. New pattern fields surface in autocomplete automatically when shipped. |
+| `prd-records-and-field-access.md` §3 | DONE (shipped 2026-05-07, commit `19feea2`) | All 11 fixed pattern fields + aliases now exposed; analyzer shape index surfaces them automatically. `voice` slot deferred separately. |
 | `prd-compiler-type-system.md` Phase 1 | DONE | TypedValue + RecordPayload + PatternPayload are the source of truth for the analyzer dump. |
 
 ### 3.4 Cross-PRD Sequencing
@@ -134,12 +134,13 @@ prd-record-argument-spread.md  ----> | prd-records-system-       |
                                             |  deferrable (off-ramp
                                             |  in Phase 4b body)
 
-                          [HELD OPEN — independent track]
+                          [DONE — 2026-05-07, commit 19feea2]
                           prd-records-and-field-access.md §3
                           (extended pattern event fields)
-                          ─── new fields surface in autocomplete
-                              automatically once shipped, no
-                              coupling needed
+                          ─── 11 fixed fields + aliases live;
+                              analyzer shape index surfaces them
+                              with no extra coupling. `voice`
+                              deferred under polyphony pivot.
 
                           [FUTURE — per-builtin-family PRDs]
                           - prd-sampler-options.md       (per Enhanced Sampler G8)
@@ -151,7 +152,7 @@ prd-record-argument-spread.md  ----> | prd-records-system-       |
 **Reading the diagram:**
 - Solid arrows are hard prerequisites: Phase 1+2 cannot ship without the prior editor-autocomplete and type-system foundations.
 - Spread (`prd-record-argument-spread.md`) is a soft prerequisite: shipping it before Phase 3 lets destructuring + spread compose meaningfully (`fn f({x, y})` paired with `f(..r)`). If spread slips, Phase 3 still ships; spread-paired tests come later.
-- §3 of the records PRD is an **independent track** — the audit at `audits/prd-records-and-field-access_audit_2026-05-05.md` keeps it open. New pattern fields will surface through the analyzer shape index automatically when they ship; no coupling required.
+- §3 of the records PRD shipped on 2026-05-07 (commit `19feea2`) — its 11 fixed fields plus aliases flow through `PatternPayload` and surface verbatim through this PRD's analyzer shape index. No coupling needed; the `voice` slot remains deferred separately under the polyphony pivot.
 - Per-family options PRDs are downstream of §5.5 and can ship in any order once the convention is documented.
 
 ---
@@ -173,13 +174,16 @@ synth_cfg = {wave: "saw", cutoff: 2000, q: 0.7}
 synth_cfg.|     // ← editor suggests: wave, cutoff, q
 
 // 3. Pattern fields, fixed (analyzer dump)
-pat("c4 e4") |> osc("sin", %.|)    // ← suggests: freq, vel, trig, gate, type
-                                   //   (plus aliases pitch/f, velocity/v, trigger/t)
+pat("c4 e4") |> osc("sin", %.|)    // ← suggests: freq, vel, trig, gate, type,
+                                   //   note, dur, chance, time, phase, sample_id
+                                   //   (plus aliases: pitch/f, velocity/v,
+                                   //   trigger/t, midi/n, sample/s, frequency, p)
 
 // 4. Pattern fields including custom_fields (analyzer dump)
 beat = pat("c4 e4").set("cutoff", saw(0.5)).set("res", 0.7)
-beat |> lp(osc("sin", %.freq), %.|)   // ← suggests: freq, vel, …, cutoff, res
-                                      //   (custom fields from .set() calls)
+beat |> lp(osc("sin", %.freq), %.|)   // ← suggests: all 11 fixed fields above
+                                      //   plus cutoff, res (custom fields from
+                                      //   .set() calls)
 
 // 5. Field hints inside spread caller (when spread PRD ships)
 preset = {bits: 12, sr: 26040}
@@ -376,7 +380,13 @@ New WASM export:
 
 ```cpp
 // web/wasm/nkido_wasm.cpp
-WASM_EXPORT const char* akkado_get_shape_index(const char* source);
+//
+// `cursor_offset` is the byte offset of the editor caret in `source`.
+// Used solely to resolve the `patternHole` field below — top-level
+// `bindings` are independent of cursor position. Pass `UINT32_MAX` (or
+// any value past end-of-source) to skip patternHole resolution.
+WASM_EXPORT const char* akkado_get_shape_index(const char* source,
+                                                std::uint32_t cursor_offset);
 ```
 
 Behavior: parse + analyze the source (same pipeline as the regular compile, but tolerant — partial bindings still indexed). Walk the symbol table; for every binding whose `TypedValue` is `Record`, `Pattern`, or `Array`-of-Record, emit:
@@ -409,7 +419,12 @@ Behavior: parse + analyze the source (same pipeline as the regular compile, but 
   },
   "patternHole": {
     "kind": "pattern",
-    "fields": [/* shape of the pattern at the % position, if cursor is in a pipe */]
+    "fields": [/* shape of the pattern feeding the % nearest to cursor_offset,
+                  if any. Resolution: walk the AST, find the innermost pipe
+                  expression containing cursor_offset; if its LHS is a
+                  Pattern-typed expression, emit that pattern's shape.
+                  Omitted entirely if no enclosing pipe or LHS is not a
+                  Pattern. */]
   }
 }
 ```
@@ -429,12 +444,15 @@ let lastHash = "";
 let cachedIndex: ShapeIndex | null = null;
 let timer: number | null = null;
 
-export function scheduleShapeIndex(source: string) {
+export function scheduleShapeIndex(source: string, cursorOffset: number) {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
-        const hash = fnv1a(source);
+        // Hash includes cursor since patternHole depends on it. (Top-level
+        // bindings would suffice with a source-only hash if patternHole were
+        // computed lazily — kept simple here.)
+        const hash = fnv1a(source) ^ cursorOffset;
         if (hash === lastHash) return;
-        cachedIndex = JSON.parse(wasm.akkado_get_shape_index(source));
+        cachedIndex = JSON.parse(wasm.akkado_get_shape_index(source, cursorOffset));
         lastHash = hash;
     }, 300);
 }
@@ -501,7 +519,7 @@ The pipe-side `as {x, y}` parser already validates the destructuring pattern syn
 
 #### 5.4.3 Codegen
 
-For statement-level: each field becomes an immutable binding to the analyzer-visible buffer for that record field. If the field is missing from the source record AND a default is declared, emit the default expression and bind to its buffer. If missing AND no default, emit error E150-style ("destructure source missing field 'foo'") — see §10.
+For statement-level: each field becomes an immutable binding to the analyzer-visible buffer for that record field. If the field is missing from the source record AND a default is declared, emit the default expression and bind to its buffer. If missing AND no default, emit **E187** ("destructure source missing required field 'foo'") — see §10.0 reserved codes table.
 
 For function params: at call site, the call's argument is required to be Record-typed. Before lowering the function body, emit per-field bindings into the function's local scope with the same semantics as statement-level. Composes naturally with argument spread — `f(..r)` builds a synthetic record from spread args, then destructures normally.
 
@@ -532,10 +550,12 @@ This work has two layers: (1) the type-system extension that lets state cells ho
 
 The state-cell mechanism already exists (`TypedValue::cell_state_id` and surrounding plumbing). Extending it to record-valued cells is mostly type-system work.
 
+**Existing behavior to relax.** `codegen_state.cpp:60` and `:154` currently emit `E122 "state() initial value must be a number or signal"` (and the parallel rejection on `set()`). Phase 4a explicitly **widens** that check to admit `Record` alongside `Number`/`Signal`; `Function`, `Array`, `StateCell`, and `Void` continue to reject. The error code stays E122; the message is updated to "must be a number, signal, or record".
+
 **Type rules:**
 - `state(initial)` where `typeof(initial) = Record` returns `StateCell<Record<…>>` and remembers the cell's record shape.
 - `get(cell)` returns the `Record` payload of the cell — supports field access naturally (`get(cell).freq`).
-- `set(cell, value)` requires `typeof(value) = Record` with the same field shape as the cell's declared type. Mismatch → E170 (new).
+- `set(cell, value)` requires `typeof(value) = Record` with the same field shape as the cell's declared type. Shape mismatch → **E189** (new — see §10.0 reserved codes).
 
 **State preservation across hot-swap:** the cell's `state_id` (FNV-1a path hash) already tracks identity; the record value held inside is just data. No new hot-swap logic.
 
@@ -560,12 +580,12 @@ Two new desugarings, both gated on the receiver being a state cell holding a rec
 
 - New AST node `FieldAssignment { receiver: NodeIndex, field: string, value: NodeIndex }`.
 - Parser: when `parse_statement()` (or expression-statement parser) sees `expr.identifier =`, build a `FieldAssignment`. Distinguish from `expr.identifier(...)` (method call) and `expr.identifier` (field read) by the trailing `=`.
-- Analyzer: validate that `receiver` is `StateCell<Record>` AND the named `field` exists on the cell's record shape. If receiver is a value record → E150 ("cannot assign to field of immutable value record; declare with state(...) instead"). If receiver is a state cell but field absent → E136-style "unknown field" with the cell's available field list.
+- Analyzer: validate that `receiver` is `StateCell<Record>` AND the named `field` exists on the cell's record shape. If receiver is a value record → **E150** (existing code, message extended: "Cannot assign to field of immutable value record; declare with state(...) instead"). If receiver is a state cell but field absent → reuse **E136** "Unknown field" with the cell's available field list.
 - Codegen: lower to `set(receiver, {..get(receiver), field: value})`. The `{..get(receiver), field: value}` part reuses existing record-spread codegen verbatim.
 
-**No nested-field write in v1.** `cell.inner.x = 5` is rejected at parse or analyze time (defer to `prd-records-and-field-access.md` §Q1 / future). The sugar only applies to a one-level field on a state cell.
+**No nested-field write in v1.** `cell.inner.x = 5` is rejected at analyze time with **E204** ("Nested field assignment is not supported; use `set(cell, {..get(cell), inner: {..get(cell).inner, x: v}})`"). The sugar only applies to a one-level field on a state cell.
 
-**No pipe-position write in v1.** `expr |> cell.x = 5` is parsed as a statement-level write within a block, not a pipe-stage expression. If users want pipe-driven writes, they wrap in a block: `expr |> { cell.x = 5 }`. Documented in §10.
+**No pipe-position write in v1.** `expr |> cell.x = 5` is rejected at parse time with **E205** ("Field assignment is a statement, not an expression — wrap in a block: `expr |> { cell.x = 5 }`"). Documented in §10.
 
 **Disambiguation rule (§10.1 echo):** when both static schema and analyzer disagree on a binding's shape, static wins. For sugar resolution specifically: the analyzer determines whether a binding is `StateCell<Record>` vs. `Record`; that's analyzer-only territory (no static schema collision possible) so the rule does not bite here.
 
@@ -590,8 +610,19 @@ Two new desugarings, both gated on the receiver being a state cell holding a rec
 | Editor — `akkado-shape-index.ts` | **New** | Pull-on-idle WASM caller |
 | Editor — `akkado-completions.ts` | **Modified** | `.`-context branch + record-literal-context branch |
 | `prd-record-argument-spread.md` | **Stays** | Authoritative for spread; this PRD only consumes |
-| `prd-records-and-field-access.md` §3 | **Stays** | Held-open work tracked in audit, not here |
+| `prd-records-and-field-access.md` §3 | **Stays (now DONE)** | Shipped 2026-05-07; this PRD's analyzer surfaces fields verbatim |
 | `prd-editor-autocomplete.md` | **Stays** | Authoritative for the existing autocomplete; this PRD extends |
+
+### 6.1 Unchanged Surfaces
+
+These shipped surfaces are explicitly preserved as-is and verified by regression tests:
+
+- **Cedar VM opcodes.** No new opcodes; no opcode behavior changes. Whole feature is compile-time.
+- **Existing record literal `{x: 1}` and spread `{..base, x: 1}`.** Parser path (`parser.cpp:1503–1577`) and codegen (`codegen.cpp:1999–2110`) untouched.
+- **Existing field access `r.field`, `%.field`.** `handle_field_access` (`codegen.cpp:2112+`) gains a `StateCell<Record>` branch but the existing Record/Pattern branches are unchanged.
+- **Existing pipe-binding destructure `as {x, y}`.** Parser path (`parser.cpp:366–404`) gets refactored to share `parse_destructure_fields()` — same observable behavior; the existing tests act as a regression gate.
+- **All extended pattern fields shipped 2026-05-07.** Surfaced verbatim; no remapping or alias rewiring.
+- **State cell hot-swap identity (`state_id` path-hash).** Same machinery, now also carries Record-shaped values.
 
 ---
 
@@ -604,7 +635,7 @@ Records are immutable today. `prd-records-and-field-access.md` §1.3 lists "Muta
 Initially these looked like competing alternatives:
 
 - **Sketch A** — direct mutation `r.x = 5`. Familiar imperative ergonomics.
-- **Sketch C** — record-valued state cells: `voice = state({...})`, then `get(voice).x` and `set(voice, {..get(voice), x: 5})`. Reuses existing state-cell infra.
+- **Sketch C** — record-valued state cells: `voice = state({...})`, then `get(voice).x` and `set(voice, {..get(voice), x: 5})`. **Extends** existing state-cell infra: cell-identity, `state_id`, hot-swap, and StatePool plumbing all reuse verbatim; the `E122` type-acceptance check in `state()`/`set()` is widened to admit `Record` (currently Number/Signal only — see §5.6.1).
 
 Read literally as separate semantics, A and C conflict: A makes records mutable values; C keeps records pure and puts mutability inside state cells. Picking A would require a new runtime record representation, complicate hot-swap identity, and reverse `prd-records-and-field-access.md` §1.3.
 
@@ -664,15 +695,16 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 | `akkado/src/builtins.cpp` (or wherever viz signatures are declared) | Populate `option_schemas` for all current viz builtins |
 | `akkado/include/akkado/ast.hpp` | Add `DestructureField`, `DestructureAssignmentData`, `DestructureParamData`, NodeType entries |
 | `akkado/src/parser.cpp` | New `parse_destructure_fields()` helper; refactor `as {x, y}` to use it; extend `parse_statement()` and `parse_fn_signature()` |
-| `akkado/src/analyzer.cpp` | Validate destructure source is Record; check field existence; resolve defaults; new diagnostic E170 for source mismatch |
+| `akkado/src/analyzer.cpp` | Validate destructure source is Record; check field existence; resolve defaults; emit **E187** (missing required), **E188** (duplicate field) per §10.0 |
 | `akkado/src/codegen.cpp` | Codegen for `DestructureAssignment` and `DestructureParam`; new shared `extract_options(node, schema)` helper |
 | `akkado/src/codegen_viz.cpp` | Migrate to shared `extract_options` helper (behavior-preserving) |
 | `akkado/src/codegen_functions.cpp` | Function-param destructuring: bind locals before emitting body |
 | `akkado/include/akkado/typed_value.hpp` | Allow `Record` as the held type of `StateCell`; type-rule extensions; track cell's record shape for sugar disambiguation |
-| `akkado/src/codegen_state.cpp` (or wherever state/get/set live) | Accept Record payload in `state()`, return Record in `get()`, validate shape in `set()` |
+| `akkado/src/codegen_state.cpp` | Widen `state()`/`set()` E122 acceptance to admit Record (currently Number/Signal only); return Record in `get()`; emit **E189** on shape mismatch |
+| `akkado/include/akkado/stdlib.hpp` (and the file that registers stdlib `fn` defs) | Add `update(cell, patch)` defined as `fn update(cell, patch) -> set(cell, {..get(cell), ..patch})`. Lands once argument spread (`..patch`) ships; until then, document the helper but require users to inline. |
 | `akkado/include/akkado/ast.hpp` | Add `FieldAssignment` NodeType + data (receiver: NodeIndex, field: string, value: NodeIndex) for the write-side sugar |
-| `akkado/src/parser.cpp` | Recognize `expr.identifier = expr` in statement context; build `FieldAssignment` |
-| `akkado/src/analyzer.cpp` | Validate `FieldAssignment` receiver is `StateCell<Record>` and field exists; E150 for value-record receivers; field-existence error reusing E136 path |
+| `akkado/src/parser.cpp` | Recognize `expr.identifier = expr` in statement context; build `FieldAssignment`. Reject pipe-position field assignment with **E205** |
+| `akkado/src/analyzer.cpp` | Validate `FieldAssignment` receiver is `StateCell<Record>` and field exists; **E150** (existing code, message extended) for value-record receivers; reuse **E136** for unknown field; emit **E204** for nested-field write |
 | `akkado/src/codegen.cpp` | Codegen for `FieldAssignment` (lower to `set(receiver, {..get(receiver), field: value})`); add read-side sugar branch in `handle_field_access` for `StateCell<Record>` receivers |
 | `akkado/include/akkado/typed_value.hpp` — `pattern_field_index()` aliases | Static alias-list extension for shape-index emission (no new fields, just expose alias mapping) |
 | `web/wasm/nkido_wasm.cpp` | Add `akkado_get_shape_index()` export; extend `akkado_get_builtins_json()` to emit `optionFields` |
@@ -690,8 +722,8 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 | File | Reason |
 |---|---|
 | Cedar VM opcodes | Compile-time only feature throughout |
-| `prd-records-and-field-access.md` | Stays authoritative; §3 work tracked under audit |
-| `prd-record-argument-spread.md` | Stays authoritative; treated as prerequisite |
+| `prd-records-and-field-access.md` | Stays authoritative; §3 shipped 2026-05-07 — fields surface automatically |
+| `prd-record-argument-spread.md` | Stays authoritative; treated as soft prerequisite |
 
 ---
 
@@ -739,7 +771,7 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 - AST nodes for assignment-form and param-form destructure.
 - Shared `parse_destructure_fields()` used by all three forms (incl. existing `as {x, y}`).
 - Defaults evaluated lazily — only when source field is missing.
-- Diagnostic E170 for source missing required (no-default) fields.
+- Diagnostic **E187** for source missing required (no-default) fields; **E188** for duplicate fields. (See §10.0 reserved codes.)
 
 **Verification:**
 - Parser tests for all three forms incl. trailing comma, mixed defaults.
@@ -755,13 +787,13 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 **Deliverables:**
 - `state()` accepts Record TypedValue; type-tracks the record shape on the cell.
 - `get()` returns the held Record; field access works through it (existing record-field-access path; no sugar dispatch yet).
-- `set()` validates shape match; emits E170 on mismatch.
-- `update(cell, patch)` defined as a stdlib `fn` using existing spread.
-- Hot-swap state preservation works for record-valued cells (verify via existing hot-swap test infra).
+- `set()` validates shape match; emits **E189** on mismatch.
+- `update(cell, patch)` defined as a stdlib `fn` using existing spread (lands once spread PRD ships; until then, document the helper but require users to inline `set(cell, {..get(cell), ..patch})`).
+- Hot-swap state preservation works for record-valued cells (verify via existing hot-swap test infra). Cross-shape reloads fall back to the new initial record (no silent partial-merge).
 
 **Verification:**
-- Unit tests for shape-mismatched `set()` (E170).
-- Unit tests for `set()` given a non-Record value (E140).
+- Unit tests for shape-mismatched `set()` (**E189**).
+- Unit tests for `set()` given a non-Record value (**E122**, message widened).
 - Integration: button trigger updates voice via explicit `set(voice, {..get(voice), gate: 1})`; verify audio.
 - Hot-swap test: cell value persists across structural code reload using `update()`.
 
@@ -812,6 +844,24 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 
 ## 10. Edge Cases
 
+### 10.0 Reserved Diagnostic Codes
+
+The records audit (`audits/prd-records-and-field-access_audit_2026-05-05.md`) flagged drift between PRD-spec'd codes (E060–E065) and emitted ones (E135/E136/E140). To prevent recurrence, this PRD nails down its codes against actual current usage. Codes were chosen from gaps in the existing distribution surveyed at PRD draft time — see `grep -rh 'error("E[0-9]' akkado/src/`.
+
+| Code | Reuse / new | Site | Message |
+|---|---|---|---|
+| **E122** | Existing — message widened | `codegen_state.cpp` | "state() / set() initial value must be a number, signal, or record" (was: "must be a number or signal"). The pre-existing rejection of Function/Array/StateCell stays. |
+| **E136** | Existing — reused | analyzer / codegen | "Unknown field 'X' on state cell. Available: …" — same family as the existing pattern/record unknown-field. |
+| **E150** | Existing — message extended | analyzer | Currently "Cannot reassign immutable variable 'X'" (`analyzer.cpp:215, 513`); add a sibling case "Cannot assign to field of immutable value record. Declare with `state({...})` to allow mutation." |
+| **E187** | New | analyzer (destructure) | "Destructure source missing required field 'X' (no default declared)." Distinct from the existing **E141** ("Destructure field 'X' not found in record/pattern"), which fires from the `as {x, y}` pipe-binding path; E187 fires from the new statement-level / fn-param destructure paths. |
+| **E188** | New | parser/analyzer (destructure) | "Duplicate field 'X' in destructure pattern." |
+| **E189** | New | analyzer (state cell) | "State cell shape mismatch — expected fields {…}, got {…}." Replaces the conflicting E170 originally drafted. |
+| **E204** | New | analyzer (field-assign sugar) | "Nested field assignment is not supported in v1; rewrite as `set(cell, {..get(cell), inner: {..get(cell).inner, field: v}})`." |
+| **E205** | New | parser (field-assign sugar) | "Field assignment is a statement, not an expression. Wrap in a block: `expr |> { cell.x = 5 }`." |
+| **W160** | Existing (per spread PRD) | analyzer (option fields) | "Field 'X' has no matching option in `<builtin>`." Reused from the spread PRD's W160 to keep severity consistent across the two surfaces (per §12.5 recommendation). |
+
+**Codes deliberately NOT used.** **E170** (already in use at `analyzer.cpp:200, :507`, `codegen.cpp:606`, `codegen_viz.cpp:147` for read-only-builtin assignment & `pianoroll()` arg validation) and **E180** (already in use at `codegen_arrays.cpp:668` for `spread()` count and `codegen_stereo.cpp:100` for `mono()` arg) — both originally drafted into this PRD; both reassigned to the E187–E189 / E204–E205 ranges above to avoid clashes.
+
 ### 10.1 Editor / Shape Index
 
 - **Source has parse error.** `akkado_get_shape_index` returns whatever was bound before the error, plus an `errors: […]` array. Editor still serves completions for valid bindings.
@@ -824,12 +874,12 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 
 | Input | Expected |
 |---|---|
-| `{x, y} = {x: 1}` (no default for `y`) | E170: "destructure source missing field 'y'" |
+| `{x, y} = {x: 1}` (no default for `y`) | **E187**: "destructure source missing required field 'y'" |
 | `{x = 0, y = 0} = {x: 5}` | `x = 5, y = 0` |
-| `{x, y} = 42` | E140: "destructure source is not a record" |
+| `{x, y} = 42` | **E140**: "destructure source is not a record" (existing) |
 | `{x, y} = {x: 1, y: 2, z: 3}` | OK; `z` ignored (no warning — extra fields are common when destructuring a wider record) |
 | `fn f({x, y = 1, z}) -> …` | OK at definition. Caller must supply a record where `x` and `z` are present; `y` falls back. |
-| `{x, x} = r` | E180: "duplicate field 'x' in destructure pattern" |
+| `{x, x} = r` | **E188**: "duplicate field 'x' in destructure pattern" |
 | Nested destructure `{a, b: {c}} = r` | **Out of scope for v1.** Defer. |
 
 ### 10.3 Record-as-Options Convention
@@ -843,23 +893,23 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 
 | Input | Expected |
 |---|---|
-| `s = state({x: 1}); set(s, {x: 2, y: 3})` | E170: "state cell shape mismatch — expected {x}, got {x, y}" |
-| `s = state({x: 1}); set(s, 42)` | E140: "state cell holds Record, set() given Number" |
+| `s = state({x: 1}); set(s, {x: 2, y: 3})` | **E189**: "state cell shape mismatch — expected {x}, got {x, y}" |
+| `s = state({x: 1}); set(s, 42)` | **E122** (widened): "state cell holds Record, set() given Number" |
 | `s = state({x: 1}); get(s) + 1` | Existing field-access required: error E061 "Cannot apply '+' to Record" |
-| Hot-swap: previous `voice = state({freq: 440})`, new code adds field `voice = state({freq: 440, vel: 0.5})` | Cell shape changed; existing hot-swap handles by re-initializing or mapping by ID hash — verify in Phase 4 |
+| Hot-swap: previous `voice = state({freq: 440})`, new code adds field `voice = state({freq: 440, vel: 0.5})` | Cell shape changed; existing hot-swap handles by re-initializing or mapping by ID hash — verify in Phase 4. **If the previous shape's serialized state cannot be migrated, fall back to the new initial record (no silent partial-merge).** |
 | `s = state({x: 1}); s.x` | Read sugar: equivalent to `get(s).x` |
 | `s = state({x: 1}); s.x = 5` | Write sugar: equivalent to `set(s, {..get(s), x: 5})` |
-| `s = state({x: 1}); s.y = 5` | E136: "Unknown field 'y' on state cell. Available: x" |
-| `r = {x: 1}; r.x = 5` | E150: "Cannot assign to field of immutable value record. Declare with `state({...})` to allow mutation." |
-| `s = state({inner: {x: 1}}); s.inner.x = 5` | Deferred-feature error: "Nested field assignment is not supported in this PRD. Use `set(s, {..get(s), inner: {..get(s).inner, x: 5}})`." |
-| `expr |> s.x = 5` | Parse error: "Field assignment is a statement, not an expression. Use `expr |> { s.x = 5 }`." |
+| `s = state({x: 1}); s.y = 5` | **E136**: "Unknown field 'y' on state cell. Available: x" |
+| `r = {x: 1}; r.x = 5` | **E150** (existing, message extended): "Cannot assign to field of immutable value record. Declare with `state({...})` to allow mutation." |
+| `s = state({inner: {x: 1}}); s.inner.x = 5` | **E204**: "Nested field assignment is not supported in v1. Use `set(s, {..get(s), inner: {..get(s).inner, x: 5}})`." |
+| `expr |> s.x = 5` | **E205** (parse): "Field assignment is a statement, not an expression. Wrap: `expr |> { s.x = 5 }`." |
 | `s = state({x: 1}); s.x = s.x + 1` | OK. Lowers to `set(s, {..get(s), x: get(s).x + 1})` — two reads + one write of the cell. Cheap; no special handling needed. |
 | `s = state({x: 1}); t = s; t.x = 5` | OK. `t` and `s` alias the same cell (cell identity flows through the binding). `get(s).x == 5` after the write. |
 
 ### 10.5 Custom Pattern Fields
 
 - **Same field name from multiple `.set()` calls.** Last wins (existing `custom_fields` map semantics).
-- **Custom field name shadows a fixed field.** E.g. `pat("c4").set("freq", x)` — defer; either reject at compile time or document that custom always wins. **[OPEN QUESTION]** — flagged.
+- **Custom field name collides with a fixed field.** Resolved by inspecting current behavior in `akkado/src/typed_value.cpp:66–84` (`pattern_field()`): the lookup checks the **fixed-field table first**, falling back to `custom_fields` only if no fixed match. Therefore `pat("c4").set("freq", x)` *silently allocates a `custom_fields["freq"]` buffer that is unreachable via `%.freq` or `pat.freq`* — the fixed `freq` buffer wins at every access site. The collision is data-loss-quiet; for editor autocomplete this PRD treats it as a correctness issue and **deduplicates by name in the shape-index emitter** (fixed entry exported, custom entry suppressed) so the autocomplete cannot mislead the user into typing a colliding `.set()` and assuming `%.freq` will read it. A user-visible warning at the `.set()` site is recommended as a follow-up but explicitly out of scope for this PRD (pattern-build-time emitter changes).
 - **Custom field referenced before `.set()` chain completes.** Already handled — codegen visits the chain before emitting field accesses.
 
 ---
@@ -870,8 +920,8 @@ Revisit deferred items (nested-field write, pipe-position write, `modify`) only 
 
 - Phase 1: 6+ tests for `OptionSchema` JSON emission across viz builtins.
 - Phase 2: 10+ tests for `ShapeIndexBuilder` covering record, nested record, pattern fixed fields, pattern custom fields, aliases, partial-source recovery.
-- Phase 3: 15+ parser tests, 10+ codegen tests, defaults coverage, E170 cases.
-- Phase 4: 15+ tests for record-valued state cells AND field sugar — including E170, E140, hot-swap survival, read-sugar equivalence with `get()`, write-sugar equivalence with `set(...{..get(...)...})`, E150 on value-record assignment, E136 on unknown field, deferred-feature error on nested-field write, parse error on pipe-position write, alias semantics.
+- Phase 3: 15+ parser tests, 10+ codegen tests, defaults coverage, **E187** + **E188** cases.
+- Phase 4: 15+ tests for record-valued state cells AND field sugar — including **E189** (shape mismatch), **E122** (non-Record `set` value), hot-swap survival, read-sugar equivalence with `get()`, write-sugar equivalence with `set(...{..get(...)...})`, **E150** on value-record assignment, **E136** on unknown field, **E204** on nested-field write, **E205** on pipe-position write, alias semantics.
 
 ### 11.2 Integration Tests
 
@@ -921,7 +971,7 @@ TEST_CASE("record-valued state cell shape mismatch") {
         set(v, {freq: 880, vel: 0.5})
     )");
     CHECK_FALSE(result.success);
-    CHECK(has_diagnostic(result, "E170"));
+    CHECK(has_diagnostic(result, "E189"));
 }
 
 TEST_CASE("state cell read sugar matches get()") {
@@ -1008,9 +1058,9 @@ The PRD is considered complete when **all** of the following hold:
 |---|---|
 | 1 | All viz builtins emit `optionFields` in `akkado_get_builtins_json()`. Editor surfaces field hints inside record-typed builtin args. New unit tests pass. |
 | 2 | `akkado_get_shape_index(source)` returns shapes for all top-level Record / Pattern / Array-of-Record bindings, including pattern `custom_fields` and aliases. Editor pull-on-idle wired up; manual UX checks §11.3.2–§11.3.3 pass. |
-| 3 | `{x, y} = r`, `fn f({x, y}) -> …`, and `{x = 1, y = 2} = r` all parse, analyze, and codegen. E170 emitted on missing required fields with no default. All existing pipe-side `as {x, y}` tests still pass (regression gate). |
-| 4a | `state(record_literal)`, `get(cell)`, `set(cell, ...)`, and stdlib `update()` all work end-to-end. E170 on shape mismatch. Hot-swap test passes for record-valued cells. |
-| 4b | `cell.field` and `cell.field = expr` produce observably equivalent behaviour to the explicit `get`/`set` forms (verified by paired tests). E150 on value-record assignment with the `state(...)` hint. Nested-field-write rejection emits the deferred-feature diagnostic. |
+| 3 | `{x, y} = r`, `fn f({x, y}) -> …`, and `{x = 1, y = 2} = r` all parse, analyze, and codegen. **E187** emitted on missing required fields with no default; **E188** on duplicate fields. All existing pipe-side `as {x, y}` tests still pass (regression gate). |
+| 4a | `state(record_literal)`, `get(cell)`, `set(cell, ...)`, and stdlib `update()` all work end-to-end. **E122** message widened; **E189** on shape mismatch. Hot-swap test passes for record-valued cells. |
+| 4b | `cell.field` and `cell.field = expr` produce observably equivalent behaviour to the explicit `get`/`set` forms (verified by paired tests). **E150** (existing, message extended) on value-record assignment with the `state(...)` hint. **E204** for nested-field-write rejection. **E205** parse error on pipe-position write outside a block. |
 | 5 | Convention documented in language reference + agent guide. Viz handlers migrated to the shared `extract_options` helper with all existing viz tests still green (behaviour-preserving migration gate). |
 | 6 | Audit doc `docs/audits/prd-records-system-unification_audit_<date>.md` written and recommends Status `DONE`. |
 
@@ -1035,7 +1085,7 @@ The PRD is considered complete when **all** of the following hold:
 
 ### 12.1 Custom field shadowing a fixed pattern field
 
-`pat("c4").set("freq", x)` — should the custom `freq` win, error, or be silently ignored? Editor autocomplete must agree with codegen behavior. **[OPEN]**
+**Resolved during PRD review (2026-05-07).** Investigation of `typed_value.cpp:66–84` shows fixed fields shadow custom fields silently — the `.set("freq", …)` value is computed but unreachable. This PRD's editor shape index deduplicates by name (fixed wins, custom suppressed) so autocomplete agrees with codegen. A user-visible warning at the `.set()` site is recommended as a follow-up but is out of scope here. See §10.5.
 
 ### 12.2 Nested destructuring
 
@@ -1067,8 +1117,8 @@ Today the spread PRD proposes W160 (warning) for unknown fields. Should record-a
 
 ## 14. References
 
-- `docs/prd-records-and-field-access.md` — §1–2, §4–6 done; §3 held open.
-- `docs/audits/prd-records-and-field-access_audit_2026-05-05.md` — recommends keeping the existing PRD at PARTIAL until §3 ships; tracks diagnostic-code drift.
+- `docs/prd-records-and-field-access.md` — DONE as of 2026-05-07; all §3 extended pattern fields shipped except `voice` (deferred under polyphony pivot).
+- `docs/audits/prd-records-and-field-access_audit_2026-05-05.md` — recommended PARTIAL pre-shipment; tracks diagnostic-code drift (E060–E065 spec'd vs E135/E136/E140 emitted) — the precedent that motivates §10.0's reserved-codes table here.
 - `docs/prd-record-argument-spread.md` — spread feature spec; prerequisite for parts of this PRD.
 - `docs/prd-editor-autocomplete.md` — DONE; this PRD extends its WASM-export pipeline.
 - `docs/prd-compiler-type-system.md` — Phase 1 done; TypedValue is the source of truth for shape index.
