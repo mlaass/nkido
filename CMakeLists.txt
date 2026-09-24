@@ -20,6 +20,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Build options
 option(NKIDO_BUILD_CEDAR "Build Cedar synth engine" ON)
 option(NKIDO_BUILD_AKKADO "Build Akkado compiler" ON)
+option(NKIDO_BUILD_CATALOG "Build sample catalog library" ON)
 option(NKIDO_BUILD_TOOLS "Build CLI tools" ON)
 option(NKIDO_BUILD_TESTS "Build tests" ON)
 # nkido CLI tests (test_serve.cpp) used to be POSIX-only; the Phase 3
@@ -45,6 +46,15 @@ if(NKIDO_BUILD_AKKADO)
         message(FATAL_ERROR "Akkado requires Cedar. Set NKIDO_BUILD_CEDAR=ON")
     endif()
     add_subdirectory(akkado)
+endif()
+
+# Native-only: the catalog needs cedar's file IO and on-disk SQLite. The web
+# runtime story is a follow-up PRD (prd-studio-sample-catalog [OQ8]).
+if(NKIDO_BUILD_CATALOG AND NOT EMSCRIPTEN)
+    if(NOT NKIDO_BUILD_CEDAR)
+        message(FATAL_ERROR "Catalog requires Cedar. Set NKIDO_BUILD_CEDAR=ON")
+    endif()
+    add_subdirectory(catalog)
 endif()
 
 if(NKIDO_BUILD_TOOLS)
