@@ -1,0 +1,37 @@
+{
+  "cpu": "12th Gen Intel(R) Core(TM) i7-12700KF",
+  "governor": "performance",
+  "pinned_cpu": "2",
+  "opcodes": {
+    "op_add": 14.47,
+    "op_sub": 14.54,
+    "op_mul": 14.47,
+    "op_distort_tanh": 974.44,
+    "op_distort_soft": 257.33,
+    "op_filter_formant": 5316.11,
+    "op_filter_svf_lp": 2256.17,
+    "op_filter_svf_hp": 2354.72,
+    "op_filter_svf_bp": 2240.25,
+    "op_reverb_freeverb": 6784.81,
+    "op_reverb_fdn": 1080.0,
+    "op_dynamics_comp": 3647.12,
+    "op_distort_tube": 3056.97,
+    "op_distort_tape": 8487.75
+  },
+  "noise_band": {
+    "op_add": 0.0028,
+    "op_sub": 0.0034,
+    "op_mul": 0.0055,
+    "op_distort_tanh": 0.0039,
+    "op_distort_soft": 0.0012,
+    "op_filter_formant": 0.004,
+    "op_filter_svf_lp": 0.0026,
+    "op_filter_svf_hp": 0.0067,
+    "op_filter_svf_bp": 0.0015,
+    "op_reverb_freeverb": 0.0041,
+    "op_reverb_fdn": 0.0035,
+    "op_dynamics_comp": 0.0026,
+    "op_distort_tube": 0.0064,
+    "op_distort_tape": 0.0382
+  }
+}

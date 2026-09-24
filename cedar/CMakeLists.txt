@@ -197,6 +197,12 @@ endif()
 # Alias for use in parent project
 add_library(nkido::cedar ALIAS cedar)
 
+# Microbenchmark (native only; the WASM leg is benched headless in node)
+option(CEDAR_BUILD_BENCH "Build the cedar_bench opcode microbenchmark" ON)
+if(CEDAR_BUILD_BENCH AND NOT EMSCRIPTEN)
+    add_subdirectory(benchmarks)
+endif()
+
 # Tests
 if(CEDAR_BUILD_TESTS)
     add_subdirectory(tests)
