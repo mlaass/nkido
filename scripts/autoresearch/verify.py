@@ -18,7 +18,9 @@ import argparse
 import json
 import math
 import os
+import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -51,6 +53,7 @@ APPROX_MARK = "simd: approx"
 NULL_TEST_DBFS = -100.0
 DUMP_BLOCKS = 1024
 BUILD_TARGETS = ["cedar_bench", "cedar_tests", "akkado_tests", "cedar_core"]
+MAX_CHECKS = 10  # quick-check calls per attempt, same for every backend (research P4)
 
 # Candidate set (§3.1). `approx`: opcodes whose scalar body calls a
 # transcendental (tanh / tan) and may take a declared approximation.
@@ -132,10 +135,12 @@ def bench_bin(wt):
     return build_dir(wt) / "bin" / "cedar_bench"
 
 
-def dump(binary, opcode, path, scalar=False):
+def dump(binary, opcode, path, scalar=False, seed=0):
     cmd = [str(binary), "--opcode", opcode, "--dump", str(path), "--blocks", str(DUMP_BLOCKS)]
     if scalar:
         cmd.append("--scalar")
+    if seed:
+        cmd += ["--seed", str(seed)]
     r = sh(cmd)
     if r.returncode:
         raise Reject("equality", f"{opcode}: dump failed: {tail(r.stderr, 10)}")
@@ -201,13 +206,44 @@ def gate_allowlist(wt, base_rev):
     return files
 
 
-def gate_equality(run_dir, meta):
+def compare(n, ref, cand, target, declared, label):
+    """None if bit-identical, else the null-test dB of a permitted approximation;
+    raises Reject otherwise."""
+    if np.array_equal(cand.view(np.uint32), ref.view(np.uint32)):
+        return None
+    err = np.abs(cand.astype(np.float64) - ref.astype(np.float64))
+    err = np.where(np.isnan(err), np.inf, err)
+    peak = float(err.max())
+    db = 20 * math.log10(peak) if peak > 0 else -math.inf
+    first = int(np.argmax(err > 0))
+    where = f"{label}: first diff at sample {first} (block {first // 256}): " \
+            f"ref {ref[first]!r} vs candidate {cand[first]!r}"
+    if n not in target["approx"]:
+        raise Reject("equality", f"{n}: not bit-identical (peak error {db:.1f} dBFS); "
+                                 f"{where}. Only {target['approx'] or 'no'} opcodes "
+                                 "may take a declared approximation.")
+    if not declared:
+        raise Reject("undeclared approximation",
+                     f"{n}: not bit-identical ({db:.1f} dBFS, {label}) and no "
+                     f"`// {APPROX_MARK}` comment declares the approximation")
+    if db > NULL_TEST_DBFS:
+        raise Reject("equality", f"{n}: null test {db:.1f} dBFS > {NULL_TEST_DBFS} dBFS; {where}")
+    if not np.isfinite(cand).all() and np.isfinite(ref).all():
+        raise Reject("equality", f"{n}: candidate produces NaN/Inf ({label})")
+    return db
+
+
+def gate_equality(run_dir, meta, hidden=True):
+    """Bit-identity (or a declared approximation) on the fixed stimuli, then —
+    full verify only — on a fresh random hidden-stimulus seed the model never
+    sees (research P5). Both references are the original scalar build."""
     wt, base = run_dir / "wt", run_dir / "baseline"
     target = TARGETS[meta["target"]]
     declared = APPROX_MARK in added_lines(wt, meta["base_rev"])
-    worst_db, approx_used = -math.inf, []
+    dbs = []
     tmp = run_dir / "dumps"
     tmp.mkdir(exist_ok=True)
+    seed = random.randint(1, 2**31 - 1) if hidden else 0
     for n in json.loads((base / "cases.json").read_text()):
         ref = np.fromfile(base / f"{n}.f32", dtype=np.float32)
         # Fallback first: the scalar body is the oracle and must survive
@@ -217,31 +253,15 @@ def gate_equality(run_dir, meta):
             raise Reject("equality", f"{n}: scalar fallback path no longer bit-identical "
                                      "to baseline (the scalar body must stay intact)")
         cand = dump(bench_bin(wt), n, tmp / f"{n}.f32")
-        if np.array_equal(cand.view(np.uint32), ref.view(np.uint32)):
-            continue
-        err = np.abs(cand.astype(np.float64) - ref.astype(np.float64))
-        err = np.where(np.isnan(err), np.inf, err)
-        peak = float(err.max())
-        db = 20 * math.log10(peak) if peak > 0 else -math.inf
-        first = int(np.argmax(err > 0))
-        where = f"first diff at sample {first} (block {first // 256}): " \
-                f"ref {ref[first]!r} vs candidate {cand[first]!r}"
-        if n not in target["approx"]:
-            raise Reject("equality", f"{n}: not bit-identical (peak error {db:.1f} dBFS); "
-                                     f"{where}. Only {target['approx'] or 'no'} opcodes "
-                                     "may take a declared approximation.")
-        if not declared:
-            raise Reject("undeclared approximation",
-                         f"{n}: not bit-identical ({db:.1f} dBFS) and no "
-                         f"`// {APPROX_MARK}` comment declares the approximation")
-        if db > NULL_TEST_DBFS:
-            raise Reject("equality", f"{n}: null test {db:.1f} dBFS > {NULL_TEST_DBFS} dBFS; {where}")
-        if not np.isfinite(cand).all() and np.isfinite(ref).all():
-            raise Reject("equality", f"{n}: candidate produces NaN/Inf")
-        worst_db = max(worst_db, db)
-        approx_used.append(n)
-    return {"equality": "approx" if approx_used else "exact",
-            "null_test_dbfs": None if not approx_used else round(worst_db, 1)}
+        dbs.append(compare(n, ref, cand, target, declared, "fixed stimuli"))
+        if seed:
+            href = dump(base / "cedar_bench", n, tmp / f"{n}.hidden.ref.f32", seed=seed)
+            hcand = dump(bench_bin(wt), n, tmp / f"{n}.hidden.f32", seed=seed)
+            dbs.append(compare(n, href, hcand, target, declared,
+                               f"hidden randomised stimuli (seed {seed})"))
+    dbs = [d for d in dbs if d is not None]
+    return {"equality": "approx" if dbs else "exact", "hidden_seed": seed or None,
+            "null_test_dbfs": round(max(dbs), 1) if dbs else None}
 
 
 def gate_unit(wt):
@@ -321,22 +341,64 @@ def verify(run_dir, meta):
     return res
 
 
+def vectoriser_remarks(wt, header, limit=40):
+    """GCC -fopt-info-vec for the opcode header, from recompiling vm.cpp (where
+    the opcodes are inlined) — research P10: precise vectoriser feedback."""
+    db = json.loads((build_dir(wt) / "compile_commands.json").read_text())
+    entry = next((e for e in db if e["file"].endswith("cedar/src/vm/vm.cpp")), None)
+    if not entry:
+        return "(no compile command for vm.cpp)"
+    args = shlex.split(entry["command"]) if "command" in entry else list(entry["arguments"])
+    if "-o" in args:
+        i = args.index("-o")
+        args[i + 1] = os.devnull
+    args += ["-fopt-info-vec-optimized", "-fopt-info-vec-missed"]
+    r = sh(args, cwd=entry["directory"])
+    name = Path(header).name
+    seen, out = set(), []
+    for l in (r.stdout + r.stderr).splitlines():
+        if name in l and ("optimized:" in l or "missed:" in l):
+            key = re.sub(r"^.*?" + re.escape(name), name, l)
+            if key not in seen:
+                seen.add(key)
+                out.append(key)
+    if not out:
+        return f"(no vectoriser remarks for {name})"
+    more = f"\n  … {len(out) - limit} more" if len(out) > limit else ""
+    return "\n".join("  " + l for l in out[:limit]) + more
+
+
 def quick(run_dir, meta):
-    """Fast self-check for the model: no unit suites, one short bench."""
+    """Fast self-check for the model: fixed stimuli only, vectoriser remarks,
+    one short bench against the current head. Capped at MAX_CHECKS calls."""
     wt = run_dir / "wt"
+    counter = run_dir / "check_calls"
+    n_calls = int(counter.read_text() or 0) + 1 if counter.exists() else 1
+    counter.write_text(str(n_calls))
+    if n_calls > MAX_CHECKS:
+        return (f"CHECK BUDGET EXHAUSTED: {MAX_CHECKS} checks per attempt. Stop now and write "
+                "your final message (ending with the IDEA line).")
+    header = f"(check {n_calls}/{MAX_CHECKS})"
     try:
         files = gate_allowlist(wt, meta["base_rev"])
         build(wt, ["cedar_bench"])
-        eq = gate_equality(run_dir, meta)
+        eq = gate_equality(run_dir, meta, hidden=False)
     except Reject as e:
-        return f"FAIL [{e.reason}]\n{e.detail}"
-    lines = [f"OK: allowlist ({', '.join(files)}), build, equality ({eq['equality']}"
-             + (f", null test {eq['null_test_dbfs']} dBFS" if eq["null_test_dbfs"] else "") + ")"]
+        return f"{header} FAIL [{e.reason}]\n{e.detail}"
+    lines = [f"{header} OK: allowlist ({', '.join(files)}), build, equality on the fixed stimuli "
+             f"({eq['equality']}"
+             + (f", null test {eq['null_test_dbfs']} dBFS" if eq["null_test_dbfs"] else "") + ")",
+             f"Vectoriser remarks for {TARGETS[meta['target']]['file']}:",
+             vectoriser_remarks(wt, TARGETS[meta["target"]]["file"]),
+             "Short benchmark vs the current version:"]
+    head = run_dir / "baseline" / "cedar_bench.head"
+    ref = head if head.exists() else run_dir / "baseline" / "cedar_bench"
     for n in TARGETS[meta["target"]]["bench"]:
-        r = bench.measure(n, run_dir / "baseline" / "cedar_bench", bench_bin(wt), 1, 200)
+        r = bench.measure(n, ref, bench_bin(wt), 1, 200)
         lines.append(f"  {n}: {r['baseline_ns']} -> {r['candidate_ns']} ns/block "
                      f"({r['speedup']:.2f}x, isa {r['isa_candidate']})")
-    lines.append("(unit suites, experiments and the full 5-round bench run at the real verify)")
+    lines.append("(hidden stimuli, unit suites, experiments and the full 5-round bench run at "
+                 "the final verify)")
     return "\n".join(lines)
 
 
@@ -348,6 +410,7 @@ SELFTEST = [  # (fixture, target, expected verdict, expected reason)
     ("slower_mul.patch", "arith", "reject", "speed"),
     ("cheat_bench.patch", "arith", "reject", "out-of-allowlist edit"),
     ("tanh_undeclared.patch", "distort", "reject", "undeclared approximation"),
+    ("hidden_ftz_mul.patch", "arith", "reject", "equality"),  # exact on fixed stimuli only
 ]
 
 

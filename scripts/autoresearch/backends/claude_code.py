@@ -17,7 +17,7 @@ class ClaudeCode:
         self.model = model
         self.effort = effort
 
-    def propose(self, prompt, wt, check_cmd, budget_usd):
+    def propose(self, prompt, wt, check_cmd, budget_usd, timeout_s):
         cmd = ["claude", "-p", "--model", self.model, "--output-format", "json",
                "--safe-mode", "--strict-mcp-config", "--no-session-persistence",
                "--tools", "Read,Edit,Write,Glob,Grep,Bash",
@@ -27,8 +27,14 @@ class ClaudeCode:
         if self.effort:
             cmd += ["--effort", self.effort]
         t0 = time.time()
-        r = subprocess.run(cmd, input=prompt, cwd=wt, capture_output=True, text=True,
-                           timeout=3600)
+        try:
+            r = subprocess.run(cmd, input=prompt, cwd=wt, capture_output=True, text=True,
+                               timeout=timeout_s)
+        except subprocess.TimeoutExpired as e:
+            # The JSON result (and with it the usage) only arrives at exit.
+            return {"tokens": None, "cost_usd": None, "wall_clock_s": round(time.time() - t0, 1),
+                    "gpu_s": None, "error": f"wall-clock cap of {timeout_s} s hit; usage unknown",
+                    "final_text": "", "transcript": str(e.stdout or "")}
         wall = time.time() - t0
         try:
             out = json.loads(r.stdout)
@@ -36,7 +42,7 @@ class ClaudeCode:
             return {"tokens": {"input": 0, "output": 0, "cached": 0}, "cost_usd": 0.0,
                     "wall_clock_s": round(wall, 1), "gpu_s": None,
                     "error": f"claude exited {r.returncode}: {(r.stderr or r.stdout)[-800:]}",
-                    "transcript": r.stdout + r.stderr}
+                    "final_text": "", "transcript": r.stdout + r.stderr}
         u = out.get("usage", {})
         return {
             "tokens": {"input": u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
@@ -48,5 +54,6 @@ class ClaudeCode:
             "turns": out.get("num_turns"),
             "model_resolved": list(out.get("modelUsage", {}) or {}) or None,
             "error": out.get("result") if out.get("is_error") else None,
+            "final_text": out.get("result", ""),
             "transcript": out.get("result", ""),
         }

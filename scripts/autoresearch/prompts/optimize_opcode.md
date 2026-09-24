@@ -15,9 +15,15 @@ They live in `$file`. Current source of the opcode bodies:
 $sources
 ```
 
-Baseline cost on the gate machine (median ns per opcode-block, lower is better):
+Cost on the gate machine (median ns per opcode-block, lower is better):
 
+| Opcode | Original scalar | Current (accepted so far) | Speedup so far |
+|---|---|---|---|
 $baseline
+
+## Accepted so far (already in the tree)
+
+$accepted
 
 ## How to add a kernel
 
@@ -61,21 +67,43 @@ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
    bit-identical output to the original.
 3. Output must be **bit-identical** to the original for every opcode.
    $approx_policy
-4. No allocation, locks or syscalls in a kernel. CPU detection is already done
+4. The final verification also runs every opcode on **randomised stimuli you
+   cannot see** (different signals, levels down to denormals, parameter
+   trajectories). A kernel that only works for the stimuli in the benchmark
+   source fails there.
+5. No allocation, locks or syscalls in a kernel. CPU detection is already done
    once at start-up; never detect features per block or per sample.
-5. The change must make at least one listed opcode **≥ 5 % faster** (outside
-   measurement noise) and none slower.
+6. The change must make at least one listed opcode **≥ 5 % faster** than the
+   *current* version (outside measurement noise) and none slower.
 
-## Checking your work
+## Budget
 
-Run `$check_cmd` as often as you like. It builds, checks the allowlist and
-bit-identity for every opcode, and runs a short benchmark (~1 minute). The
-full verification after you finish also runs all unit test suites, the
-zero-allocation trap, the opcode's DSP experiments and a longer benchmark.
+At most **$max_checks runs of the check command** and **$minutes minutes** for
+this attempt. Every model in this experiment gets the same budget.
 
-When you are done, stop. Leave your changes in the working tree; do not
-commit.
+## Method
+
+1. Read the code you need.
+2. **Before editing, state your hypothesis in one or two sentences:** what
+   bounds this opcode's speed (e.g. a serial feedback recurrence, a
+   transcendental call, memory bandwidth, branches, VM overhead) and the
+   single change you will make to address it.
+3. Make **one focused change**. Do not repeat an idea from the attempts table
+   below unless you fix the reason it failed.
+4. Run `$check_cmd`. It builds, checks the allowlist and bit-identity for
+   every opcode, prints compiler vectoriser remarks for `$file`, and runs a
+   short benchmark (~1 minute). The full verification afterwards also runs
+   the hidden stimuli, all unit test suites, the zero-allocation trap, the
+   opcode's DSP experiments and a longer benchmark.
+5. Stop. Leave your changes in the working tree; do not commit.
+
+**Your final message must end with exactly one line of this form:**
+
+```
+IDEA: <bottleneck> -> <the change you made> (<what the check showed>)
+```
 
 ## Previous attempts in this run
 
 $history
+$plateau

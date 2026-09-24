@@ -17,7 +17,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-MAX_TURNS = 60
+# Runaway guard only; the real per-attempt budget is the shared wall clock
+# plus the check-call cap (claude -p has no turn limit to match).
+MAX_TURNS = 200
 TOOL_OUTPUT_LIMIT = 20000
 
 SYSTEM = ("You are an expert C++ performance engineer working in a git checkout. Use the tools "
@@ -146,13 +148,17 @@ class OpenAICompat:
         with urllib.request.urlopen(req, timeout=1800) as r:
             return json.loads(r.read())
 
-    def propose(self, prompt, wt, check_cmd, budget_usd):
+    def propose(self, prompt, wt, check_cmd, budget_usd, timeout_s):
         ws = Workspace(wt, check_cmd)
         msgs = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
         tok = {"input": 0, "output": 0, "cached": 0}
         cost, gaps, err, t_req, turns, tool_calls = 0.0, [], None, 0.0, 0, 0
         t0 = time.time()
+        final = ""
         for turns in range(1, MAX_TURNS + 1):
+            if time.time() - t0 > timeout_s:
+                err = f"wall-clock cap of {timeout_s} s hit"
+                break
             body = {"model": self.model, "messages": msgs, "tools": TOOLS,
                     "tool_choice": "auto", **self.extra_body()}
             ts = time.time()
@@ -180,6 +186,7 @@ class OpenAICompat:
                 gaps.append(f"context truncated: prompt reported as {u['prompt_tokens']} tokens "
                             f"for {len(prompt)} chars")
             msg = resp["choices"][0]["message"]
+            final = msg.get("content") or final
             calls = msg.get("tool_calls") or []
             msgs.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls")})
             if not calls:
@@ -203,5 +210,5 @@ class OpenAICompat:
             gaps.append(f"hit the {MAX_TURNS}-turn limit")
         return {"tokens": tok, "cost_usd": round(cost, 6), "wall_clock_s": round(time.time() - t0, 1),
                 "gpu_s": round(t_req, 1) if self.local else None, "turns": turns,
-                "capability_gaps": gaps or None, "error": err,
+                "capability_gaps": gaps or None, "error": err, "final_text": final,
                 "transcript": json.dumps(msgs, indent=1)}

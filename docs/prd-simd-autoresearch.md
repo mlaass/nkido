@@ -583,6 +583,37 @@ rewards x86.
     to a temporary builder's field. The first Release test build (`simd`
     preset) failed on them; fixed in `62d11b0`.
 
+### Prompt framework revision (2026-09-24)
+
+Informed by `docs/research/llm-autoresearch-loops.md`, which covers
+Karpathy's autoresearch, AutoKernel, OpenEvolve / AlphaEvolve /
+ShinkaEvolve, CUDA-L1, Kevin-32B and METR. The owner adopted P1–P8 and P10.
+Summary:
+
+- **P1/P3:** ideas ledger. The agent ends with `IDEA: …`, and the history
+  becomes a compact attempts table. Only the latest rejection keeps its full
+  verifier output.
+- **P2:** the stale-baseline bug is fixed. The prompt shows current vs
+  original ns and the accepted diff.
+- **P4:** equal per-attempt budget for every backend: 30 min wall clock and
+  10 check calls. `claude -p` has no turn cap, so turns are logged, not
+  limited.
+- **P5:** hidden stimuli. `cedar_bench --seed N` generates randomised
+  stimuli. Every seed includes a near-denormal segment and a hot segment.
+  The full verify uses a fresh seed on every call, and the prompt tells the
+  model this. A new selftest fixture, `hidden_ftz_mul`, is exact on the
+  fixed stimuli and must be rejected.
+- **P6:** state the bottleneck hypothesis before editing, then make one
+  focused change.
+- **P7:** after 3 rejects in a row, the driver adds a fixed "structurally
+  different" line.
+- **P8:** a patch ≥ 95 % identical to an earlier rejected patch is rejected
+  as `duplicate` without running the verifier.
+- **P10:** the quick check prints GCC `-fopt-info-vec` remarks for the
+  opcode's header.
+- **Not adopted:** P11 (frozen lessons list). P9 (keep fresh sessions) is
+  the status quo.
+
 ### Blockers for Phase 3/4 (the user's to resolve)
 
 - `OPENROUTER_API_KEY` is not set, so the OpenRouter backend is written but

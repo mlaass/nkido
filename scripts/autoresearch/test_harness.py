@@ -37,4 +37,23 @@ assert s["accepts"] == 1 and s["first_accept_iteration"] == 2
 assert s["tokens"] == {"input": 30, "output": 6, "cached": 5} and s["cost_usd"] == 1.5
 assert s["best_speedup"] == 4.0  # geomean of 2.0 and 8.0 (vs origin wins)
 assert s["reject_reasons"] == {"equality": 1}
+# ideas ledger, duplicate filter, attempts table, plateau switch (research P1/P3/P7/P8)
+assert run.parse_idea("blah\nIDEA: serial recurrence -> 2-ch fuse (1.3x)\n") == \
+    "serial recurrence -> 2-ch fuse (1.3x)"
+assert run.parse_idea("`IDEA: a`\nIDEA: b") == "b" and run.parse_idea("no line") is None
+d1 = "--- a/x\n+++ b/x\n@@\n+  int   a = 1;\n-int b;\n context\n"
+d2 = "--- a/x\n+++ b/x\n@@ -9 +9 @@\n+int a = 1;\n- int b;\n"
+assert run.normalise_diff(d1) == run.normalise_diff(d2) == "+int a = 1;\n-int b;"
+rej = {"iteration": 1, "verdict": "reject", "reason": "speed", "detail": "no gain\nmore",
+       "bench": {"op_mul": {"speedup": 1.0}}, "idea": "mul | avx2", "norm_diff": run.normalise_diff(d1)}
+acc = {**rej, "iteration": 2, "verdict": "accept", "reason": None, "detail": ""}
+assert run.find_duplicate(d2, [rej]) == 1 and run.find_duplicate(d2, [acc]) is None
+assert run.find_duplicate("+totally different\n", [rej]) is None
+t = run.history_table([rej, acc])
+assert "| 1 | rejected: `speed` — no gain | mul / avx2 | mul 1.0x |" in t and "ACCEPTED" in t
+assert "Full verifier output for the latest rejection (attempt 1" in t
+r3 = [{**rej, "iteration": i} for i in (3, 4, 5)]
+assert run.plateau_note([acc, *r3]) and not run.plateau_note([*r3[:2], acc]) \
+    and not run.plateau_note(r3[:2])
+
 print("test_harness: ok")

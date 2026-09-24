@@ -5,6 +5,7 @@
 //   cedar_bench --opcode op_mul [--reps 500] [--warmup 200] [--json]
 //   cedar_bench --opcode op_mul --dump out.f32 [--blocks 1024]
 //   add --scalar to force the scalar fallback on a CEDAR_SIMD build
+//   add --seed N for randomised hidden stimuli (full verify only)
 //
 // Timing: one program of INSTANCES copies of the opcode (distinct state ids,
 // shared stimulus inputs) is run through VM::process_block; ns/block is the
@@ -49,6 +50,13 @@ constexpr std::uint16_t NONE = 0xFFFF;
 // Stimulus for one input slot at absolute sample index n (0..STIM_BLOCKS*BLOCK_SIZE).
 using Stim = std::function<float(std::size_t n)>;
 
+// --seed N (N != 0) switches every stimulus to a randomised "hidden" variant
+// (PRD §6 / research P5): the full verify picks a fresh seed per call and
+// dumps baseline and candidate with it, so a kernel cannot be tuned to the
+// fixed stimuli the quick check and the timing path use.
+std::uint32_t g_seed = 0;
+std::mt19937 g_hidden_rng;  // draws per-stimulus variations in hidden mode
+
 float frac(std::size_t n, std::size_t period) {
     return static_cast<float>(n % period) / static_cast<float>(period);
 }
@@ -59,11 +67,39 @@ struct AudioStim {
     float gain;
     std::vector<float> noise;
     explicit AudioStim(float g) : gain(g), noise(STIM_BLOCKS * BLOCK_SIZE) {
-        std::mt19937 rng(0xCEDA5u);
+        std::mt19937 rng(g_seed ? g_seed : 0xCEDA5u);
         std::uniform_real_distribution<float> d(-1.0f, 1.0f);
         for (auto& x : noise) x = d(rng);
+        if (g_seed) make_hidden(rng);
+    }
+    // Hidden mode: 8 segments, each a random choice of noise at a random
+    // gain (from near-denormal to 4x the nominal level), sparse random
+    // impulses, DC steps, or silence. Every seed is guaranteed one
+    // near-denormal noise segment (1e-35..1e-25) and one hot one (2-4x),
+    // at random positions, so that coverage never depends on luck.
+    void make_hidden(std::mt19937& rng) {
+        std::uniform_real_distribution<float> u(0.0f, 1.0f);
+        constexpr std::size_t seg = STIM_BLOCKS * BLOCK_SIZE / 8;
+        const auto tiny_seg = static_cast<std::size_t>(u(rng) * 8.0f) % 8;
+        const auto hot_seg = (tiny_seg + 1 + static_cast<std::size_t>(u(rng) * 7.0f) % 7) % 8;
+        for (std::size_t s = 0; s < 8; ++s) {
+            int kind = static_cast<int>(u(rng) * 4.0f);
+            float level = gain * std::pow(10.0f, -30.0f * u(rng) * u(rng)) * (1.0f + 3.0f * u(rng));
+            if (s == tiny_seg) { kind = 0; level = gain * std::pow(10.0f, -25.0f - 10.0f * u(rng)); }
+            if (s == hot_seg) { kind = 0; level = gain * (2.0f + 2.0f * u(rng)); }
+            float dc = level * (2.0f * u(rng) - 1.0f);
+            for (std::size_t k = s * seg; k < (s + 1) * seg; ++k) {
+                switch (kind) {
+                    case 0: noise[k] *= level; break;
+                    case 1: noise[k] = u(rng) < 0.002f ? level * (u(rng) < 0.5f ? -1.0f : 1.0f) : 0.0f; break;
+                    case 2: noise[k] = (k % 4096 == 0) ? (dc = level * (2.0f * u(rng) - 1.0f)) : dc; break;
+                    default: noise[k] = 0.0f; break;
+                }
+            }
+        }
     }
     float operator()(std::size_t n) const {
+        if (g_seed) return noise[n];
         constexpr std::size_t total = STIM_BLOCKS * BLOCK_SIZE;
         constexpr std::size_t quarter = total / 4;
         std::size_t seg = n / quarter, k = n % quarter;
@@ -85,6 +121,12 @@ struct AudioStim {
 };
 
 Stim ramp(float lo, float hi, std::size_t period) {
+    if (g_seed) {  // hidden: same range, random rate and phase
+        std::uniform_real_distribution<float> u(0.0f, 1.0f);
+        auto p = static_cast<std::size_t>(static_cast<float>(period) * (0.05f + 3.0f * u(g_hidden_rng))) + 1;
+        auto off = static_cast<std::size_t>(u(g_hidden_rng) * static_cast<float>(p));
+        return [=](std::size_t n) { return lo + (hi - lo) * frac(n + off, p); };
+    }
     return [=](std::size_t n) { return lo + (hi - lo) * frac(n, period); };
 }
 Stim constant(float v) { return [=](std::size_t) { return v; }; }
@@ -112,8 +154,8 @@ std::vector<Case> make_cases() {
                             std::pair{"op_filter_svf_bp", Opcode::FILTER_SVF_BP}}) {
         c.push_back({name, op, {audio, ramp(40, 12000, P), ramp(0.5f, 8.0f, P / 2)}});
     }
-    // C5 survey candidates (PRD OQ5) — ranked by --list-ranking, not gated
-    // unless nominated.
+    // C5 survey candidates (PRD OQ5) — ranked by bench.py --pin; only
+    // freeverb is a gated target.
     c.push_back({"op_reverb_freeverb", Opcode::REVERB_FREEVERB,
                  {audio, ramp(0, 1, P), ramp(0, 1, P / 2), constant(0.28f), constant(0.7f)}});
     c.push_back({"op_reverb_fdn", Opcode::REVERB_FDN, {audio, ramp(0, 0.95f, P), ramp(0, 1, P / 2)}});
@@ -192,7 +234,8 @@ int usage() {
         "usage: cedar_bench --list\n"
         "       cedar_bench --opcode NAME [--reps N] [--warmup N] [--json]\n"
         "       cedar_bench --opcode NAME --dump FILE [--blocks N]\n"
-        "       --scalar forces the scalar fallback path (A/B the dispatch)\n");
+        "       --scalar forces the scalar fallback path (A/B the dispatch)\n"
+        "       --seed N (N != 0) uses randomised hidden stimuli\n");
     return 2;
 }
 
@@ -214,9 +257,11 @@ int main(int argc, char** argv) {
         else if (a == "--warmup" && (v = next())) warmup = std::stoul(v);
         else if (a == "--blocks" && (v = next())) blocks = std::stoul(v);
         else if (a == "--scalar") simd::force(simd::Isa::Scalar);
+        else if (a == "--seed" && (v = next())) g_seed = static_cast<std::uint32_t>(std::stoul(v));
         else return usage();
     }
 
+    g_hidden_rng.seed(g_seed);
     auto cases = make_cases();
     if (list) {
         for (const auto& c : cases) std::printf("%s\n", c.name);

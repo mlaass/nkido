@@ -12,7 +12,8 @@ cmake --preset simd && cmake --build build/simd -j
 scripts/autoresearch/bench.py --pin --baseline build/release/bin/cedar_bench
 
 # Phase 1 — prove the gates: good kernel accepted; lane swap, slower kernel,
-# benchmark edit and undeclared tanh approximation rejected
+# benchmark edit, undeclared tanh approximation and a kernel that is only
+# exact on the fixed stimuli rejected
 scripts/autoresearch/verify.py --selftest
 
 # Phase 2/3 — one (model, target) run, 8 proposals, commits on autoresearch/* only
@@ -26,6 +27,17 @@ scripts/autoresearch/legs.py --run scripts/autoresearch/runs/<id> --wasm --remot
 # talk table + chart from every runs/*/iterations.jsonl
 scripts/autoresearch/report.py --out results.md
 ```
+
+Prompt framework: `prompts/optimize_opcode.md`, shaped by the survey in
+`docs/research/llm-autoresearch-loops.md`. Each attempt is a fresh session.
+Memory between attempts lives in the prompt: current vs original ns, the
+accepted diff, and an attempts table built from each agent's `IDEA:` line.
+Every attempt, on every backend, gets the same budget: 30 min wall clock and
+10 `check.sh` calls. The quick check prints GCC vectoriser remarks. The full
+verify also checks bit-identity on a fresh random hidden-stimulus seed
+(`cedar_bench --seed N`) that the model never sees. Near-duplicate rejected
+patches are skipped without verifying, and three rejects in a row add a
+fixed "try something structurally different" line.
 
 Targets (`verify.TARGETS`): `arith` (C1), `distort` (C2), `formant` (C3),
 `svf` (C4), `freeverb` (C5, top of the Phase 0 ranking).

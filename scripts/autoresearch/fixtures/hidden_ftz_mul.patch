@@ -1,0 +1,48 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 72deca0..801fd52 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -3,10 +3,30 @@
+ #include "../vm/context.hpp"
+ #include "../vm/instruction.hpp"
+ #include "../dsp/constants.hpp"
++#include "../dsp/simd.hpp"
+ #include <cmath>
+ 
+ namespace cedar {
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // Deliberate bug: flushes tiny products to zero. Exact on the fixed
++        // stimuli, wrong on the hidden near-denormal ones.
++        __m256 p = _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i));
++        __m256 big = _mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0f), p),
++                                   _mm256_set1_ps(1e-20f), _CMP_GE_OQ);
++        _mm256_store_ps(out + i, _mm256_and_ps(p, big));
++    }
++}
++#endif
++}  // namespace kernels
++
++
+ // ADD: out = in0 + in1
+ [[gnu::always_inline]]
+ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+@@ -38,6 +53,12 @@ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::mul_avx2(a, b, out);
++        return;
++    }
++#endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] * b[i];
+     }
