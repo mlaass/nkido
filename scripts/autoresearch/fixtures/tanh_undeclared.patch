@@ -1,0 +1,20 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..9c8fe9f 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -39,8 +39,13 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+         float wet = drywet::coeff(wet_level, i, 1.0f);
+         float x_l = input[i];
+         float x_r = stereo_in ? input_r[i] : x_l;
+-        out_l[i] = drywet::mix(x_l, std::tanh(x_l * d), dry, wet);
+-        out_r[i] = drywet::mix(x_r, std::tanh(x_r * d), dry, wet);
++        auto fast_tanh = [](float x) {
++            x = std::clamp(x, -9.0f, 9.0f);
++            float e = std::exp(2.0f * x);
++            return (e - 1.0f) / (e + 1.0f);
++        };
++        out_l[i] = drywet::mix(x_l, fast_tanh(x_l * d), dry, wet);
++        out_r[i] = drywet::mix(x_r, fast_tanh(x_r * d), dry, wet);
+     }
+ }
+ 

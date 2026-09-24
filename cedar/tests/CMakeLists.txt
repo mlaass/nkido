@@ -54,6 +54,7 @@ add_executable(cedar_tests
     test_soundfont_registry.cpp
     test_audit_inst_rate.cpp
     test_subprogram_table.cpp
+    test_simd.cpp
     # Leg 3 of docs/prd-memory-integrity-tests.md: zero-allocation trap.
     zero_alloc_hooks.cpp
     test_zero_alloc.cpp

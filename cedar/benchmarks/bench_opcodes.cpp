@@ -4,6 +4,7 @@
 //   cedar_bench --list
 //   cedar_bench --opcode op_mul [--reps 500] [--warmup 200] [--json]
 //   cedar_bench --opcode op_mul --dump out.f32 [--blocks 1024]
+//   add --scalar to force the scalar fallback on a CEDAR_SIMD build
 //
 // Timing: one program of INSTANCES copies of the opcode (distinct state ids,
 // shared stimulus inputs) is run through VM::process_block; ns/block is the
@@ -17,6 +18,7 @@
 
 #include "cedar/vm/vm.hpp"
 #include "cedar/vm/instruction.hpp"
+#include "cedar/dsp/simd.hpp"
 
 #include <algorithm>
 #include <array>
@@ -189,7 +191,8 @@ int usage() {
     std::fprintf(stderr,
         "usage: cedar_bench --list\n"
         "       cedar_bench --opcode NAME [--reps N] [--warmup N] [--json]\n"
-        "       cedar_bench --opcode NAME --dump FILE [--blocks N]\n");
+        "       cedar_bench --opcode NAME --dump FILE [--blocks N]\n"
+        "       --scalar forces the scalar fallback path (A/B the dispatch)\n");
     return 2;
 }
 
@@ -210,6 +213,7 @@ int main(int argc, char** argv) {
         else if (a == "--reps" && (v = next())) reps = std::stoul(v);
         else if (a == "--warmup" && (v = next())) warmup = std::stoul(v);
         else if (a == "--blocks" && (v = next())) blocks = std::stoul(v);
+        else if (a == "--scalar") simd::force(simd::Isa::Scalar);
         else return usage();
     }
 
@@ -273,7 +277,7 @@ int main(int argc, char** argv) {
 
     std::string cpu = read_first_line("/proc/cpuinfo", "model name");
     std::string gov = read_first_line("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor");
-    const char* isa = "scalar";
+    const char* isa = simd::name(simd::active());
 
     if (json) {
         std::printf("{\"opcode\":\"%s\",\"ns_per_block_median\":%.2f,\"ns_p10\":%.2f,"

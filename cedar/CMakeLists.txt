@@ -40,6 +40,9 @@ option(CEDAR_ENABLE_SOUNDFONT      "Include SoundFont (SF2) support" ON)
 option(CEDAR_ENABLE_FFT            "Include FFT support (KissFFT)" ON)
 option(CEDAR_ENABLE_FILE_IO        "Include filesystem-based file loading" ON)
 option(CEDAR_ENABLE_MINBLEP        "Include MinBLEP anti-aliased oscillators" ON)
+# SIMD kernels behind runtime dispatch (prd-simd-autoresearch). OFF keeps every
+# opcode on its scalar body, so default builds are unchanged.
+option(CEDAR_SIMD                  "Compile SIMD opcode kernels (runtime-dispatched)" OFF)
 option(CEDAR_FLOAT_ONLY            "Use float instead of double for beat timing" OFF)
 # Host extension API (prd-host-extension-api). Native embedders only — OFF keeps
 # the dispatch switch, the DSPState variant and the emitted bytecode exactly as
@@ -59,6 +62,7 @@ set(CEDAR_ARENA_SIZE "" CACHE STRING "Override AudioArena size in bytes (default
 set(CEDAR_SOURCES
     src/cedar.cpp
     src/vm/vm.cpp
+    src/dsp/simd.cpp
     src/opcodes/midi.cpp
     src/io/smf_parser.cpp
     src/io/uri_resolver.cpp
@@ -175,6 +179,9 @@ if(NOT CEDAR_ENABLE_MINBLEP)
 endif()
 if(CEDAR_FLOAT_ONLY)
     target_compile_definitions(cedar PUBLIC CEDAR_FLOAT_ONLY=1)
+endif()
+if(CEDAR_SIMD)
+    target_compile_definitions(cedar PUBLIC CEDAR_SIMD=1)
 endif()
 
 # Memory constant overrides

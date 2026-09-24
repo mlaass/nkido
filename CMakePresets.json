@@ -33,6 +33,16 @@
             }
         },
         {
+            "name": "simd",
+            "displayName": "Release + SIMD kernels + tests (autoresearch gate build)",
+            "inherits": "base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "NKIDO_BUILD_TESTS": "ON",
+                "CEDAR_SIMD": "ON"
+            }
+        },
+        {
             "name": "relwithdebinfo",
             "displayName": "Release with Debug Info",
             "inherits": "base",
@@ -50,6 +60,15 @@
                 "CMAKE_TOOLCHAIN_FILE": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
                 "NKIDO_BUILD_TESTS": "OFF",
                 "NKIDO_BUILD_TOOLS": "OFF"
+            }
+        },
+        {
+            "name": "wasm-simd",
+            "displayName": "WebAssembly + SIMD128 kernels",
+            "inherits": "wasm",
+            "cacheVariables": {
+                "CEDAR_SIMD": "ON",
+                "CMAKE_CXX_FLAGS": "-msimd128"
             }
         },
         {
@@ -126,8 +145,16 @@
             "configurePreset": "release"
         },
         {
+            "name": "simd",
+            "configurePreset": "simd"
+        },
+        {
             "name": "wasm",
             "configurePreset": "wasm"
+        },
+        {
+            "name": "wasm-simd",
+            "configurePreset": "wasm-simd"
         },
         {
             "name": "coverage",
