@@ -614,6 +614,23 @@ Summary:
 - **Not adopted:** P11 (frozen lessons list). P9 (keep fresh sessions) is
   the status quo.
 
+### Second spike on the revised framework (3 iterations, `distort`)
+
+Command: `run.py --backend claude-code --model sonnet --target distort
+--iterations 3`. Branch: `autoresearch/sonnet-distort-202609242050` (not
+merged). Total $0.45, 2.4 min of proposing.
+
+| Iter | Verdict | Result |
+|---|---|---|
+| 1 | accept | `tanh` **18.8×** (973 → 52 ns): a rational approximation declared with `// simd: approx`, −128.9 dBFS on both the fixed and the hidden stimuli. Soft clip **5.2×**, bit-exact |
+| 2–3 | reject `speed` | No change made: Claude reported the check as "denied" |
+
+The rejects were harness bugs, fixed in `df57f8b`. The allow rule matched
+only the exact check command, so piped calls were refused. Unchanged trees
+after an accept were also verified in full instead of being rejected as
+`empty patch`. The `tanh` kernel still needs the winners-only listening
+check (§4.3) before anyone merges it.
+
 ### Blockers for Phase 3/4 (the user's to resolve)
 
 - `OPENROUTER_API_KEY` is not set, so the OpenRouter backend is written but
