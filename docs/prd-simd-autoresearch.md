@@ -637,3 +637,75 @@ check (§4.3) before anyone merges it.
   has not been exercised live.
 - The Apple Silicon host for `legs.py --remote` is still OQ3. The remote
   script has only been exercised with `--remote local`.
+- The Ollama server must be restarted with `OLLAMA_CONTEXT_LENGTH=32768`.
+  At the default 4096 the prompt is truncated.
+- The OpenRouter model ids (§13, divergence 9) need confirming.
+
+---
+
+## 14. Resume Here (next session)
+
+**State on 2026-09-24:**
+
+- Phases 0–3 of the harness are on master (`86b3ace`..`9ea074e`, unpushed).
+- The gate selftest is green: 6 fixtures.
+- Two test-run branches exist. Neither is merged, and neither is on master:
+  - `autoresearch/sonnet-arith-202609241443`: add/sub/mul at 1.31×.
+  - `autoresearch/sonnet-distort-202609242050`: `tanh` 18.8× (declared
+    approximation), soft clip 5.2×.
+- Run logs live under the gitignored `scripts/autoresearch/runs/`: one
+  `iterations.jsonl` per run, with prompts, transcripts and patches.
+- The Claude transcripts from the second test run predate the switch to
+  stream-json, so they hold only the final message.
+
+**Sanity check before anything else** (≈ 6 min):
+
+```bash
+cmake --build build/simd -j                       # gate build (preset `simd`)
+scripts/autoresearch/test_harness.py              # driver helpers
+scripts/autoresearch/verify.py --selftest         # 6 fixtures -> "selftest PASSED"
+```
+
+**Next steps, in order:**
+
+1. **Re-run the `distort` test run** (3 iterations). This confirms the fixes
+   in `df57f8b`: piped check calls are allowed and a no-op is rejected as
+   `empty patch`. Look at the `stream-json` transcript and the `check_calls`
+   and `idea` fields in `iterations.jsonl`.
+2. **Listening check on the `tanh` winner** (§4.3, winners only):
+   `scripts/memory/run_all.sh` on the branch, then render a patch that uses
+   `saturate`/`tanh` to WAV, compare it with master, and listen.
+3. **Owner inputs** (see "Blockers" above): OpenRouter key, the three
+   OpenRouter model ids, the Mac host, and Ollama's context length.
+4. **Phase 2 verify:** one full 8-iteration run per candidate with Opus 5
+   and Sonnet 5:
+   `run.py --backend claude-code --model opus --target <arith|distort|formant|svf|freeverb>`.
+   Runs share the benchmark machine, so they must be **serialised**. Budget
+   $20 per run.
+5. **Phase 3:** OpenRouter runs (`--backend openrouter --model …`) and local
+   runs (`--backend local --model qwen3:14b`) on the same targets. Then
+   `legs.py --run runs/<id> --wasm --remote <mac>` for every run with an
+   accept.
+6. **Phase 4:** `report.py --out results.md` builds the table and the chart
+   (`runs/results.png`). Then:
+   - pick the rejected-change example for the talk (the gates' rejections
+     are in `runs/*/rejected/`);
+   - screen-capture a live run;
+   - replace §5 of `docs/adcx-gather-2026-talk-outline.md` with the real
+     results.
+7. **Phase 5 (after 16 Oct):** review and merge winners to master. Default
+   builds keep `CEDAR_SIMD=OFF` until the owner decides otherwise.
+
+**Findings so far to carry into the talk:**
+
+- The gates caught what they should. The selftest proves one case per
+  gate. In the test runs they rejected no-gain changes, and the hidden
+  stimuli exposed a kernel that was exact only on the fixed inputs.
+- The AVX2 `op_mul` reached 1.32×, not the 1.5× predicted. The scalar loop
+  was already SSE-autovectorised.
+- On WASM an AVX2-only kernel gives 1.00×, because `-msimd128`
+  autovectorisation matches it. Only a WASM128 kernel would help web users.
+- `tanh` gained 18.8× from a declared approximation. This is the case for
+  the "declared approximation + null test + listening" policy.
+- Cost so far: $0.17 (arith) + $0.45 (distort) for 5 proposals in total.
+
