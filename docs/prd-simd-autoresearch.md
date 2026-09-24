@@ -1,8 +1,9 @@
 # PRD: SIMD Autoresearch Loop
 
-> **Status: NOT STARTED** — Experiment design for the ADCx Gather 2026 closing
-> section (talk plays 16 Oct; final video due 2 Oct). Nothing implemented yet:
-> the repo has no CPU benchmark and no SIMD code.
+> **Status: PARTIAL** — harness for phases 0–3 built and self-tested; the
+> model matrix (Phase 4) has not been run (2026-09-24). See §13 for what
+> shipped, measured numbers and divergences. Talk plays 16 Oct; final video
+> due 2 Oct.
 
 ---
 
@@ -460,3 +461,131 @@ x86 baseline question.
   `oversampling.hpp`, and `dynamics.hpp`.
 - **[OQ6]** Whether the WASM leg benches in node only, or also in a real
   AudioWorklet (more representative, much harder to time).
+
+---
+
+## 13. Implementation Notes (2026-09-24)
+
+Commits on master: `86b3ace` (Phase 0), `62d11b0` (test fix found on the way),
+`49191bb` + `d11bc16` (Phase 1), `d29a648` (Phase 2), `75bb487` (Phase 3).
+No model-generated kernel is on master; those live on `autoresearch/*`.
+
+### Phase 0 — pinned baselines (i7-12700KF, P-core 2, governor `performance`)
+
+`scripts/autoresearch/baselines.json`, 3 interleaved rounds × 500 reps. The
+noise band is < 1 % for every candidate (Phase 0 verify: < 5 %).
+
+| Opcode | ns / opcode-block | Band |
+|---|---|---|
+| `op_distort_tape` (C5 survey) | 8488 | 3.8 % |
+| `op_reverb_freeverb` (C5 survey) | 6785 | 0.4 % |
+| `op_filter_formant` (C3) | 5316 | 0.4 % |
+| `op_dynamics_comp` (C5 survey) | 3647 | 0.3 % |
+| `op_distort_tube` (C5 survey) | 3057 | 0.6 % |
+| `op_filter_svf_hp` / `_lp` / `_bp` (C4) | 2355 / 2256 / 2240 | ≤ 0.7 % |
+| `op_reverb_fdn` (C5 survey) | 1080 | 0.4 % |
+| `op_distort_tanh` (C2) | 974 | 0.4 % |
+| `op_distort_soft` (C2) | 257 | 0.1 % |
+| `op_add` / `op_sub` / `op_mul` (C1) | 14.5 | ≤ 0.6 % |
+
+**[OQ5] → C5 = `op_reverb_freeverb`** (heaviest opcode with a stable band;
+`tape` is heavier but its cost varies 4–8 µs with input, so a gate on it is
+noisy). Target name `freeverb` in `verify.TARGETS`.
+
+### Phase 1 — gate selftest (`verify.py --selftest`)
+
+| Fixture | Verdict |
+|---|---|
+| hand-written AVX2 `op_mul` | accept — **1.32×** (PRD §10 expected > 1.5×: the scalar loop is already SSE-autovectorised and the op is L1-bound) |
+| lane swap | reject `equality` |
+| correct but slower | reject `speed` |
+| edits `bench_opcodes.cpp` | reject `out-of-allowlist edit` |
+| `tanh` via `exp`, in tolerance, undeclared | reject `undeclared approximation` |
+
+### Phase 2 — Claude Code spike (2 of 8 iterations, `arith`)
+
+`run.py --backend claude-code --model sonnet --target arith --iterations 2`
+→ branch `autoresearch/sonnet-arith-202609241443` (not merged).
+
+| Iter | Verdict | Speedup (add / sub / mul) | Tokens in / out (cached) | USD | Wall clock |
+|---|---|---|---|---|---|
+| 1 | accept, every gate green, bit-exact | 1.32× / 1.31× / 1.32× | 54 499 / 1 857 (30 077) | $0.12 | 33 s |
+| 2 | reject `speed`: no gain beyond noise over iter 1 | 1.00× / 1.01× / 1.00× | 32 513 / 1 187 (24 773) | $0.05 | 15 s |
+
+The driver ran unattended through baseline, propose, verify, commit and
+revert; `report.py` regenerated the table and chart from the JSONL. The full
+8-iteration runs across the matrix (Phase 2 verify and Phase 4) have **not**
+been run.
+
+### Phase 3 — platform legs on the spike's accepted kernel
+
+`legs.py --wasm --remote local` (the remote script run on this machine; no Mac
+host yet):
+
+| Leg | add / sub / mul | Output |
+|---|---|---|
+| WASM SIMD128 (node 24, `-msimd128` both sides) | 1.00× / 1.00× / 1.00× | bit-exact |
+| remote script, local x86 (unpinned) | 1.56× / 1.29× / 1.69× | bit-exact |
+
+Finding for the talk: an AVX2-only kernel does nothing for nkido's web
+users. At `-msimd128` the compiler already auto-vectorises the scalar loop
+to the same speed. The prompt allows WASM/NEON paths, but the gate only
+rewards x86.
+
+### Divergences from the design above
+
+1. **Python, not shell.** `verify.sh` / `bench.sh` are `verify.py` /
+   `bench.py`: the equality gate needs numpy, and one language keeps the
+   driver importing the gates directly.
+2. **A/B oracle is `cedar_bench --dump`, not `cedar_core`.** The dump uses the
+   exact stimuli the timing path uses (one source of truth), and a baseline and
+   a candidate binary can run side by side without two `cedar_core` modules
+   colliding on one import name. `cedar_core` is still built per worktree and
+   drives the experiment gate.
+3. **Extra gate: scalar fallback.** Every opcode is also dumped with
+   `--scalar` (forces `simd::Isa::Scalar`) and must be bit-identical to the
+   original. This enforces "the scalar body is never deleted" mechanically.
+4. **Noise band = run-to-run spread of baseline medians** over 5 interleaved
+   rounds. The within-run p10/p90 spread is still reported, but it measures
+   interrupt tails (30 % on `op_mul`) rather than median noise (0.5 %). The bench
+   also subtracts an interleaved empty-program VM (~450 ns of fixed
+   `process_block` overhead that hid most of `op_mul`'s cost) and times each
+   rep over 32 blocks spread across all four stimulus segments (`tanh`'s cost
+   depends on the input).
+5. **No per-ISA kernel TUs.** Kernels carry `[[gnu::target("avx2")]]`
+   (`CEDAR_TARGET_AVX2`) in the opcode headers, so no CMake flags change and the
+   allowlist stays header-only. `CEDAR_SIMD` defaults **OFF**; the `simd`
+   preset (Release + tests) is the gate build, and `wasm-simd` adds
+   `-msimd128`.
+6. **Experiment gate = no new `✗` lines vs baseline, and exit code 0.** Most
+   `test_op_*.py` scripts have no assertions and always exit 0, so the
+   stronger form in §4.3 is not available without editing them.
+7. **Speed baseline moves, equality baseline does not.** After an accept, later
+   proposals must beat the accepted head; equality is always against the
+   original scalar dumps, so approximations cannot compound. Speedup vs origin
+   is logged too.
+8. **Edge case 6 not implemented.** C5 is fixed from the Phase 0 ranking, not
+   nominated by the loop, so "stop nominating after two losses" has nothing to
+   act on.
+9. **Model matrix ids.** OpenRouter no longer lists "coder" tiers. The pinned
+   defaults are `z-ai/glm-5.3`, `deepseek/deepseek-v4-pro-0813` and
+   `qwen/qwen3.8-27b` (dated ids, tool-capable) **[confirm]**. The local
+   backend defaults to Ollama (`qwen3:14b` Q4_K_M, 9.3 GB) on the actual GPU,
+   an **RTX 5060 Ti 16 GB** (not the 3060 12 GB assumed in OQ2). LocalAI
+   stays reachable via `AUTORESEARCH_LOCAL_URL`. Ollama's server default
+   context of 4096 tokens truncates the prompt; the backend detects this and
+   logs it as a capability gap. A fair local run needs the server started
+   with `OLLAMA_CONTEXT_LENGTH=32768`.
+10. **Claude isolation.** `claude -p --safe-mode` drops CLAUDE.md, hooks,
+    skills, plugins and MCP servers, so Claude gets the same prompt as the
+    other backends. `--bare` would need an API key.
+11. **Found on the way:** four `InstructionBuilder` tests bound a reference
+    to a temporary builder's field. The first Release test build (`simd`
+    preset) failed on them; fixed in `62d11b0`.
+
+### Blockers for Phase 3/4 (the user's to resolve)
+
+- `OPENROUTER_API_KEY` is not set, so the OpenRouter backend is written but
+  has not been exercised live.
+- The Apple Silicon host for `legs.py --remote` is still OQ3. The remote
+  script has only been exercised with `--remote local`.

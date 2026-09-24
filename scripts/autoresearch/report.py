@@ -11,8 +11,16 @@ regenerate with one command.
 import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
+
+try:
+    import matplotlib  # noqa: F401
+except ModuleNotFoundError:  # re-exec under the experiments venv
+    _venv = Path(__file__).resolve().parents[2] / "experiments" / ".venv" / "bin" / "python3"
+    if __name__ == "__main__" and _venv.exists() and Path(sys.executable).resolve() != _venv.resolve():
+        os.execv(str(_venv), [str(_venv), *sys.argv])
 
 HERE = Path(__file__).resolve().parent
 RUNS = HERE / "runs"
@@ -39,7 +47,9 @@ def summarise(run_id, recs):
             reasons[r["reject_reason"]] = reasons.get(r["reject_reason"], 0) + 1
     first = recs[0] if recs else {}
     return {
-        "run_id": run_id, "model": first.get("model"), "provider": first.get("provider"),
+        "run_id": run_id, "provider": first.get("provider"),
+        "model": first.get("model") + (f" ({', '.join(first['model_resolved'])})"
+                                       if first.get("model_resolved") else "") if first else None,
         "target": first.get("target"), "iterations": len(recs),
         "accepts": len(accepts), "rejects": len(recs) - len(accepts), "reject_reasons": reasons,
         "first_accept_iteration": accepts[0]["iteration"] if accepts else None,
@@ -105,7 +115,7 @@ def chart(rows, path):
     ax.axhline(1.0, color="grey", lw=0.8, ls="--")
     ax.set_xlabel("tokens spent per run (input + output, log)")
     ax.set_ylabel("best accepted speedup (× vs scalar)")
-    ax.set_title("SIMD autoresearch: speedup vs tokens (8 proposals per run)")
+    ax.set_title("SIMD autoresearch: best speedup vs tokens per run")
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(path, dpi=150)
