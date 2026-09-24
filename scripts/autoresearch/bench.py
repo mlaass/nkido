@@ -26,12 +26,15 @@ MIN_SPEEDUP = 1.05
 
 
 def run(binary, opcode, reps):
-    cmd = ["taskset", "-c", CPU, str(binary), "--opcode", opcode, "--reps", str(reps), "--json"]
+    # A list is a full command prefix (node / ssh legs); a path is a local
+    # native binary, pinned to one P-core.
+    prefix = list(binary) if isinstance(binary, (list, tuple)) else ["taskset", "-c", CPU, str(binary)]
+    cmd = [*prefix, "--opcode", opcode, "--reps", str(reps), "--json"]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
     return json.loads(out)
 
 
-def measure(opcode, baseline, candidate=None, rounds=5, reps=500):
+def measure(opcode, baseline, candidate=None, rounds=5, reps=500, check_pinned=True):
     base, cand = [], []
     for _ in range(rounds):
         base.append(run(baseline, opcode, reps))
@@ -50,7 +53,8 @@ def measure(opcode, baseline, candidate=None, rounds=5, reps=500):
     unstable = []
     if res["governor"] != "performance":
         unstable.append(f"governor={res['governor']}")
-    pinned = json.loads(PINNED.read_text()).get("opcodes", {}) if PINNED.exists() else {}
+    pinned = json.loads(PINNED.read_text()).get("opcodes", {}) \
+        if check_pinned and PINNED.exists() else {}  # pins are x86 gate-machine numbers
     if opcode in pinned:
         drift = abs(bmed - pinned[opcode]) / pinned[opcode]
         res["baseline_drift"] = round(drift, 4)

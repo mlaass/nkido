@@ -204,9 +204,14 @@ endif()
 # Alias for use in parent project
 add_library(nkido::cedar ALIAS cedar)
 
-# Microbenchmark (native only; the WASM leg is benched headless in node)
-option(CEDAR_BUILD_BENCH "Build the cedar_bench opcode microbenchmark" ON)
-if(CEDAR_BUILD_BENCH AND NOT EMSCRIPTEN)
+# Microbenchmark. Opt-in on Emscripten, where it runs headless in node for
+# the WASM SIMD128 leg of prd-simd-autoresearch.
+if(EMSCRIPTEN)
+    option(CEDAR_BUILD_BENCH "Build the cedar_bench opcode microbenchmark" OFF)
+else()
+    option(CEDAR_BUILD_BENCH "Build the cedar_bench opcode microbenchmark" ON)
+endif()
+if(CEDAR_BUILD_BENCH)
     add_subdirectory(benchmarks)
 endif()
 
