@@ -1,20 +1,55 @@
 diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
-index 4a294b4..9c8fe9f 100644
+index 4a294b4..6223998 100644
 --- a/cedar/include/cedar/opcodes/distortion.hpp
 +++ b/cedar/include/cedar/opcodes/distortion.hpp
-@@ -39,8 +39,13 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
-         float wet = drywet::coeff(wet_level, i, 1.0f);
-         float x_l = input[i];
-         float x_r = stereo_in ? input_r[i] : x_l;
--        out_l[i] = drywet::mix(x_l, std::tanh(x_l * d), dry, wet);
--        out_r[i] = drywet::mix(x_r, std::tanh(x_r * d), dry, wet);
-+        auto fast_tanh = [](float x) {
-+            x = std::clamp(x, -9.0f, 9.0f);
-+            float e = std::exp(2.0f * x);
-+            return (e - 1.0f) / (e + 1.0f);
-+        };
-+        out_l[i] = drywet::mix(x_l, fast_tanh(x_l * d), dry, wet);
-+        out_r[i] = drywet::mix(x_r, fast_tanh(x_r * d), dry, wet);
-     }
- }
+@@ -6,11 +6,36 @@
+ #include "dsp_state.hpp"
+ #include "dsp_utils.hpp"
+ #include "drywet.hpp"
++#include "../dsp/simd.hpp"
+ #include <cmath>
+ #include <algorithm>
  
+ namespace cedar {
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++// tanh via exp: close to std::tanh but not bit-identical, and deliberately
++// NOT declared as an approximation -> the gate must reject it.
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,
++                                                const float* drive, const float* dry_level,
++                                                const float* wet_level, float* out_l,
++                                                float* out_r) noexcept {
++    auto t = [](float x) {
++        x = std::clamp(x, -9.0f, 9.0f);
++        float e = std::exp(2.0f * x);
++        return (e - 1.0f) / (e + 1.0f);
++    };
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        float d = std::max(0.1f, drive[i]);
++        float dry = drywet::coeff(dry_level, i, 0.0f);
++        float wet = drywet::coeff(wet_level, i, 1.0f);
++        out_l[i] = drywet::mix(in_l[i], t(in_l[i] * d), dry, wet);
++        out_r[i] = drywet::mix(in_r[i], t(in_r[i] * d), dry, wet);
++    }
++}
++#endif
++}  // namespace kernels
++
+ // ============================================================================
+ // DISTORT_TANH: Tanh Saturation
+ // ============================================================================
+@@ -33,6 +58,13 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_tanh_avx2(input, stereo_in ? input_r : input, drive, dry_level,
++                                   wet_level, out_l, out_r);
++        return;
++    }
++#endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float d = std::max(0.1f, drive[i]);
+         float dry = drywet::coeff(dry_level, i, 0.0f);

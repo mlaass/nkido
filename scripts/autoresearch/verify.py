@@ -25,7 +25,13 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError:  # re-exec under the experiments venv (numpy, matplotlib)
+    _venv = Path(__file__).resolve().parents[2] / "experiments" / ".venv" / "bin" / "python3"
+    if _venv.exists() and Path(sys.executable).resolve() != _venv.resolve():
+        os.execv(str(_venv), [str(_venv), *sys.argv])
+    raise
 
 import bench
 
@@ -75,7 +81,8 @@ class Reject(Exception):
 
 
 def sh(cmd, cwd=None, env=None, timeout=None):
-    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
+                          errors="replace", timeout=timeout)
 
 
 def tail(text, n=40):
@@ -241,14 +248,14 @@ def gate_unit(wt):
     bd = build_dir(wt)
     for name, exe in (("cedar_tests", bd / "cedar" / "tests" / "cedar_tests"),
                       ("akkado_tests", bd / "akkado" / "tests" / "akkado_tests")):
-        r = sh([str(exe)], timeout=1800)
+        r = sh([str(exe)], cwd=wt, timeout=1800)  # some tests read sources repo-relative
         if r.returncode:
             fails = [l for l in r.stdout.splitlines() if "FAILED" in l or "failed" in l]
             raise Reject("unit", f"{name}: " + tail("\n".join(fails) or r.stdout, 30))
 
 
 def gate_zero_alloc(wt):
-    r = sh([str(build_dir(wt) / "cedar" / "tests" / "cedar_tests"), "[zero_alloc]"])
+    r = sh([str(build_dir(wt) / "cedar" / "tests" / "cedar_tests"), "[zero_alloc]"], cwd=wt)
     if r.returncode:
         raise Reject("zero_alloc", tail(r.stdout, 30))
 
@@ -289,8 +296,9 @@ def gate_speed(run_dir, meta, rounds=5, reps=500):
 def verify(run_dir, meta):
     """Full gate. Returns the verdict dict; never raises for a bad patch."""
     wt = run_dir / "wt"
-    gates, res = {}, {"verdict": "reject", "reject_reason": None, "detail": "", "gates": gates,
-                      "bench": None, "unstable": False}
+    gates = {}
+    res = {"verdict": "reject", "reject_reason": None, "detail": "", "gates": gates,
+           "bench": None, "unstable": False, "files": []}
     try:
         res["files"] = gate_allowlist(wt, meta["base_rev"])
         gates["allowlist"] = "pass"
@@ -361,8 +369,8 @@ def new_run(run_id, target, base_rev="HEAD", branch=None):
 
 def reset_wt(run_dir):
     wt = run_dir / "wt"
-    sh(["git", "checkout", "--", "."], cwd=wt)
-    sh(["git", "clean", "-fdq", "-e", "build/"], cwd=wt)
+    sh(["git", "reset", "-q", "--hard", "HEAD"], cwd=wt)
+    sh(["git", "clean", "-fdq"], cwd=wt)  # ignored files (build/) survive
 
 
 def selftest(only=None):
