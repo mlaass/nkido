@@ -81,6 +81,12 @@ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
 At most **$max_checks runs of the check command** and **$minutes minutes** for
 this attempt. Every model in this experiment gets the same budget.
 
+Your tools are: read, write and edit files, search the repository, and run
+the check command. **The check command is the only shell command allowed**
+(piping its output, e.g. through `tail`, is fine). You cannot run Python,
+compilers or other scripts; do any numeric derivation (polynomial
+coefficients, error bounds) yourself, and let the check measure it.
+
 ## Method
 
 1. Read the code you need.

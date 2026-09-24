@@ -201,8 +201,10 @@ def gate_allowlist(wt, base_rev):
     bad = [f for f in files if not any(p.match(f) for p in ALLOWLIST)]
     if bad:
         raise Reject("out-of-allowlist edit", ", ".join(bad))
-    if not files:
-        raise Reject("empty patch", "no files changed")
+    # Empty = nothing new since the last accept (HEAD), not since the base:
+    # after an accept the tree always differs from base_rev.
+    if not changed_files(wt, "HEAD"):
+        raise Reject("empty patch", "no files changed since the last accepted state")
     return files
 
 
