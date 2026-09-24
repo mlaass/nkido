@@ -11912,10 +11912,13 @@ saw(f) |> out(@))");
 // =============================================================================
 
 TEST_CASE("InstructionBuilder: field construction", "[codegen][builder]") {
+    // Copy, never bind a reference: get() returns a ref into the temporary
+    // builder, which dies at the end of the full-expression (only shows up
+    // as garbage at -O3 — first seen in the `simd` Release test build).
     using akkado::codegen::InstructionBuilder;
 
     SECTION("defaults: all inputs unused, zero rate/flags/state") {
-        const cedar::Instruction& inst =
+        const cedar::Instruction inst =
             InstructionBuilder(cedar::Opcode::OSC_SIN).get();
         CHECK(inst.opcode == cedar::Opcode::OSC_SIN);
         for (int i = 0; i < 5; ++i) CHECK(inst.inputs[i] == 0xFFFF);
@@ -11925,7 +11928,7 @@ TEST_CASE("InstructionBuilder: field construction", "[codegen][builder]") {
     }
 
     SECTION("input() sets one slot, others stay unused") {
-        const cedar::Instruction& inst = InstructionBuilder(cedar::Opcode::MUL)
+        const cedar::Instruction inst = InstructionBuilder(cedar::Opcode::MUL)
                                              .input(0, 12)
                                              .input(2, 34)
                                              .get();
@@ -11937,7 +11940,7 @@ TEST_CASE("InstructionBuilder: field construction", "[codegen][builder]") {
     }
 
     SECTION("inputs() fills from slot 0, tail stays unused") {
-        const cedar::Instruction& inst = InstructionBuilder(cedar::Opcode::ENV_ADSR)
+        const cedar::Instruction inst = InstructionBuilder(cedar::Opcode::ENV_ADSR)
                                              .inputs({1, 2, 3})
                                              .get();
         CHECK(inst.inputs[0] == 1);
@@ -11948,7 +11951,7 @@ TEST_CASE("InstructionBuilder: field construction", "[codegen][builder]") {
     }
 
     SECTION("output/rate/state_id/flags setters") {
-        const cedar::Instruction& inst = InstructionBuilder(cedar::Opcode::OSC_SAW)
+        const cedar::Instruction inst = InstructionBuilder(cedar::Opcode::OSC_SAW)
                                              .output(7)
                                              .rate(3)
                                              .state_id(0xDEADBEEFu)
@@ -11962,7 +11965,7 @@ TEST_CASE("InstructionBuilder: field construction", "[codegen][builder]") {
 
     SECTION("const_value matches encode_const_value encoding") {
         const float v = 440.125f;
-        const cedar::Instruction& built =
+        const cedar::Instruction built =
             InstructionBuilder(cedar::Opcode::PUSH_CONST).const_value(v).get();
 
         cedar::Instruction manual{};
