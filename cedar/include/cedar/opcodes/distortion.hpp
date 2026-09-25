@@ -44,6 +44,18 @@ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* 
                                                 const float* wet_level, float* out_l,
                                                 float* out_r) noexcept {
     const __m256 min_drive = _mm256_set1_ps(0.1f);
+    if (!dry_level && !wet_level) {
+        // default dry 0 / wet 1: x*0 + w*1 == w for every finite x
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), min_drive);
+            const __m256 yl = tanh_approx_avx2(_mm256_mul_ps(_mm256_load_ps(in_l + i), d));
+            _mm256_store_ps(out_l + i, yl);
+            _mm256_store_ps(out_r + i, in_r ? tanh_approx_avx2(
+                                                  _mm256_mul_ps(_mm256_load_ps(in_r + i), d))
+                                            : yl);
+        }
+        return;
+    }
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         // std::max(0.1f, d) == (0.1 < d) ? d : 0.1
         const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), min_drive);
@@ -84,6 +96,16 @@ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* in_l, const float* 
                                                 float* out_r) noexcept {
     const __m256 lo = _mm256_set1_ps(0.1f);
     const __m256 hi = _mm256_set1_ps(2.0f);
+    if (!dry_level && !wet_level) {
+        // default dry 0 / wet 1: x*0 + w*1 == w for every finite x
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            const __m256 t = _mm256_min_ps(hi, _mm256_max_ps(lo, _mm256_load_ps(threshold + i)));
+            const __m256 yl = soft_clip_avx2(_mm256_load_ps(in_l + i), t);
+            _mm256_store_ps(out_l + i, yl);
+            _mm256_store_ps(out_r + i, in_r ? soft_clip_avx2(_mm256_load_ps(in_r + i), t) : yl);
+        }
+        return;
+    }
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         // std::clamp(v, lo, hi): (v < lo) ? lo : (hi < v) ? hi : v
         const __m256 t = _mm256_min_ps(hi, _mm256_max_ps(lo, _mm256_load_ps(threshold + i)));
