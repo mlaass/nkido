@@ -465,9 +465,10 @@ CEDAR_TARGET_AVX2 inline void formant_targets_avx2(FormantState& state, float va
 }
 
 // std::clamp(v, lo, hi): v < lo ? lo : (hi < v ? hi : v); NaN passes through.
+// maxps(a, b) is a > b ? a : b and minps(a, b) is a < b ? a : b, so with the
+// bound as the first operand they select exactly like the two comparisons.
 CEDAR_TARGET_AVX2 inline __m256 formant_clamp_avx2(__m256 v, __m256 lo, __m256 hi) noexcept {
-    v = _mm256_blendv_ps(v, lo, _mm256_cmp_ps(v, lo, _CMP_LT_OQ));
-    return _mm256_blendv_ps(v, hi, _mm256_cmp_ps(hi, v, _CMP_LT_OQ));
+    return _mm256_min_ps(hi, _mm256_max_ps(lo, v));
 }
 
 // VOWEL_TABLE column lerp: T[i0] * (1 - frac) + T[i1] * frac
@@ -572,8 +573,17 @@ CEDAR_TARGET_AVX2 inline __m256 formant_clamp_audio_avx2(__m256 v) noexcept {
     return _mm256_castsi256_ps(_mm256_andnot_si256(nan, c));
 }
 
-// SVF recurrence over samples [i0, i0 + 8). xs holds [L L L L | R R R R] per
-// sample; the raw bp vector of each sample goes to bps for the gain sum.
+// The SVF input of sample i as [L L L L | R R R R]: Mono broadcasts it from
+// the input itself, otherwise xs holds the prepared vectors.
+template <bool Mono>
+CEDAR_TARGET_AVX2 inline __m256 formant_x_avx2(const float* xs, std::size_t i) noexcept {
+    if constexpr (Mono) return _mm256_broadcast_ss(xs + i);
+    else return _mm256_load_ps(xs + i * 8);
+}
+
+// SVF recurrence over samples [i0, i0 + 8); the raw bp vector of each sample
+// goes to bps for the gain sum.
+template <bool Mono>
 [[gnu::noinline, gnu::cold]] CEDAR_TARGET_AVX2 inline void
 formant_svf_clamped_avx2(std::size_t i0, __m256& z1r, __m256& z2r, const float* coefs,
                          const float* qcs, const float* xs, float* bps) noexcept {
@@ -582,7 +592,7 @@ formant_svf_clamped_avx2(std::size_t i0, __m256& z1r, __m256& z2r, const float* 
     for (std::size_t i = i0; i < i0 + 8; ++i) {
         const __m256 coef = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(coefs + i * 4));
         const __m256 qc = _mm256_broadcast_ss(qcs + i);
-        const __m256 x = _mm256_load_ps(xs + i * 8);
+        const __m256 x = formant_x_avx2<Mono>(xs, i);
 
         __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(z1, qc)), z2);
         __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(coef, hp));
@@ -605,36 +615,34 @@ CEDAR_TARGET_AVX2 inline __m256 formant_clamp_audio_nonan_avx2(__m256 v) noexcep
         _mm256_min_epu32(c, _mm256_set1_epi32(static_cast<int>(0xC1200000u))));
 }
 
-// The recurrence with the NaN-less clamp on the critical path; the largest
-// magnitude bits of bp/lp are tracked alongside, and if any was a NaN the
-// chunk is redone with the exact clamp.
+// The recurrence with the NaN-less clamp on the critical path; an unordered
+// compare of bp/lp is accumulated alongside, and if any was a NaN the chunk
+// is redone with the exact clamp.
+template <bool Mono>
 CEDAR_TARGET_AVX2 inline void formant_svf_avx2(std::size_t i0, __m256& z1r, __m256& z2r,
                                                const float* coefs, const float* qcs,
                                                const float* xs, float* bps) noexcept {
     __m256 z1 = z1r, z2 = z2r;
-    const __m256i absmask = _mm256_set1_epi32(0x7fffffff);
-    __m256i mx = _mm256_setzero_si256();
+    __m256 nan = _mm256_setzero_ps();
 
     for (std::size_t i = i0; i < i0 + 8; ++i) {
         const __m256 coef = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(coefs + i * 4));
         const __m256 qc = _mm256_broadcast_ss(qcs + i);
-        const __m256 x = _mm256_load_ps(xs + i * 8);
+        const __m256 x = formant_x_avx2<Mono>(xs, i);
 
         __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(z1, qc)), z2);
         __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(coef, hp));
         __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(coef, z1));
-        mx = _mm256_max_epi32(mx, _mm256_and_si256(_mm256_castps_si256(bp), absmask));
-        mx = _mm256_max_epi32(mx, _mm256_and_si256(_mm256_castps_si256(lp), absmask));
+        nan = _mm256_or_ps(nan, _mm256_cmp_ps(bp, lp, _CMP_UNORD_Q));
         z1 = formant_clamp_audio_nonan_avx2(bp);
         z2 = formant_clamp_audio_nonan_avx2(lp);
         _mm256_store_ps(bps + i * 8, bp);
     }
-    const __m256i over = _mm256_cmpgt_epi32(mx, _mm256_set1_epi32(0x7f800000));
-    if (__builtin_expect(_mm256_testz_si256(over, over), 1)) {
+    if (__builtin_expect(_mm256_testz_ps(nan, nan), 1)) {
         z1r = z1;
         z2r = z2;
     } else {
-        formant_svf_clamped_avx2(i0, z1r, z2r, coefs, qcs, xs, bps);
+        formant_svf_clamped_avx2<Mono>(i0, z1r, z2r, coefs, qcs, xs, bps);
     }
 }
 
@@ -691,13 +699,15 @@ CEDAR_TARGET_AVX2 inline void formant_mix_avx2(std::size_t i, const float* in_l,
 // The formant targets are a pure function of the clamped (va, vb, m), so the
 // scalar change-detection cache is equivalent to recomputing them per sample;
 // that is done 8 samples at a time, one chunk ahead of the SVF recurrence.
-CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
-                                           const float* vowel_a, const float* vowel_b,
-                                           const float* morph, const float* q_in,
-                                           const float* dry_buf, float dry_const,
-                                           const float* wet_buf, float wet_const,
-                                           float sr, FormantState& state,
-                                           float* out_l, float* out_r) noexcept {
+// Mono: in_l == in_r.
+template <bool Mono>
+CEDAR_TARGET_AVX2 inline void formant_avx2_impl(const float* in_l, const float* in_r,
+                                                const float* vowel_a, const float* vowel_b,
+                                                const float* morph, const float* q_in,
+                                                const float* dry_buf, float dry_const,
+                                                const float* wet_buf, float wet_const,
+                                                float sr, FormantState& state,
+                                                float* out_l, float* out_r) noexcept {
     __m256 z1 = _mm256_setr_ps(state.bp1_z1[0], state.bp2_z1[0], state.bp3_z1[0], 0.0f,
                                state.bp1_z1[1], state.bp2_z1[1], state.bp3_z1[1], 0.0f);
     __m256 z2 = _mm256_setr_ps(state.bp1_z2[0], state.bp2_z2[0], state.bp3_z2[0], 0.0f,
@@ -738,8 +748,9 @@ CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
 
     // Skewed loop: coefficients for samples [i, i + 8), then the SVF over
     // [i - 8, i). The recurrence is latency-bound; the independent
-    // coefficient work issued alongside it fills those stalls.
-    for (std::size_t i = 0; i <= BLOCK_SIZE; i += 8) {
+    // coefficient work issued alongside it fills those stalls, as does the
+    // gain sum / dry-wet mix of [i - 16, i - 8), whose bp values are done.
+    for (std::size_t i = 0; i <= BLOCK_SIZE + 8; i += 8) {
         if (i < BLOCK_SIZE) {
             __m256 va = formant_clamp_avx2(_mm256_loadu_ps(vowel_a + i), zero, four);
             __m256 vb = formant_clamp_avx2(_mm256_loadu_ps(vowel_b + i), zero, four);
@@ -777,20 +788,26 @@ CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
             _mm256_store_ps(qcs + i, _mm256_div_ps(one, q));
 
             // xs: [L L L L | R R R R] per sample
-            const __m256 xl = _mm256_loadu_ps(in_l + i), xr = _mm256_loadu_ps(in_r + i);
-            const __m256 lo = _mm256_permute2f128_ps(xl, xr, 0x20);
-            const __m256 hi = _mm256_permute2f128_ps(xl, xr, 0x31);
-            float* xd = xs + i * 8;
-            _mm256_store_ps(xd + 0, _mm256_permute_ps(lo, 0x00));
-            _mm256_store_ps(xd + 8, _mm256_permute_ps(lo, 0x55));
-            _mm256_store_ps(xd + 16, _mm256_permute_ps(lo, 0xAA));
-            _mm256_store_ps(xd + 24, _mm256_permute_ps(lo, 0xFF));
-            _mm256_store_ps(xd + 32, _mm256_permute_ps(hi, 0x00));
-            _mm256_store_ps(xd + 40, _mm256_permute_ps(hi, 0x55));
-            _mm256_store_ps(xd + 48, _mm256_permute_ps(hi, 0xAA));
-            _mm256_store_ps(xd + 56, _mm256_permute_ps(hi, 0xFF));
+            if constexpr (!Mono) {
+                const __m256 xl = _mm256_loadu_ps(in_l + i), xr = _mm256_loadu_ps(in_r + i);
+                const __m256 lo = _mm256_permute2f128_ps(xl, xr, 0x20);
+                const __m256 hi = _mm256_permute2f128_ps(xl, xr, 0x31);
+                float* xd = xs + i * 8;
+                _mm256_store_ps(xd + 0, _mm256_permute_ps(lo, 0x00));
+                _mm256_store_ps(xd + 8, _mm256_permute_ps(lo, 0x55));
+                _mm256_store_ps(xd + 16, _mm256_permute_ps(lo, 0xAA));
+                _mm256_store_ps(xd + 24, _mm256_permute_ps(lo, 0xFF));
+                _mm256_store_ps(xd + 32, _mm256_permute_ps(hi, 0x00));
+                _mm256_store_ps(xd + 40, _mm256_permute_ps(hi, 0x55));
+                _mm256_store_ps(xd + 48, _mm256_permute_ps(hi, 0xAA));
+                _mm256_store_ps(xd + 56, _mm256_permute_ps(hi, 0xFF));
+            }
         }
-        if (i != 0) formant_svf_avx2(i - 8, z1, z2, coefs, qcs, xs, bps);
+        if (i >= 16)
+            formant_mix_avx2(i - 16, in_l, in_r, bps, g1s, g2s, g3s, dry_buf, dry_const,
+                             wet_buf, wet_const, out_l, out_r);
+        if (i != 0 && i <= BLOCK_SIZE)
+            formant_svf_avx2<Mono>(i - 8, z1, z2, coefs, qcs, Mono ? in_l : xs, bps);
     }
 
     alignas(32) float zz1[8], zz2[8];
@@ -801,10 +818,21 @@ CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
         state.bp2_z1[ch] = zz1[ch * 4 + 1]; state.bp2_z2[ch] = zz2[ch * 4 + 1];
         state.bp3_z1[ch] = zz1[ch * 4 + 2]; state.bp3_z2[ch] = zz2[ch * 4 + 2];
     }
+}
 
-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
-        formant_mix_avx2(i, in_l, in_r, bps, g1s, g2s, g3s, dry_buf, dry_const, wet_buf,
-                         wet_const, out_l, out_r);
+CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
+                                           const float* vowel_a, const float* vowel_b,
+                                           const float* morph, const float* q_in,
+                                           const float* dry_buf, float dry_const,
+                                           const float* wet_buf, float wet_const,
+                                           float sr, FormantState& state,
+                                           float* out_l, float* out_r) noexcept {
+    if (in_l == in_r)
+        formant_avx2_impl<true>(in_l, in_r, vowel_a, vowel_b, morph, q_in, dry_buf, dry_const,
+                                wet_buf, wet_const, sr, state, out_l, out_r);
+    else
+        formant_avx2_impl<false>(in_l, in_r, vowel_a, vowel_b, morph, q_in, dry_buf, dry_const,
+                                 wet_buf, wet_const, sr, state, out_l, out_r);
 }
 #endif
 }  // namespace kernels
