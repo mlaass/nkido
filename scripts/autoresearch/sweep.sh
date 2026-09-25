@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Full model matrix (docs/prd-simd-autoresearch.md §14 steps 4-5), one run at a
 # time: every run shares the pinned bench core. Re-running skips (model, target)
-# pairs that already have a summary.json. OpenRouter runs get a $2 per-run cap
-# and stop once all OpenRouter runs together have spent OR_CAP_USD.
+# pairs that already have a summary.json and resumes a stopped one (run.py
+# --resume); `touch runs/STOP` pauses every lane at its next iteration
+# boundary. OpenRouter runs get a $2 per-run cap and stop once all OpenRouter
+# runs together have spent OR_CAP_USD.
 #   OPENROUTER_API_KEY=... scripts/autoresearch/sweep.sh [backend:model ...]
 # Pass model specs to run one lane per model in parallel: runs have their own
 # worktree + branch, and verify.machine_lock serialises every build and bench.
@@ -23,10 +25,18 @@ for spec in $MODELS; do
   backend=${spec%%:*} model=${spec#*:}
   slug=$(echo "$model" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')
   for t in $TARGETS; do
+    [ -e runs/STOP ] && { echo "== paused (runs/STOP)"; exit 0; }
     done_run=$(grep -l '"iterations": 8' runs/*_"${slug}_$t"/run.json 2>/dev/null \
       | while read -r f; do [ -f "${f%run.json}summary.json" ] && echo "$f"; done)
     if [ -n "$done_run" ]; then  # the 2026-09-24 spikes ran 2-3 iterations: not done
       echo "== skip $model $t (done)"; continue
+    fi
+    open_run=$(grep -l '"iterations": 8' runs/*_"${slug}_$t"/run.json 2>/dev/null \
+      | while read -r f; do [ -f "${f%run.json}summary.json" ] || echo "${f%/run.json}"; done | tail -1)
+    if [ -n "$open_run" ]; then
+      echo "== $(date -u +%FT%TZ) resume $open_run"
+      ./run.py --resume "$open_run" || echo "== stopped/failed $open_run (exit $?)"
+      continue
     fi
     extra=()
     if [ "$backend" = openrouter ]; then

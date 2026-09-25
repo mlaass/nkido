@@ -173,17 +173,25 @@ def render_prompt(meta, run_dir, attempts, current):
     )
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", required=True, choices=["claude-code", "openrouter", "local"])
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--target", required=True, choices=sorted(TARGETS))
-    ap.add_argument("--iterations", type=int, default=8)
-    ap.add_argument("--budget-usd", type=float, default=BUDGET_USD)
-    ap.add_argument("--effort", help="claude-code only")
-    ap.add_argument("--keep-worktree", action="store_true")
-    a = ap.parse_args()
+def replay(run_dir, recs, target):
+    """Loop state of a stopped run from its log: attempts (dup-check diffs from
+    the saved reject patches), current ns after the accepts, USD spent."""
+    pinned = json.loads((HERE / "baselines.json").read_text())["opcodes"]
+    current = {n: pinned[n] for n in TARGETS[target]["bench"]}
+    attempts = []
+    for r in recs:
+        if r["verdict"] == "accept":
+            current.update({n: b["candidate_ns"] for n, b in r["bench"].items()})
+        p = run_dir / "rejected" / f"iter-{r['iteration']}.patch"
+        attempts.append({"iteration": r["iteration"], "verdict": r["verdict"],
+                         "reason": r["reject_reason"], "detail": r["reject_detail"],
+                         "bench": r["bench"], "idea": r["idea"],
+                         "norm_diff": normalise_diff(p.read_text()) if p.exists() else ""})
+    return attempts, current, sum(r.get("cost_usd") or 0 for r in recs)
 
+
+def setup_run(a):
+    """New run: worktree on a fresh autoresearch/* branch, check.sh, baseline cache."""
     backend = backend_for(a.backend, a.model, a.effort)
     ts = time.strftime("%Y-%m-%dT%H%MZ", time.gmtime())
     run_id = f"{ts}_{slug(a.model)}_{a.target}"
@@ -197,15 +205,48 @@ def main():
     (run_dir / "run.json").write_text(json.dumps(meta, indent=2))
     print(f"[{run_id}] preparing baseline ...", file=sys.stderr)
     verify.prepare_baseline(run_dir, meta)
-
-    log = run_dir / "iterations.jsonl"
     (run_dir / "rejected").mkdir()
     (run_dir / "accepted").mkdir()
-    pinned = json.loads((HERE / "baselines.json").read_text())["opcodes"]
-    current = {n: pinned[n] for n in TARGETS[a.target]["bench"]}
-    attempts, spent, status = [], 0.0, "complete"
+    return run_dir, meta, run_id, branch, check, backend
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--backend", choices=["claude-code", "openrouter", "local"])
+    ap.add_argument("--model")
+    ap.add_argument("--target", choices=sorted(TARGETS))
+    ap.add_argument("--iterations", type=int, default=8)
+    ap.add_argument("--budget-usd", type=float, default=BUDGET_USD)
+    ap.add_argument("--effort", help="claude-code only")
+    ap.add_argument("--keep-worktree", action="store_true")
+    ap.add_argument("--resume", metavar="RUN_DIR",
+                    help="continue a stopped run at its next iteration (same worktree + branch)")
+    a = ap.parse_args()
+    if a.resume:
+        run_dir = Path(a.resume).resolve()
+        meta = json.loads((run_dir / "run.json").read_text())
+        a.backend, a.model, a.target = meta["provider"], meta["model"], meta["target"]
+        a.iterations, a.budget_usd = meta["iterations"], meta["budget_usd"]
+        run_id, branch, check = meta["run_id"], meta["branch"], Path(meta["check_cmd"])
+        backend = backend_for(a.backend, a.model, a.effort)
+        verify.reset_wt(run_dir)  # drop edits from an attempt cut off at the boundary
+        print(f"[{run_id}] resuming", file=sys.stderr)
+    elif not (a.backend and a.model and a.target):
+        ap.error("--backend, --model and --target are required (or --resume)")
+    else:
+        run_dir, meta, run_id, branch, check, backend = setup_run(a)
+    log = run_dir / "iterations.jsonl"
+    recs = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+    attempts, current, spent = replay(run_dir, recs, a.target)
+    status = "complete"
     wt = run_dir / "wt"
-    for it in range(1, a.iterations + 1):
+    for it in range(len(recs) + 1, a.iterations + 1):
+        if (RUNS / "STOP").exists():  # pause at an iteration boundary; --resume continues
+            print(f"[{run_id}] paused before iteration {it} (runs/STOP)", file=sys.stderr)
+            return 3
+        if spent >= a.budget_usd:
+            status = "budget-stopped"
+            break
         prompt = render_prompt(meta, run_dir, attempts, current)
         (run_dir / f"prompt-{it}.md").write_text(prompt)
         (run_dir / "check_calls").write_text("0")
@@ -250,7 +291,8 @@ def main():
             "target": a.target, "opcodes": TARGETS[a.target]["bench"], "isa_target": "avx2",
             **{k: u.get(k) for k in ("tokens", "cost_usd", "wall_clock_s", "gpu_s", "turns",
                                      "model_resolved", "capability_gaps", "error")},
-            "check_calls": checks, "lock_wait_s": lock_wait, "lock_wait_propose_s": lock_wait_propose, "idea": idea,
+            "check_calls": checks, "lock_wait_s": lock_wait,
+            "lock_wait_propose_s": lock_wait_propose, "idea": idea,
             "verdict": v["verdict"], "reject_reason": v["reject_reason"],
             "reject_detail": (v["detail"] or "")[:4000], "gates": v["gates"],
             "bench": v["bench"], "unstable": v["unstable"],
@@ -263,9 +305,6 @@ def main():
                          "norm_diff": normalise_diff(diff)})
         print(f"[{run_id}] iteration {it}: {v['verdict']} "
               f"({v['reject_reason'] or 'all gates green'}), ${spent:.2f} spent", file=sys.stderr)
-        if spent >= a.budget_usd:
-            status = "budget-stopped"
-            break
 
     import report
     summary = report.summarise(run_id, [json.loads(l) for l in log.read_text().splitlines()])
