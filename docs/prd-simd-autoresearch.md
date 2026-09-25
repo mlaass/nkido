@@ -645,6 +645,53 @@ check (§4.3) before anyone merges it.
 
 ## 14. Resume Here (next session)
 
+**Sweep paused on 2026-09-25 (22:40 CEST), resume from here:**
+
+The full matrix is 6 models × 5 targets = 30 runs of 8 iterations.
+`sweep.sh` runs it as one lane per model: each run has its own worktree
+and branch, and `verify.machine_lock` serialises every build and bench.
+The lanes were stopped at a run boundary. Six runs were still in flight
+(opus svf, and arith for sonnet, glm-5.3, deepseek-v4-pro, qwen3.8-27b
+and local qwen3:14b-32k). They write to `runs/lane_*.log` until they
+finish (≈ 1–4 h after the pause).
+
+Done: opus arith (1.41×), opus distort (tanh 30.7×, soft 7.9×) and opus
+formant (8.1×). DeepSeek's first arith run was lost to a one-token
+upstream reply. It is archived in `runs/_aborted/`, and `f2f822f` now
+retries such replies.
+
+To resume, first check that no `run.py` is still alive. A lane would
+otherwise restart a run that has not written its `summary.json` yet.
+
+```bash
+pgrep -af "run.py --backend" || scripts/autoresearch/runs/launch_lanes.sh
+```
+
+`launch_lanes.sh` is gitignored; it is a copy of the loop below:
+
+```bash
+cd scripts/autoresearch
+export OPENROUTER_API_KEY=…   # from ../video_app/.env
+for spec in claude-code:opus claude-code:sonnet openrouter:z-ai/glm-5.3 \
+    openrouter:deepseek/deepseek-v4-pro-0813 openrouter:qwen/qwen3.8-27b local:qwen3:14b-32k; do
+  setsid nohup ./sweep.sh "$spec" >> "runs/lane_$(echo "$spec" | tr ':/' '__').log" 2>&1 < /dev/null &
+  sleep 60
+done
+```
+
+Finished `(model, target)` pairs are skipped. OpenRouter is capped at
+$30 in total and $2 per run. At about 3 min of lock time per iteration,
+the hosted lanes need ≈ 12 h. The local lane needs ≈ 20 h, because it
+runs close to the 30 min cap on every iteration. After the sweep:
+
+1. `legs.py --wasm --remote mini` for every run with an accept. `mini`
+   is an M4 Mac mini reachable over ssh; the remote leg was fixed and
+   verified in `8778ac4`.
+2. The `tanh` listening check (step 2 below).
+3. `report.py`.
+4. Commit the logs to the `autoresearch/results` branch (owner decision
+   2026-09-25).
+
 **State on 2026-09-24:**
 
 - Phases 0–3 of the harness are on master (`86b3ace`..`9ea074e`, unpushed).
