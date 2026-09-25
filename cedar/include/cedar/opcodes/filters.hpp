@@ -574,9 +574,9 @@ CEDAR_TARGET_AVX2 inline __m256 formant_clamp_audio_avx2(__m256 v) noexcept {
 
 // SVF recurrence over samples [i0, i0 + 8). xs holds [L L L L | R R R R] per
 // sample; the raw bp vector of each sample goes to bps for the gain sum.
-CEDAR_TARGET_AVX2 inline void formant_svf_avx2(std::size_t i0, __m256& z1r, __m256& z2r,
-                                               const float* coefs, const float* qcs,
-                                               const float* xs, float* bps) noexcept {
+[[gnu::noinline, gnu::cold]] CEDAR_TARGET_AVX2 inline void
+formant_svf_clamped_avx2(std::size_t i0, __m256& z1r, __m256& z2r, const float* coefs,
+                         const float* qcs, const float* xs, float* bps) noexcept {
     __m256 z1 = z1r, z2 = z2r;
 
     for (std::size_t i = i0; i < i0 + 8; ++i) {
@@ -593,6 +593,49 @@ CEDAR_TARGET_AVX2 inline void formant_svf_avx2(std::size_t i0, __m256& z1r, __m2
     }
     z1r = z1;
     z2r = z2;
+}
+
+// clamp_audio for non-NaN v in two 1-cycle ops on the bit pattern: the signed
+// min clamps positives to 10.0f (negatives are negative ints, untouched), the
+// unsigned min clamps negatives to -10.0f (positives are smaller unsigned).
+// A NaN comes out as +-10 here instead of +0.
+CEDAR_TARGET_AVX2 inline __m256 formant_clamp_audio_nonan_avx2(__m256 v) noexcept {
+    const __m256i c = _mm256_min_epi32(_mm256_castps_si256(v), _mm256_set1_epi32(0x41200000));
+    return _mm256_castsi256_ps(
+        _mm256_min_epu32(c, _mm256_set1_epi32(static_cast<int>(0xC1200000u))));
+}
+
+// The recurrence with the NaN-less clamp on the critical path; the largest
+// magnitude bits of bp/lp are tracked alongside, and if any was a NaN the
+// chunk is redone with the exact clamp.
+CEDAR_TARGET_AVX2 inline void formant_svf_avx2(std::size_t i0, __m256& z1r, __m256& z2r,
+                                               const float* coefs, const float* qcs,
+                                               const float* xs, float* bps) noexcept {
+    __m256 z1 = z1r, z2 = z2r;
+    const __m256i absmask = _mm256_set1_epi32(0x7fffffff);
+    __m256i mx = _mm256_setzero_si256();
+
+    for (std::size_t i = i0; i < i0 + 8; ++i) {
+        const __m256 coef = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(coefs + i * 4));
+        const __m256 qc = _mm256_broadcast_ss(qcs + i);
+        const __m256 x = _mm256_load_ps(xs + i * 8);
+
+        __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(z1, qc)), z2);
+        __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(coef, hp));
+        __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(coef, z1));
+        mx = _mm256_max_epi32(mx, _mm256_and_si256(_mm256_castps_si256(bp), absmask));
+        mx = _mm256_max_epi32(mx, _mm256_and_si256(_mm256_castps_si256(lp), absmask));
+        z1 = formant_clamp_audio_nonan_avx2(bp);
+        z2 = formant_clamp_audio_nonan_avx2(lp);
+        _mm256_store_ps(bps + i * 8, bp);
+    }
+    const __m256i over = _mm256_cmpgt_epi32(mx, _mm256_set1_epi32(0x7f800000));
+    if (__builtin_expect(_mm256_testz_si256(over, over), 1)) {
+        z1r = z1;
+        z2r = z2;
+    } else {
+        formant_svf_clamped_avx2(i0, z1r, z2r, coefs, qcs, xs, bps);
+    }
 }
 
 // (b1*g1 + b2*g2) + b3*g3
