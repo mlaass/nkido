@@ -14,27 +14,29 @@ namespace cedar {
 
 namespace kernels {
 #if CEDAR_SIMD_X86
-// simd: approx tanh — odd rational minimax x * P(x^2) / Q(x^2) (Eigen's float
-// tanh coefficients) on y clamped to +-7.905 (tanh there is 1 - 3e-7).
-// Peak absolute error a few ulp; no sign or small-|y| special-casing needed.
+// simd: approx tanh — tanh(y) = 1 - 2 / (1 + e^(2y)) on y clamped to +-9.
+// e^(2y) = 2^n * 2^f with n = round(2y*log2e) via the 1.5*2^23 magic add (the
+// low mantissa bits of the sum are n + 127, shifted straight into the exponent)
+// and 2^f, |f| <= 0.5, from a Chebyshev-economised degree-4 Taylor polynomial
+// (relative error < 8e-6). The absolute tanh error is at most half the relative
+// error of e^(2y), so < 4e-6 everywhere; the formula is valid for both signs.
 CEDAR_TARGET_AVX2 inline __m256 tanh_approx_avx2(__m256 y) noexcept {
     // min/max with the constant first return y when y is NaN, so NaN propagates
-    const __m256 x = _mm256_max_ps(_mm256_set1_ps(-7.90531110763549805f),
-                                   _mm256_min_ps(_mm256_set1_ps(7.90531110763549805f), y));
-    const __m256 x2 = _mm256_mul_ps(x, x);
-    __m256 p = _mm256_set1_ps(-2.76076847742355e-16f);
-    p = _mm256_add_ps(_mm256_mul_ps(p, x2), _mm256_set1_ps(2.00018790482477e-13f));
-    p = _mm256_add_ps(_mm256_mul_ps(p, x2), _mm256_set1_ps(-8.60467152213735e-11f));
-    p = _mm256_add_ps(_mm256_mul_ps(p, x2), _mm256_set1_ps(5.12229709037114e-08f));
-    p = _mm256_add_ps(_mm256_mul_ps(p, x2), _mm256_set1_ps(1.48572235717979e-05f));
-    p = _mm256_add_ps(_mm256_mul_ps(p, x2), _mm256_set1_ps(6.37261928875436e-04f));
-    p = _mm256_add_ps(_mm256_mul_ps(p, x2), _mm256_set1_ps(4.89352455891786e-03f));
-    p = _mm256_mul_ps(p, x);
-    __m256 q = _mm256_set1_ps(1.19825839466702e-06f);
-    q = _mm256_add_ps(_mm256_mul_ps(q, x2), _mm256_set1_ps(1.18534705686654e-04f));
-    q = _mm256_add_ps(_mm256_mul_ps(q, x2), _mm256_set1_ps(2.26843463243900e-03f));
-    q = _mm256_add_ps(_mm256_mul_ps(q, x2), _mm256_set1_ps(4.89352518554385e-03f));
-    return _mm256_div_ps(p, q);
+    const __m256 x = _mm256_max_ps(_mm256_set1_ps(-9.0f),
+                                   _mm256_min_ps(_mm256_set1_ps(9.0f), y));
+    const __m256 t = _mm256_mul_ps(x, _mm256_set1_ps(2.88539008177792681f));  // 2*log2(e)
+    const __m256 magic = _mm256_set1_ps(12583039.0f);  // 1.5 * 2^23 + 127
+    const __m256 s = _mm256_add_ps(t, magic);
+    const __m256 f = _mm256_sub_ps(t, _mm256_sub_ps(s, magic));
+    __m256 p = _mm256_set1_ps(9.61812910762847716e-03f);
+    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(5.59208190e-02f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(2.40226506959100712e-01f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(6.93121138e-01f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(1.0f));
+    const __m256 pow2n = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_castps_si256(s), 23));
+    const __m256 e = _mm256_mul_ps(p, pow2n);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    return _mm256_sub_ps(one, _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(one, e)));
 }
 
 CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,
