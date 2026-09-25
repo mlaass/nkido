@@ -86,7 +86,8 @@ def wasm_leg(meta, workdir):
 
 REMOTE_SCRIPT = r"""
 set -e
-dir="$1"; bundle="$2"; base="$3"; head="$4"; shift 4
+PATH="/opt/homebrew/bin:$PATH"  # non-interactive ssh on macOS skips the Homebrew shellenv
+dir=$(cd "$1" && pwd); bundle="$2"; base="$3"; head="$4"; shift 4
 for t in git cmake c++; do command -v "$t" >/dev/null || { echo "GAP: $t not found on $(hostname)"; exit 3; }; done
 rm -rf "$dir/src" && git clone -q "$bundle" "$dir/src" && cd "$dir/src"
 for label in base head; do
@@ -102,7 +103,7 @@ echo READY
 def remote_leg(meta, workdir, host):
     local = host == "local"
     rdir = str(workdir / "remote") if local else f"nkido-autoresearch/{meta['run_id']}"
-    ssh = [] if local else ["ssh", "-o", "BatchMode=yes", host]
+    ssh = [] if local else ["ssh", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=20", host]
     bundle = workdir / "run.bundle"
     r = sh(["git", "bundle", "create", str(bundle), meta["branch"], meta["base_rev"]], cwd=REPO)
     if r.returncode:
