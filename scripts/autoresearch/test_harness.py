@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Self-check for the harness logic that is not exercised by verify.py --selftest."""
+import json
 import tempfile
 from pathlib import Path
 
@@ -55,5 +56,19 @@ assert "Full verifier output for the latest rejection (attempt 1" in t
 r3 = [{**rej, "iteration": i} for i in (3, 4, 5)]
 assert run.plateau_note([acc, *r3]) and not run.plateau_note([*r3[:2], acc]) \
     and not run.plateau_note(r3[:2])
+# --resume: loop state rebuilt from the log (checked byte-identical against a live prompt)
+rd = Path(tempfile.mkdtemp())
+(rd / "rejected").mkdir()
+(rd / "rejected" / "iter-2.patch").write_text(d1)
+logged = [{"iteration": 1, "target": "arith", "verdict": "accept", "reject_reason": None,
+           "reject_detail": "", "idea": "a", "cost_usd": 0.5,
+           "bench": {"op_mul": {"speedup": 1.3, "candidate_ns": 11.0}}},
+          {"iteration": 2, "target": "arith", "verdict": "reject", "reject_reason": "speed",
+           "reject_detail": "no gain", "idea": "b", "cost_usd": 0.25, "bench": None}]
+att, cur, spent = run.replay(rd, logged, "arith")
+assert cur["op_mul"] == 11.0 and cur["op_add"] == json.loads(
+    (Path(run.HERE) / "baselines.json").read_text())["opcodes"]["op_add"]
+assert spent == 0.75 and [a["verdict"] for a in att] == ["accept", "reject"]
+assert att[1]["norm_diff"] == run.normalise_diff(d1) and run.find_duplicate(d2, att) == 2
 
 print("test_harness: ok")
