@@ -12,29 +12,43 @@ namespace kernels {
 #if CEDAR_SIMD_X86
 // Element-wise binary ops. Each 8-lane vector is fully loaded before being
 // stored, so in-place use (out == a or out == b) is safe.
-CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+//
+// The output block is 8 cache lines; when it is not L1-resident each store
+// needs an RFO, and the store buffer would otherwise wait on them one line
+// at a time. prefetchw on all 8 lines up front overlaps those RFOs with the
+// loads and arithmetic. (prfchw ships on every AVX2 CPU; it's a hint only.)
+#define CEDAR_TARGET_AVX2_PRFCHW [[gnu::target("avx2,prfchw")]]
+CEDAR_TARGET_AVX2_PRFCHW inline void prefetch_block_for_write(float* out) noexcept {
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) _m_prefetchw(out + i);
+}
+
+CEDAR_TARGET_AVX2_PRFCHW inline void add_avx2(const float* a, const float* b, float* out) noexcept {
     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+    prefetch_block_for_write(out);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
         _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
 }
 
-CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+CEDAR_TARGET_AVX2_PRFCHW inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+    prefetch_block_for_write(out);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
         _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
 }
 
-CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+CEDAR_TARGET_AVX2_PRFCHW inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+    prefetch_block_for_write(out);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
         _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
 }
+#undef CEDAR_TARGET_AVX2_PRFCHW
 #endif
 }  // namespace kernels
 
