@@ -214,6 +214,8 @@ def main():
         u = backend.propose(prompt, wt, str(check), a.budget_usd - spent, ITERATION_S)
         (run_dir / f"transcript-{it}.txt").write_text(u.pop("transcript", "") or "")
         idea = parse_idea(u.pop("final_text", ""))
+        # lock wait inside the attempt's wall clock (check calls); verify adds more below
+        lock_wait_propose = float((run_dir / "lock_wait_s").read_text() or 0)
         spent += u["cost_usd"] or 0.0
         sh(["git", "add", "-A", "--", "."], cwd=wt)  # stage new files too, for the diff
         diff = sh(["git", "diff", "--cached", "HEAD"], cwd=wt).stdout
@@ -248,7 +250,7 @@ def main():
             "target": a.target, "opcodes": TARGETS[a.target]["bench"], "isa_target": "avx2",
             **{k: u.get(k) for k in ("tokens", "cost_usd", "wall_clock_s", "gpu_s", "turns",
                                      "model_resolved", "capability_gaps", "error")},
-            "check_calls": checks, "lock_wait_s": lock_wait, "idea": idea,
+            "check_calls": checks, "lock_wait_s": lock_wait, "lock_wait_propose_s": lock_wait_propose, "idea": idea,
             "verdict": v["verdict"], "reject_reason": v["reject_reason"],
             "reject_detail": (v["detail"] or "")[:4000], "gates": v["gates"],
             "bench": v["bench"], "unstable": v["unstable"],

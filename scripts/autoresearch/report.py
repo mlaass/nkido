@@ -58,6 +58,10 @@ def summarise(run_id, recs):
         "cost_usd": round(sum(r.get("cost_usd") or 0 for r in recs), 4),
         "wall_clock_s": round(sum(r.get("wall_clock_s") or 0 for r in recs), 1),
         "gpu_s": round(sum(r.get("gpu_s") or 0 for r in recs), 1) or None,
+        # parallel lanes: wall clock minus time queued on verify.machine_lock
+        "active_s": round(sum((r.get("wall_clock_s") or 0) - (r.get("lock_wait_propose_s") or 0)
+                              for r in recs), 1)
+                    if recs and all("lock_wait_propose_s" in r for r in recs) else None,
         "unstable_iterations": sum(1 for r in recs if r.get("unstable")),
     }
 
@@ -93,6 +97,7 @@ def table(rows):
             f"| {s['first_accept_iteration'] or '—'} | {f'{sp:.2f}×' if sp else '—'} "
             f"| {t['input']:,} / {t['output']:,} ({t['cached']:,}) | ${s['cost_usd']:.2f} "
             f"| {per} | {s['wall_clock_s'] / 60:.0f} min"
+            + (f" ({s['active_s'] / 60:.0f} active)" if s.get("active_s") is not None else "")
             + (f" (GPU {s['gpu_s']:.0f} s)" if s.get("gpu_s") else "") + f" | {rej} |")
     return h + "\n".join(lines) + "\n"
 
