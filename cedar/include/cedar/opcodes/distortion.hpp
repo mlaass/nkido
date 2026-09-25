@@ -14,16 +14,17 @@ namespace cedar {
 
 namespace kernels {
 #if CEDAR_SIMD_X86
-// simd: approx tanh — evaluated on the signed y as tanh(y) = 1 - 2 / (1 + e^(2y))
+// simd: approx tanh — evaluated on the signed y as tanh(y) = (e^(2y) - 1) / (e^(2y) + 1)
 // with 2y*log2e clamped to [-120, 120] (both ends already round to -1 / 1), which
 // needs no sign split. The absolute tanh error is at most half the relative error
 // of e^(2y). e^(2y) = 2^(k/8) * 2^f with
-// k = round(2y*log2e*8) via the 1.5*2^20 magic add, |f| <= 1/16: 2^(j/8),
-// j = k & 7, comes from an 8-entry vpermps table (vpermps only reads the low 3
-// index bits) whose entries have j<<20 pre-subtracted, so adding k<<20 as an
-// integer both cancels that and adds floor(k/8) to the exponent. 2^f is a
-// Chebyshev-economised quadratic (relative error < 3.5e-6), so the absolute
-// tanh error is < 2e-6.
+// k = round(2y*log2e*8) via the 1.5*2^20 magic add, |f| <= 1/16, so
+// tanh = (2^f - 2^(-k/8)) / (2^f + 2^(-k/8)), which needs no multiply by 2^(k/8).
+// 2^(-k/8) = 2^(-j/8) * 2^(-floor(k/8)), j = k & 7, comes from an 8-entry
+// vpermps table (vpermps only reads the low 3 index bits) whose entries have
+// j<<20 pre-added, so subtracting k<<20 as an integer both cancels that and
+// subtracts floor(k/8) from the exponent. 2^f is a Chebyshev-economised
+// quadratic (relative error < 3.5e-6), so the absolute tanh error is < 2e-6.
 CEDAR_TARGET_AVX2 inline __m256 tanh_approx_avx2(__m256 y) noexcept {
     // max/min with the constant first return the product when it is NaN, so NaN
     // propagates
@@ -35,21 +36,19 @@ CEDAR_TARGET_AVX2 inline __m256 tanh_approx_avx2(__m256 y) noexcept {
     const __m256 s = _mm256_add_ps(t, magic);
     const __m256 f = _mm256_sub_ps(t, _mm256_sub_ps(s, magic));
     const __m256i k = _mm256_castps_si256(s);  // low bits hold k = round(8t)
-    const __m256i table = _mm256_sub_epi32(
-        _mm256_castps_si256(_mm256_setr_ps(1.0f, 1.0905077326652577f, 1.1892071150027210f,
-                                           1.2968395546510096f, 1.4142135623730951f,
-                                           1.5422108254079407f, 1.6817928305074290f,
-                                           1.8340080864093424f)),
+    const __m256i table = _mm256_add_epi32(
+        _mm256_castps_si256(_mm256_setr_ps(1.0f, 0.9170040432046712f, 0.8408964152537145f,
+                                           0.7711054127039704f, 0.7071067811865476f,
+                                           0.6484197773255048f, 0.5946035575013605f,
+                                           0.5452538663326288f)),
         _mm256_setr_epi32(0, 1 << 20, 2 << 20, 3 << 20, 4 << 20, 5 << 20, 6 << 20, 7 << 20));
-    const __m256 pow2 = _mm256_castsi256_ps(_mm256_add_epi32(
+    const __m256 rpow2 = _mm256_castsi256_ps(_mm256_sub_epi32(
         _mm256_castps_si256(_mm256_permutevar8x32_ps(_mm256_castsi256_ps(table), k)),
         _mm256_slli_epi32(k, 20)));
     __m256 p = _mm256_add_ps(_mm256_mul_ps(_mm256_set1_ps(2.402640778e-01f), f),
                              _mm256_set1_ps(6.933097903e-01f));
-    const __m256 one = _mm256_set1_ps(1.0f);
-    p = _mm256_add_ps(_mm256_mul_ps(p, f), one);
-    const __m256 e = _mm256_mul_ps(p, pow2);
-    return _mm256_sub_ps(one, _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(one, e)));
+    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(1.0f));
+    return _mm256_div_ps(_mm256_sub_ps(p, rpow2), _mm256_add_ps(p, rpow2));
 }
 
 CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,
