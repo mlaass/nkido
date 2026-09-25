@@ -209,6 +209,7 @@ def main():
         prompt = render_prompt(meta, run_dir, attempts, current)
         (run_dir / f"prompt-{it}.md").write_text(prompt)
         (run_dir / "check_calls").write_text("0")
+        (run_dir / "lock_wait_s").write_text("0")
         print(f"[{run_id}] iteration {it}/{a.iterations}: proposing ...", file=sys.stderr)
         u = backend.propose(prompt, wt, str(check), a.budget_usd - spent, ITERATION_S)
         (run_dir / f"transcript-{it}.txt").write_text(u.pop("transcript", "") or "")
@@ -241,12 +242,13 @@ def main():
                 (run_dir / "rejected" / f"iter-{it}.patch").write_text(diff)
             verify.reset_wt(run_dir)
         checks = int((run_dir / "check_calls").read_text() or 0)
+        lock_wait = float((run_dir / "lock_wait_s").read_text() or 0)
         rec = {
             "run_id": run_id, "iteration": it, "model": a.model, "provider": backend.provider,
             "target": a.target, "opcodes": TARGETS[a.target]["bench"], "isa_target": "avx2",
             **{k: u.get(k) for k in ("tokens", "cost_usd", "wall_clock_s", "gpu_s", "turns",
                                      "model_resolved", "capability_gaps", "error")},
-            "check_calls": checks, "idea": idea,
+            "check_calls": checks, "lock_wait_s": lock_wait, "idea": idea,
             "verdict": v["verdict"], "reject_reason": v["reject_reason"],
             "reject_detail": (v["detail"] or "")[:4000], "gates": v["gates"],
             "bench": v["bench"], "unstable": v["unstable"],
