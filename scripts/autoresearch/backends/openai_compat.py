@@ -20,6 +20,11 @@ from pathlib import Path
 # Runaway guard only; the real per-attempt budget is the shared wall clock
 # plus the check-call cap (claude -p has no turn limit to match).
 MAX_TURNS = 200
+# Transient upstream failures (5xx / 429, or a reply with no tool call and a
+# handful of tokens: seen live as a 1-token reply from one OpenRouter
+# upstream) are retried, as the claude CLI retries its own API errors.
+MAX_RETRIES = 2
+TRANSIENT_HTTP = (429, 500, 502, 503, 504)
 TOOL_OUTPUT_LIMIT = 20000
 
 SYSTEM = ("You are an expert C++ performance engineer working in a git checkout. Use the tools "
@@ -155,6 +160,7 @@ class OpenAICompat:
         cost, gaps, err, t_req, turns, tool_calls = 0.0, [], None, 0.0, 0, 0
         t0 = time.time()
         final = ""
+        retries, served_by = 0, set()
         for turns in range(1, MAX_TURNS + 1):
             if time.time() - t0 > timeout_s:
                 err = f"wall-clock cap of {timeout_s} s hit"
@@ -166,6 +172,11 @@ class OpenAICompat:
                 resp = self.post(body)
             except urllib.error.HTTPError as e:
                 text = e.read().decode(errors="replace")[:800]
+                if e.code in TRANSIENT_HTTP and retries < MAX_RETRIES:
+                    retries += 1
+                    gaps.append(f"HTTP {e.code} from upstream; retried")
+                    time.sleep(10)
+                    continue
                 if "tool" in text.lower() and turns == 1:
                     gaps.append(f"endpoint rejected tool calling: {text[:200]}")
                 err = f"HTTP {e.code}: {text}"
@@ -185,7 +196,16 @@ class OpenAICompat:
                 # ~4 chars/token; less than half of that means the server cut the prompt.
                 gaps.append(f"context truncated: prompt reported as {u['prompt_tokens']} tokens "
                             f"for {len(prompt)} chars")
-            msg = resp["choices"][0]["message"]
+            served_by.add(resp.get("provider") or "?")
+            choice = resp["choices"][0]
+            if (choice.get("finish_reason") == "error"
+                    or (not choice["message"].get("tool_calls") and (u.get("completion_tokens") or 0) < 5)) \
+                    and retries < MAX_RETRIES:
+                retries += 1
+                gaps.append(f"degenerate reply from {resp.get('provider')} (finish "
+                            f"{choice.get('finish_reason')}, {u.get('completion_tokens')} tokens); retried")
+                continue
+            msg = choice["message"]
             final = msg.get("content") or final
             calls = msg.get("tool_calls") or []
             msgs.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls")})
@@ -210,5 +230,6 @@ class OpenAICompat:
             gaps.append(f"hit the {MAX_TURNS}-turn limit")
         return {"tokens": tok, "cost_usd": round(cost, 6), "wall_clock_s": round(time.time() - t0, 1),
                 "gpu_s": round(t_req, 1) if self.local else None, "turns": turns,
+                "model_resolved": sorted(f"{self.model}@{p}" for p in served_by) or None,
                 "capability_gaps": gaps or None, "error": err, "final_text": final,
                 "transcript": json.dumps(msgs, indent=1)}
