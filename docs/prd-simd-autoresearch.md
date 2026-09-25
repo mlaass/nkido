@@ -650,18 +650,25 @@ check (§4.3) before anyone merges it.
 The full matrix is 6 models × 5 targets = 30 runs of 8 iterations.
 `sweep.sh` runs it as one lane per model: each run has its own worktree
 and branch, and `verify.machine_lock` serialises every build and bench.
-The lanes were stopped at a run boundary. Six runs were still in flight
-(opus svf, and arith for sonnet, glm-5.3, deepseek-v4-pro, qwen3.8-27b
-and local qwen3:14b-32k). They write to `runs/lane_*.log` until they
-finish (≈ 1–4 h after the pause).
+The six in-flight runs were stopped at an **iteration boundary**: each
+was killed right after its current iteration was logged, which happens
+after the commit or revert. Iterations done: opus svf 3, and on arith
+sonnet 7, deepseek-v4-pro 3, glm-5.3 2, qwen3.8-27b 2 and local
+qwen3:14b-32k 2 (`runs/stop_at_boundary.log`).
+`run.py --resume RUN_DIR` (`0a19cc1`) continues a stopped run in the
+same worktree and branch. The state is rebuilt from `iterations.jsonl`,
+and the rebuilt next-iteration prompt was checked byte-identical against
+the one the live process had written. `sweep.sh` resumes open runs
+before it starts new ones. From now on, `touch runs/STOP` pauses every
+lane at its next iteration boundary; `rm runs/STOP` before resuming.
 
 Done: opus arith (1.41×), opus distort (tanh 30.7×, soft 7.9×) and opus
 formant (8.1×). DeepSeek's first arith run was lost to a one-token
 upstream reply. It is archived in `runs/_aborted/`, and `f2f822f` now
-retries such replies.
+retries such replies. Runs started before `2822230` have no
+`lock_wait_propose_s`, so the report shows their raw wall clock.
 
-To resume, first check that no `run.py` is still alive. A lane would
-otherwise restart a run that has not written its `summary.json` yet.
+To resume, first check that nothing is still running:
 
 ```bash
 pgrep -af "run.py --backend" || scripts/autoresearch/runs/launch_lanes.sh
