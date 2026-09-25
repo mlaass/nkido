@@ -5,6 +5,7 @@
 #include "../dsp/constants.hpp"
 #include "dsp_state.hpp"
 #include "drywet.hpp"
+#include "../dsp/simd.hpp"
 #include <cmath>
 #include <algorithm>
 
@@ -426,6 +427,272 @@ constexpr VowelFormants VOWEL_TABLE[5] = {
     {400.0f, 800.0f, 2600.0f, 1.0f, 0.5f, 0.2f}      // O (as in "bought")
 };
 
+namespace kernels {
+#if CEDAR_SIMD_X86
+// Same arithmetic as the scalar formant-target update, in the same order.
+CEDAR_TARGET_AVX2 inline void formant_targets_avx2(FormantState& state, float va, float vb,
+                                                   float m) noexcept {
+    int idx_a = static_cast<int>(va);
+    int idx_b = static_cast<int>(vb);
+    float frac_a = va - static_cast<float>(idx_a);
+    float frac_b = vb - static_cast<float>(idx_b);
+
+    idx_a = std::min(idx_a, 4);
+    idx_b = std::min(idx_b, 4);
+    int idx_a2 = std::min(idx_a + 1, 4);
+    int idx_b2 = std::min(idx_b + 1, 4);
+
+    float f1_a = VOWEL_TABLE[idx_a].f1 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f1 * frac_a;
+    float f2_a = VOWEL_TABLE[idx_a].f2 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f2 * frac_a;
+    float f3_a = VOWEL_TABLE[idx_a].f3 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f3 * frac_a;
+    float g1_a = VOWEL_TABLE[idx_a].g1 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g1 * frac_a;
+    float g2_a = VOWEL_TABLE[idx_a].g2 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g2 * frac_a;
+    float g3_a = VOWEL_TABLE[idx_a].g3 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g3 * frac_a;
+
+    float f1_b = VOWEL_TABLE[idx_b].f1 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f1 * frac_b;
+    float f2_b = VOWEL_TABLE[idx_b].f2 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f2 * frac_b;
+    float f3_b = VOWEL_TABLE[idx_b].f3 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f3 * frac_b;
+    float g1_b = VOWEL_TABLE[idx_b].g1 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g1 * frac_b;
+    float g2_b = VOWEL_TABLE[idx_b].g2 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g2 * frac_b;
+    float g3_b = VOWEL_TABLE[idx_b].g3 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g3 * frac_b;
+
+    state.f1 = f1_a * (1.0f - m) + f1_b * m;
+    state.f2 = f2_a * (1.0f - m) + f2_b * m;
+    state.f3 = f3_a * (1.0f - m) + f3_b * m;
+    state.g1 = g1_a * (1.0f - m) + g1_b * m;
+    state.g2 = g2_a * (1.0f - m) + g2_b * m;
+    state.g3 = g3_a * (1.0f - m) + g3_b * m;
+}
+
+// std::clamp(v, lo, hi): v < lo ? lo : (hi < v ? hi : v); NaN passes through.
+CEDAR_TARGET_AVX2 inline __m256 formant_clamp_avx2(__m256 v, __m256 lo, __m256 hi) noexcept {
+    v = _mm256_blendv_ps(v, lo, _mm256_cmp_ps(v, lo, _CMP_LT_OQ));
+    return _mm256_blendv_ps(v, hi, _mm256_cmp_ps(hi, v, _CMP_LT_OQ));
+}
+
+// VOWEL_TABLE column lerp: T[i0] * (1 - frac) + T[i1] * frac
+CEDAR_TARGET_AVX2 inline __m256 formant_lerp_avx2(__m256 tbl, __m256i i0, __m256i i1,
+                                                  __m256 frac, __m256 one_m_frac) noexcept {
+    return _mm256_add_ps(_mm256_mul_ps(_mm256_permutevar8x32_ps(tbl, i0), one_m_frac),
+                         _mm256_mul_ps(_mm256_permutevar8x32_ps(tbl, i1), frac));
+}
+
+// a * (1 - m) + b * m
+CEDAR_TARGET_AVX2 inline __m256 formant_morph_avx2(__m256 a, __m256 b, __m256 m,
+                                                   __m256 one_m_m) noexcept {
+    return _mm256_add_ps(_mm256_mul_ps(a, one_m_m), _mm256_mul_ps(b, m));
+}
+
+// t + w * acc
+CEDAR_TARGET_AVX2 inline __m256 formant_madd_avx2(float t, __m256 w, __m256 acc) noexcept {
+    return _mm256_add_ps(_mm256_set1_ps(t), _mm256_mul_ps(w, acc));
+}
+
+// tanf for 2^-13 <= x < 0.6744: the fdlibm __kernel_tanf(x, 0, 1) polynomial
+// (glibc's float tanf on this range), same operations in the same order.
+CEDAR_TARGET_AVX2 inline __m256 formant_tan_kernel_avx2(__m256 x) noexcept {
+    constexpr float T[] = {
+        3.3333334327e-01f, 1.3333334029e-01f, 5.3968254477e-02f, 2.1869488060e-02f,
+        8.8632395491e-03f, 3.5920790397e-03f, 1.4562094584e-03f, 5.8804126456e-04f,
+        2.4646313977e-04f, 7.8179444245e-05f, 7.1407252108e-05f, -1.8558637748e-05f,
+        2.5907305826e-05f,
+    };
+    const auto madd = formant_madd_avx2;
+    const __m256 z = _mm256_mul_ps(x, x);
+    const __m256 w = _mm256_mul_ps(z, z);
+    // r = T1 + w*(T3 + w*(T5 + w*(T7 + w*(T9 + w*T11))))
+    __m256 r = _mm256_set1_ps(T[11]);
+    r = madd(T[9], w, r); r = madd(T[7], w, r); r = madd(T[5], w, r);
+    r = madd(T[3], w, r); r = madd(T[1], w, r);
+    // v = z*(T2 + w*(T4 + w*(T6 + w*(T8 + w*(T10 + w*T12)))))
+    __m256 v = _mm256_set1_ps(T[12]);
+    v = madd(T[10], w, v); v = madd(T[8], w, v); v = madd(T[6], w, v);
+    v = madd(T[4], w, v); v = madd(T[2], w, v);
+    v = _mm256_mul_ps(z, v);
+    const __m256 s = _mm256_mul_ps(z, x);
+    // y == 0: r = z*(s*(r+v)); r += T0*s; return x + r
+    r = _mm256_mul_ps(z, _mm256_mul_ps(s, _mm256_add_ps(r, v)));
+    r = _mm256_add_ps(r, _mm256_mul_ps(_mm256_set1_ps(T[0]), s));
+    return _mm256_add_ps(x, r);
+}
+
+// min(1.9, 2 * tan(PI * min(f, sr * 0.48) / sr)); std::tan per lane when any
+// argument leaves the range the polynomial kernel covers.
+CEDAR_TARGET_AVX2 inline __m256 formant_prewarp_avx2(__m256 f, __m256 lim, __m256 sr) noexcept {
+    __m256 w = _mm256_div_ps(_mm256_mul_ps(_mm256_set1_ps(PI), _mm256_min_ps(f, lim)), sr);
+    const __m256 lo = _mm256_set1_ps(0x1p-13f);
+    const __m256 hi = _mm256_castsi256_ps(_mm256_set1_epi32(0x3f2ca140));  // 0.6744
+    const __m256 ok = _mm256_and_ps(_mm256_cmp_ps(w, lo, _CMP_GE_OQ),
+                                    _mm256_cmp_ps(w, hi, _CMP_LT_OQ));
+    __m256 t;
+    if (_mm256_movemask_ps(ok) == 0xFF) {
+        t = formant_tan_kernel_avx2(w);
+    } else {
+        alignas(32) float lanes[8];
+        _mm256_store_ps(lanes, w);
+        for (float& l : lanes) l = std::tan(l);
+        t = _mm256_load_ps(lanes);
+    }
+    return _mm256_min_ps(_mm256_mul_ps(_mm256_set1_ps(2.0f), t), _mm256_set1_ps(1.9f));
+}
+
+// Store [a b c 0] per sample for 8 samples: dst[(i + k) * 4 + j].
+CEDAR_TARGET_AVX2 inline void formant_store3_avx2(float* dst, __m256 a, __m256 b,
+                                                  __m256 c) noexcept {
+    const __m256 zero = _mm256_setzero_ps();
+    __m256 t0 = _mm256_unpacklo_ps(a, b), t1 = _mm256_unpacklo_ps(c, zero);
+    __m256 t2 = _mm256_unpackhi_ps(a, b), t3 = _mm256_unpackhi_ps(c, zero);
+    __m256 r0 = _mm256_shuffle_ps(t0, t1, 0x44);  // samples 0 | 4
+    __m256 r1 = _mm256_shuffle_ps(t0, t1, 0xEE);  // samples 1 | 5
+    __m256 r2 = _mm256_shuffle_ps(t2, t3, 0x44);  // samples 2 | 6
+    __m256 r3 = _mm256_shuffle_ps(t2, t3, 0xEE);  // samples 3 | 7
+    _mm256_store_ps(dst + 0, _mm256_permute2f128_ps(r0, r1, 0x20));
+    _mm256_store_ps(dst + 8, _mm256_permute2f128_ps(r2, r3, 0x20));
+    _mm256_store_ps(dst + 16, _mm256_permute2f128_ps(r0, r1, 0x31));
+    _mm256_store_ps(dst + 24, _mm256_permute2f128_ps(r2, r3, 0x31));
+}
+
+// Lanes: [F1 F2 F3 - | F1 F2 F3 -], low half = left, high half = right.
+// The formant targets are a pure function of the clamped (va, vb, m), so the
+// scalar change-detection cache is equivalent to recomputing them per sample;
+// a pre-pass does that 8 samples at a time, then the SVF recurrence runs.
+CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
+                                           const float* vowel_a, const float* vowel_b,
+                                           const float* morph, const float* q_in,
+                                           const float* dry_buf, float dry_const,
+                                           const float* wet_buf, float wet_const,
+                                           float sr, FormantState& state,
+                                           float* out_l, float* out_r) noexcept {
+    alignas(32) float proc_l[BLOCK_SIZE];
+    alignas(32) float proc_r[BLOCK_SIZE];
+
+    __m256 z1 = _mm256_setr_ps(state.bp1_z1[0], state.bp2_z1[0], state.bp3_z1[0], 0.0f,
+                               state.bp1_z1[1], state.bp2_z1[1], state.bp3_z1[1], 0.0f);
+    __m256 z2 = _mm256_setr_ps(state.bp1_z2[0], state.bp2_z2[0], state.bp3_z2[0], 0.0f,
+                               state.bp1_z2[1], state.bp2_z2[1], state.bp3_z2[1], 0.0f);
+    alignas(32) float coefs[BLOCK_SIZE * 4];
+    alignas(32) float gains[BLOCK_SIZE * 4];
+    alignas(32) float qcs[BLOCK_SIZE];
+
+    {
+        const VowelFormants* T = VOWEL_TABLE;
+        const __m256 tf1 = _mm256_setr_ps(T[0].f1, T[1].f1, T[2].f1, T[3].f1, T[4].f1, 0, 0, 0);
+        const __m256 tf2 = _mm256_setr_ps(T[0].f2, T[1].f2, T[2].f2, T[3].f2, T[4].f2, 0, 0, 0);
+        const __m256 tf3 = _mm256_setr_ps(T[0].f3, T[1].f3, T[2].f3, T[3].f3, T[4].f3, 0, 0, 0);
+        const __m256 tg1 = _mm256_setr_ps(T[0].g1, T[1].g1, T[2].g1, T[3].g1, T[4].g1, 0, 0, 0);
+        const __m256 tg2 = _mm256_setr_ps(T[0].g2, T[1].g2, T[2].g2, T[3].g2, T[4].g2, 0, 0, 0);
+        const __m256 tg3 = _mm256_setr_ps(T[0].g3, T[1].g3, T[2].g3, T[3].g3, T[4].g3, 0, 0, 0);
+        const __m256 zero = _mm256_setzero_ps(), one = _mm256_set1_ps(1.0f);
+        const __m256 four = _mm256_set1_ps(4.0f), twenty = _mm256_set1_ps(20.0f);
+        const __m256i ifour = _mm256_set1_epi32(4), ione = _mm256_set1_epi32(1);
+        const __m256 srv = _mm256_set1_ps(sr), lim = _mm256_set1_ps(sr * 0.48f);
+
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            __m256 va = formant_clamp_avx2(_mm256_loadu_ps(vowel_a + i), zero, four);
+            __m256 vb = formant_clamp_avx2(_mm256_loadu_ps(vowel_b + i), zero, four);
+            __m256 m = formant_clamp_avx2(_mm256_loadu_ps(morph + i), zero, one);
+            __m256 q = formant_clamp_avx2(_mm256_loadu_ps(q_in + i), one, twenty);
+
+            __m256i ia = _mm256_cvttps_epi32(va);
+            __m256i ib = _mm256_cvttps_epi32(vb);
+            __m256 fa = _mm256_sub_ps(va, _mm256_cvtepi32_ps(ia));
+            __m256 fb = _mm256_sub_ps(vb, _mm256_cvtepi32_ps(ib));
+            __m256 nfa = _mm256_sub_ps(one, fa), nfb = _mm256_sub_ps(one, fb);
+            __m256 nm = _mm256_sub_ps(one, m);
+            ia = _mm256_min_epi32(ia, ifour);
+            ib = _mm256_min_epi32(ib, ifour);
+            __m256i ia2 = _mm256_min_epi32(_mm256_add_epi32(ia, ione), ifour);
+            __m256i ib2 = _mm256_min_epi32(_mm256_add_epi32(ib, ione), ifour);
+
+#define CEDAR_FORMANT_TARGET(tbl)                                          \
+    formant_morph_avx2(formant_lerp_avx2(tbl, ia, ia2, fa, nfa),           \
+                       formant_lerp_avx2(tbl, ib, ib2, fb, nfb), m, nm)
+            __m256 f1 = CEDAR_FORMANT_TARGET(tf1);
+            __m256 f2 = CEDAR_FORMANT_TARGET(tf2);
+            __m256 f3 = CEDAR_FORMANT_TARGET(tf3);
+            __m256 g1 = CEDAR_FORMANT_TARGET(tg1);
+            __m256 g2 = CEDAR_FORMANT_TARGET(tg2);
+            __m256 g3 = CEDAR_FORMANT_TARGET(tg3);
+#undef CEDAR_FORMANT_TARGET
+
+            formant_store3_avx2(coefs + i * 4, formant_prewarp_avx2(f1, lim, srv),
+                                formant_prewarp_avx2(f2, lim, srv),
+                                formant_prewarp_avx2(f3, lim, srv));
+            formant_store3_avx2(gains + i * 4, g1, g2, g3);
+            _mm256_store_ps(qcs + i, _mm256_div_ps(one, q));
+        }
+    }
+
+    // Leave the change-detection cache as the scalar path would.
+    {
+        float va = std::clamp(vowel_a[BLOCK_SIZE - 1], 0.0f, 4.0f);
+        float vb = std::clamp(vowel_b[BLOCK_SIZE - 1], 0.0f, 4.0f);
+        float m = std::clamp(morph[BLOCK_SIZE - 1], 0.0f, 1.0f);
+        float q = std::clamp(q_in[BLOCK_SIZE - 1], 1.0f, 20.0f);
+        if (va != state.last_vowel_a || vb != state.last_vowel_b ||
+            m != state.last_morph || q != state.last_q) {
+            state.last_vowel_a = va;
+            state.last_vowel_b = vb;
+            state.last_morph = m;
+            state.last_q = q;
+            formant_targets_avx2(state, va, vb, m);
+        }
+    }
+
+    const __m256 lim_hi = _mm256_set1_ps(10.0f);
+    const __m256 lim_lo = _mm256_set1_ps(-10.0f);
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        const __m256 coef = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(coefs + i * 4));
+        const __m256 gain = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(gains + i * 4));
+        const __m256 qc = _mm256_broadcast_ss(qcs + i);
+
+        __m256 x = _mm256_insertf128_ps(_mm256_castps128_ps256(_mm_set1_ps(in_l[i])),
+                                        _mm_set1_ps(in_r[i]), 1);
+        __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(z1, qc)), z2);
+        __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(coef, hp));
+        __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(coef, z1));
+        // clamp_audio: NaN -> 0, else clamp to [-10, 10]
+        z1 = _mm256_and_ps(_mm256_min_ps(_mm256_max_ps(bp, lim_lo), lim_hi),
+                           _mm256_cmp_ps(bp, bp, _CMP_ORD_Q));
+        z2 = _mm256_and_ps(_mm256_min_ps(_mm256_max_ps(lp, lim_lo), lim_hi),
+                           _mm256_cmp_ps(lp, lp, _CMP_ORD_Q));
+
+        // (bp1*g1 + bp2*g2) + bp3*g3 in lane 0 of each half
+        __m256 p = _mm256_mul_ps(bp, gain);
+        __m256 s = _mm256_add_ps(_mm256_add_ps(p, _mm256_permute_ps(p, 0x55)),
+                                 _mm256_permute_ps(p, 0xAA));
+        _mm_store_ss(proc_l + i, _mm256_castps256_ps128(s));
+        _mm_store_ss(proc_r + i, _mm256_extractf128_ps(s, 1));
+    }
+
+    alignas(32) float zz1[8], zz2[8];
+    _mm256_store_ps(zz1, z1);
+    _mm256_store_ps(zz2, z2);
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        state.bp1_z1[ch] = zz1[ch * 4 + 0]; state.bp1_z2[ch] = zz2[ch * 4 + 0];
+        state.bp2_z1[ch] = zz1[ch * 4 + 1]; state.bp2_z2[ch] = zz2[ch * 4 + 1];
+        state.bp3_z1[ch] = zz1[ch * 4 + 2]; state.bp3_z2[ch] = zz2[ch * 4 + 2];
+    }
+
+    const __m256 dry_c = _mm256_set1_ps(dry_const);
+    const __m256 wet_c = _mm256_set1_ps(wet_const);
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+        __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + i) : dry_c;
+        __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + i) : wet_c;
+        __m256 xl = _mm256_loadu_ps(in_l + i);
+        __m256 xr = _mm256_loadu_ps(in_r + i);
+        __m256 ol = _mm256_add_ps(_mm256_mul_ps(xl, dry),
+                                  _mm256_mul_ps(_mm256_load_ps(proc_l + i), wet));
+        __m256 orr = _mm256_add_ps(_mm256_mul_ps(xr, dry),
+                                   _mm256_mul_ps(_mm256_load_ps(proc_r + i), wet));
+        _mm256_storeu_ps(out_l + i, ol);
+        _mm256_storeu_ps(out_r + i, orr);
+    }
+}
+#endif
+}  // namespace kernels
+
 // FILTER_FORMANT: 3-band parallel vowel morphing filter
 // in0: input signal
 // in1: vowel_a (0-4, selects first vowel: A/I/U/E/O)
@@ -460,6 +727,21 @@ inline void op_filter_formant(ExecutionContext& ctx, const Instruction& inst) {
         const auto& w = ext->params[1];
         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
     }
+
+#if CEDAR_SIMD_X86
+    {
+        const float* in_r = stereo_in ? input_r : input;
+        // The kernel reads the input again after the filter pass, so an
+        // output aliasing an input takes the scalar path.
+        const bool alias = out_l == input || out_l == in_r || out_r == input || out_r == in_r;
+        if (!alias && simd::has(simd::Isa::Avx2)) {
+            kernels::formant_avx2(input, in_r, vowel_a, vowel_b, morph, q_in,
+                                  dry_buf, dry_const, wet_buf, wet_const,
+                                  ctx.sample_rate, state, out_l, out_r);
+            return;
+        }
+    }
+#endif
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         float va = std::clamp(vowel_a[i], 0.0f, 4.0f);
