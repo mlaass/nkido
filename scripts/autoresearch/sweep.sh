@@ -3,13 +3,15 @@
 # time: every run shares the pinned bench core. Re-running skips (model, target)
 # pairs that already have a summary.json. OpenRouter runs get a $2 per-run cap
 # and stop once all OpenRouter runs together have spent OR_CAP_USD.
-#   OPENROUTER_API_KEY=... scripts/autoresearch/sweep.sh
+#   OPENROUTER_API_KEY=... scripts/autoresearch/sweep.sh [backend:model ...]
+# Pass model specs to run one lane per model in parallel: runs have their own
+# worktree + branch, and verify.machine_lock serialises every build and bench.
 set -u
 cd "$(dirname "$0")"
 OR_CAP_USD=${OR_CAP_USD:-30}
 TARGETS="arith distort formant svf freeverb"
-MODELS="claude-code:opus claude-code:sonnet openrouter:z-ai/glm-5.3
-openrouter:deepseek/deepseek-v4-pro-0813 openrouter:qwen/qwen3.8-27b local:qwen3:14b-32k"
+MODELS=${*:-"claude-code:opus claude-code:sonnet openrouter:z-ai/glm-5.3
+openrouter:deepseek/deepseek-v4-pro-0813 openrouter:qwen/qwen3.8-27b local:qwen3:14b-32k"}
 
 or_spent() {  # USD over every OpenRouter iteration logged so far
   cat runs/*/iterations.jsonl 2>/dev/null | python3 -c '

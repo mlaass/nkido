@@ -15,6 +15,8 @@ to the model): allowlist → build → equality → unit → zero_alloc →
 experiment → speed.
 """
 import argparse
+import contextlib
+import fcntl
 import json
 import math
 import os
@@ -75,6 +77,21 @@ TARGETS = {
                  "file": "cedar/include/cedar/opcodes/reverbs.hpp",
                  "experiments": ["test_op_freeverb.py"]},
 }
+
+
+@contextlib.contextmanager
+def machine_lock(run_dir):
+    """Parallel runs (one sweep lane per model) share one machine. Everything
+    that builds or times holds this lock, so a benchmark never runs next to
+    another run's build or bench; only the models' thinking overlaps. Wait
+    time is logged per iteration: it counts against the attempt's wall clock."""
+    t0 = time.time()
+    with open(RUNS / ".machine.lock", "w") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        waited = time.time() - t0
+        w = Path(run_dir) / "lock_wait_s"
+        w.write_text(f"{(float(w.read_text() or 0) if w.exists() else 0) + waited:.1f}")
+        yield
 
 
 class Reject(Exception):
@@ -161,6 +178,11 @@ def run_experiment(wt, script):
 def prepare_baseline(run_dir, meta):
     """Build the pristine worktree once and cache everything the gates
     compare against: bench binary, output dumps, experiment ✗ counts."""
+    with machine_lock(run_dir):
+        _prepare_baseline(run_dir, meta)
+
+
+def _prepare_baseline(run_dir, meta):
     wt, base = run_dir / "wt", run_dir / "baseline"
     base.mkdir(exist_ok=True)
     configure(wt)
@@ -317,6 +339,11 @@ def gate_speed(run_dir, meta, rounds=5, reps=500):
 
 def verify(run_dir, meta):
     """Full gate. Returns the verdict dict; never raises for a bad patch."""
+    with machine_lock(run_dir):
+        return _verify(run_dir, meta)
+
+
+def _verify(run_dir, meta):
     wt = run_dir / "wt"
     gates = {}
     res = {"verdict": "reject", "reject_reason": None, "detail": "", "gates": gates,
@@ -380,7 +407,11 @@ def quick(run_dir, meta):
     if n_calls > MAX_CHECKS:
         return (f"CHECK BUDGET EXHAUSTED: {MAX_CHECKS} checks per attempt. Stop now and write "
                 "your final message (ending with the IDEA line).")
-    header = f"(check {n_calls}/{MAX_CHECKS})"
+    with machine_lock(run_dir):
+        return _quick(run_dir, meta, wt, f"(check {n_calls}/{MAX_CHECKS})")
+
+
+def _quick(run_dir, meta, wt, header):
     try:
         files = gate_allowlist(wt, meta["base_rev"])
         build(wt, ["cedar_bench"])
