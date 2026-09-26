@@ -69,6 +69,25 @@ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* 
     const __m256 v1 = _mm256_set1_ps(1.0f);
     const __m256 v0 = _mm256_setzero_ps();
 
+    if (in_r == nullptr) {
+        // Mono input: both outputs share one input vector, so saturate once
+        // and broadcast the mixed result to the stereo output pair.
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), v0p1);
+            const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i)
+                                         : _mm256_setzero_ps();
+            const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : v1;
+            const __m256 x = _mm256_load_ps(in_l + i);
+
+            const __m256 y = tanh_exp_avx2(_mm256_mul_ps(x, d));
+            const __m256 out_v = _mm256_add_ps(_mm256_mul_ps(x, dry),
+                                               _mm256_mul_ps(y, wet));
+            _mm256_store_ps(out_l + i, out_v);
+            _mm256_store_ps(out_r + i, out_v);
+        }
+        return;
+    }
+
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), v0p1);
         const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i)
@@ -112,6 +131,26 @@ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* in_l, const float* 
     const __m256 vhi = _mm256_set1_ps(2.0f);
     const __m256 v1 = _mm256_set1_ps(1.0f);
     const __m256 v0 = _mm256_setzero_ps();
+
+    if (in_r == nullptr) {
+        // Mono input: soft-clip one input vector and broadcast the mixed
+        // result to both outputs, exactly like the scalar mono fallback.
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            const __m256 t = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(threshold + i), vlo), vhi);
+            const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i)
+                                         : _mm256_setzero_ps();
+            const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : v1;
+            const __m256 x = _mm256_load_ps(in_l + i);
+
+            const __m256 xs = _mm256_div_ps(x, t);
+            const __m256 y = _mm256_mul_ps(soft_clip_avx2(xs), t);
+            const __m256 out_v = _mm256_add_ps(_mm256_mul_ps(x, dry),
+                                               _mm256_mul_ps(y, wet));
+            _mm256_store_ps(out_l + i, out_v);
+            _mm256_store_ps(out_r + i, out_v);
+        }
+        return;
+    }
 
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         const __m256 t = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(threshold + i), vlo), vhi);
@@ -162,7 +201,7 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
 
 #if CEDAR_SIMD_X86
     if (simd::has(simd::Isa::Avx2)) {
-        kernels::distort_tanh_avx2(input, stereo_in ? input_r : input, drive, dry_level,
+        kernels::distort_tanh_avx2(input, stereo_in ? input_r : nullptr, drive, dry_level,
                                    wet_level, out_l, out_r);
         return;
     }
@@ -209,7 +248,7 @@ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
 
 #if CEDAR_SIMD_X86
     if (simd::has(simd::Isa::Avx2)) {
-        kernels::distort_soft_avx2(input, stereo_in ? input_r : input, threshold, dry_level,
+        kernels::distort_soft_avx2(input, stereo_in ? input_r : nullptr, threshold, dry_level,
                                    wet_level, out_l, out_r);
         return;
     }
