@@ -143,7 +143,7 @@ CEDAR_TARGET_AVX2 inline void svf_deint_avx2(const float* p, __m256& l, __m256& 
 // Outputs are 2*v = n + ic stored as L/R pairs (v1 -> p1, v2 -> p2). Returns true if any state
 // value left +-10 or went NaN (then the caller redoes the block with the exact clamp).
 template <int Mode>
-CEDAR_TARGET_AVX2 inline bool svf_recur2_avx2(const float* xlr, const float* m11, const float* A2,
+CEDAR_TARGET_AVX2_FMA inline bool svf_recur2_avx2(const float* xlr, const float* m11, const float* A2,
                                               const float* m22, const float* A3,
                                               const float* P11, const float* P12,
                                               const float* P21, const float* P22,
@@ -170,10 +170,11 @@ CEDAR_TARGET_AVX2 inline bool svf_recur2_avx2(const float* xlr, const float* m11
                 _mm_loadl_pi(_mm_setzero_ps(), reinterpret_cast<const __m64*>(C1 + o)),
                 reinterpret_cast<const __m64*>(C2 + o));
             const __m128 bx = _mm_castpd_ps(_mm_loaddup_pd(reinterpret_cast<const double*>(xlr + o)));
-            const __m128 b = _mm_add_ps(_mm_mul_ps(A23, bx), dc2);
+            const __m128 b = _mm_fmadd_ps(A23, bx, dc2);
             const __m128 sw = _mm_shuffle_ps(s, s, _MM_SHUFFLE(1, 0, 3, 2));
-            const __m128 s1 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(D1, s), b), _mm_mul_ps(D2, sw));
-            const __m128 s2 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(D1p, s), cp), _mm_mul_ps(D2p, sw));
+            // Fused: the chain s -> s2 is fma(D1p, s, cp) then fma(D2p, sw, .), two FMAs deep.
+            const __m128 s1 = _mm_fmadd_ps(D2, sw, _mm_fmadd_ps(D1, s, b));
+            const __m128 s2 = _mm_fmadd_ps(D2p, sw, _mm_fmadd_ps(D1p, s, cp));
             const __m128 va = _mm_add_ps(s1, s);
             const __m128 vb = _mm_add_ps(s2, s1);
             if constexpr (Mode != SvfLP) {

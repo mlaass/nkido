@@ -6,7 +6,7 @@ namespace {
 Isa detect() noexcept {
 #if CEDAR_SIMD_X86
     __builtin_cpu_init();
-    if (__builtin_cpu_supports("avx2")) return Isa::Avx2;
+    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma")) return Isa::Avx2;
     if (__builtin_cpu_supports("sse2")) return Isa::Sse2;
     return Isa::Scalar;
 #elif CEDAR_SIMD_NEON

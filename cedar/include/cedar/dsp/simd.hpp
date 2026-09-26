@@ -24,6 +24,8 @@
 #  define CEDAR_SIMD_X86 1
 #  include <immintrin.h>
 #  define CEDAR_TARGET_AVX2 [[gnu::target("avx2")]]
+// Only for kernels that tolerate fused rounding; Isa::Avx2 detection requires FMA as well.
+#  define CEDAR_TARGET_AVX2_FMA [[gnu::target("avx2,fma")]]
 #else
 #  define CEDAR_SIMD_X86 0
 #endif
