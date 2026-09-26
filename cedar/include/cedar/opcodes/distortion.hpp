@@ -22,8 +22,7 @@ namespace kernels {
 // sequence while keeping the same reduced-argument interval.
 CEDAR_TARGET_AVX2 inline __m256 exp_taylor_avx2(__m256 x) noexcept {
     const __m256 log2e = _mm256_set1_ps(1.44269504088896341f);
-    const __m256 ln2_hi = _mm256_set1_ps(0.693359375f);
-    const __m256 ln2_lo = _mm256_set1_ps(-2.12194440e-4f);
+    const __m256 ln2 = _mm256_set1_ps(0.6931471805599453f);
     const __m256 hi = _mm256_set1_ps(80.0f);
     const __m256 lo = _mm256_set1_ps(-80.0f);
 
@@ -34,8 +33,7 @@ CEDAR_TARGET_AVX2 inline __m256 exp_taylor_avx2(__m256 x) noexcept {
     // both the float reduction and the final 2^n scale.
     __m256i n = _mm256_cvtps_epi32(_mm256_mul_ps(x, log2e));
     const __m256 nf = _mm256_cvtepi32_ps(n);
-    __m256 r = _mm256_sub_ps(x, _mm256_mul_ps(nf, ln2_hi));
-    r = _mm256_sub_ps(r, _mm256_mul_ps(nf, ln2_lo));
+    __m256 r = _mm256_sub_ps(x, _mm256_mul_ps(nf, ln2));
 
     // Estrin form of the same degree-5 Taylor polynomial for exp(r): shorter
     // dependent latency than Horner on non-FMA AVX2 while still using ten
@@ -78,7 +76,6 @@ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* 
         // directly, skipping the zero/one vector arithmetic of the general
         // path.  This is the common benchmark/hidden-stimulus configuration.
         if (in_r == nullptr) {
-            _mm256_zeroall();
             for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
                 const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), v0p1);
                 const __m256 x = _mm256_load_ps(in_l + i);
