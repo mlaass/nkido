@@ -25,10 +25,31 @@ namespace kernels {
 
 #if CEDAR_SIMD_X86
 // AVX2: 8 lanes, aligned loads/stores.
+//
+// The output buffer's 8 cache lines are almost always cold in L1 when the
+// kernel runs (a program typically writes dozens of distinct buffers per
+// block, far more than L1D can hold), and an aligned 32-byte store covers
+// only half a 64-byte line — so every store miss triggers a write-allocate
+// L2->L1 line fetch that the store buffer has to wait behind. Prefetching
+// all 8 output lines up front starts those fills while the kernel is still
+// busy with its 32 input loads, moving the fetch off the stores' critical
+// path. Prefetches are pure hardware hints: no architectural state, no
+// effect on the computed values, exact for every input.
+namespace detail {
+// 8 prefetcht0 ops, one per 64-byte line of the block. BLOCK_SIZE floats
+// at 4 bytes each: 512 bytes = 8 lines.
+CEDAR_TARGET_AVX2 inline void prefetch_out_avx2(const float* out) noexcept {
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
+        _mm_prefetch(reinterpret_cast<const char*>(out + i), _MM_HINT_T0);
+    }
+}
+}  // namespace detail
+
 CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+    detail::prefetch_out_avx2(out);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
     }
@@ -38,6 +59,7 @@ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* ou
     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+    detail::prefetch_out_avx2(out);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
     }
@@ -47,6 +69,7 @@ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* ou
     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+    detail::prefetch_out_avx2(out);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
     }
