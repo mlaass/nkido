@@ -71,39 +71,27 @@ inline constexpr std::size_t W = 8;  // AVX2 float lane count
 // tan(x) for x in [0.0013, 1.5394] (= PI*freq/sr, freq clamped to
 // [20, sr*0.49]).
 // simd: approx — replaces std::tan (tanf) in the SVF coefficient path.
-// Maclaurin sin and cos series in double precision (the argument is well
-// inside the convergence radius; terms through x^21 and x^22 keep the
-// truncation error below 1e-18 relative) followed by one division. Total
-// error < ~2e-15 relative, so the result rounds to the float nearest
-// tan(x) — the same value the scalar `std::tan` returns for these
-// arguments. No FMA is used (plain mul/sub), so the code is correct on any
-// AVX2 CPU.
+// Maclaurin sin and cos series in double precision, followed by one
+// division. The argument is clamped to [0.0013, PI*0.49], so t = x*x
+// <= 2.3698; with the sin series truncated after the 1/11! term and cos
+// after the 1/12! term, the truncation errors are bounded by
+//   sin: t^6/13! < 3.1e-8 (relative to S, |S| in [~0.21, 1] here),
+//   cos: t^6/14! < 2.1e-9,
+// giving a tan error < ~1.5e-7 absolute (tan <= ~33 on this range) —
+// roughly 5 digits of margin under the 1e-5 (-100 dBFS) allowance.
+// No FMA is used (plain mul/sub), so the code is correct on any AVX2 CPU.
 CEDAR_TARGET_AVX2 inline __m256d tan4_pd(__m256d v) noexcept {
     const __m256d t = _mm256_mul_pd(v, v);
-    // sin(v) = v * (1 - t*(1/3! - t*(1/5! - ... - t*(1/25!))))
-    __m256d s = _mm256_set1_pd(1.0 / 15511210043330985984000000.0);   // 1/25!
-    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 25852016738884976640000.0), _mm256_mul_pd(t, s));  // 1/23!
-    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 51090942171709440000.0), _mm256_mul_pd(t, s));     // 1/21!
-    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 121645100408832000.0), _mm256_mul_pd(t, s));       // 1/19!
-    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 355687428096000.0), _mm256_mul_pd(t, s));         // 1/17!
-    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 1307674368000.0), _mm256_mul_pd(t, s));           // 1/15!
-    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 6227020800.0), _mm256_mul_pd(t, s));              // 1/13!
-    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 39916800.0), _mm256_mul_pd(t, s));                // 1/11!
+    // sin(v) = v * (1 - t*(1/3! - t*(1/5! - t*(1/7! - t*(1/9! - t/11!)))))
+    __m256d s = _mm256_set1_pd(1.0 / 39916800.0);   // 1/11!
     s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 362880.0), _mm256_mul_pd(t, s));                  // 1/9!
     s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 5040.0), _mm256_mul_pd(t, s));                    // 1/7!
     s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 120.0), _mm256_mul_pd(t, s));                     // 1/5!
     s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 6.0), _mm256_mul_pd(t, s));                       // 1/3!
     s = _mm256_sub_pd(_mm256_set1_pd(1.0), _mm256_mul_pd(t, s));                             // S
     s = _mm256_mul_pd(v, s);                                                                 // sin
-    // cos(v) = 1 - t*(1/2! - t*(1/4! - ... - t*(1/26!)))
-    __m256d c = _mm256_set1_pd(1.0 / 403291461126605635584000000.0);  // 1/26!
-    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 620448401733239439360000.0), _mm256_mul_pd(t, c)); // 1/24!
-    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 1124000727777607680000.0), _mm256_mul_pd(t, c));   // 1/22!
-    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 2432902008176640000.0), _mm256_mul_pd(t, c));      // 1/20!
-    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 6402373705728000.0), _mm256_mul_pd(t, c));        // 1/18!
-    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 20922789888000.0), _mm256_mul_pd(t, c));          // 1/16!
-    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 87178291200.0), _mm256_mul_pd(t, c));             // 1/14!
-    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 479001600.0), _mm256_mul_pd(t, c));               // 1/12!
+    // cos(v) = 1 - t*(1/2! - t*(1/4! - t*(1/6! - t*(1/8! - t*(1/10! - t/12!)))))
+    __m256d c = _mm256_set1_pd(1.0 / 479001600.0);  // 1/12!
     c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 3628800.0), _mm256_mul_pd(t, c));                 // 1/10!
     c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 40320.0), _mm256_mul_pd(t, c));                   // 1/8!
     c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 720.0), _mm256_mul_pd(t, c));                     // 1/6!
