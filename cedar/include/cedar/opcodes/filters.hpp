@@ -469,22 +469,16 @@ inline __m256d formant_tan_pd(__m256d w) noexcept {
     return _mm256_div_pd(s, c);
 }
 
-// tan(w) for w in [0, 0.25] on 4 doubles: truncated sin/cos Taylor series.
-// Omitted terms: sin w^9/9! (rel. 4e-11), cos w^10/10! (rel. 3e-13).
+// tan(w) for w in [0, 0.25] on 4 doubles: [3/2] continued-fraction Pade,
+// tan w ~ w*(105 - 10x)/(105 - 45x + x^2), x = w^2. Truncation error is
+// x^4/(105*945) relative (1.5e-10 at w = 0.25, <= 0.003 float ulp).
 [[gnu::always_inline]] CEDAR_TARGET_AVX2
 inline __m256d formant_tan_small_pd(__m256d w) noexcept {
     const __m256d x = _mm256_mul_pd(w, w);
-    __m256d s = _mm256_set1_pd(-1.0 / 5040.0);
-    s = _mm256_add_pd(_mm256_mul_pd(s, x), _mm256_set1_pd(1.0 / 120.0));
-    s = _mm256_add_pd(_mm256_mul_pd(s, x), _mm256_set1_pd(-1.0 / 6.0));
-    s = _mm256_add_pd(_mm256_mul_pd(s, x), _mm256_set1_pd(1.0));
-    s = _mm256_mul_pd(s, w);
-    __m256d c = _mm256_set1_pd(1.0 / 40320.0);
-    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(-1.0 / 720.0));
-    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(1.0 / 24.0));
-    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(-0.5));
-    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(1.0));
-    return _mm256_div_pd(s, c);
+    const __m256d c105 = _mm256_set1_pd(105.0);
+    const __m256d num = _mm256_mul_pd(w, _mm256_sub_pd(c105, _mm256_mul_pd(_mm256_set1_pd(10.0), x)));
+    const __m256d den = _mm256_sub_pd(c105, _mm256_mul_pd(x, _mm256_sub_pd(_mm256_set1_pd(45.0), x)));
+    return _mm256_div_pd(num, den);
 }
 
 // Prewarped SVF coefficient for 4 samples of one band: min(1.9, 2*tan(pi*min(f, 0.48*sr)/sr)).
