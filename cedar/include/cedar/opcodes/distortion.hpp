@@ -26,6 +26,11 @@ inline __m256 coeff8(const float* buf, std::size_t i, float fallback) noexcept {
 // exp via 2^n * poly5(r), r in [-ln2/2, ln2/2]; relative error ~3e-6 (tanh err ~1e-6).
 CEDAR_TARGET_AVX2 [[gnu::always_inline]]
 inline __m256 tanh8(__m256 t) noexcept {
+    // All |z| < 0.01: tanh(z) = z - z^3/3, error < 4e-7, so return z = t/2 and
+    // skip the exp polynomial and divide (silent/quiet blocks). NaN -> slow path.
+    if (_mm256_movemask_ps(_mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0f), t),
+                                         _mm256_set1_ps(0.02f), _CMP_LT_OQ)) == 0xFF)
+        return _mm256_mul_ps(t, _mm256_set1_ps(0.5f));
     t = _mm256_min_ps(_mm256_set1_ps(20.0f), t);  // NaN in t propagates (2nd operand)
     t = _mm256_max_ps(_mm256_set1_ps(-20.0f), t);
     const __m256i n = _mm256_cvtps_epi32(_mm256_mul_ps(t, _mm256_set1_ps(1.44269504088896341f)));
@@ -83,6 +88,18 @@ inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
 // Bit-identical to the scalar soft(x / t) * t mix.
 CEDAR_TARGET_AVX2 [[gnu::always_inline]]
 inline __m256 soft8(__m256 x, __m256 t, __m256 dry, __m256 wet) noexcept {
+    // Divide-free path (vdivps throughput bounds this kernel) when every lane is
+    // exactly zero (soft(+-0) = +-0, so s = x keeps the sign) or surely saturated
+    // (|x| > 3.001 t  =>  |x/t| > 3 despite rounding, s = +-1). Otherwise exact path.
+    const __m256 sign = _mm256_set1_ps(-0.0f);
+    const __m256 ax = _mm256_andnot_ps(sign, x);
+    const __m256 sat = _mm256_cmp_ps(ax, _mm256_mul_ps(t, _mm256_set1_ps(3.001f)), _CMP_GT_OQ);
+    const __m256 zero = _mm256_cmp_ps(x, _mm256_setzero_ps(), _CMP_EQ_OQ);
+    if (_mm256_movemask_ps(_mm256_or_ps(sat, zero)) == 0xFF) {
+        const __m256 one = _mm256_or_ps(_mm256_and_ps(x, sign), _mm256_set1_ps(1.0f));
+        const __m256 s = _mm256_blendv_ps(one, x, zero);
+        return _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(_mm256_mul_ps(s, t), wet));
+    }
     const __m256 u = _mm256_div_ps(x, t);
     const __m256 u2 = _mm256_mul_ps(u, u);
     const __m256 num = _mm256_mul_ps(u, _mm256_add_ps(_mm256_set1_ps(27.0f), u2));
@@ -100,10 +117,9 @@ inline void soft_avx2(const float* in_l, const float* in_r, const float* thresho
     const __m256 lo = _mm256_set1_ps(0.1f);
     const __m256 hi = _mm256_set1_ps(2.0f);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
-        __m256 t = _mm256_load_ps(threshold + i);
-        // std::clamp: (t < lo) ? lo : (hi < t) ? hi : t
-        t = _mm256_blendv_ps(t, hi, _mm256_cmp_ps(hi, t, _CMP_LT_OQ));
-        t = _mm256_blendv_ps(t, lo, _mm256_cmp_ps(_mm256_load_ps(threshold + i), lo, _CMP_LT_OQ));
+        // std::clamp: (t < lo) ? lo : (hi < t) ? hi : t. max/min return the 2nd operand
+        // when either is NaN, so NaN passes through like the scalar (lo, hi are > 0).
+        const __m256 t = _mm256_min_ps(hi, _mm256_max_ps(lo, _mm256_load_ps(threshold + i)));
         const __m256 dry = coeff8(dry_level, i, 0.0f);
         const __m256 wet = coeff8(wet_level, i, 1.0f);
         const __m256 xl = _mm256_load_ps(in_l + i);
