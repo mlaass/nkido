@@ -21,16 +21,13 @@ inline __m256 coeff8(const float* buf, std::size_t i, float fallback) noexcept {
     return buf ? _mm256_load_ps(buf + i) : _mm256_set1_ps(fallback);
 }
 
-// simd: approx -- replaces std::tanh(z). tanh(z) = sign(z) * (e - 1) / (e + 1),
-// e = exp(2|z|), |z| clamped so e stays finite (tanh(10) == 1 to 4e-9).
+// simd: approx -- replaces std::tanh(z). Takes t = 2z; tanh(z) = 1 - 2 / (e + 1),
+// e = exp(t), t clamped to [-20, 20] so e stays finite (tanh(10) == 1 to 4e-9).
 // exp via 2^n * poly5(r), r in [-ln2/2, ln2/2]; relative error ~3e-6 (tanh err ~1e-6).
 CEDAR_TARGET_AVX2 [[gnu::always_inline]]
-inline __m256 tanh8(__m256 z) noexcept {
-    const __m256 sign_mask = _mm256_set1_ps(-0.0f);
-    const __m256 sign = _mm256_and_ps(z, sign_mask);
-    const __m256 az = _mm256_andnot_ps(sign_mask, z);
-    __m256 t = _mm256_add_ps(az, az);
-    t = _mm256_min_ps(_mm256_set1_ps(20.0f), t);  // NaN in t propagates
+inline __m256 tanh8(__m256 t) noexcept {
+    t = _mm256_min_ps(_mm256_set1_ps(20.0f), t);  // NaN in t propagates (2nd operand)
+    t = _mm256_max_ps(_mm256_set1_ps(-20.0f), t);
     const __m256i n = _mm256_cvtps_epi32(_mm256_mul_ps(t, _mm256_set1_ps(1.44269504088896341f)));
     const __m256 nf = _mm256_cvtepi32_ps(n);
     const __m256 r = _mm256_sub_ps(t, _mm256_mul_ps(nf, _mm256_set1_ps(0.693147182f)));
@@ -40,11 +37,11 @@ inline __m256 tanh8(__m256 z) noexcept {
     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.5f));
     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f));
     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f));
-    const __m256i bits = _mm256_slli_epi32(_mm256_add_epi32(n, _mm256_set1_epi32(127)), 23);
-    const __m256 e = _mm256_mul_ps(p, _mm256_castsi256_ps(bits));
-    const __m256 one = _mm256_set1_ps(1.0f);
-    const __m256 res = _mm256_div_ps(_mm256_sub_ps(e, one), _mm256_add_ps(e, one));
-    return _mm256_or_ps(res, sign);
+    // p in [0.7, 1.42] is normal: adding n to its exponent field scales by 2^n.
+    const __m256 e = _mm256_castsi256_ps(
+        _mm256_add_epi32(_mm256_castps_si256(p), _mm256_slli_epi32(n, 23)));
+    return _mm256_sub_ps(_mm256_set1_ps(1.0f),
+                         _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(e, _mm256_set1_ps(1.0f))));
 }
 
 CEDAR_TARGET_AVX2
@@ -54,16 +51,17 @@ inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
     const __m256 dmin = _mm256_set1_ps(0.1f);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);  // == (0.1f < d) ? d : 0.1f
+        const __m256 d2 = _mm256_add_ps(d, d);  // 2*d exact; tanh8 takes 2*x*d
         const __m256 dry = coeff8(dry_level, i, 0.0f);
         const __m256 wet = coeff8(wet_level, i, 1.0f);
         const __m256 xl = _mm256_load_ps(in_l + i);
         const __m256 yl = _mm256_add_ps(_mm256_mul_ps(xl, dry),
-                                        _mm256_mul_ps(tanh8(_mm256_mul_ps(xl, d)), wet));
+                                        _mm256_mul_ps(tanh8(_mm256_mul_ps(xl, d2)), wet));
         _mm256_store_ps(out_l + i, yl);
         if (in_r) {
             const __m256 xr = _mm256_load_ps(in_r + i);
             _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry),
-                                        _mm256_mul_ps(tanh8(_mm256_mul_ps(xr, d)), wet)));
+                                        _mm256_mul_ps(tanh8(_mm256_mul_ps(xr, d2)), wet)));
         } else {
             _mm256_store_ps(out_r + i, yl);
         }
