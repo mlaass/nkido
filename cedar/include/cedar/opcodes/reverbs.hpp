@@ -203,36 +203,51 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
         }
     }
 
-    // Series allpasses: no intra-block recurrence, vectorise along time.
+    // Series allpasses (no intra-block recurrence) fused with the dry/wet mix:
+    // each 8-sample chunk runs through all 4 allpasses in registers, reading
+    // and writing the rings in place. Only chunks straddling a wrap are staged.
+    constexpr std::size_t NA = FreeverbState::NUM_ALLPASSES;
     const __m256 g = _mm256_set1_ps(0.5f);
-    for (std::size_t ch = 0; ch < 2; ++ch) {
-        for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
-            float* buf = state.allpass_buffers[ch][a];
-            const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
-            const std::size_t pos = state.allpass_pos[ch][a];
-            ring_read(buf, size, pos, apd, N);
-            for (std::size_t i = 0; i < N; i += 8) {
-                __m256 y = _mm256_load_ps(ysum[ch] + i);
-                __m256 out = _mm256_sub_ps(_mm256_load_ps(apd + i), _mm256_mul_ps(g, y));
-                _mm256_store_ps(apd + i, _mm256_add_ps(y, _mm256_mul_ps(g, out)));
-                _mm256_store_ps(ysum[ch] + i, out);
-            }
-            ring_write(buf, size, pos, apd, N);
-            state.allpass_pos[ch][a] = (pos + N) % size;
+    float* ap_buf[2][NA];
+    std::size_t ap_pos[2][NA];
+    for (std::size_t ch = 0; ch < 2; ++ch)
+        for (std::size_t a = 0; a < NA; ++a) {
+            ap_buf[ch][a] = state.allpass_buffers[ch][a];
+            ap_pos[ch][a] = state.allpass_pos[ch][a];
         }
-    }
-
-    // Dry/wet mix.
     for (std::size_t i = 0; i < N; i += 8) {
+        __m256 ych[2];
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            __m256 y = _mm256_load_ps(ysum[ch] + i);
+            for (std::size_t a = 0; a < NA; ++a) {
+                float* buf = ap_buf[ch][a];
+                const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
+                const std::size_t p = ring_at(ap_pos[ch][a], i, size);
+                if (p + 8 <= size) [[likely]] {
+                    __m256 out = _mm256_sub_ps(_mm256_loadu_ps(buf + p), _mm256_mul_ps(g, y));
+                    _mm256_storeu_ps(buf + p, _mm256_add_ps(y, _mm256_mul_ps(g, out)));
+                    y = out;
+                } else {
+                    for (std::size_t k = 0; k < 8; ++k) apd[k] = buf[ring_at(p, k, size)];
+                    __m256 out = _mm256_sub_ps(_mm256_load_ps(apd), _mm256_mul_ps(g, y));
+                    _mm256_store_ps(apd, _mm256_add_ps(y, _mm256_mul_ps(g, out)));
+                    for (std::size_t k = 0; k < 8; ++k) buf[ring_at(p, k, size)] = apd[k];
+                    y = out;
+                }
+            }
+            ych[ch] = y;
+        }
         __m256 xl = _mm256_loadu_ps(x_l + i);
         __m256 xr = _mm256_loadu_ps(x_r + i);
         __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + i) : _mm256_set1_ps(dry_const);
         __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + i) : _mm256_set1_ps(wet_const);
-        __m256 ol = _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(_mm256_load_ps(ysum[0] + i), wet));
-        __m256 orr = _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(_mm256_load_ps(ysum[1] + i), wet));
-        _mm256_storeu_ps(out_l + i, ol);
-        _mm256_storeu_ps(out_r + i, orr);
+        _mm256_storeu_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(ych[0], wet)));
+        _mm256_storeu_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(ych[1], wet)));
     }
+    for (std::size_t ch = 0; ch < 2; ++ch)
+        for (std::size_t a = 0; a < NA; ++a)
+            state.allpass_pos[ch][a] =
+                ring_at(ap_pos[ch][a], N, FreeverbState::ALLPASS_SIZES_LR[ch][a]);
 }
 #endif
 }  // namespace kernels
