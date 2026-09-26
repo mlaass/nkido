@@ -31,11 +31,12 @@ inline __m256 tanh8(__m256 t) noexcept {
     const __m256i n = _mm256_cvtps_epi32(_mm256_mul_ps(t, _mm256_set1_ps(1.44269504088896341f)));
     const __m256 nf = _mm256_cvtepi32_ps(n);
     const __m256 r = _mm256_sub_ps(t, _mm256_mul_ps(nf, _mm256_set1_ps(0.693147182f)));
-    __m256 p = _mm256_set1_ps(1.0f / 120.0f);
-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f / 24.0f));
-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f / 6.0f));
+    // Degree-5 Taylor with the r^5 term Chebyshev-economised onto r, r^3 (a = ln2/2):
+    // r^5 ~ 1.25 a^2 r^3 - 0.3125 a^4 r; adds ~3e-6 relative error.
+    __m256 p = _mm256_set1_ps(1.0f / 24.0f);
+    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.16791785f));
     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.5f));
-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.99996243f));
     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f));
     // p in [0.7, 1.42] is normal: adding n to its exponent field scales by 2^n.
     const __m256 e = _mm256_castsi256_ps(
@@ -49,6 +50,17 @@ inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
                       const float* dry_level, const float* wet_level,
                       float* out_l, float* out_r) noexcept {
     const __m256 dmin = _mm256_set1_ps(0.1f);
+    if (!dry_level && !wet_level) {
+        // Default dry=0, wet=1: x*0 + y*1 == y for finite x, so skip the mix.
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);
+            const __m256 d2 = _mm256_add_ps(d, d);
+            const __m256 yl = tanh8(_mm256_mul_ps(_mm256_load_ps(in_l + i), d2));
+            _mm256_store_ps(out_l + i, yl);
+            _mm256_store_ps(out_r + i, in_r ? tanh8(_mm256_mul_ps(_mm256_load_ps(in_r + i), d2)) : yl);
+        }
+        return;
+    }
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);  // == (0.1f < d) ? d : 0.1f
         const __m256 d2 = _mm256_add_ps(d, d);  // 2*d exact; tanh8 takes 2*x*d
