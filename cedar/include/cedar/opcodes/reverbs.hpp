@@ -7,6 +7,8 @@
 #include "dsp_utils.hpp"
 #include "drywet.hpp"
 #include "../util/log_once.hpp"
+#include "../dsp/simd.hpp"
+#include <cstring>
 #include <cmath>
 #include <algorithm>
 
@@ -32,6 +34,194 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
 //
 // Classic algorithm: 8 parallel lowpass-feedback comb filters summed,
 // then through 4 series allpass filters. Creates lush, dense reverb.
+
+namespace freeverb_kernels {
+#if CEDAR_SIMD_X86
+
+// In-place 8x8 float transpose.
+[[gnu::always_inline]] CEDAR_TARGET_AVX2 inline void transpose8x8(__m256 (&r)[8]) noexcept {
+    const __m256 t0 = _mm256_unpacklo_ps(r[0], r[1]);
+    const __m256 t1 = _mm256_unpackhi_ps(r[0], r[1]);
+    const __m256 t2 = _mm256_unpacklo_ps(r[2], r[3]);
+    const __m256 t3 = _mm256_unpackhi_ps(r[2], r[3]);
+    const __m256 t4 = _mm256_unpacklo_ps(r[4], r[5]);
+    const __m256 t5 = _mm256_unpackhi_ps(r[4], r[5]);
+    const __m256 t6 = _mm256_unpacklo_ps(r[6], r[7]);
+    const __m256 t7 = _mm256_unpackhi_ps(r[6], r[7]);
+    const __m256 u0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
+    const __m256 u1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
+    const __m256 u2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
+    const __m256 u3 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+    const __m256 u4 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(1, 0, 1, 0));
+    const __m256 u5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3, 2, 3, 2));
+    const __m256 u6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1, 0, 1, 0));
+    const __m256 u7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3, 2, 3, 2));
+    r[0] = _mm256_permute2f128_ps(u0, u4, 0x20);
+    r[1] = _mm256_permute2f128_ps(u1, u5, 0x20);
+    r[2] = _mm256_permute2f128_ps(u2, u6, 0x20);
+    r[3] = _mm256_permute2f128_ps(u3, u7, 0x20);
+    r[4] = _mm256_permute2f128_ps(u0, u4, 0x31);
+    r[5] = _mm256_permute2f128_ps(u1, u5, 0x31);
+    r[6] = _mm256_permute2f128_ps(u2, u6, 0x31);
+    r[7] = _mm256_permute2f128_ps(u3, u7, 0x31);
+}
+
+// One allpass stage over a contiguous run of the delay line. y holds the stage
+// input on entry and the stage output on exit. Elements are independent
+// because the delay is longer than a block.
+CEDAR_TARGET_AVX2 inline void allpass_run(float* p, float* y, std::size_t len) noexcept {
+    const __m256 g = _mm256_set1_ps(0.5f);
+    std::size_t j = 0;
+    for (; j + 8 <= len; j += 8) {
+        const __m256 d = _mm256_loadu_ps(p + j);
+        const __m256 yy = _mm256_loadu_ps(y + j);
+        const __m256 o = _mm256_sub_ps(d, _mm256_mul_ps(g, yy));
+        _mm256_storeu_ps(p + j, _mm256_add_ps(yy, _mm256_mul_ps(g, o)));
+        _mm256_storeu_ps(y + j, o);
+    }
+    for (; j < len; ++j) {
+        const float d = p[j];
+        const float yy = y[j];
+        const float o = d - 0.5f * yy;
+        p[j] = yy + 0.5f * o;
+        y[j] = o;
+    }
+}
+
+CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+    FreeverbState& st, const float* in_l, const float* in_r,
+    const float* room_size, const float* damping,
+    const float* room_scale_in, const float* room_offset_in,
+    const float* dry_buf, float dry_const, const float* wet_buf, float wet_const,
+    float* out_l, float* out_r) noexcept {
+    constexpr std::size_t N = BLOCK_SIZE;
+    constexpr std::size_t NC = FreeverbState::NUM_COMBS;
+    constexpr std::size_t NA = FreeverbState::NUM_ALLPASSES;
+    static_assert(NC == 8 && N % 8 == 0, "freeverb kernel layout");
+    static_assert(FreeverbState::COMB_SIZES_LR[0][7] > N &&
+                  FreeverbState::ALLPASS_SIZES_LR[0][0] > N,
+                  "delay lines must be longer than a block");
+
+    alignas(32) float fb[N];
+    alignas(32) float damp[N];
+    alignas(32) float omd[N];
+    alignas(32) float dl[2][NC][N];
+    alignas(32) float ys[2][N];
+
+    for (std::size_t i = 0; i < N; ++i) {
+        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+        const float d = std::clamp(damping[i], 0.0f, 1.0f);
+        const float room_scale = room_scale_in[i] > 0.0f ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
+        const float room_offset = room_offset_in[i] > 0.0f ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+        fb[i] = room * room_scale + room_offset;
+        damp[i] = d;
+        omd[i] = 1.0f - d;
+    }
+
+    // Read this block's worth of delayed samples from every comb line.
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        for (std::size_t c = 0; c < NC; ++c) {
+            const float* buf = st.comb_buffers[ch][c];
+            const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+            const std::size_t pos = st.comb_pos[ch][c];
+            const std::size_t first = std::min(N, size - pos);
+            std::memcpy(dl[ch][c], buf + pos, first * sizeof(float));
+            if (first < N) std::memcpy(dl[ch][c] + first, buf, (N - first) * sizeof(float));
+        }
+    }
+
+    const __m256 rv = _mm256_set1_ps(DC_BLOCKER_R);
+    __m256 fs[2], x1[2], y1[2];
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        fs[ch] = _mm256_loadu_ps(st.comb_filter_state[ch]);
+        x1[ch] = _mm256_loadu_ps(st.dc_x1[ch]);
+        y1[ch] = _mm256_loadu_ps(st.dc_y1[ch]);
+    }
+    const float* xin[2] = {in_l, in_r};
+
+    for (std::size_t n = 0; n < N; n += 8) {
+        __m256 v[2][8];
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            __m256 r[8];
+            for (std::size_t c = 0; c < NC; ++c) r[c] = _mm256_load_ps(dl[ch][c] + n);
+            __m256 s = _mm256_setzero_ps();
+            for (std::size_t c = 0; c < NC; ++c) s = _mm256_add_ps(s, r[c]);
+            _mm256_store_ps(ys[ch] + n, s);
+            transpose8x8(r);
+            for (std::size_t t = 0; t < 8; ++t) v[ch][t] = r[t];
+        }
+        __m256 w[2][8];
+        for (std::size_t t = 0; t < 8; ++t) {
+            const __m256 bd = _mm256_broadcast_ss(damp + n + t);
+            const __m256 bo = _mm256_broadcast_ss(omd + n + t);
+            const __m256 bf = _mm256_broadcast_ss(fb + n + t);
+            for (std::size_t ch = 0; ch < 2; ++ch) {
+                const __m256 x = _mm256_broadcast_ss(xin[ch] + n + t);
+                fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
+                const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
+                                                    _mm256_mul_ps(rv, y1[ch]));
+                x1[ch] = fs[ch];
+                y1[ch] = dc_out;
+                w[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
+            }
+        }
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            __m256 r[8];
+            for (std::size_t t = 0; t < 8; ++t) r[t] = w[ch][t];
+            transpose8x8(r);
+            for (std::size_t c = 0; c < NC; ++c) _mm256_store_ps(dl[ch][c] + n, r[c]);
+        }
+    }
+
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        _mm256_storeu_ps(st.comb_filter_state[ch], fs[ch]);
+        _mm256_storeu_ps(st.dc_x1[ch], x1[ch]);
+        _mm256_storeu_ps(st.dc_y1[ch], y1[ch]);
+    }
+
+    // Write the new feedback samples back into the comb lines.
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        for (std::size_t c = 0; c < NC; ++c) {
+            float* buf = st.comb_buffers[ch][c];
+            const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+            const std::size_t pos = st.comb_pos[ch][c];
+            const std::size_t first = std::min(N, size - pos);
+            std::memcpy(buf + pos, dl[ch][c], first * sizeof(float));
+            if (first < N) std::memcpy(buf, dl[ch][c] + first, (N - first) * sizeof(float));
+            const std::size_t np = pos + N;
+            st.comb_pos[ch][c] = np >= size ? np - size : np;
+        }
+    }
+
+    // Series allpasses, vectorised over time.
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        for (std::size_t a = 0; a < NA; ++a) {
+            float* buf = st.allpass_buffers[ch][a];
+            const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
+            const std::size_t pos = st.allpass_pos[ch][a];
+            const std::size_t first = std::min(N, size - pos);
+            allpass_run(buf + pos, ys[ch], first);
+            if (first < N) allpass_run(buf, ys[ch] + first, N - first);
+            const std::size_t np = pos + N;
+            st.allpass_pos[ch][a] = np >= size ? np - size : np;
+        }
+    }
+
+    for (std::size_t i = 0; i < N; i += 8) {
+        const __m256 xl = _mm256_loadu_ps(in_l + i);
+        const __m256 xr = _mm256_loadu_ps(in_r + i);
+        const __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + i) : _mm256_set1_ps(dry_const);
+        const __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + i) : _mm256_set1_ps(wet_const);
+        const __m256 ol = _mm256_add_ps(_mm256_mul_ps(xl, dry),
+                                        _mm256_mul_ps(_mm256_load_ps(ys[0] + i), wet));
+        const __m256 orr = _mm256_add_ps(_mm256_mul_ps(xr, dry),
+                                         _mm256_mul_ps(_mm256_load_ps(ys[1] + i), wet));
+        _mm256_storeu_ps(out_l + i, ol);
+        _mm256_storeu_ps(out_r + i, orr);
+    }
+}
+#endif
+}  // namespace freeverb_kernels
 
 [[gnu::always_inline]]
 inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
@@ -73,6 +263,16 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
         const auto& w = ext->params[1];
         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
     }
+
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        freeverb_kernels::freeverb_avx2(state, input, stereo_in ? input_r : input,
+                                        room_size, damping, room_scale_in, room_offset_in,
+                                        dry_buf, dry_const, wet_buf, wet_const,
+                                        out_l, out_r);
+        return;
+    }
+#endif
 
     constexpr float ALLPASS_GAIN = 0.5f;
 
