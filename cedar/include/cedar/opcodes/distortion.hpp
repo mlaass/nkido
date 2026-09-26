@@ -3,6 +3,7 @@
 #include "../vm/context.hpp"
 #include "../vm/instruction.hpp"
 #include "../dsp/constants.hpp"
+#include "../dsp/simd.hpp"
 #include "dsp_state.hpp"
 #include "dsp_utils.hpp"
 #include "drywet.hpp"
@@ -10,6 +11,177 @@
 #include <algorithm>
 
 namespace cedar {
+
+// ============================================================================
+// SIMD kernels (x86-64 AVX2) — docs/prd-simd-autoresearch.md §5.1
+//
+// The scalar bodies further down are untouched: they stay the oracle and the
+// fallback, and still run whenever simd::has(Isa::Avx2) is false. Buffers come
+// from the 32-byte aligned pool slabs, so the aligned load/store intrinsics
+// are safe.
+// ============================================================================
+namespace kernels {
+#if CEDAR_SIMD_X86
+
+static_assert(BLOCK_SIZE % 8 == 0, "AVX2 kernels need a multiple-of-8 block");
+
+// Per-8-lane dry/wet mix coefficient: control-buffer read, or the sentinel
+// fallback constant drywet::coeff() uses for an unconnected (0xFFFF) slot.
+template <bool FromBuf>
+CEDAR_TARGET_AVX2 inline __m256 coeff_avx2([[maybe_unused]] const float* buf,
+                                           [[maybe_unused]] std::size_t i, float fallback) noexcept {
+    if constexpr (FromBuf) {
+        return _mm256_load_ps(buf + i);
+    } else {
+        return _mm256_set1_ps(fallback);
+    }
+}
+
+// simd: approx std::tanh — tanh(x) = 1 - 2/(1 + e^(2x)), with e^(2x) split into
+// an exact power of two and a degree-8 polynomial for 2^s on s in [0,1).
+// Peak |error| is ~1e-7 (about -140 dBFS), inside the -100 dBFS budget this
+// opcode is allowed for its declared approximation; every other operation in
+// the opcode matches the scalar body bit for bit.
+CEDAR_TARGET_AVX2 inline __m256 tanh_avx2(__m256 x) noexcept {
+    const __m256 one = _mm256_set1_ps(1.0f);
+    // z = 2*log2(e)*x, clamped into the normal-exponent range. tanh() has
+    // saturated to +-1 long before that, so the clamp only touches samples
+    // whose result is exactly +-1 anyway (and keeps the range reduction well
+    // defined for |x| up to infinity). vminps/vmaxps return their second
+    // operand for NaN, so this ordering propagates NaN like std::tanh does.
+    __m256 z = _mm256_mul_ps(x, _mm256_set1_ps(2.885390081777926814f));
+    z = _mm256_min_ps(_mm256_set1_ps(126.0f), _mm256_max_ps(_mm256_set1_ps(-126.0f), z));
+    // z = k + s with s in [0,1)  ->  2^z = 2^k * 2^s (exact split)
+    const __m256i k = _mm256_cvttps_epi32(z);
+    const __m256 s = _mm256_sub_ps(z, _mm256_cvtepi32_ps(k));
+    // 2^s on [0,1): Taylor series around zero, truncation error <= 1.1e-7
+    // relative (coefficients (ln2)^n / n!).
+    __m256 p = _mm256_set1_ps(1.3215e-6f);
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), _mm256_set1_ps(1.5252734e-5f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), _mm256_set1_ps(1.5403531e-4f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), _mm256_set1_ps(1.3333559e-3f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), _mm256_set1_ps(9.6181291e-3f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), _mm256_set1_ps(5.5504109e-2f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), _mm256_set1_ps(2.4022651e-1f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), _mm256_set1_ps(6.9314718e-1f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, s), one);
+    const __m256 scale = _mm256_castsi256_ps(
+        _mm256_slli_epi32(_mm256_add_epi32(k, _mm256_set1_epi32(127)), 23));
+    const __m256 e = _mm256_mul_ps(p, scale);
+    return _mm256_sub_ps(one, _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(one, e)));
+}
+
+// soft() from op_distort_soft over 8 lanes. Same operation order as the scalar
+// expression, so the |q| <= 3 lanes are bit-identical; the early-outs become
+// selects that return the same exact +-1 the branches return (the polynomial
+// is monotone and passes exactly through (3, 1) and (-3, -1)).
+CEDAR_TARGET_AVX2 inline __m256 soft_avx2(__m256 x, __m256 t) noexcept {
+    const __m256 q = _mm256_div_ps(x, t);  // x / t
+    const __m256 q2 = _mm256_mul_ps(q, q);
+    __m256 w = _mm256_div_ps(_mm256_mul_ps(q, _mm256_add_ps(_mm256_set1_ps(27.0f), q2)),
+                             _mm256_add_ps(_mm256_set1_ps(27.0f),
+                                           _mm256_mul_ps(_mm256_set1_ps(9.0f), q2)));
+    w = _mm256_blendv_ps(w, _mm256_set1_ps(1.0f),
+                         _mm256_cmp_ps(q, _mm256_set1_ps(3.0f), _CMP_GT_OQ));
+    w = _mm256_blendv_ps(w, _mm256_set1_ps(-1.0f),
+                         _mm256_cmp_ps(q, _mm256_set1_ps(-3.0f), _CMP_LT_OQ));
+    return _mm256_mul_ps(w, t);  // soft(x / t) * t
+}
+
+// DISTORT_TANH body over 8 lanes. `in_r` is only read when Stereo is set; a
+// mono input broadcasts the L result to R, exactly like the scalar body.
+template <bool Stereo, bool HasDry, bool HasWet>
+CEDAR_TARGET_AVX2 void distort_tanh_avx2(const float* in_l, [[maybe_unused]] const float* in_r,
+                                         const float* drive, [[maybe_unused]] const float* dry_level,
+                                         [[maybe_unused]] const float* wet_level, float* out_l,
+                                         float* out_r) noexcept {
+    const __m256 drive_floor = _mm256_set1_ps(0.1f);
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+        // d = max(0.1f, drive): vmaxps(drive, 0.1f) so a NaN drive collapses
+        // to 0.1 exactly like the scalar std::max(0.1f, NaN).
+        const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), drive_floor);
+        const __m256 dry = coeff_avx2<HasDry>(dry_level, i, 0.0f);
+        const __m256 wet = coeff_avx2<HasWet>(wet_level, i, 1.0f);
+        const __m256 x = _mm256_load_ps(in_l + i);
+        const __m256 sat = tanh_avx2(_mm256_mul_ps(x, d));
+        const __m256 res = _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(sat, wet));
+        _mm256_store_ps(out_l + i, res);
+        if constexpr (Stereo) {
+            const __m256 xr = _mm256_load_ps(in_r + i);
+            const __m256 sat_r = tanh_avx2(_mm256_mul_ps(xr, d));
+            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(sat_r, wet)));
+        } else {
+            _mm256_store_ps(out_r + i, res);
+        }
+    }
+}
+
+// DISTORT_SOFT body over 8 lanes, same story as above.
+template <bool Stereo, bool HasDry, bool HasWet>
+CEDAR_TARGET_AVX2 void distort_soft_avx2(const float* in_l, [[maybe_unused]] const float* in_r,
+                                         const float* threshold, [[maybe_unused]] const float* dry_level,
+                                         [[maybe_unused]] const float* wet_level, float* out_l,
+                                         float* out_r) noexcept {
+    const __m256 lo = _mm256_set1_ps(0.1f);
+    const __m256 hi = _mm256_set1_ps(2.0f);
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+        // t = clamp(threshold, 0.1, 2.0). Written as maxps(v, lo) then
+        // minps(..., hi) so the NaN/operand-order semantics match the scalar
+        // std::clamp(v, lo, hi) == min(hi, max(lo, v)) exactly (a NaN
+        // threshold collapses to lo, like std::max(0.1f, NaN) collapses to
+        // 0.1f in the tanh opcode's drive).
+        const __m256 t = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(threshold + i), lo), hi);
+        const __m256 dry = coeff_avx2<HasDry>(dry_level, i, 0.0f);
+        const __m256 wet = coeff_avx2<HasWet>(wet_level, i, 1.0f);
+        const __m256 x = _mm256_load_ps(in_l + i);
+        const __m256 res = _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(soft_avx2(x, t), wet));
+        _mm256_store_ps(out_l + i, res);
+        if constexpr (Stereo) {
+            const __m256 xr = _mm256_load_ps(in_r + i);
+            const __m256 sat_r = soft_avx2(xr, t);
+            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(sat_r, wet)));
+        } else {
+            _mm256_store_ps(out_r + i, res);
+        }
+    }
+}
+
+// (dry, wet) slot dispatch: control buffer or the sentinel fallback constant.
+// `Stereo` and the (HasDry, HasWet) mix are compile-time, so the hot loop has
+// no per-sample branch at all — same shape the scalar loop-invariant branches
+// gave the vectoriser no chance to exploit.
+template <bool Stereo>
+inline void distort_tanh_avx2(const float* in_l, const float* in_r, const float* drive,
+                              const float* dry_level, const float* wet_level, float* out_l,
+                              float* out_r) noexcept {
+    if (dry_level != nullptr && wet_level != nullptr) {
+        distort_tanh_avx2<Stereo, true, true>(in_l, in_r, drive, dry_level, wet_level, out_l, out_r);
+    } else if (dry_level != nullptr) {
+        distort_tanh_avx2<Stereo, true, false>(in_l, in_r, drive, dry_level, wet_level, out_l, out_r);
+    } else if (wet_level != nullptr) {
+        distort_tanh_avx2<Stereo, false, true>(in_l, in_r, drive, dry_level, wet_level, out_l, out_r);
+    } else {
+        distort_tanh_avx2<Stereo, false, false>(in_l, in_r, drive, dry_level, wet_level, out_l, out_r);
+    }
+}
+
+template <bool Stereo>
+inline void distort_soft_avx2(const float* in_l, const float* in_r, const float* threshold,
+                              const float* dry_level, const float* wet_level, float* out_l,
+                              float* out_r) noexcept {
+    if (dry_level != nullptr && wet_level != nullptr) {
+        distort_soft_avx2<Stereo, true, true>(in_l, in_r, threshold, dry_level, wet_level, out_l, out_r);
+    } else if (dry_level != nullptr) {
+        distort_soft_avx2<Stereo, true, false>(in_l, in_r, threshold, dry_level, wet_level, out_l, out_r);
+    } else if (wet_level != nullptr) {
+        distort_soft_avx2<Stereo, false, true>(in_l, in_r, threshold, dry_level, wet_level, out_l, out_r);
+    } else {
+        distort_soft_avx2<Stereo, false, false>(in_l, in_r, threshold, dry_level, wet_level, out_l, out_r);
+    }
+}
+
+#endif  // CEDAR_SIMD_X86
+}  // namespace kernels
 
 // ============================================================================
 // DISTORT_TANH: Tanh Saturation
@@ -33,6 +205,16 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
 
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        if (stereo_in) {
+            kernels::distort_tanh_avx2<true>(input, input_r, drive, dry_level, wet_level, out_l, out_r);
+        } else {
+            kernels::distort_tanh_avx2<false>(input, input, drive, dry_level, wet_level, out_l, out_r);
+        }
+        return;
+    }
+#endif
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         float d = std::max(0.1f, drive[i]);
         float dry = drywet::coeff(dry_level, i, 0.0f);
@@ -72,6 +254,17 @@ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
         float x2 = x * x;
         return x * (27.0f + x2) / (27.0f + 9.0f * x2);
     };
+
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        if (stereo_in) {
+            kernels::distort_soft_avx2<true>(input, input_r, threshold, dry_level, wet_level, out_l, out_r);
+        } else {
+            kernels::distort_soft_avx2<false>(input, input, threshold, dry_level, wet_level, out_l, out_r);
+        }
+        return;
+    }
+#endif
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         float t = std::clamp(threshold[i], 0.1f, 2.0f);
