@@ -26,12 +26,7 @@ inline __m256 coeff8(const float* buf, std::size_t i, float fallback) noexcept {
 // 2^w = 2^n * poly4(f), f = w - n in [-1/2, 1/2] (no ln2 multiply); relative error ~5e-6
 // (tanh err ~2.5e-6).
 CEDAR_TARGET_AVX2 [[gnu::always_inline]]
-inline __m256 tanh8(__m256 w) noexcept {
-    // All |z| < 0.0097: tanh(z) = z - z^3/3, error < 4e-7, so return z = w/(2 log2 e) and
-    // skip the exp polynomial and divide (silent/quiet blocks). NaN -> slow path.
-    if (_mm256_movemask_ps(_mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0f), w),
-                                         _mm256_set1_ps(0.028f), _CMP_LT_OQ)) == 0xFF)
-        return _mm256_mul_ps(w, _mm256_set1_ps(0.34657359f));
+inline __m256 tanh8_exp(__m256 w) noexcept {
     w = _mm256_min_ps(_mm256_set1_ps(28.0f), w);  // NaN in w propagates (2nd operand)
     w = _mm256_max_ps(_mm256_set1_ps(-28.0f), w);
     const __m256i n = _mm256_cvtps_epi32(w);
@@ -50,6 +45,33 @@ inline __m256 tanh8(__m256 w) noexcept {
                          _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(e, _mm256_set1_ps(1.0f))));
 }
 
+// All |z| < 0.0097: tanh(z) = z - z^3/3, error < 4e-7, so return z = w/(2 log2 e) and
+// skip the exp polynomial and divide (silent/quiet blocks). NaN -> slow path.
+CEDAR_TARGET_AVX2 [[gnu::always_inline]]
+inline __m256 tanh8(__m256 w) noexcept {
+    if (_mm256_movemask_ps(_mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0f), w),
+                                         _mm256_set1_ps(0.028f), _CMP_LT_OQ)) == 0xFF)
+        return _mm256_mul_ps(w, _mm256_set1_ps(0.34657359f));
+    return tanh8_exp(w);
+}
+
+// Two vectors under one quiet-block check (fewer uops per vector on loud signals).
+CEDAR_TARGET_AVX2 [[gnu::always_inline]]
+inline void tanh8x2(__m256 w0, __m256 w1, __m256& y0, __m256& y1) noexcept {
+    const __m256 sign = _mm256_set1_ps(-0.0f);
+    // |w0| + |w1| < 0.056 implies both < 0.056 (tanh err <= 2.4e-6 via z - z^3/3); a NaN in
+    // either makes the sum NaN, and the ordered compare is false, so NaN -> slow path.
+    const __m256 s = _mm256_add_ps(_mm256_andnot_ps(sign, w0), _mm256_andnot_ps(sign, w1));
+    if (_mm256_movemask_ps(_mm256_cmp_ps(s, _mm256_set1_ps(0.056f), _CMP_LT_OQ)) == 0xFF) {
+        const __m256 c = _mm256_set1_ps(0.34657359f);
+        y0 = _mm256_mul_ps(w0, c);
+        y1 = _mm256_mul_ps(w1, c);
+        return;
+    }
+    y0 = tanh8_exp(w0);
+    y1 = tanh8_exp(w1);
+}
+
 CEDAR_TARGET_AVX2
 inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
                       const float* dry_level, const float* wet_level,
@@ -58,12 +80,24 @@ inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
     const __m256 k = _mm256_set1_ps(2.88539008f);  // 2 * log2(e)
     if (!dry_level && !wet_level) {
         // Default dry=0, wet=1: x*0 + y*1 == y for finite x, so skip the mix.
-        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
-            const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);
-            const __m256 d2 = _mm256_mul_ps(d, k);
-            const __m256 yl = tanh8(_mm256_mul_ps(_mm256_load_ps(in_l + i), d2));
-            _mm256_store_ps(out_l + i, yl);
-            _mm256_store_ps(out_r + i, in_r ? tanh8(_mm256_mul_ps(_mm256_load_ps(in_r + i), d2)) : yl);
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
+            const __m256 da = _mm256_mul_ps(_mm256_max_ps(_mm256_load_ps(drive + i), dmin), k);
+            const __m256 db = _mm256_mul_ps(_mm256_max_ps(_mm256_load_ps(drive + i + 8), dmin), k);
+            __m256 la, lb;
+            tanh8x2(_mm256_mul_ps(_mm256_load_ps(in_l + i), da),
+                    _mm256_mul_ps(_mm256_load_ps(in_l + i + 8), db), la, lb);
+            _mm256_store_ps(out_l + i, la);
+            _mm256_store_ps(out_l + i + 8, lb);
+            if (in_r) {
+                __m256 ra, rb;
+                tanh8x2(_mm256_mul_ps(_mm256_load_ps(in_r + i), da),
+                        _mm256_mul_ps(_mm256_load_ps(in_r + i + 8), db), ra, rb);
+                _mm256_store_ps(out_r + i, ra);
+                _mm256_store_ps(out_r + i + 8, rb);
+            } else {
+                _mm256_store_ps(out_r + i, la);
+                _mm256_store_ps(out_r + i + 8, lb);
+            }
         }
         return;
     }
@@ -101,13 +135,14 @@ inline __m256 soft8(__m256 x, __m256 t, __m256 dry, __m256 wet) noexcept {
         const __m256 s = _mm256_blendv_ps(one, x, zero);
         return _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(_mm256_mul_ps(s, t), wet));
     }
-    const __m256 u = _mm256_div_ps(x, t);
+    // soft(+-3) is exactly +-1 (108/108), so clamping u to [-3, 3] replaces the saturation
+    // blends; NaN in u propagates (min/max return the 2nd operand).
+    const __m256 u = _mm256_max_ps(_mm256_set1_ps(-3.0f),
+                                   _mm256_min_ps(_mm256_set1_ps(3.0f), _mm256_div_ps(x, t)));
     const __m256 u2 = _mm256_mul_ps(u, u);
     const __m256 num = _mm256_mul_ps(u, _mm256_add_ps(_mm256_set1_ps(27.0f), u2));
     const __m256 den = _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), u2));
-    __m256 s = _mm256_div_ps(num, den);
-    s = _mm256_blendv_ps(s, _mm256_set1_ps(1.0f), _mm256_cmp_ps(u, _mm256_set1_ps(3.0f), _CMP_GT_OQ));
-    s = _mm256_blendv_ps(s, _mm256_set1_ps(-1.0f), _mm256_cmp_ps(u, _mm256_set1_ps(-3.0f), _CMP_LT_OQ));
+    const __m256 s = _mm256_div_ps(num, den);
     return _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(_mm256_mul_ps(s, t), wet));
 }
 
