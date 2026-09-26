@@ -535,28 +535,81 @@ inline void formant_coef4_avx2(const float* fq, float* coef_out, float sample_ra
     _mm_store_ps(coef_out, _mm_min_ps(_mm_mul_ps(_mm_set1_ps(2.0f), t), _mm_set1_ps(1.9f)));
 }
 
-// One SVF recurrence step (sample i) for the 6 chains; writes out_l/out_r[i].
+// Transpose band-major coefficients of samples j..j+3 into per-sample rows
+// (c1, c2, c3, 0) so a step can fetch all of them with one broadcast load.
+[[gnu::always_inline]] CEDAR_TARGET_AVX2
+inline void formant_pack_coef_avx2(const float (*coef)[BLOCK_SIZE], float (*cv)[4],
+                                   std::size_t j) noexcept {
+    const __m128 a = _mm_load_ps(coef[0] + j);
+    const __m128 b = _mm_load_ps(coef[1] + j);
+    const __m128 c = _mm_load_ps(coef[2] + j);
+    const __m128 z = _mm_setzero_ps();
+    const __m128 t0 = _mm_unpacklo_ps(a, b);
+    const __m128 t1 = _mm_unpacklo_ps(c, z);
+    const __m128 t2 = _mm_unpackhi_ps(a, b);
+    const __m128 t3 = _mm_unpackhi_ps(c, z);
+    _mm_store_ps(cv[j],     _mm_movelh_ps(t0, t1));
+    _mm_store_ps(cv[j + 1], _mm_movehl_ps(t1, t0));
+    _mm_store_ps(cv[j + 2], _mm_movelh_ps(t2, t3));
+    _mm_store_ps(cv[j + 3], _mm_movehl_ps(t3, t2));
+}
+
+// Gain sum and dry/wet mix for samples i..i+7, from the per-sample bandpass rows
+// [b1 b2 b3 pad | b1 b2 b3 pad]. Same op order as the scalar body:
+// out = x*dry + ((bp1*g1 + bp2*g2) + bp3*g3)*wet.
+[[gnu::always_inline]] CEDAR_TARGET_AVX2
+inline void formant_post8_avx2(std::size_t i, const float (*bpbuf)[8],
+                               const float (*gain)[BLOCK_SIZE],
+                               const float* input, const float* input_r,
+                               const float* dry_buf, float dry_const,
+                               const float* wet_buf, float wet_const,
+                               float* out_l, float* out_r) noexcept {
+    const __m256 t0 = _mm256_unpacklo_ps(_mm256_load_ps(bpbuf[i]),     _mm256_load_ps(bpbuf[i + 1]));
+    const __m256 t1 = _mm256_unpackhi_ps(_mm256_load_ps(bpbuf[i]),     _mm256_load_ps(bpbuf[i + 1]));
+    const __m256 t2 = _mm256_unpacklo_ps(_mm256_load_ps(bpbuf[i + 2]), _mm256_load_ps(bpbuf[i + 3]));
+    const __m256 t3 = _mm256_unpackhi_ps(_mm256_load_ps(bpbuf[i + 2]), _mm256_load_ps(bpbuf[i + 3]));
+    const __m256 t4 = _mm256_unpacklo_ps(_mm256_load_ps(bpbuf[i + 4]), _mm256_load_ps(bpbuf[i + 5]));
+    const __m256 t5 = _mm256_unpackhi_ps(_mm256_load_ps(bpbuf[i + 4]), _mm256_load_ps(bpbuf[i + 5]));
+    const __m256 t6 = _mm256_unpacklo_ps(_mm256_load_ps(bpbuf[i + 6]), _mm256_load_ps(bpbuf[i + 7]));
+    const __m256 t7 = _mm256_unpackhi_ps(_mm256_load_ps(bpbuf[i + 6]), _mm256_load_ps(bpbuf[i + 7]));
+    // s_k / u_k: band k of samples 0-3 / 4-7; low lane = L, high lane = R.
+    const __m256 s0 = _mm256_shuffle_ps(t0, t2, 0x44);
+    const __m256 s1 = _mm256_shuffle_ps(t0, t2, 0xEE);
+    const __m256 s2 = _mm256_shuffle_ps(t1, t3, 0x44);
+    const __m256 u0 = _mm256_shuffle_ps(t4, t6, 0x44);
+    const __m256 u1 = _mm256_shuffle_ps(t4, t6, 0xEE);
+    const __m256 u2 = _mm256_shuffle_ps(t5, t7, 0x44);
+
+    const __m256 g0 = _mm256_load_ps(gain[0] + i);
+    const __m256 g1 = _mm256_load_ps(gain[1] + i);
+    const __m256 g2 = _mm256_load_ps(gain[2] + i);
+    const __m256 pl = _mm256_add_ps(
+        _mm256_add_ps(_mm256_mul_ps(_mm256_permute2f128_ps(s0, u0, 0x20), g0),
+                      _mm256_mul_ps(_mm256_permute2f128_ps(s1, u1, 0x20), g1)),
+        _mm256_mul_ps(_mm256_permute2f128_ps(s2, u2, 0x20), g2));
+    const __m256 pr = _mm256_add_ps(
+        _mm256_add_ps(_mm256_mul_ps(_mm256_permute2f128_ps(s0, u0, 0x31), g0),
+                      _mm256_mul_ps(_mm256_permute2f128_ps(s1, u1, 0x31), g1)),
+        _mm256_mul_ps(_mm256_permute2f128_ps(s2, u2, 0x31), g2));
+
+    const __m256 xl = _mm256_load_ps(input + i);
+    const __m256 xr = input_r ? _mm256_load_ps(input_r + i) : xl;
+    const __m256 dry = dry_buf ? _mm256_load_ps(dry_buf + i) : _mm256_set1_ps(dry_const);
+    const __m256 wet = wet_buf ? _mm256_load_ps(wet_buf + i) : _mm256_set1_ps(wet_const);
+    _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(pl, wet)));
+    _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(pr, wet)));
+}
+
+// One SVF recurrence step (sample i) for the 6 chains; stores the bandpass row.
 [[gnu::always_inline]] CEDAR_TARGET_AVX2
 inline void formant_step_avx2(std::size_t i, __m256& z1, __m256& z2,
-                              const float (*coef)[BLOCK_SIZE], const float (*gain)[BLOCK_SIZE],
-                              const float* qinv, const float* input, const float* input_r,
-                              const float* dry_buf, float dry_const,
-                              const float* wet_buf, float wet_const,
-                              float* out_l, float* out_r) noexcept {
-    const float dry = drywet::coeff(dry_buf, i, dry_const);
-    const float wet = drywet::coeff(wet_buf, i, wet_const);
-    const float c1 = coef[0][i];
-    const float c2 = coef[1][i];
-    const float c3 = coef[2][i];
-    const __m256 fv = _mm256_set_ps(0.0f, c3, c2, c1, 0.0f, c3, c2, c1);
-    const __m256 gv = _mm256_set_ps(0.0f, gain[2][i], gain[1][i], gain[0][i],
-                                    0.0f, gain[2][i], gain[1][i], gain[0][i]);
-    const __m256 qv = _mm256_set1_ps(qinv[i]);
-
-    const float xl = input[i];
-    const float xr = input_r ? input_r[i] : xl;
-    const __m256 xv = _mm256_insertf128_ps(
-        _mm256_castps128_ps256(_mm_set1_ps(xl)), _mm_set1_ps(xr), 1);
+                              const float (*cv)[4], const float* qinv,
+                              const float* input, const float* input_r,
+                              float (*bpbuf)[8]) noexcept {
+    const __m256 fv = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(cv[i]));
+    const __m256 qv = _mm256_broadcast_ss(qinv + i);
+    __m256 xv = _mm256_broadcast_ss(input + i);
+    if (input_r) xv = _mm256_blend_ps(xv, _mm256_broadcast_ss(input_r + i), 0xF0);
 
     const __m256 hp = _mm256_sub_ps(_mm256_sub_ps(xv, _mm256_mul_ps(z1, qv)), z2);
     const __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(fv, hp));
@@ -576,15 +629,7 @@ inline void formant_step_avx2(std::size_t i, __m256& z1, __m256& z2,
         z2 = formant_clamp_avx2(lp);
     }
 
-    // (bp1*g1 + bp2*g2) + bp3*g3 per half, result in lanes 0 and 4.
-    const __m256 p = _mm256_mul_ps(bp, gv);
-    const __m256 s = _mm256_add_ps(p, _mm256_permute_ps(p, _MM_SHUFFLE(3, 3, 3, 1)));
-    const __m256 t = _mm256_add_ps(s, _mm256_permute_ps(p, _MM_SHUFFLE(3, 3, 3, 2)));
-    const float pl = _mm_cvtss_f32(_mm256_castps256_ps128(t));
-    const float pr = _mm_cvtss_f32(_mm256_extractf128_ps(t, 1));
-
-    out_l[i] = drywet::mix(xl, pl, dry, wet);
-    out_r[i] = drywet::mix(xr, pr, dry, wet);
+    _mm256_store_ps(bpbuf[i], bp);
 }
 
 // Lane layout: [b1 b2 b3 pad | b1 b2 b3 pad], low half = L, high half = R.
@@ -665,20 +710,27 @@ inline void formant_avx2(FormantState& state, float sample_rate,
     // the recurrence steps of chunk c so the out-of-order core overlaps the two.
     alignas(32) float coef[3][BLOCK_SIZE];
     constexpr std::size_t CH = 4;
+    // The recurrence only stores per-sample bandpass rows; the gain sum and dry/wet
+    // mix run 8 samples at a time (formant_post8_avx2) every second chunk.
+    alignas(32) float cv[BLOCK_SIZE][4];
+    alignas(32) float bpbuf[BLOCK_SIZE][8];
     for (int k = 0; k < 3; ++k) formant_coef4_avx2(freq[k], coef[k], sample_rate);
+    formant_pack_coef_avx2(coef, cv, 0);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += CH) {
         const bool more = i + CH < BLOCK_SIZE;
-        formant_step_avx2(i, z1, z2, coef, gain, qinv, input, input_r,
-                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
+        formant_step_avx2(i, z1, z2, cv, qinv, input, input_r, bpbuf);
         if (more) formant_coef4_avx2(freq[0] + i + CH, coef[0] + i + CH, sample_rate);
-        formant_step_avx2(i + 1, z1, z2, coef, gain, qinv, input, input_r,
-                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
+        formant_step_avx2(i + 1, z1, z2, cv, qinv, input, input_r, bpbuf);
         if (more) formant_coef4_avx2(freq[1] + i + CH, coef[1] + i + CH, sample_rate);
-        formant_step_avx2(i + 2, z1, z2, coef, gain, qinv, input, input_r,
-                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
-        if (more) formant_coef4_avx2(freq[2] + i + CH, coef[2] + i + CH, sample_rate);
-        formant_step_avx2(i + 3, z1, z2, coef, gain, qinv, input, input_r,
-                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
+        formant_step_avx2(i + 2, z1, z2, cv, qinv, input, input_r, bpbuf);
+        if (more) {
+            formant_coef4_avx2(freq[2] + i + CH, coef[2] + i + CH, sample_rate);
+            formant_pack_coef_avx2(coef, cv, i + CH);
+        }
+        formant_step_avx2(i + 3, z1, z2, cv, qinv, input, input_r, bpbuf);
+        if (i & CH)
+            formant_post8_avx2(i - CH, bpbuf, gain, input, input_r,
+                               dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
     }
 
     alignas(32) float a1[8], a2[8];
