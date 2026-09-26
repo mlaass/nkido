@@ -64,6 +64,7 @@ CEDAR_TARGET_AVX2 inline __m256 svf_tan_avx2(__m256 x) noexcept {
     p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(1.33387994085e-1f));
     p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(3.33331568548e-1f));
     const __m256 t = _mm256_add_ps(_mm256_mul_ps(_mm256_mul_ps(p, z), y), y);
+    if (_mm256_movemask_ps(big) == 0) return t;  // no lane above pi/4: skip the reciprocal
     return _mm256_blendv_ps(t, _mm256_div_ps(_mm256_set1_ps(1.0f), t), big);
 }
 
@@ -123,6 +124,76 @@ CEDAR_TARGET_AVX2 inline bool svf_recur_avx2(const float* in_l, const float* in_
     return (_mm_movemask_ps(bad) & 3) != 0;
 }
 
+// Slot of sample j (0..7 of a group of eight) in the L/R-pair layout: pairs of samples come out
+// of _mm256_unpack{lo,hi}_ps as [s0 s1 s4 s5] [s2 s3 s6 s7], and _mm256_shuffle_ps(a, b, 0x88/0xDD)
+// turns that back into sample order.
+constexpr int svf_pos(int j) noexcept { return (j & 1) | ((j & 4) >> 1) | ((j & 2) << 1); }
+
+CEDAR_TARGET_AVX2 inline void svf_deint_avx2(const float* p, __m256& l, __m256& r) noexcept {
+    const __m256 a = _mm256_load_ps(p);
+    const __m256 b = _mm256_load_ps(p + 8);
+    l = _mm256_shuffle_ps(a, b, 0x88);
+    r = _mm256_shuffle_ps(a, b, 0xDD);
+}
+
+// Two-step lookahead recurrence (unclamped, speculative). State is one register
+// s = [ic1L, ic1R, ic2L, ic2R]; one step is s' = D1*s + D2*swap(s) + b. The even-sample chain
+// advances two samples at a time with the precomputed composite (P, c) so its dependency
+// latency is halved per sample; the odd-sample state is derived from the even one off-chain.
+// Outputs are 2*v = n + ic stored as L/R pairs (v1 -> p1, v2 -> p2). Returns true if any state
+// value left +-10 or went NaN (then the caller redoes the block with the exact clamp).
+template <int Mode>
+CEDAR_TARGET_AVX2 inline bool svf_recur2_avx2(const float* xlr, const float* m11, const float* A2,
+                                              const float* m22, const float* A3,
+                                              const float* P11, const float* P12,
+                                              const float* P21, const float* P22,
+                                              const float* C1, const float* C2,
+                                              float* p1, float* p2, __m128& s_io) noexcept {
+    const __m128 dc2 = _mm_set1_ps(2.0f * DENORMAL_DC);
+    const __m128 neg_lo = _mm_setr_ps(-0.0f, -0.0f, 0.0f, 0.0f);
+    const __m128 absmask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
+    const __m128 lim_hi = _mm_set1_ps(10.0f);
+    __m128 s = s_io;
+    __m128 mx = _mm_setzero_ps();
+    for (std::size_t g = 0; g < BLOCK_SIZE / 8; ++g) {
+#pragma GCC unroll 4
+        for (int j = 0; j < 8; j += 2) {
+            const std::size_t i = g * 8 + static_cast<std::size_t>(j);
+            const std::size_t o = g * 16 + 2 * static_cast<std::size_t>(svf_pos(j));
+            const __m128 e = _mm_set1_ps(A2[i]);
+            const __m128 D1 = _mm_blend_ps(_mm_set1_ps(m11[i]), _mm_set1_ps(m22[i]), 0xC);
+            const __m128 D2 = _mm_xor_ps(e, neg_lo);
+            const __m128 A23 = _mm_blend_ps(e, _mm_set1_ps(A3[i]), 0xC);
+            const __m128 D1p = _mm_blend_ps(_mm_set1_ps(P11[i]), _mm_set1_ps(P22[i]), 0xC);
+            const __m128 D2p = _mm_blend_ps(_mm_set1_ps(P12[i]), _mm_set1_ps(P21[i]), 0xC);
+            const __m128 cp = _mm_loadh_pi(
+                _mm_loadl_pi(_mm_setzero_ps(), reinterpret_cast<const __m64*>(C1 + o)),
+                reinterpret_cast<const __m64*>(C2 + o));
+            const __m128 bx = _mm_castpd_ps(_mm_loaddup_pd(reinterpret_cast<const double*>(xlr + o)));
+            const __m128 b = _mm_add_ps(_mm_mul_ps(A23, bx), dc2);
+            const __m128 sw = _mm_shuffle_ps(s, s, _MM_SHUFFLE(1, 0, 3, 2));
+            const __m128 s1 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(D1, s), b), _mm_mul_ps(D2, sw));
+            const __m128 s2 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(D1p, s), cp), _mm_mul_ps(D2p, sw));
+            const __m128 va = _mm_add_ps(s1, s);
+            const __m128 vb = _mm_add_ps(s2, s1);
+            if constexpr (Mode != SvfLP) {
+                _mm_storel_pi(reinterpret_cast<__m64*>(p1 + o), va);
+                _mm_storel_pi(reinterpret_cast<__m64*>(p1 + o + 2), vb);
+            }
+            if constexpr (Mode != SvfBP) {
+                _mm_storeh_pi(reinterpret_cast<__m64*>(p2 + o), va);
+                _mm_storeh_pi(reinterpret_cast<__m64*>(p2 + o + 2), vb);
+            }
+            mx = _mm_max_ps(mx, _mm_and_ps(s1, absmask));
+            mx = _mm_max_ps(mx, _mm_and_ps(s2, absmask));
+            s = s2;
+        }
+    }
+    s_io = s;
+    // A NaN anywhere (state or input) persists in the chain, so checking the final state suffices.
+    return (_mm_movemask_ps(_mm_cmpnle_ps(mx, lim_hi)) | _mm_movemask_ps(_mm_cmpunord_ps(s, s))) != 0;
+}
+
 template <int Mode>
 CEDAR_TARGET_AVX2 inline void svf_avx2(const float* in_l, const float* in_r,
                                        const float* freq, const float* q,
@@ -130,11 +201,30 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(const float* in_l, const float* in_r,
                                        float* out_l, float* out_r,
                                        float sample_rate, SVFState& state) noexcept {
     // Transition coefficients: n1 = m11*ic1 - A2*ic2 + A2*x, n2 = A2*ic1 + m22*ic2 + A3*x
-    alignas(32) float m11[BLOCK_SIZE];
-    alignas(32) float A2[BLOCK_SIZE];
-    alignas(32) float m22[BLOCK_SIZE];
+    // Arrays that are also read at i+1 carry one group of zero padding.
+    constexpr std::size_t PADDED = BLOCK_SIZE + 8;
+    alignas(32) float m11[PADDED];
+    alignas(32) float A2[PADDED];
+    alignas(32) float m22[PADDED];
     alignas(32) float A3[BLOCK_SIZE];
     alignas(32) float kk[BLOCK_SIZE];
+    // Input terms b1 = A2*x + dc, b2 = A3*x + dc per channel.
+    alignas(32) float B1L[PADDED];
+    alignas(32) float B1R[PADDED];
+    alignas(32) float B2L[PADDED];
+    alignas(32) float B2R[PADDED];
+    // Two-step composite: s(i+2) = P*s(i) + c, P = M(i+1)*M(i), c = M(i+1)*b(i) + b(i+1).
+    alignas(32) float P11[BLOCK_SIZE];
+    alignas(32) float P12[BLOCK_SIZE];
+    alignas(32) float P21[BLOCK_SIZE];
+    alignas(32) float P22[BLOCK_SIZE];
+    // L/R-interleaved (pair) arrays, see svf_pos.
+    alignas(32) float xlr[2 * BLOCK_SIZE];
+    alignas(32) float C1[2 * BLOCK_SIZE];
+    alignas(32) float C2[2 * BLOCK_SIZE];
+    alignas(32) float p1[2 * BLOCK_SIZE];
+    alignas(32) float p2[2 * BLOCK_SIZE];
+    // Exact-clamp fallback outputs (only written on the rare clipped path).
     alignas(32) float p1l[BLOCK_SIZE];
     alignas(32) float p1r[BLOCK_SIZE];
     alignas(32) float p2l[BLOCK_SIZE];
@@ -146,24 +236,74 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(const float* in_l, const float* in_r,
         const __m256 one = _mm256_set1_ps(1.0f);
         const __m256 lo = _mm256_set1_ps(20.0f);
         const __m256 hi = _mm256_set1_ps(sample_rate * 0.49f);
-        const __m256 pi = _mm256_set1_ps(PI);
-        const __m256 sr = _mm256_set1_ps(sample_rate);
+        const __m256 pi_sr = _mm256_set1_ps(PI / sample_rate);
         const __m256 qmin = _mm256_set1_ps(0.1f);
+        const __m256 dc2v = _mm256_set1_ps(2.0f * DENORMAL_DC);
         for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
             __m256 f = _mm256_max_ps(_mm256_load_ps(freq + i), zero);  // NaN -> 0
             f = _mm256_min_ps(_mm256_max_ps(f, lo), hi);
-            const __m256 g = svf_tan_avx2(_mm256_div_ps(_mm256_mul_ps(pi, f), sr));
+            const __m256 g = svf_tan_avx2(_mm256_mul_ps(f, pi_sr));
             const __m256 k = _mm256_div_ps(one, _mm256_max_ps(_mm256_load_ps(q + i), qmin));
             const __m256 a1v = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(g, _mm256_add_ps(g, k))));
             const __m256 a2v = _mm256_mul_ps(g, a1v);
             const __m256 a3v = _mm256_mul_ps(g, a2v);
             const __m256 two8 = _mm256_set1_ps(2.0f);
             const __m256 A3v = _mm256_mul_ps(two8, a3v);
-            _mm256_store_ps(m11 + i, _mm256_sub_ps(_mm256_mul_ps(two8, a1v), one));
-            _mm256_store_ps(A2 + i, _mm256_mul_ps(two8, a2v));
+            const __m256 m11v = _mm256_sub_ps(_mm256_mul_ps(two8, a1v), one);
+            const __m256 A2v = _mm256_mul_ps(two8, a2v);
+            _mm256_store_ps(m11 + i, m11v);
+            _mm256_store_ps(A2 + i, A2v);
             _mm256_store_ps(m22 + i, _mm256_sub_ps(one, A3v));
             _mm256_store_ps(A3 + i, A3v);
             if constexpr (Mode == SvfHP) _mm256_store_ps(kk + i, k);
+            const __m256 xl = _mm256_load_ps(in_l + i);
+            const __m256 xr = _mm256_load_ps(in_r + i);
+            _mm256_store_ps(B1L + i, _mm256_add_ps(_mm256_mul_ps(A2v, xl), dc2v));
+            _mm256_store_ps(B1R + i, _mm256_add_ps(_mm256_mul_ps(A2v, xr), dc2v));
+            _mm256_store_ps(B2L + i, _mm256_add_ps(_mm256_mul_ps(A3v, xl), dc2v));
+            _mm256_store_ps(B2R + i, _mm256_add_ps(_mm256_mul_ps(A3v, xr), dc2v));
+            _mm256_store_ps(xlr + 2 * i, _mm256_unpacklo_ps(xl, xr));
+            _mm256_store_ps(xlr + 2 * i + 8, _mm256_unpackhi_ps(xl, xr));
+        }
+        _mm256_store_ps(m11 + BLOCK_SIZE, zero);
+        _mm256_store_ps(A2 + BLOCK_SIZE, zero);
+        _mm256_store_ps(m22 + BLOCK_SIZE, zero);
+        _mm256_store_ps(B1L + BLOCK_SIZE, zero);
+        _mm256_store_ps(B1R + BLOCK_SIZE, zero);
+        _mm256_store_ps(B2L + BLOCK_SIZE, zero);
+        _mm256_store_ps(B2R + BLOCK_SIZE, zero);
+    }
+
+    // Pass 1b: two-step composite for every sample position (only even ones are consumed).
+    {
+        const __m256 zero = _mm256_setzero_ps();
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            const __m256 a = _mm256_load_ps(m11 + i);
+            const __m256 d = _mm256_load_ps(m22 + i);
+            const __m256 e = _mm256_load_ps(A2 + i);
+            const __m256 ap = _mm256_loadu_ps(m11 + i + 1);
+            const __m256 dp = _mm256_loadu_ps(m22 + i + 1);
+            const __m256 ep = _mm256_loadu_ps(A2 + i + 1);
+            const __m256 epe = _mm256_mul_ps(ep, e);
+            _mm256_store_ps(P11 + i, _mm256_sub_ps(_mm256_mul_ps(ap, a), epe));
+            _mm256_store_ps(P12 + i, _mm256_sub_ps(zero, _mm256_add_ps(_mm256_mul_ps(ap, e), _mm256_mul_ps(ep, d))));
+            _mm256_store_ps(P21 + i, _mm256_add_ps(_mm256_mul_ps(ep, a), _mm256_mul_ps(dp, e)));
+            _mm256_store_ps(P22 + i, _mm256_sub_ps(_mm256_mul_ps(dp, d), epe));
+            __m256 c1[2], c2[2];
+            const float* B1[2] = {B1L, B1R};
+            const float* B2[2] = {B2L, B2R};
+            for (int ch = 0; ch < 2; ++ch) {
+                const __m256 b1 = _mm256_load_ps(B1[ch] + i);
+                const __m256 b2 = _mm256_load_ps(B2[ch] + i);
+                const __m256 b1p = _mm256_loadu_ps(B1[ch] + i + 1);
+                const __m256 b2p = _mm256_loadu_ps(B2[ch] + i + 1);
+                c1[ch] = _mm256_add_ps(_mm256_sub_ps(_mm256_mul_ps(ap, b1), _mm256_mul_ps(ep, b2)), b1p);
+                c2[ch] = _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(ep, b1), _mm256_mul_ps(dp, b2)), b2p);
+            }
+            _mm256_store_ps(C1 + 2 * i, _mm256_unpacklo_ps(c1[0], c1[1]));
+            _mm256_store_ps(C1 + 2 * i + 8, _mm256_unpackhi_ps(c1[0], c1[1]));
+            _mm256_store_ps(C2 + 2 * i, _mm256_unpacklo_ps(c2[0], c2[1]));
+            _mm256_store_ps(C2 + 2 * i + 8, _mm256_unpackhi_ps(c2[0], c2[1]));
         }
     }
 
@@ -173,24 +313,42 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(const float* in_l, const float* in_r,
     {
         const float s1l = state.ic1eq[0], s1r = state.ic1eq[1];
         const float s2l = state.ic2eq[0], s2r = state.ic2eq[1];
-        __m128 ic1 = _mm_setr_ps(s1l, s1r, 0.0f, 0.0f);
-        __m128 ic2 = _mm_setr_ps(s2l, s2r, 0.0f, 0.0f);
-        bool clipped = svf_recur_avx2<Mode, false>(in_l, in_r, m11, A2, m22, A3, p1l, p1r, p2l, p2r, ic1, ic2);
+        __m128 s = _mm_setr_ps(s1l, s1r, s2l, s2r);
+        const bool clipped = svf_recur2_avx2<Mode>(xlr, m11, A2, m22, A3, P11, P12, P21, P22,
+                                                   C1, C2, p1, p2, s);
         if (clipped) {
-            ic1 = _mm_setr_ps(s1l, s1r, 0.0f, 0.0f);
-            ic2 = _mm_setr_ps(s2l, s2r, 0.0f, 0.0f);
+            __m128 ic1 = _mm_setr_ps(s1l, s1r, 0.0f, 0.0f);
+            __m128 ic2 = _mm_setr_ps(s2l, s2r, 0.0f, 0.0f);
             svf_recur_avx2<Mode, true>(in_l, in_r, m11, A2, m22, A3, p1l, p1r, p2l, p2r, ic1, ic2);
+            // Move the exact results into the pair layout (stored as 2*v like the fast path).
+            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+                const std::size_t o = (i >> 3) * 16 + 2 * static_cast<std::size_t>(svf_pos(static_cast<int>(i & 7)));
+                if constexpr (Mode != SvfLP) {
+                    p1[o] = 2.0f * p1l[i];
+                    p1[o + 1] = 2.0f * p1r[i];
+                }
+                if constexpr (Mode != SvfBP) {
+                    p2[o] = 2.0f * p2l[i];
+                    p2[o + 1] = 2.0f * p2r[i];
+                }
+            }
+            state.ic1eq[0] = _mm_cvtss_f32(ic1);
+            state.ic1eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(ic1, ic1, 1));
+            state.ic2eq[0] = _mm_cvtss_f32(ic2);
+            state.ic2eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(ic2, ic2, 1));
+        } else {
+            state.ic1eq[0] = _mm_cvtss_f32(s);
+            state.ic1eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(s, s, 1));
+            state.ic2eq[0] = _mm_cvtss_f32(_mm_movehl_ps(s, s));
+            state.ic2eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(s, s, 3));
         }
-        state.ic1eq[0] = _mm_cvtss_f32(ic1);
-        state.ic1eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(ic1, ic1, 1));
-        state.ic2eq[0] = _mm_cvtss_f32(ic2);
-        state.ic2eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(ic2, ic2, 1));
     }
 
     // Pass 3: output mix.
     {
         const __m256 zero = _mm256_setzero_ps();
         const __m256 one = _mm256_set1_ps(1.0f);
+        const __m256 half = _mm256_set1_ps(0.5f);
         for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
             const __m256 xl = _mm256_load_ps(in_l + i);
             const __m256 xr = _mm256_load_ps(in_r + i);
@@ -198,17 +356,22 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(const float* in_l, const float* in_r,
             const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : one;
             __m256 pl, pr;
             if constexpr (Mode == SvfLP) {
-                pl = _mm256_load_ps(p2l + i);
-                pr = _mm256_load_ps(p2r + i);
+                svf_deint_avx2(p2 + 2 * i, pl, pr);
+                pl = _mm256_mul_ps(pl, half);
+                pr = _mm256_mul_ps(pr, half);
             } else if constexpr (Mode == SvfBP) {
-                pl = _mm256_load_ps(p1l + i);
-                pr = _mm256_load_ps(p1r + i);
+                svf_deint_avx2(p1 + 2 * i, pl, pr);
+                pl = _mm256_mul_ps(pl, half);
+                pr = _mm256_mul_ps(pr, half);
             } else {
                 const __m256 k = _mm256_load_ps(kk + i);
-                pl = _mm256_sub_ps(_mm256_sub_ps(xl, _mm256_mul_ps(k, _mm256_load_ps(p1l + i))),
-                                   _mm256_load_ps(p2l + i));
-                pr = _mm256_sub_ps(_mm256_sub_ps(xr, _mm256_mul_ps(k, _mm256_load_ps(p1r + i))),
-                                   _mm256_load_ps(p2r + i));
+                __m256 v1l, v1r, v2l, v2r;
+                svf_deint_avx2(p1 + 2 * i, v1l, v1r);
+                svf_deint_avx2(p2 + 2 * i, v2l, v2r);
+                pl = _mm256_sub_ps(_mm256_sub_ps(xl, _mm256_mul_ps(k, _mm256_mul_ps(v1l, half))),
+                                   _mm256_mul_ps(v2l, half));
+                pr = _mm256_sub_ps(_mm256_sub_ps(xr, _mm256_mul_ps(k, _mm256_mul_ps(v1r, half))),
+                                   _mm256_mul_ps(v2r, half));
             }
             _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(pl, wet)));
             _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(pr, wet)));
