@@ -502,22 +502,20 @@ inline void formant_coef4_avx2(const float* fq, float* coef_out, float sample_ra
     const __m256d wd = _mm256_cvtps_pd(w);
     const bool all_small = __builtin_expect(_mm_movemask_ps(small) == 0, 1);
     const __m256d d = all_small ? formant_tan_small_pd(wd) : formant_tan_pd(wd);
-    const __m128 t0 = _mm256_cvtpd_ps(d);
-    const __m128 r = _mm256_cvtpd_ps(_mm256_sub_pd(d, _mm256_cvtps_pd(t0)));
-    __m128 t = t0;
+    __m128 t = _mm256_cvtpd_ps(d);
 
-    const __m128 exp_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7F800000));
-    const __m128 abs_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
-    // Risky if the residual is within a small band of a rounding midpoint. The Pade
-    // path has double error <= ~0.003 ulp, so a 0.01 ulp band (0.49) is enough and
+    // A lane is risky if d lies within a small band of a float rounding midpoint,
+    // i.e. its low 29 mantissa bits are within +-delta of 2^28. The Pade path has
+    // double error <= ~0.003 ulp, so a 0.01 ulp band (0.01 * 2^29) is enough and
     // keeps ~4x fewer lanes on the slow scalar fallback; the long-series path keeps
-    // the wider 0.03 ulp band (0.47).
-    const __m128 thr_scale = _mm_set1_ps((all_small ? 0.49f : 0.47f) * 1.1920929e-07f);  // * 2^-23
-    const __m128 thr = _mm_mul_ps(_mm_and_ps(t, exp_mask), thr_scale);
-    const __m128 risky_r = _mm_cmp_ps(_mm_and_ps(r, abs_mask), thr, _CMP_GT_OQ);
-    const __m128 pow2 = _mm_castsi128_ps(_mm_cmpeq_epi32(
-        _mm_and_si128(_mm_castps_si128(t), _mm_set1_epi32(0x007FFFFF)), _mm_setzero_si128()));
-    int mask = _mm_movemask_ps(_mm_or_ps(risky_r, pow2));
+    // the wider 0.03 ulp band. Testing d's own bits (no float round trip) also covers
+    // the power-of-two boundaries, since ulp(d) is taken from d's own binade.
+    const long long delta = all_small ? 5368709LL : 16106127LL;
+    const __m256i off = _mm256_and_si256(
+        _mm256_sub_epi64(_mm256_castpd_si256(d), _mm256_set1_epi64x((1LL << 28) - delta)),
+        _mm256_set1_epi64x((1LL << 29) - 1));
+    const __m256i risky = _mm256_cmpgt_epi64(_mm256_set1_epi64x(2 * delta), off);
+    int mask = _mm256_movemask_pd(_mm256_castsi256_pd(risky));
     if (__builtin_expect(mask != 0, 0)) {
         alignas(16) float ta[4], wa[4];
         _mm_store_ps(ta, t);
@@ -629,6 +627,46 @@ inline void formant_step_avx2(std::size_t i, __m256& z1, __m256& z2,
     _mm256_store_ps(bpbuf[i], bp);
 }
 
+// Formant freqs, gains and 1/q for samples i..i+7 (state-independent).
+[[gnu::always_inline]] CEDAR_TARGET_AVX2
+inline void formant_params8_avx2(std::size_t i, const __m256* tab_f, const __m256* tab_g,
+                                 const float* vowel_a, const float* vowel_b,
+                                 const float* morph, const float* q_in,
+                                 float (*freq)[BLOCK_SIZE], float (*gain)[BLOCK_SIZE],
+                                 float* qinv) noexcept {
+    const __m256 one = _mm256_set1_ps(1.0f);
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256i four = _mm256_set1_epi32(4);
+    const __m256i one_i = _mm256_set1_epi32(1);
+
+    const __m256 va = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(vowel_a + i), zero), _mm256_set1_ps(4.0f));
+    const __m256 vb = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(vowel_b + i), zero), _mm256_set1_ps(4.0f));
+    const __m256 m = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(morph + i), zero), one);
+    const __m256 q = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(q_in + i), one), _mm256_set1_ps(20.0f));
+
+    const __m256i ia = _mm256_min_epi32(_mm256_cvttps_epi32(va), four);
+    const __m256i ib = _mm256_min_epi32(_mm256_cvttps_epi32(vb), four);
+    const __m256 fa = _mm256_sub_ps(va, _mm256_cvtepi32_ps(_mm256_cvttps_epi32(va)));
+    const __m256 fb = _mm256_sub_ps(vb, _mm256_cvtepi32_ps(_mm256_cvttps_epi32(vb)));
+    const __m256i ia2 = _mm256_min_epi32(_mm256_add_epi32(ia, one_i), four);
+    const __m256i ib2 = _mm256_min_epi32(_mm256_add_epi32(ib, one_i), four);
+    const __m256 omfa = _mm256_sub_ps(one, fa);
+    const __m256 omfb = _mm256_sub_ps(one, fb);
+    const __m256 omm = _mm256_sub_ps(one, m);
+
+    for (int k = 0; k < 3; ++k) {
+        const __m256 f_a = formant_lerp_avx2(tab_f[k], ia, ia2, omfa, fa);
+        const __m256 f_b = formant_lerp_avx2(tab_f[k], ib, ib2, omfb, fb);
+        const __m256 f = _mm256_add_ps(_mm256_mul_ps(f_a, omm), _mm256_mul_ps(f_b, m));
+        _mm256_store_ps(freq[k] + i, f);
+
+        const __m256 g_a = formant_lerp_avx2(tab_g[k], ia, ia2, omfa, fa);
+        const __m256 g_b = formant_lerp_avx2(tab_g[k], ib, ib2, omfb, fb);
+        _mm256_store_ps(gain[k] + i, _mm256_add_ps(_mm256_mul_ps(g_a, omm), _mm256_mul_ps(g_b, m)));
+    }
+    _mm256_store_ps(qinv + i, _mm256_div_ps(one, q));
+}
+
 // Lane layout: [b1 b2 b3 pad | b1 b2 b3 pad], low half = L, high half = R.
 CEDAR_TARGET_AVX2
 inline void formant_avx2(FormantState& state, float sample_rate,
@@ -658,48 +696,9 @@ inline void formant_avx2(FormantState& state, float sample_rate,
     tab_g[1] = _mm256_setr_ps(VOWEL_TABLE[0].g2, VOWEL_TABLE[1].g2, VOWEL_TABLE[2].g2, VOWEL_TABLE[3].g2, VOWEL_TABLE[4].g2, 0.0f, 0.0f, 0.0f);
     tab_g[2] = _mm256_setr_ps(VOWEL_TABLE[0].g3, VOWEL_TABLE[1].g3, VOWEL_TABLE[2].g3, VOWEL_TABLE[3].g3, VOWEL_TABLE[4].g3, 0.0f, 0.0f, 0.0f);
 
-    const __m256 one = _mm256_set1_ps(1.0f);
-    const __m256 zero = _mm256_setzero_ps();
-    const __m256i four = _mm256_set1_epi32(4);
-    const __m256i one_i = _mm256_set1_epi32(1);
-
-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
-        const __m256 va = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(vowel_a + i), zero), _mm256_set1_ps(4.0f));
-        const __m256 vb = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(vowel_b + i), zero), _mm256_set1_ps(4.0f));
-        const __m256 m = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(morph + i), zero), one);
-        const __m256 q = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(q_in + i), one), _mm256_set1_ps(20.0f));
-
-        const __m256i ia = _mm256_min_epi32(_mm256_cvttps_epi32(va), four);
-        const __m256i ib = _mm256_min_epi32(_mm256_cvttps_epi32(vb), four);
-        const __m256 fa = _mm256_sub_ps(va, _mm256_cvtepi32_ps(_mm256_cvttps_epi32(va)));
-        const __m256 fb = _mm256_sub_ps(vb, _mm256_cvtepi32_ps(_mm256_cvttps_epi32(vb)));
-        const __m256i ia2 = _mm256_min_epi32(_mm256_add_epi32(ia, one_i), four);
-        const __m256i ib2 = _mm256_min_epi32(_mm256_add_epi32(ib, one_i), four);
-        const __m256 omfa = _mm256_sub_ps(one, fa);
-        const __m256 omfb = _mm256_sub_ps(one, fb);
-        const __m256 omm = _mm256_sub_ps(one, m);
-
-        for (int k = 0; k < 3; ++k) {
-            const __m256 f_a = formant_lerp_avx2(tab_f[k], ia, ia2, omfa, fa);
-            const __m256 f_b = formant_lerp_avx2(tab_f[k], ib, ib2, omfb, fb);
-            const __m256 f = _mm256_add_ps(_mm256_mul_ps(f_a, omm), _mm256_mul_ps(f_b, m));
-            _mm256_store_ps(freq[k] + i, f);
-
-            const __m256 g_a = formant_lerp_avx2(tab_g[k], ia, ia2, omfa, fa);
-            const __m256 g_b = formant_lerp_avx2(tab_g[k], ib, ib2, omfb, fb);
-            _mm256_store_ps(gain[k] + i, _mm256_add_ps(_mm256_mul_ps(g_a, omm), _mm256_mul_ps(g_b, m)));
-        }
-        _mm256_store_ps(qinv + i, _mm256_div_ps(one, q));
-    }
-
-    // Persist the scalar cache so the fallback path / next block stay consistent.
-    constexpr std::size_t L = BLOCK_SIZE - 1;
-    state.last_vowel_a = std::clamp(vowel_a[L], 0.0f, 4.0f);
-    state.last_vowel_b = std::clamp(vowel_b[L], 0.0f, 4.0f);
-    state.last_morph = std::clamp(morph[L], 0.0f, 1.0f);
-    state.last_q = std::clamp(q_in[L], 1.0f, 20.0f);
-    state.f1 = freq[0][L]; state.f2 = freq[1][L]; state.f3 = freq[2][L];
-    state.g1 = gain[0][L]; state.g2 = gain[1][L]; state.g3 = gain[2][L];
+    // Pass 1 is software-pipelined into the recurrence loop below: the params of the
+    // next 8-sample group are computed while the serial SVF chain of this one runs.
+    formant_params8_avx2(0, tab_f, tab_g, vowel_a, vowel_b, morph, q_in, freq, gain, qinv);
 
     // Pass 2b+3 fused and software-pipelined: the SVF recurrence is a serial
     // latency-bound chain, the tan coefficients are throughput-bound and state
@@ -715,6 +714,9 @@ inline void formant_avx2(FormantState& state, float sample_rate,
     formant_pack_coef_avx2(coef, cv, 0);
     for (std::size_t i = 0; i < BLOCK_SIZE; i += CH) {
         const bool more = i + CH < BLOCK_SIZE;
+        if (!(i & CH) && i + 8 < BLOCK_SIZE)
+            formant_params8_avx2(i + 8, tab_f, tab_g, vowel_a, vowel_b, morph, q_in,
+                                 freq, gain, qinv);
         formant_step_avx2(i, z1, z2, cv, qinv, input, input_r, bpbuf);
         if (more) formant_coef4_avx2(freq[0] + i + CH, coef[0] + i + CH, sample_rate);
         formant_step_avx2(i + 1, z1, z2, cv, qinv, input, input_r, bpbuf);
@@ -729,6 +731,15 @@ inline void formant_avx2(FormantState& state, float sample_rate,
             formant_post8_avx2(i - CH, bpbuf, gain, input, input_r,
                                dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
     }
+
+    // Persist the scalar cache so the fallback path / next block stay consistent.
+    constexpr std::size_t L = BLOCK_SIZE - 1;
+    state.last_vowel_a = std::clamp(vowel_a[L], 0.0f, 4.0f);
+    state.last_vowel_b = std::clamp(vowel_b[L], 0.0f, 4.0f);
+    state.last_morph = std::clamp(morph[L], 0.0f, 1.0f);
+    state.last_q = std::clamp(q_in[L], 1.0f, 20.0f);
+    state.f1 = freq[0][L]; state.f2 = freq[1][L]; state.f3 = freq[2][L];
+    state.g1 = gain[0][L]; state.g2 = gain[1][L]; state.g3 = gain[2][L];
 
     alignas(32) float a1[8], a2[8];
     _mm256_store_ps(a1, z1);
