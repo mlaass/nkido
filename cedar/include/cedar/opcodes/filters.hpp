@@ -469,6 +469,124 @@ inline __m256d formant_tan_pd(__m256d w) noexcept {
     return _mm256_div_pd(s, c);
 }
 
+// tan(w) for w in [0, 0.25] on 4 doubles: truncated sin/cos Taylor series.
+// Omitted terms: sin w^9/9! (rel. 4e-11), cos w^10/10! (rel. 3e-13).
+[[gnu::always_inline]] CEDAR_TARGET_AVX2
+inline __m256d formant_tan_small_pd(__m256d w) noexcept {
+    const __m256d x = _mm256_mul_pd(w, w);
+    __m256d s = _mm256_set1_pd(-1.0 / 5040.0);
+    s = _mm256_add_pd(_mm256_mul_pd(s, x), _mm256_set1_pd(1.0 / 120.0));
+    s = _mm256_add_pd(_mm256_mul_pd(s, x), _mm256_set1_pd(-1.0 / 6.0));
+    s = _mm256_add_pd(_mm256_mul_pd(s, x), _mm256_set1_pd(1.0));
+    s = _mm256_mul_pd(s, w);
+    __m256d c = _mm256_set1_pd(1.0 / 40320.0);
+    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(-1.0 / 720.0));
+    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(1.0 / 24.0));
+    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(-0.5));
+    c = _mm256_add_pd(_mm256_mul_pd(c, x), _mm256_set1_pd(1.0));
+    return _mm256_div_pd(s, c);
+}
+
+// Prewarped SVF coefficient for 4 samples of one band: min(1.9, 2*tan(pi*min(f, 0.48*sr)/sr)).
+// w is built with the same float ops as the scalar path; tan is evaluated in
+// double (sin/cos Taylor, ~1e-10 rel. error for w <= 1.51) and rounded to
+// float. glibc's tanf is not always correctly rounded, so lanes whose double
+// result lies within 0.03 ulp of a rounding midpoint (or on a power of two)
+// are re-evaluated with the real std::tan; every other lane is bit-identical
+// to tanf. The filter is chaotic at high q, so 1 ulp here would blow up.
+// simd: approx (replaces std::tan)
+[[gnu::always_inline]] CEDAR_TARGET_AVX2
+inline void formant_coef4_avx2(const float* fq, float* coef_out, float sample_rate) noexcept {
+    const __m128 lim = _mm_set1_ps(sample_rate * 0.48f);
+    const __m128 srv = _mm_set1_ps(sample_rate);
+    const __m128 f = _mm_min_ps(_mm_load_ps(fq), lim);
+    const __m128 w = _mm_div_ps(_mm_mul_ps(_mm_set1_ps(PI), f), srv);
+    // Formant frequencies keep w <= 0.25 at typical sample rates: a shorter series
+    // (sin to w^7, cos to w^8; rel. error <= ~5e-11 there) is enough. Larger or NaN w
+    // takes the full-range series.
+    const __m128 small = _mm_cmp_ps(w, _mm_set1_ps(0.25f), _CMP_NLE_UQ);
+    const __m256d wd = _mm256_cvtps_pd(w);
+    const __m256d d = __builtin_expect(_mm_movemask_ps(small) == 0, 1)
+        ? formant_tan_small_pd(wd) : formant_tan_pd(wd);
+    const __m128 t0 = _mm256_cvtpd_ps(d);
+    const __m128 r = _mm256_cvtpd_ps(_mm256_sub_pd(d, _mm256_cvtps_pd(t0)));
+    __m128 t = t0;
+
+    const __m128 exp_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7F800000));
+    const __m128 abs_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+    // Risky if the residual is within 0.03 ulp of a rounding midpoint (double error <= ~0.02 ulp).
+    const __m128 thr_scale = _mm_set1_ps(0.47f * 1.1920929e-07f);  // 0.47 * 2^-23
+    const __m128 thr = _mm_mul_ps(_mm_and_ps(t, exp_mask), thr_scale);
+    const __m128 risky_r = _mm_cmp_ps(_mm_and_ps(r, abs_mask), thr, _CMP_GT_OQ);
+    const __m128 pow2 = _mm_castsi128_ps(_mm_cmpeq_epi32(
+        _mm_and_si128(_mm_castps_si128(t), _mm_set1_epi32(0x007FFFFF)), _mm_setzero_si128()));
+    int mask = _mm_movemask_ps(_mm_or_ps(risky_r, pow2));
+    if (__builtin_expect(mask != 0, 0)) {
+        alignas(16) float ta[4], wa[4];
+        _mm_store_ps(ta, t);
+        _mm_store_ps(wa, w);
+        do {
+            const int j = __builtin_ctz(mask);
+            mask &= mask - 1;
+            ta[j] = std::tan(wa[j]);
+        } while (mask);
+        t = _mm_load_ps(ta);
+    }
+    _mm_store_ps(coef_out, _mm_min_ps(_mm_mul_ps(_mm_set1_ps(2.0f), t), _mm_set1_ps(1.9f)));
+}
+
+// One SVF recurrence step (sample i) for the 6 chains; writes out_l/out_r[i].
+[[gnu::always_inline]] CEDAR_TARGET_AVX2
+inline void formant_step_avx2(std::size_t i, __m256& z1, __m256& z2,
+                              const float (*coef)[BLOCK_SIZE], const float (*gain)[BLOCK_SIZE],
+                              const float* qinv, const float* input, const float* input_r,
+                              const float* dry_buf, float dry_const,
+                              const float* wet_buf, float wet_const,
+                              float* out_l, float* out_r) noexcept {
+    const float dry = drywet::coeff(dry_buf, i, dry_const);
+    const float wet = drywet::coeff(wet_buf, i, wet_const);
+    const float c1 = coef[0][i];
+    const float c2 = coef[1][i];
+    const float c3 = coef[2][i];
+    const __m256 fv = _mm256_set_ps(0.0f, c3, c2, c1, 0.0f, c3, c2, c1);
+    const __m256 gv = _mm256_set_ps(0.0f, gain[2][i], gain[1][i], gain[0][i],
+                                    0.0f, gain[2][i], gain[1][i], gain[0][i]);
+    const __m256 qv = _mm256_set1_ps(qinv[i]);
+
+    const float xl = input[i];
+    const float xr = input_r ? input_r[i] : xl;
+    const __m256 xv = _mm256_insertf128_ps(
+        _mm256_castps128_ps256(_mm_set1_ps(xl)), _mm_set1_ps(xr), 1);
+
+    const __m256 hp = _mm256_sub_ps(_mm256_sub_ps(xv, _mm256_mul_ps(z1, qv)), z2);
+    const __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(fv, hp));
+    const __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(fv, z1));
+    // clamp_audio is the identity for |v| <= 10, so feed bp/lp straight back and
+    // run the clamp only when some lane is out of range or NaN (rare, predicted
+    // branch). This keeps max/min/and off the loop-carried dependency chain.
+    z1 = bp;
+    z2 = lp;
+    const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
+    const __m256 ten = _mm256_set1_ps(10.0f);
+    const __m256 bad = _mm256_or_ps(
+        _mm256_cmp_ps(_mm256_and_ps(bp, abs_mask), ten, _CMP_NLE_UQ),
+        _mm256_cmp_ps(_mm256_and_ps(lp, abs_mask), ten, _CMP_NLE_UQ));
+    if (__builtin_expect(_mm256_movemask_ps(bad) != 0, 0)) {
+        z1 = formant_clamp_avx2(bp);
+        z2 = formant_clamp_avx2(lp);
+    }
+
+    // (bp1*g1 + bp2*g2) + bp3*g3 per half, result in lanes 0 and 4.
+    const __m256 p = _mm256_mul_ps(bp, gv);
+    const __m256 s = _mm256_add_ps(p, _mm256_permute_ps(p, _MM_SHUFFLE(3, 3, 3, 1)));
+    const __m256 t = _mm256_add_ps(s, _mm256_permute_ps(p, _MM_SHUFFLE(3, 3, 3, 2)));
+    const float pl = _mm_cvtss_f32(_mm256_castps256_ps128(t));
+    const float pr = _mm_cvtss_f32(_mm256_extractf128_ps(t, 1));
+
+    out_l[i] = drywet::mix(xl, pl, dry, wet);
+    out_r[i] = drywet::mix(xr, pr, dry, wet);
+}
+
 // Lane layout: [b1 b2 b3 pad | b1 b2 b3 pad], low half = L, high half = R.
 CEDAR_TARGET_AVX2
 inline void formant_avx2(FormantState& state, float sample_rate,
@@ -541,103 +659,26 @@ inline void formant_avx2(FormantState& state, float sample_rate,
     state.f1 = freq[0][L]; state.f2 = freq[1][L]; state.f3 = freq[2][L];
     state.g1 = gain[0][L]; state.g2 = gain[1][L]; state.g3 = gain[2][L];
 
-    // Pass 2b (state-independent): prewarped SVF coefficients for all samples.
-    // w is built with the same float ops as the scalar path; tan is evaluated in
-    // double (sin/cos Taylor, ~1e-10 rel. error for w <= 1.51) and rounded to
-    // float. glibc's tanf is not always correctly rounded, so lanes whose double
-    // result lies within 0.1 ulp of a rounding midpoint (or on a power of two)
-    // are re-evaluated with the real std::tan; every other lane is bit-identical
-    // to tanf. The filter is chaotic at high q, so 1 ulp here would blow up.
-    // simd: approx (replaces std::tan)
+    // Pass 2b+3 fused and software-pipelined: the SVF recurrence is a serial
+    // latency-bound chain, the tan coefficients are throughput-bound and state
+    // independent. Coefficients for chunk c+1 (one band per step) are issued between
+    // the recurrence steps of chunk c so the out-of-order core overlaps the two.
     alignas(32) float coef[3][BLOCK_SIZE];
-    {
-        const __m256 lim = _mm256_set1_ps(sample_rate * 0.48f);
-        const __m256 srv = _mm256_set1_ps(sample_rate);
-        const __m256 pi = _mm256_set1_ps(PI);
-        const __m256 two = _mm256_set1_ps(2.0f);
-        const __m256 cmax = _mm256_set1_ps(1.9f);
-        const __m256 exp_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7F800000));
-        const __m256 thr_scale = _mm256_set1_ps(0.4f * 1.1920929e-07f);  // 0.4 * 2^-23
-        const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
-        const __m256i mant_mask = _mm256_set1_epi32(0x007FFFFF);
-        for (int k = 0; k < 3; ++k) {
-            for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
-                const __m256 f = _mm256_min_ps(_mm256_load_ps(freq[k] + i), lim);
-                const __m256 w = _mm256_div_ps(_mm256_mul_ps(pi, f), srv);
-                const __m256d d_lo = formant_tan_pd(_mm256_cvtps_pd(_mm256_castps256_ps128(w)));
-                const __m256d d_hi = formant_tan_pd(_mm256_cvtps_pd(_mm256_extractf128_ps(w, 1)));
-                const __m128 a_lo = _mm256_cvtpd_ps(d_lo);
-                const __m128 a_hi = _mm256_cvtpd_ps(d_hi);
-                const __m128 r_lo = _mm256_cvtpd_ps(_mm256_sub_pd(d_lo, _mm256_cvtps_pd(a_lo)));
-                const __m128 r_hi = _mm256_cvtpd_ps(_mm256_sub_pd(d_hi, _mm256_cvtps_pd(a_hi)));
-                __m256 t = _mm256_insertf128_ps(_mm256_castps128_ps256(a_lo), a_hi, 1);
-                const __m256 r = _mm256_insertf128_ps(_mm256_castps128_ps256(r_lo), r_hi, 1);
-
-                const __m256 thr = _mm256_mul_ps(_mm256_and_ps(t, exp_mask), thr_scale);
-                const __m256 risky_r = _mm256_cmp_ps(_mm256_and_ps(r, abs_mask), thr, _CMP_GT_OQ);
-                const __m256 pow2 = _mm256_castsi256_ps(_mm256_cmpeq_epi32(
-                    _mm256_and_si256(_mm256_castps_si256(t), mant_mask), _mm256_setzero_si256()));
-                int mask = _mm256_movemask_ps(_mm256_or_ps(risky_r, pow2));
-                if (mask) {
-                    alignas(32) float ta[8], wa[8];
-                    _mm256_store_ps(ta, t);
-                    _mm256_store_ps(wa, w);
-                    do {
-                        const int j = __builtin_ctz(mask);
-                        mask &= mask - 1;
-                        ta[j] = std::tan(wa[j]);
-                    } while (mask);
-                    t = _mm256_load_ps(ta);
-                }
-                _mm256_store_ps(coef[k] + i, _mm256_min_ps(_mm256_mul_ps(two, t), cmax));
-            }
-        }
-    }
-
-    // Pass 3: the recurrence.
-    const __m256 abs_mask_r = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
-    const __m256 ten_r = _mm256_set1_ps(10.0f);
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        const float dry = drywet::coeff(dry_buf, i, dry_const);
-        const float wet = drywet::coeff(wet_buf, i, wet_const);
-        const float c1 = coef[0][i];
-        const float c2 = coef[1][i];
-        const float c3 = coef[2][i];
-        const __m256 fv = _mm256_set_ps(0.0f, c3, c2, c1, 0.0f, c3, c2, c1);
-        const __m256 gv = _mm256_set_ps(0.0f, gain[2][i], gain[1][i], gain[0][i],
-                                        0.0f, gain[2][i], gain[1][i], gain[0][i]);
-        const __m256 qv = _mm256_set1_ps(qinv[i]);
-
-        const float xl = input[i];
-        const float xr = input_r ? input_r[i] : xl;
-        const __m256 xv = _mm256_insertf128_ps(
-            _mm256_castps128_ps256(_mm_set1_ps(xl)), _mm_set1_ps(xr), 1);
-
-        __m256 hp = _mm256_sub_ps(_mm256_sub_ps(xv, _mm256_mul_ps(z1, qv)), z2);
-        __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(fv, hp));
-        __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(fv, z1));
-        // clamp_audio is the identity for |v| <= 10, so feed bp/lp straight back and
-        // run the clamp only when some lane is out of range or NaN (rare, predicted
-        // branch). This keeps max/min/and off the loop-carried dependency chain.
-        z1 = bp;
-        z2 = lp;
-        const __m256 bad = _mm256_or_ps(
-            _mm256_cmp_ps(_mm256_and_ps(bp, abs_mask_r), ten_r, _CMP_NLE_UQ),
-            _mm256_cmp_ps(_mm256_and_ps(lp, abs_mask_r), ten_r, _CMP_NLE_UQ));
-        if (__builtin_expect(_mm256_movemask_ps(bad) != 0, 0)) {
-            z1 = formant_clamp_avx2(bp);
-            z2 = formant_clamp_avx2(lp);
-        }
-
-        // (bp1*g1 + bp2*g2) + bp3*g3 per half, result in lanes 0 and 4.
-        const __m256 p = _mm256_mul_ps(bp, gv);
-        const __m256 s = _mm256_add_ps(p, _mm256_permute_ps(p, _MM_SHUFFLE(3, 3, 3, 1)));
-        const __m256 t = _mm256_add_ps(s, _mm256_permute_ps(p, _MM_SHUFFLE(3, 3, 3, 2)));
-        const float pl = _mm_cvtss_f32(_mm256_castps256_ps128(t));
-        const float pr = _mm_cvtss_f32(_mm256_extractf128_ps(t, 1));
-
-        out_l[i] = drywet::mix(xl, pl, dry, wet);
-        out_r[i] = drywet::mix(xr, pr, dry, wet);
+    constexpr std::size_t CH = 4;
+    for (int k = 0; k < 3; ++k) formant_coef4_avx2(freq[k], coef[k], sample_rate);
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += CH) {
+        const bool more = i + CH < BLOCK_SIZE;
+        formant_step_avx2(i, z1, z2, coef, gain, qinv, input, input_r,
+                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
+        if (more) formant_coef4_avx2(freq[0] + i + CH, coef[0] + i + CH, sample_rate);
+        formant_step_avx2(i + 1, z1, z2, coef, gain, qinv, input, input_r,
+                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
+        if (more) formant_coef4_avx2(freq[1] + i + CH, coef[1] + i + CH, sample_rate);
+        formant_step_avx2(i + 2, z1, z2, coef, gain, qinv, input, input_r,
+                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
+        if (more) formant_coef4_avx2(freq[2] + i + CH, coef[2] + i + CH, sample_rate);
+        formant_step_avx2(i + 3, z1, z2, coef, gain, qinv, input, input_r,
+                          dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
     }
 
     alignas(32) float a1[8], a2[8];
