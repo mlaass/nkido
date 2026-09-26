@@ -7,6 +7,10 @@ from backends.openai_compat import OpenAICompat
 # Pinned from the public catalogue (/api/v1/models, tool-capable, 2026-09-24).
 # Dated ids rather than `~…-latest` aliases so reruns hit the same weights.
 MATRIX = ["z-ai/glm-5.3", "deepseek/deepseek-v4-pro-0813", "qwen/qwen3.8-27b"]
+# Cheap/free extension added 2026-09-26 (serial lanes, see runs/launch_new_lanes.sh).
+EXTRA = ["z-ai/glm-5.3-flash", "deepseek/deepseek-v4-flash-0731", "qwen/qwen3-coder-next",
+         "openai/gpt-6-luna", "poolside/laguna-s-2.1:free", "cohere/north-mini-code:free",
+         "nvidia/nemotron-3-ultra-550b-a55b:free", "qwen/qwen3.8-27b:free"]
 
 
 class OpenRouter(OpenAICompat):
