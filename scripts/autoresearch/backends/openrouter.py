@@ -24,4 +24,6 @@ class OpenRouter(OpenAICompat):
                 "X-Title": "nkido simd-autoresearch"}
 
     def extra_body(self):
-        return {"usage": {"include": True}}
+        # Default routing favours the cheapest upstream (Baidu, DeepInfra at 30-40 tok/s),
+        # which blew the 30 min wall clock. Same weights, fastest host.
+        return {"usage": {"include": True}, "provider": {"sort": "throughput"}}

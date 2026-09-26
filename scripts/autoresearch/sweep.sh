@@ -3,14 +3,14 @@
 # time: every run shares the pinned bench core. Re-running skips (model, target)
 # pairs that already have a summary.json and resumes a stopped one (run.py
 # --resume); `touch runs/STOP` pauses every lane at its next iteration
-# boundary. OpenRouter runs get a $2 per-run cap and stop once all OpenRouter
+# boundary. OpenRouter runs get a $6 per-run cap and stop once all OpenRouter
 # runs together have spent OR_CAP_USD.
 #   OPENROUTER_API_KEY=... scripts/autoresearch/sweep.sh [backend:model ...]
 # Pass model specs to run one lane per model in parallel: runs have their own
 # worktree + branch, and verify.machine_lock serialises every build and bench.
 set -u
 cd "$(dirname "$0")"
-OR_CAP_USD=${OR_CAP_USD:-30}
+OR_CAP_USD=${OR_CAP_USD:-50}
 TARGETS="arith distort formant svf freeverb"
 MODELS=${*:-"claude-code:opus claude-code:sonnet openrouter:z-ai/glm-5.3
 openrouter:deepseek/deepseek-v4-pro-0813 openrouter:qwen/qwen3.8-27b local:qwen3:14b-32k"}
@@ -44,7 +44,7 @@ for spec in $MODELS; do
       if python3 -c "import sys; sys.exit(float('$spent') < $OR_CAP_USD)"; then
         echo "== skip $model $t: OpenRouter total \$$spent >= \$$OR_CAP_USD"; continue
       fi
-      extra=(--budget-usd 2)
+      extra=(--budget-usd 6)
     fi
     echo "== $(date -u +%FT%TZ) $backend $model $t"
     ./run.py --backend "$backend" --model "$model" --target "$t" "${extra[@]}" \
