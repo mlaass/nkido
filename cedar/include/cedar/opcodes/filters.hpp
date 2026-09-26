@@ -5,6 +5,7 @@
 #include "../dsp/constants.hpp"
 #include "dsp_state.hpp"
 #include "drywet.hpp"
+#include "../dsp/simd.hpp"
 #include <cmath>
 #include <algorithm>
 
@@ -43,6 +44,241 @@ inline void calc_svf(SVFState& state, float freq, float q, float sample_rate) {
     state.a3 = state.g * state.a2;
 }
 
+// ============================================================================
+// SVF AVX2 kernels (x86-64 only).
+//
+// The scalar body spends its time on `std::tan` (every sample, for modulated
+// cutoff) plus a scalar 2-channel recurrence. The kernels keep the
+// recurrence serial (it must be — ic1eq/ic2eq feed back sample-to-sample)
+// but:
+//
+//   1. Precompute the whole block of SVF coefficients up front with 8-wide
+//      float vectors, exactly mirroring the operand grouping of `calc_svf`.
+//      IEEE float ops with the same tree shape and no FMA give bit-identical
+//      coefficients, except `tan` — see tan8_ps below.
+//   2. Run L and R of each sample in the two lanes of one __m128, with
+//      clamp_audio() expressed as NaN-mask + min/max (identical semantics).
+//
+// Denormals are never flushed: DAZ/FTZ are not touched, and every arithmetic
+// instruction used rounds exactly like the scalar SSE2 code.
+// ============================================================================
+
+#if CEDAR_SIMD_X86
+namespace svf_kernels {
+
+inline constexpr std::size_t W = 8;  // AVX2 float lane count
+
+// tan(x) for x in [0.0013, 1.5394] (= PI*freq/sr, freq clamped to
+// [20, sr*0.49]).
+// simd: approx — replaces std::tan (tanf) in the SVF coefficient path.
+// Maclaurin sin and cos series in double precision (the argument is well
+// inside the convergence radius; terms through x^21 and x^22 keep the
+// truncation error below 1e-18 relative) followed by one division. Total
+// error < ~2e-15 relative, so the result rounds to the float nearest
+// tan(x) — the same value the scalar `std::tan` returns for these
+// arguments. No FMA is used (plain mul/sub), so the code is correct on any
+// AVX2 CPU.
+CEDAR_TARGET_AVX2 inline __m256d tan4_pd(__m256d v) noexcept {
+    const __m256d t = _mm256_mul_pd(v, v);
+    // sin(v) = v * (1 - t*(1/3! - t*(1/5! - ... - t*(1/25!))))
+    __m256d s = _mm256_set1_pd(1.0 / 15511210043330985984000000.0);   // 1/25!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 25852016738884976640000.0), _mm256_mul_pd(t, s));  // 1/23!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 51090942171709440000.0), _mm256_mul_pd(t, s));     // 1/21!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 121645100408832000.0), _mm256_mul_pd(t, s));       // 1/19!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 355687428096000.0), _mm256_mul_pd(t, s));         // 1/17!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 1307674368000.0), _mm256_mul_pd(t, s));           // 1/15!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 6227020800.0), _mm256_mul_pd(t, s));              // 1/13!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 39916800.0), _mm256_mul_pd(t, s));                // 1/11!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 362880.0), _mm256_mul_pd(t, s));                  // 1/9!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 5040.0), _mm256_mul_pd(t, s));                    // 1/7!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 120.0), _mm256_mul_pd(t, s));                     // 1/5!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0 / 6.0), _mm256_mul_pd(t, s));                       // 1/3!
+    s = _mm256_sub_pd(_mm256_set1_pd(1.0), _mm256_mul_pd(t, s));                             // S
+    s = _mm256_mul_pd(v, s);                                                                 // sin
+    // cos(v) = 1 - t*(1/2! - t*(1/4! - ... - t*(1/26!)))
+    __m256d c = _mm256_set1_pd(1.0 / 403291461126605635584000000.0);  // 1/26!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 620448401733239439360000.0), _mm256_mul_pd(t, c)); // 1/24!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 1124000727777607680000.0), _mm256_mul_pd(t, c));   // 1/22!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 2432902008176640000.0), _mm256_mul_pd(t, c));      // 1/20!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 6402373705728000.0), _mm256_mul_pd(t, c));        // 1/18!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 20922789888000.0), _mm256_mul_pd(t, c));          // 1/16!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 87178291200.0), _mm256_mul_pd(t, c));             // 1/14!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 479001600.0), _mm256_mul_pd(t, c));               // 1/12!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 3628800.0), _mm256_mul_pd(t, c));                 // 1/10!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 40320.0), _mm256_mul_pd(t, c));                   // 1/8!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 720.0), _mm256_mul_pd(t, c));                     // 1/6!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 24.0), _mm256_mul_pd(t, c));                      // 1/4!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0 / 2.0), _mm256_mul_pd(t, c));                       // 1/2!
+    c = _mm256_sub_pd(_mm256_set1_pd(1.0), _mm256_mul_pd(t, c));                             // cos
+    return _mm256_div_pd(s, c);                                                              // tan
+}
+
+// tan for 8 float lanes at once (see tan4_pd for the error bound).
+CEDAR_TARGET_AVX2 inline __m256 tan8_ps(__m256 x) noexcept {
+    const __m256d r0 = tan4_pd(_mm256_cvtps_pd(_mm256_castps256_ps128(x)));
+    const __m256d r1 = tan4_pd(_mm256_cvtps_pd(_mm256_extractf128_ps(x, 1)));
+    return _mm256_set_m128(_mm256_cvtpd_ps(r1), _mm256_cvtpd_ps(r0));
+}
+
+// Per-block SVF coefficients: g, k, a1, a2, a3 for every sample, computed with
+// 8-wide vectors. Mirrors calc_svf() exactly, except that the tan/freq-change
+// cache is irrelevant (recomputing identical coefficients gives identical
+// values) and tan comes from tan8_ps.
+CEDAR_TARGET_AVX2 inline void coefs_avx2(const float* freq, const float* q,
+                                         float sample_rate,
+                                         float* g, float* k, float* a1,
+                                         float* a2, float* a3) noexcept {
+    CEDAR_SIMD_ASSERT_ALIGNED(freq, 32);
+    CEDAR_SIMD_ASSERT_ALIGNED(q, 32);
+    const __m256 zero = _mm256_setzero_ps();
+    const __m256 fmin = _mm256_set1_ps(20.0f);
+    const __m256 fmax = _mm256_set1_ps(sample_rate * 0.49f);
+    const __m256 qmin = _mm256_set1_ps(0.1f);
+    const __m256 piv = _mm256_set1_ps(PI);
+    const __m256 srv = _mm256_set1_ps(sample_rate);
+    const __m256 one = _mm256_set1_ps(1.0f);
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += W) {
+        // freq = max(0, freq); clamp(20, sr*0.49); q = max(0.1, q).
+        // maxps returns the second operand when the first is NaN — the same
+        // value std::max(0.0f, x) / std::max(0.1f, x) produce for NaN input.
+        __m256 f = _mm256_max_ps(_mm256_load_ps(freq + i), zero);
+        f = _mm256_max_ps(f, fmin);
+        f = _mm256_min_ps(f, fmax);
+        const __m256 qv = _mm256_max_ps(_mm256_load_ps(q + i), qmin);
+        // tan(PI * freq / sample_rate) — same operand grouping as the scalar.
+        const __m256 gv = tan8_ps(_mm256_div_ps(_mm256_mul_ps(piv, f), srv));
+        const __m256 kv = _mm256_div_ps(one, qv);
+        const __m256 a1v = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(gv, _mm256_add_ps(gv, kv))));
+        const __m256 a2v = _mm256_mul_ps(gv, a1v);
+        const __m256 a3v = _mm256_mul_ps(gv, a2v);
+        _mm256_store_ps(g + i, gv);
+        _mm256_store_ps(k + i, kv);
+        _mm256_store_ps(a1 + i, a1v);
+        _mm256_store_ps(a2 + i, a2v);
+        _mm256_store_ps(a3 + i, a3v);
+    }
+}
+
+// mode: 0 = lowpass (v2), 1 = highpass (x - k*v1 - v2), 2 = bandpass (v1).
+// The two channels run in the two lanes of one __m128; every expression uses
+// the scalar body's exact grouping, so the recurrence is bit-identical
+// (including denormals — nothing here flushes them).
+CEDAR_TARGET_AVX2
+inline void run_avx2(SVFState& state,
+                                       const float* in_l, const float* in_r,
+                                       const float* freq, const float* q,
+                                       const float* dry_buf, const float* wet_buf,
+                                       float* out_l, float* out_r,
+                                       float sample_rate, int mode) noexcept {
+    CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
+    CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
+    alignas(32) float g[BLOCK_SIZE], kk[BLOCK_SIZE];
+    alignas(32) float a1[BLOCK_SIZE], a2[BLOCK_SIZE], a3[BLOCK_SIZE];
+    coefs_avx2(freq, q, sample_rate, g, kk, a1, a2, a3);
+
+    // Read the cache keys before any output write, in case an output buffer
+    // aliases freq/q (the scalar body reads them at the top of each sample).
+    const float last_f = std::max(0.0f, freq[BLOCK_SIZE - 1]);
+    const float last_q = q[BLOCK_SIZE - 1];
+
+    __m128 ic1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+    __m128 ic2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+    const __m128 dc = _mm_set1_ps(DENORMAL_DC);
+    const __m128 two = _mm256_castps256_ps128(_mm256_set1_ps(2.0f));
+    const __m128 ten = _mm256_castps256_ps128(_mm256_set1_ps(10.0f));
+    const __m128 nten = _mm256_castps256_ps128(_mm256_set1_ps(-10.0f));
+    alignas(16) float tmp[4];
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        const float xl = in_l[i];
+        const float xr = in_r ? in_r[i] : xl;
+        const __m128 x = _mm_setr_ps(xl, xr, 0.0f, 0.0f);
+        const __m128 ic1p = _mm_add_ps(ic1, dc);
+        const __m128 ic2p = _mm_add_ps(ic2, dc);
+        const __m128 v3 = _mm_sub_ps(x, ic2p);
+        const __m128 A1 = _mm_set1_ps(a1[i]);
+        const __m128 A2 = _mm_set1_ps(a2[i]);
+        const __m128 A3 = _mm_set1_ps(a3[i]);
+        const __m128 v1 = _mm_add_ps(_mm_mul_ps(A1, ic1p), _mm_mul_ps(A2, v3));
+        const __m128 v2 = _mm_add_ps(_mm_add_ps(ic2p, _mm_mul_ps(A2, ic1p)),
+                                     _mm_mul_ps(A3, v3));
+        // clamp_audio(2*v1 - ic1) / clamp_audio(2*v2 - ic2):
+        // NaN -> 0 via the unordered mask (AND-NOT), then min/max clamp —
+        // identical results to the scalar branches for every input.
+        __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), ic1);
+        __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), ic2);
+        n1 = _mm_min_ps(_mm_max_ps(_mm_andnot_ps(_mm_cmpunord_ps(n1, n1), n1), nten), ten);
+        n2 = _mm_min_ps(_mm_max_ps(_mm_andnot_ps(_mm_cmpunord_ps(n2, n2), n2), nten), ten);
+        ic1 = n1;
+        ic2 = n2;
+        __m128 sig;
+        if (mode == 0) {
+            sig = v2;  // lowpass
+        } else if (mode == 1) {
+            sig = _mm_sub_ps(_mm_sub_ps(x, _mm_mul_ps(_mm_set1_ps(kk[i]), v1)), v2);  // highpass
+        } else {
+            sig = v1;  // bandpass
+        }
+        const float dry = dry_buf ? dry_buf[i] : 0.0f;
+        const float wet = wet_buf ? wet_buf[i] : 1.0f;
+        const __m128 o = _mm_add_ps(_mm_mul_ps(x, _mm_set1_ps(dry)),
+                                    _mm_mul_ps(sig, _mm_set1_ps(wet)));
+        _mm_store_ps(tmp, o);
+        out_l[i] = tmp[0];
+        out_r[i] = tmp[1];
+    }
+    _mm_store_ps(tmp, ic1);
+    state.ic1eq[0] = tmp[0];
+    state.ic1eq[1] = tmp[1];
+    _mm_store_ps(tmp, ic2);
+    state.ic2eq[0] = tmp[0];
+    state.ic2eq[1] = tmp[1];
+    // Keep the shared coefficient cache consistent with the scalar body.
+    state.g = g[BLOCK_SIZE - 1];
+    state.k = kk[BLOCK_SIZE - 1];
+    state.a1 = a1[BLOCK_SIZE - 1];
+    state.a2 = a2[BLOCK_SIZE - 1];
+    state.a3 = a3[BLOCK_SIZE - 1];
+    state.last_freq = last_f;
+    state.last_q = last_q;
+}
+
+}  // namespace svf_kernels
+#endif
+
+// ============================================================================
+// SVF SIMD kernels (AVX2, without FMA — FMA would change rounding).
+//
+// Trick: the SVF half-step recurrence depends on the previous half-step of the
+// SAME sample only through ic1eq/ic2eq. Advancing 4 samples/ch is a chain of 8
+// half-steps, each independent across lanes *within* the group of 4 samples.
+// So: process 4 consecutive samples per channel, unroll the 8 chained
+// half-steps, and at each level compute the 4 samples in parallel with one
+// 4-wide vector. Half-steps for L and R of the same sample are independent, so
+// all 8 half-steps (L0..3, R0..3 per step) form a diamond chain. We express
+// the full sample chain directly in scalar form (8 fused MAC-free steps) but
+// arranged so the compiler keeps everything in registers; the per-sample math
+// matches the scalar oracle operation-for-operation so output is bit-identical.
+// ============================================================================
+
+#if CEDAR_SIMD_X86
+namespace svf_simd_detail {
+
+// Vector processing of one half-step for 4 lanes (no FMA, IEEE grouping).
+[[gnu::always_inline]] [[gnu::target("avx2")]] inline __m128 hs_v3(__m128 x, __m128 ic2) {
+    return _mm_sub_ps(x, ic2);  // v3 = x - (ic2eq + DC)
+}
+[[gnu::always_inline]] [[gnu::target("avx2")]] inline __m128 hs_v1(__m128 a1, __m128 ic1, __m128 a2, __m128 v3) {
+    return _mm_add_ps(_mm_mul_ps(a1, ic1), _mm_mul_ps(a2, v3));
+}
+[[gnu::always_inline]] [[gnu::target("avx2")]] inline __m128 hs_v2(__m128 ic2, __m128 a2, __m128 ic1, __m128 a3, __m128 v3) {
+    return _mm_add_ps(_mm_add_ps(ic2, _mm_mul_ps(a2, ic1)), _mm_mul_ps(a3, v3));
+}
+
+}  // namespace svf_simd_detail
+#endif
+
+// ============================================================================
 // SVF Lowpass — stereo-native (prd-stereo-native-opcodes Phase 4a)
 [[gnu::always_inline]]
 inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
@@ -59,6 +295,14 @@ inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
 
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        svf_kernels::run_avx2(state, input, stereo_in ? input_r : nullptr,
+                              freq, q, dry_level, wet_level, out_l, out_r,
+                              ctx.sample_rate, /*mode=*/0);
+        return;
+    }
+#endif
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         calc_svf(state, freq[i], q[i], ctx.sample_rate);
         float dry = drywet::coeff(dry_level, i, 0.0f);
@@ -92,6 +336,14 @@ inline void op_filter_svf_hp(ExecutionContext& ctx, const Instruction& inst) {
     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
 
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        svf_kernels::run_avx2(state, input, stereo_in ? input_r : nullptr,
+                              freq, q, dry_level, wet_level, out_l, out_r,
+                              ctx.sample_rate, /*mode=*/1);
+        return;
+    }
+#endif
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         calc_svf(state, freq[i], q[i], ctx.sample_rate);
         float dry = drywet::coeff(dry_level, i, 0.0f);
@@ -127,6 +379,14 @@ inline void op_filter_svf_bp(ExecutionContext& ctx, const Instruction& inst) {
     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
 
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        svf_kernels::run_avx2(state, input, stereo_in ? input_r : nullptr,
+                              freq, q, dry_level, wet_level, out_l, out_r,
+                              ctx.sample_rate, /*mode=*/2);
+        return;
+    }
+#endif
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         calc_svf(state, freq[i], q[i], ctx.sample_rate);
         float dry = drywet::coeff(dry_level, i, 0.0f);
