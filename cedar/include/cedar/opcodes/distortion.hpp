@@ -87,6 +87,28 @@ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* input_l,
     const __m256 one = _mm256_set1_ps(1.0f);
     const __m256 twenty_seven = _mm256_set1_ps(27.0f);
     const __m256 nine = _mm256_set1_ps(9.0f);
+
+    if (!stereo) {
+        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+            const __m256 t = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(threshold + i), lo_t), hi_t);
+            const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
+            const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : one;
+            const __m256 x = _mm256_load_ps(input_l + i);
+            const __m256 z = _mm256_div_ps(x, t);
+            const __m256 z2 = _mm256_mul_ps(z, z);
+            const __m256 y = _mm256_div_ps(_mm256_mul_ps(z, _mm256_add_ps(twenty_seven, z2)),
+                                           _mm256_add_ps(twenty_seven, _mm256_mul_ps(nine, z2)));
+            const __m256 s = _mm256_mul_ps(y, t);
+            const __m256 cl = _mm256_blendv_ps(s, t, _mm256_cmp_ps(z, hi_x, _CMP_GT_OQ));
+            const __m256 neg_t = _mm256_sub_ps(_mm256_setzero_ps(), t);
+            const __m256 nl = _mm256_blendv_ps(cl, neg_t, _mm256_cmp_ps(z, lo_x, _CMP_LT_OQ));
+            const __m256 out = _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(nl, wet));
+            _mm256_store_ps(out_l + i, out);
+            _mm256_store_ps(out_r + i, out);
+        }
+        return;
+    }
+
     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
         const __m256 t = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(threshold + i), lo_t), hi_t);
         const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
