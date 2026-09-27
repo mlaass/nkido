@@ -39,9 +39,11 @@ CEDAR_TARGET_AVX2 inline __m256 distort_tanh_curve_avx2(__m256 x) noexcept {
         _mm256_mul_ps(_mm256_set1_ps(28.0f), z));
     q = _mm256_add_ps(_mm256_set1_ps(62370.0f), _mm256_mul_ps(z, q));
     q = _mm256_add_ps(_mm256_set1_ps(135135.0f), _mm256_mul_ps(z, q));
-    __m256 y = _mm256_div_ps(_mm256_mul_ps(x, p), q);
-    return _mm256_div_ps(_mm256_add_ps(y, y),
-        _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(y, y)));
+    // Fold 2*(n/q)/(1+(n/q)^2) into 2*n*q/(q*q+n*n),
+    // removing a dependent division without reciprocal approximation.
+    const __m256 n = _mm256_mul_ps(x, p);
+    return _mm256_div_ps(_mm256_mul_ps(_mm256_add_ps(n, n), q),
+        _mm256_add_ps(_mm256_mul_ps(q, q), _mm256_mul_ps(n, n)));
 }
 
 CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(
