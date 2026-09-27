@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../dsp/simd.hpp"
+
 #include "../vm/context.hpp"
 #include "../vm/instruction.hpp"
 #include "../dsp/constants.hpp"
@@ -44,6 +46,67 @@ inline void calc_svf(SVFState& state, float freq, float q, float sample_rate) {
 }
 
 // SVF Lowpass — stereo-native (prd-stereo-native-opcodes Phase 4a)
+namespace kernels {
+#if CEDAR_SIMD_X86
+// The filter's time-domain recurrence is serial, but its two channel recurrences
+// are independent.  Keep the coefficient calculation scalar and evaluate both
+// channels in one vector without changing the operation order within a lane.
+template <int Output>
+CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
+    float* out_l, float* out_r, const float* input_l, const float* input_r,
+    const float* freq, const float* q, const float* dry_level,
+    const float* wet_level, float sample_rate, SVFState& state) noexcept {
+    const __m128 denormal_dc = _mm_set1_ps(DENORMAL_DC);
+    const __m128 two = _mm_set1_ps(2.0f);
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        calc_svf(state, freq[i], q[i], sample_rate);
+        const float dry = drywet::coeff(dry_level, i, 0.0f);
+        const float wet = drywet::coeff(wet_level, i, 1.0f);
+        const float xl = input_l[i];
+        const float xr = input_r[i];
+
+        const __m128 x = _mm_setr_ps(xl, xr, 0.0f, 0.0f);
+        const __m128 old_ic1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+        const __m128 old_ic2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+        const __m128 ic1 = _mm_add_ps(old_ic1, denormal_dc);
+        const __m128 ic2 = _mm_add_ps(old_ic2, denormal_dc);
+        const __m128 v3 = _mm_sub_ps(x, ic2);
+        const __m128 v1 = _mm_add_ps(
+            _mm_mul_ps(_mm_set1_ps(state.a1), ic1),
+            _mm_mul_ps(_mm_set1_ps(state.a2), v3));
+        const __m128 v2 = _mm_add_ps(
+            _mm_add_ps(ic2, _mm_mul_ps(_mm_set1_ps(state.a2), ic1)),
+            _mm_mul_ps(_mm_set1_ps(state.a3), v3));
+        const __m128 next_ic1 = _mm_sub_ps(_mm_mul_ps(two, v1), old_ic1);
+        const __m128 next_ic2 = _mm_sub_ps(_mm_mul_ps(two, v2), old_ic2);
+
+        const float v1l = _mm_cvtss_f32(v1);
+        const float v1r = _mm_cvtss_f32(_mm_shuffle_ps(v1, v1, _MM_SHUFFLE(1, 1, 1, 1)));
+        const float v2l = _mm_cvtss_f32(v2);
+        const float v2r = _mm_cvtss_f32(_mm_shuffle_ps(v2, v2, _MM_SHUFFLE(1, 1, 1, 1)));
+        state.ic1eq[0] = clamp_audio(_mm_cvtss_f32(next_ic1));
+        state.ic1eq[1] = clamp_audio(_mm_cvtss_f32(_mm_shuffle_ps(next_ic1, next_ic1, _MM_SHUFFLE(1, 1, 1, 1))));
+        state.ic2eq[0] = clamp_audio(_mm_cvtss_f32(next_ic2));
+        state.ic2eq[1] = clamp_audio(_mm_cvtss_f32(_mm_shuffle_ps(next_ic2, next_ic2, _MM_SHUFFLE(1, 1, 1, 1))));
+
+        if constexpr (Output == 0) {
+            out_l[i] = drywet::mix(xl, v2l, dry, wet);
+            out_r[i] = drywet::mix(xr, v2r, dry, wet);
+        } else if constexpr (Output == 1) {
+            const float hpl = xl - state.k * v1l - v2l;
+            const float hpr = xr - state.k * v1r - v2r;
+            out_l[i] = drywet::mix(xl, hpl, dry, wet);
+            out_r[i] = drywet::mix(xr, hpr, dry, wet);
+        } else {
+            out_l[i] = drywet::mix(xl, v1l, dry, wet);
+            out_r[i] = drywet::mix(xr, v1r, dry, wet);
+        }
+    }
+}
+#endif
+} // namespace kernels
+
 [[gnu::always_inline]]
 inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
     float* out_l = ctx.buffers->get(inst.out_buffer);
@@ -58,6 +121,15 @@ inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
     const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
+
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        kernels::svf_stereo_avx2<0>(out_l, out_r, input,
+            stereo_in ? input_r : input, freq, q, dry_level, wet_level,
+            ctx.sample_rate, state);
+        return;
+    }
+#endif
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         calc_svf(state, freq[i], q[i], ctx.sample_rate);
@@ -91,6 +163,15 @@ inline void op_filter_svf_hp(ExecutionContext& ctx, const Instruction& inst) {
     const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
+
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        kernels::svf_stereo_avx2<1>(out_l, out_r, input,
+            stereo_in ? input_r : input, freq, q, dry_level, wet_level,
+            ctx.sample_rate, state);
+        return;
+    }
+#endif
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         calc_svf(state, freq[i], q[i], ctx.sample_rate);
@@ -126,6 +207,15 @@ inline void op_filter_svf_bp(ExecutionContext& ctx, const Instruction& inst) {
     const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
+
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        kernels::svf_stereo_avx2<2>(out_l, out_r, input,
+            stereo_in ? input_r : input, freq, q, dry_level, wet_level,
+            ctx.sample_rate, state);
+        return;
+    }
+#endif
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         calc_svf(state, freq[i], q[i], ctx.sample_rate);
