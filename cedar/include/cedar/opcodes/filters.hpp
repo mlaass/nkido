@@ -80,6 +80,33 @@ CEDAR_TARGET_AVX2 inline bool svf_channels_avx2(
                 return svf_channels_avx2<Mode, true>(ctx, inst);
         }
     }
+    // A shared mono recurrence has only one live channel. Avoid constructing
+    // vectors and extracting their lanes around the scalar clamp/mix helpers.
+    if constexpr (SharedChannels) {
+        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+            calc_svf(state, freq[i], q[i], ctx.sample_rate);
+            const float dry = drywet::coeff(dry_level, i, 0.0f);
+            const float wet = drywet::coeff(wet_level, i, 1.0f);
+            const float x = input[i];
+            const float v3 = x - (state.ic2eq[0] + DENORMAL_DC);
+            const float v1 = state.a1 * (state.ic1eq[0] + DENORMAL_DC)
+                           + state.a2 * v3;
+            const float v2 = (state.ic2eq[0] + DENORMAL_DC)
+                           + state.a2 * (state.ic1eq[0] + DENORMAL_DC)
+                           + state.a3 * v3;
+            state.ic1eq[0] = clamp_audio(2.0f * v1 - state.ic1eq[0]);
+            state.ic2eq[0] = clamp_audio(2.0f * v2 - state.ic2eq[0]);
+            state.ic1eq[1] = state.ic1eq[0];
+            state.ic2eq[1] = state.ic2eq[0];
+            float result;
+            if constexpr (Mode == 0) result = v2;
+            else if constexpr (Mode == 1) result = x - state.k * v1 - v2;
+            else result = v1;
+            out_l[i] = drywet::mix(x, result, dry, wet);
+            out_r[i] = out_l[i];
+        }
+        return true;
+    }
     const __m128 dc = _mm_set1_ps(DENORMAL_DC);
     const __m128 two = _mm_set1_ps(2.0f);
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
