@@ -24,12 +24,13 @@ namespace cedar {
 
 #if CEDAR_SIMD_X86
 namespace kernels {
-// simd: approx std::tanh via a [7/6] Pade approximant on [-2.25, 2.25].
-// Two double-angle steps recover tanh(x); beyond |x|=9 the tail is < 4e-8.
+// simd: approx std::tanh via a [7/6] Pade approximant on [-4.5, 4.5].
+// One double-angle step recovers tanh(x) and attenuates the approximation
+// error near saturation; beyond |x|=9 the tail is < 4e-8.
 CEDAR_TARGET_AVX2 inline __m256 distort_tanh_curve_avx2(__m256 x) noexcept {
     x = _mm256_max_ps(_mm256_set1_ps(-9.0f),
         _mm256_min_ps(_mm256_set1_ps(9.0f), x));
-    x = _mm256_mul_ps(x, _mm256_set1_ps(0.25f));
+    x = _mm256_mul_ps(x, _mm256_set1_ps(0.5f));
     const __m256 z = _mm256_mul_ps(x, x);
     __m256 p = _mm256_add_ps(_mm256_set1_ps(378.0f), z);
     p = _mm256_add_ps(_mm256_set1_ps(17325.0f), _mm256_mul_ps(z, p));
@@ -39,8 +40,6 @@ CEDAR_TARGET_AVX2 inline __m256 distort_tanh_curve_avx2(__m256 x) noexcept {
     q = _mm256_add_ps(_mm256_set1_ps(62370.0f), _mm256_mul_ps(z, q));
     q = _mm256_add_ps(_mm256_set1_ps(135135.0f), _mm256_mul_ps(z, q));
     __m256 y = _mm256_div_ps(_mm256_mul_ps(x, p), q);
-    y = _mm256_div_ps(_mm256_add_ps(y, y),
-        _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(y, y)));
     return _mm256_div_ps(_mm256_add_ps(y, y),
         _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(y, y)));
 }
