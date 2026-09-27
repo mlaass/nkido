@@ -8,6 +8,8 @@
 #include <cmath>
 #include <algorithm>
 
+#include "../dsp/simd.hpp"
+
 namespace cedar {
 
 // Clamp filter state/output to prevent blowup
@@ -435,8 +437,109 @@ constexpr VowelFormants VOWEL_TABLE[5] = {
 //
 // Creates vocal-like filter sweeps by morphing between vowel formants.
 // Uses 3 parallel Chamberlin SVF bandpass filters.
+#if CEDAR_SIMD_X86
+namespace kernels {
+CEDAR_TARGET_AVX2 inline bool filter_formant_mono_avx2(ExecutionContext& ctx,
+                                                        const Instruction& inst) noexcept {
+    if ((inst.flags & InstructionFlag::STEREO_INPUT) != 0)
+        return false;
+
+    auto& state = ctx.states->get_or_create<FormantState>(inst.state_id);
+    // A mono stream must preserve the two channel histories if a graph changes
+    // from stereo to mono.  The common case starts with identical histories.
+    if (state.bp1_z1[0] != state.bp1_z1[1] || state.bp1_z2[0] != state.bp1_z2[1] ||
+        state.bp2_z1[0] != state.bp2_z1[1] || state.bp2_z2[0] != state.bp2_z2[1] ||
+        state.bp3_z1[0] != state.bp3_z1[1] || state.bp3_z2[0] != state.bp3_z2[1])
+        return false;
+
+    float* out_l = ctx.buffers->get(inst.out_buffer);
+    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+    const float* input = ctx.buffers->get(inst.inputs[0]);
+    const float* vowel_a = ctx.buffers->get(inst.inputs[1]);
+    const float* vowel_b = ctx.buffers->get(inst.inputs[2]);
+    const float* morph = ctx.buffers->get(inst.inputs[3]);
+    const float* q_in = ctx.buffers->get(inst.inputs[4]);
+
+    const auto* ext = ctx.states->get_if<ExtendedParams<2>>(ext_params_state_id(inst.state_id));
+    const float* dry_buf = nullptr; float dry_const = 0.0f;
+    const float* wet_buf = nullptr; float wet_const = 1.0f;
+    if (ext) {
+        const auto& d = ext->params[0];
+        if (d.is_constant()) dry_const = d.constant; else dry_buf = ctx.buffers->get(d.buffer_idx);
+        const auto& w = ext->params[1];
+        if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+    }
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        float va = std::clamp(vowel_a[i], 0.0f, 4.0f);
+        float vb = std::clamp(vowel_b[i], 0.0f, 4.0f);
+        float m = std::clamp(morph[i], 0.0f, 1.0f);
+        float q = std::clamp(q_in[i], 1.0f, 20.0f);
+        float dry = drywet::coeff(dry_buf, i, dry_const);
+        float wet = drywet::coeff(wet_buf, i, wet_const);
+
+        if (va != state.last_vowel_a || vb != state.last_vowel_b ||
+            m != state.last_morph || q != state.last_q) {
+            state.last_vowel_a = va; state.last_vowel_b = vb;
+            state.last_morph = m; state.last_q = q;
+            int idx_a = static_cast<int>(va), idx_b = static_cast<int>(vb);
+            float frac_a = va - static_cast<float>(idx_a);
+            float frac_b = vb - static_cast<float>(idx_b);
+            idx_a = std::min(idx_a, 4); idx_b = std::min(idx_b, 4);
+            int idx_a2 = std::min(idx_a + 1, 4), idx_b2 = std::min(idx_b + 1, 4);
+            const auto& a0 = VOWEL_TABLE[idx_a]; const auto& a1 = VOWEL_TABLE[idx_a2];
+            const auto& b0 = VOWEL_TABLE[idx_b]; const auto& b1 = VOWEL_TABLE[idx_b2];
+            float ia = 1.0f - frac_a, ib = 1.0f - frac_b;
+            float f1a = a0.f1 * ia + a1.f1 * frac_a, f2a = a0.f2 * ia + a1.f2 * frac_a;
+            float f3a = a0.f3 * ia + a1.f3 * frac_a, g1a = a0.g1 * ia + a1.g1 * frac_a;
+            float g2a = a0.g2 * ia + a1.g2 * frac_a, g3a = a0.g3 * ia + a1.g3 * frac_a;
+            float f1b = b0.f1 * ib + b1.f1 * frac_b, f2b = b0.f2 * ib + b1.f2 * frac_b;
+            float f3b = b0.f3 * ib + b1.f3 * frac_b, g1b = b0.g1 * ib + b1.g1 * frac_b;
+            float g2b = b0.g2 * ib + b1.g2 * frac_b, g3b = b0.g3 * ib + b1.g3 * frac_b;
+            float im = 1.0f - m;
+            state.f1 = f1a * im + f1b * m; state.f2 = f2a * im + f2b * m;
+            state.f3 = f3a * im + f3b * m; state.g1 = g1a * im + g1b * m;
+            state.g2 = g2a * im + g2b * m; state.g3 = g3a * im + g3b * m;
+        }
+
+        auto prewarp_coef = [&](float freq) -> float {
+            float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
+            return std::min(1.9f, 2.0f * std::tan(w));
+        };
+        float f1_coef = prewarp_coef(state.f1), f2_coef = prewarp_coef(state.f2);
+        float f3_coef = prewarp_coef(state.f3), q_coef = 1.0f / q;
+        float x = input[i];
+        float hp1 = x - state.bp1_z1[0] * q_coef - state.bp1_z2[0];
+        float bp1 = state.bp1_z1[0] + f1_coef * hp1;
+        float lp1 = state.bp1_z2[0] + f1_coef * state.bp1_z1[0];
+        state.bp1_z1[0] = clamp_audio(bp1); state.bp1_z2[0] = clamp_audio(lp1);
+        float hp2 = x - state.bp2_z1[0] * q_coef - state.bp2_z2[0];
+        float bp2 = state.bp2_z1[0] + f2_coef * hp2;
+        float lp2 = state.bp2_z2[0] + f2_coef * state.bp2_z1[0];
+        state.bp2_z1[0] = clamp_audio(bp2); state.bp2_z2[0] = clamp_audio(lp2);
+        float hp3 = x - state.bp3_z1[0] * q_coef - state.bp3_z2[0];
+        float bp3 = state.bp3_z1[0] + f3_coef * hp3;
+        float lp3 = state.bp3_z2[0] + f3_coef * state.bp3_z1[0];
+        state.bp3_z1[0] = clamp_audio(bp3); state.bp3_z2[0] = clamp_audio(lp3);
+        float processed = bp1 * state.g1 + bp2 * state.g2 + bp3 * state.g3;
+        float y = drywet::mix(x, processed, dry, wet);
+        out_l[i] = y; out_r[i] = y;
+    }
+    for (int k = 1; k < 2; ++k) {
+        state.bp1_z1[k] = state.bp1_z1[0]; state.bp1_z2[k] = state.bp1_z2[0];
+        state.bp2_z1[k] = state.bp2_z1[0]; state.bp2_z2[k] = state.bp2_z2[0];
+        state.bp3_z1[k] = state.bp3_z1[0]; state.bp3_z2[k] = state.bp3_z2[0];
+    }
+    return true;
+}
+}
+#endif
+
 [[gnu::always_inline]]
 inline void op_filter_formant(ExecutionContext& ctx, const Instruction& inst) {
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2) && kernels::filter_formant_mono_avx2(ctx, inst)) return;
+#endif
     float* out_l = ctx.buffers->get(inst.out_buffer);
     float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
     const float* input = ctx.buffers->get(inst.inputs[0]);
