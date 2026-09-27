@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../dsp/simd.hpp"
+
 #include "../vm/context.hpp"
 #include "../vm/instruction.hpp"
 #include "../dsp/constants.hpp"
@@ -33,8 +35,126 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
 // Classic algorithm: 8 parallel lowpass-feedback comb filters summed,
 // then through 4 series allpass filters. Creates lush, dense reverb.
 
+namespace kernels {
+#if CEDAR_SIMD_X86
+CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+                                                   const Instruction& inst) noexcept {
+    float* out_l = ctx.buffers->get(inst.out_buffer);
+    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+    const float* input = ctx.buffers->get(inst.inputs[0]);
+    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
+    const float* input_r = stereo_in
+        ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1))
+        : nullptr;
+    const float* room_size = ctx.buffers->get(inst.inputs[1]);
+    const float* damping = ctx.buffers->get(inst.inputs[2]);
+    const float* room_scale_in = ctx.buffers->get(inst.inputs[3]);
+    const float* room_offset_in = ctx.buffers->get(inst.inputs[4]);
+    auto& state = ctx.states->get_or_create<FreeverbState>(inst.state_id);
+
+    state.ensure_buffers(ctx.arena);
+    if (!state.buffers_ready()) {
+        CEDAR_LOG_ONCE("[CEDAR] audio arena exhausted: reverb(freeverb) → dry passthrough\n");
+        drywet::passthrough_stereo(input, input_r, stereo_in, out_l, out_r, BLOCK_SIZE);
+        return;
+    }
+
+    const auto* ext = ctx.states->get_if<ExtendedParams<2>>(ext_params_state_id(inst.state_id));
+    const float* dry_buf = nullptr; float dry_const = 1.0f;
+    const float* wet_buf = nullptr; float wet_const = 0.5f;
+    if (ext) {
+        const auto& d = ext->params[0];
+        if (d.is_constant()) dry_const = d.constant; else dry_buf = ctx.buffers->get(d.buffer_idx);
+        const auto& w = ext->params[1];
+        if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+    }
+
+    constexpr float ALLPASS_GAIN = 0.5f;
+    alignas(32) float delayed_values[FreeverbState::NUM_COMBS];
+    alignas(32) float feedback_values[FreeverbState::NUM_COMBS];
+
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        const float x_l = input[i];
+        const float x_r = stereo_in ? input_r[i] : x_l;
+        const float dry = drywet::coeff(dry_buf, i, dry_const);
+        const float wet = drywet::coeff(wet_buf, i, wet_const);
+        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
+        const float room_scale = room_scale_in[i] > 0.0f
+            ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
+        const float room_offset = room_offset_in[i] > 0.0f
+            ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+        const float feedback = room * room_scale + room_offset;
+
+        float y_lr[2] = {0.0f, 0.0f};
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            const float x = ch == 0 ? x_l : x_r;
+            float comb_sum = 0.0f;
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                const std::size_t pos = state.comb_pos[ch][c];
+                const float delayed = state.comb_buffers[ch][c][pos];
+                delayed_values[c] = delayed;
+                comb_sum += delayed;
+            }
+
+            const __m256 delayed = _mm256_load_ps(delayed_values);
+            const __m256 damp_v = _mm256_set1_ps(damp);
+            const __m256 one_minus_damp_v = _mm256_set1_ps(1.0f - damp);
+            const __m256 old_filter = _mm256_loadu_ps(state.comb_filter_state[ch]);
+            const __m256 filtered = _mm256_add_ps(
+                _mm256_mul_ps(delayed, one_minus_damp_v),
+                _mm256_mul_ps(old_filter, damp_v));
+            const __m256 old_x1 = _mm256_loadu_ps(state.dc_x1[ch]);
+            const __m256 old_y1 = _mm256_loadu_ps(state.dc_y1[ch]);
+            const __m256 dc_out = _mm256_add_ps(
+                _mm256_sub_ps(filtered, old_x1),
+                _mm256_mul_ps(_mm256_set1_ps(DC_BLOCKER_R), old_y1));
+            _mm256_storeu_ps(state.comb_filter_state[ch], filtered);
+            _mm256_storeu_ps(state.dc_x1[ch], filtered);
+            _mm256_storeu_ps(state.dc_y1[ch], dc_out);
+            const __m256 writes = _mm256_add_ps(
+                _mm256_set1_ps(x),
+                _mm256_mul_ps(_mm256_set1_ps(feedback), dc_out));
+            _mm256_store_ps(feedback_values, writes);
+
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                std::size_t pos = state.comb_pos[ch][c];
+                state.comb_buffers[ch][c][pos] = feedback_values[c];
+                ++pos;
+                if (pos == FreeverbState::COMB_SIZES_LR[ch][c]) pos = 0;
+                state.comb_pos[ch][c] = pos;
+            }
+
+            float y = comb_sum;
+            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
+                float* buffer = state.allpass_buffers[ch][a];
+                std::size_t pos = state.allpass_pos[ch][a];
+                const float delayed_ap = buffer[pos];
+                const float output = delayed_ap - ALLPASS_GAIN * y;
+                buffer[pos] = y + ALLPASS_GAIN * output;
+                ++pos;
+                if (pos == FreeverbState::ALLPASS_SIZES_LR[ch][a]) pos = 0;
+                state.allpass_pos[ch][a] = pos;
+                y = output;
+            }
+            y_lr[ch] = y;
+        }
+
+        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
+        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
+    }
+}
+#endif
+}  // namespace kernels
+
 [[gnu::always_inline]]
 inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        kernels::reverb_freeverb_avx2(ctx, inst);
+        return;
+    }
+#endif
     // Stereo-native: writes out_buffer (L) and out_buffer+1 (R) in one call.
     // When STEREO_INPUT is set in inst.flags, the primary signal input is a
     // stereo pair (inputs[0] = L, inputs[0]+1 = R). When unset, the mono input
