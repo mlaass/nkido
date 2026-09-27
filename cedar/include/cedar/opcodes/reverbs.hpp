@@ -3,6 +3,7 @@
 #include "../vm/context.hpp"
 #include "../vm/instruction.hpp"
 #include "../dsp/constants.hpp"
+#include "../dsp/simd.hpp"
 #include "dsp_state.hpp"
 #include "dsp_utils.hpp"
 #include "drywet.hpp"
@@ -11,6 +12,71 @@
 #include <algorithm>
 
 namespace cedar {
+
+namespace kernels {
+#if CEDAR_SIMD_X86
+CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+    const float* input, const float* input_r, bool stereo_in,
+    const float* room_size, const float* damping,
+    const float* room_scale_in, const float* room_offset_in,
+    const float* dry_buf, float dry_const, const float* wet_buf, float wet_const,
+    float* out_l, float* out_r, FreeverbState& state) noexcept {
+    constexpr float ALLPASS_GAIN = 0.5f;
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        const float x_l = input[i];
+        const float x_r = stereo_in ? input_r[i] : x_l;
+        const float dry = drywet::coeff(dry_buf, i, dry_const);
+        const float wet = drywet::coeff(wet_buf, i, wet_const);
+        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
+        const float room_scale = room_scale_in[i] > 0.0f ? room_scale_in[i] : 0.28f;
+        const float room_offset = room_offset_in[i] > 0.0f ? room_offset_in[i] : 0.7f;
+        const float feedback = room * room_scale + room_offset;
+        float y_lr[2] = {0.0f, 0.0f};
+
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            const float x = ch == 0 ? x_l : x_r;
+            float comb_sum = 0.0f;
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                float* const buffer = state.comb_buffers[ch][c];
+                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+                float* cursor = state.comb_cursor[ch][c];
+                const float delayed = *cursor;
+                state.comb_filter_state[ch][c] =
+                    delayed * (1.0f - damp) + state.comb_filter_state[ch][c] * damp;
+                const float dc_in = state.comb_filter_state[ch][c];
+                const float dc_out = dc_in - state.dc_x1[ch][c] +
+                                     0.997f * state.dc_y1[ch][c];
+                state.dc_x1[ch][c] = dc_in;
+                state.dc_y1[ch][c] = dc_out;
+                *cursor = x + feedback * dc_out;
+                if (++cursor == buffer + size) cursor = buffer;
+                state.comb_cursor[ch][c] = cursor;
+                if (++state.comb_pos[ch][c] == size) state.comb_pos[ch][c] = 0;
+                comb_sum += delayed;
+            }
+
+            float y = comb_sum;
+            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
+                float* const buffer = state.allpass_buffers[ch][a];
+                const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
+                float* cursor = state.allpass_cursor[ch][a];
+                const float delayed = *cursor;
+                const float output = delayed - ALLPASS_GAIN * y;
+                *cursor = y + ALLPASS_GAIN * output;
+                if (++cursor == buffer + size) cursor = buffer;
+                state.allpass_cursor[ch][a] = cursor;
+                if (++state.allpass_pos[ch][a] == size) state.allpass_pos[ch][a] = 0;
+                y = output;
+            }
+            y_lr[ch] = y;
+        }
+        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
+        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
+    }
+}
+#endif
+}  // namespace kernels
 
 // DC blocker coefficient: R ≈ 0.997 gives ~23Hz cutoff at 48kHz
 // y[n] = x[n] - x[n-1] + R * y[n-1]
@@ -73,6 +139,15 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
         const auto& w = ext->params[1];
         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
     }
+
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        kernels::freeverb_avx2(input, input_r, stereo_in, room_size, damping,
+                               room_scale_in, room_offset_in, dry_buf, dry_const,
+                               wet_buf, wet_const, out_l, out_r, state);
+        return;
+    }
+#endif
 
     constexpr float ALLPASS_GAIN = 0.5f;
 

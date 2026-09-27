@@ -883,6 +883,7 @@ struct FreeverbState {
 
     // Arena-allocated buffers: [channel][filter_index]
     float* comb_buffers[2][NUM_COMBS] = {};
+    float* comb_cursor[2][NUM_COMBS] = {};
     std::size_t comb_pos[2][NUM_COMBS] = {};
     float comb_filter_state[2][NUM_COMBS] = {};
 
@@ -891,6 +892,7 @@ struct FreeverbState {
     float dc_y1[2][NUM_COMBS] = {};
 
     float* allpass_buffers[2][NUM_ALLPASSES] = {};
+    float* allpass_cursor[2][NUM_ALLPASSES] = {};
     std::size_t allpass_pos[2][NUM_ALLPASSES] = {};
 
     void ensure_buffers(AudioArena* arena) {
@@ -900,10 +902,16 @@ struct FreeverbState {
                 if (!comb_buffers[c][i]) {
                     comb_buffers[c][i] = arena->allocate(COMB_SIZES_LR[c][i]);
                 }
+                if (comb_buffers[c][i] && !comb_cursor[c][i]) {
+                    comb_cursor[c][i] = comb_buffers[c][i] + comb_pos[c][i];
+                }
             }
             for (std::size_t i = 0; i < NUM_ALLPASSES; ++i) {
                 if (!allpass_buffers[c][i]) {
                     allpass_buffers[c][i] = arena->allocate(ALLPASS_SIZES_LR[c][i]);
+                }
+                if (allpass_buffers[c][i] && !allpass_cursor[c][i]) {
+                    allpass_cursor[c][i] = allpass_buffers[c][i] + allpass_pos[c][i];
                 }
             }
         }
@@ -920,10 +928,10 @@ struct FreeverbState {
     void release(AudioArena& arena) {
         for (std::size_t c = 0; c < 2; ++c) {
             for (std::size_t i = 0; i < NUM_COMBS; ++i) {
-                if (comb_buffers[c][i]) { arena.release(comb_buffers[c][i], COMB_SIZES_LR[c][i]); comb_buffers[c][i] = nullptr; }
+                if (comb_buffers[c][i]) { arena.release(comb_buffers[c][i], COMB_SIZES_LR[c][i]); comb_buffers[c][i] = nullptr; comb_cursor[c][i] = nullptr; }
             }
             for (std::size_t i = 0; i < NUM_ALLPASSES; ++i) {
-                if (allpass_buffers[c][i]) { arena.release(allpass_buffers[c][i], ALLPASS_SIZES_LR[c][i]); allpass_buffers[c][i] = nullptr; }
+                if (allpass_buffers[c][i]) { arena.release(allpass_buffers[c][i], ALLPASS_SIZES_LR[c][i]); allpass_buffers[c][i] = nullptr; allpass_cursor[c][i] = nullptr; }
             }
         }
     }
@@ -935,6 +943,7 @@ struct FreeverbState {
                     std::memset(comb_buffers[c][i], 0,
                                 COMB_SIZES_LR[c][i] * sizeof(float));
                     comb_pos[c][i] = 0;
+                    comb_cursor[c][i] = comb_buffers[c][i];
                     comb_filter_state[c][i] = 0.0f;
                     dc_x1[c][i] = 0.0f;
                     dc_y1[c][i] = 0.0f;
@@ -945,6 +954,7 @@ struct FreeverbState {
                     std::memset(allpass_buffers[c][i], 0,
                                 ALLPASS_SIZES_LR[c][i] * sizeof(float));
                     allpass_pos[c][i] = 0;
+                    allpass_cursor[c][i] = allpass_buffers[c][i];
                 }
             }
         }
