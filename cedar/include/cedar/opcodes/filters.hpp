@@ -80,6 +80,51 @@ CEDAR_TARGET_AVX2 inline void calc_svf_avx2(
     state.k = k;
 }
 
+// simd: approx tan -- evaluate eight independent coefficient sets together.
+CEDAR_TARGET_AVX2 inline void calc_svf8_avx2(
+    const float* freq, const float* q, float sample_rate,
+    float* a1_out, float* a2_out, float* a3_out, float* k_out) noexcept {
+    const __m256 sample_rate_v = _mm256_set1_ps(sample_rate);
+    const __m256 max_freq = _mm256_mul_ps(
+        sample_rate_v, _mm256_set1_ps(0.45f));
+    // Put the source values second to match std::min/max for NaNs.
+    const __m256 clamped_freq = _mm256_min_ps(
+        max_freq, _mm256_load_ps(freq));
+    const __m256 x = _mm256_div_ps(
+        _mm256_mul_ps(_mm256_set1_ps(PI), clamped_freq), sample_rate_v);
+    const __m256 half_pi = _mm256_set1_ps(1.57079632679489661923f);
+    const __m256 quarter_pi = _mm256_set1_ps(0.78539816339744830962f);
+    const __m256 reciprocal = _mm256_cmp_ps(x, quarter_pi, _CMP_GT_OQ);
+    const __m256 r = _mm256_blendv_ps(x, _mm256_sub_ps(half_pi, x), reciprocal);
+    const __m256 z = _mm256_mul_ps(r, r);
+    __m256 p = _mm256_set1_ps(443861162.0f / 1856156927625.0f);
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(6404582.0f / 10854718875.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(929569.0f / 638512875.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(21844.0f / 6081075.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(1382.0f / 155925.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(62.0f / 2835.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(17.0f / 315.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(2.0f / 15.0f));
+    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(1.0f / 3.0f));
+    const __m256 tangent = _mm256_add_ps(
+        r, _mm256_mul_ps(_mm256_mul_ps(r, z), p));
+    const __m256 g = _mm256_blendv_ps(
+        tangent, _mm256_div_ps(_mm256_set1_ps(1.0f), tangent), reciprocal);
+    const __m256 k = _mm256_div_ps(
+        _mm256_set1_ps(1.0f),
+        _mm256_max_ps(_mm256_set1_ps(0.01f), _mm256_load_ps(q)));
+    const __m256 a1 = _mm256_div_ps(
+        _mm256_set1_ps(1.0f),
+        _mm256_add_ps(_mm256_set1_ps(1.0f),
+            _mm256_mul_ps(g, _mm256_add_ps(g, k))));
+    const __m256 a2 = _mm256_mul_ps(g, a1);
+    const __m256 a3 = _mm256_mul_ps(g, a2);
+    _mm256_store_ps(a1_out, a1);
+    _mm256_store_ps(a2_out, a2);
+    _mm256_store_ps(a3_out, a3);
+    _mm256_store_ps(k_out, k);
+}
+
 // The filter's time-domain recurrence is serial, but its two channel recurrences
 // are independent.  Keep the coefficient calculation scalar and evaluate both
 // channels in one vector without changing the operation order within a lane.
@@ -97,8 +142,15 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
     __m128 old_ic2 = _mm_setr_ps(
         state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
 
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        calc_svf_avx2(state, freq[i], q[i], sample_rate);
+    alignas(32) float a1[8], a2[8], a3[8], k[8];
+    for (std::size_t base = 0; base < BLOCK_SIZE; base += 8) {
+        calc_svf8_avx2(freq + base, q + base, sample_rate, a1, a2, a3, k);
+        for (std::size_t lane = 0; lane < 8; ++lane) {
+        const std::size_t i = base + lane;
+        state.a1 = a1[lane];
+        state.a2 = a2[lane];
+        state.a3 = a3[lane];
+        state.k = k[lane];
         const float dry = HasDry ? dry_level[i] : 0.0f;
         const float wet = HasWet ? wet_level[i] : 1.0f;
         const float xl = input_l[i];
@@ -141,6 +193,7 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
         out_l[i] = _mm_cvtss_f32(mixed);
         out_r[i] = _mm_cvtss_f32(
             _mm_shuffle_ps(mixed, mixed, _MM_SHUFFLE(1, 1, 1, 1)));
+        }
     }
 
     state.ic1eq[0] = _mm_cvtss_f32(old_ic1);
