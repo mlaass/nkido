@@ -14,7 +14,9 @@ namespace kernels {
 #define CEDAR_BINARY_AVX2_KERNEL(name, instruction)                                   \
     [[gnu::always_inline]] inline void name(const float* a, const float* b,           \
                                              float* out) noexcept {                    \
+        unsigned int chunks = 4;                                                      \
         asm volatile(                                                                 \
+            "1:\n\t"                                                                  \
             "vmovaps 0(%[a]), %%ymm0\n\t"                                             \
             "vmovaps 32(%[a]), %%ymm1\n\t"                                            \
             "vmovaps 64(%[a]), %%ymm2\n\t"                                            \
@@ -27,46 +29,16 @@ namespace kernels {
             "vmovaps %%ymm1, 32(%[out])\n\t"                                         \
             "vmovaps %%ymm2, 64(%[out])\n\t"                                         \
             "vmovaps %%ymm3, 96(%[out])\n\t"                                         \
-            "vmovaps 128(%[a]), %%ymm0\n\t"                                         \
-            "vmovaps 160(%[a]), %%ymm1\n\t"                                         \
-            "vmovaps 192(%[a]), %%ymm2\n\t"                                         \
-            "vmovaps 224(%[a]), %%ymm3\n\t"                                         \
-            instruction " 128(%[b]), %%ymm0, %%ymm0\n\t"                           \
-            instruction " 160(%[b]), %%ymm1, %%ymm1\n\t"                           \
-            instruction " 192(%[b]), %%ymm2, %%ymm2\n\t"                           \
-            instruction " 224(%[b]), %%ymm3, %%ymm3\n\t"                           \
-            "vmovaps %%ymm0, 128(%[out])\n\t"                                        \
-            "vmovaps %%ymm1, 160(%[out])\n\t"                                        \
-            "vmovaps %%ymm2, 192(%[out])\n\t"                                        \
-            "vmovaps %%ymm3, 224(%[out])\n\t"                                        \
-            "vmovaps 256(%[a]), %%ymm0\n\t"                                         \
-            "vmovaps 288(%[a]), %%ymm1\n\t"                                         \
-            "vmovaps 320(%[a]), %%ymm2\n\t"                                         \
-            "vmovaps 352(%[a]), %%ymm3\n\t"                                         \
-            instruction " 256(%[b]), %%ymm0, %%ymm0\n\t"                           \
-            instruction " 288(%[b]), %%ymm1, %%ymm1\n\t"                           \
-            instruction " 320(%[b]), %%ymm2, %%ymm2\n\t"                           \
-            instruction " 352(%[b]), %%ymm3, %%ymm3\n\t"                           \
-            "vmovaps %%ymm0, 256(%[out])\n\t"                                        \
-            "vmovaps %%ymm1, 288(%[out])\n\t"                                        \
-            "vmovaps %%ymm2, 320(%[out])\n\t"                                        \
-            "vmovaps %%ymm3, 352(%[out])\n\t"                                        \
-            "vmovaps 384(%[a]), %%ymm0\n\t"                                         \
-            "vmovaps 416(%[a]), %%ymm1\n\t"                                         \
-            "vmovaps 448(%[a]), %%ymm2\n\t"                                         \
-            "vmovaps 480(%[a]), %%ymm3\n\t"                                         \
-            instruction " 384(%[b]), %%ymm0, %%ymm0\n\t"                           \
-            instruction " 416(%[b]), %%ymm1, %%ymm1\n\t"                           \
-            instruction " 448(%[b]), %%ymm2, %%ymm2\n\t"                           \
-            instruction " 480(%[b]), %%ymm3, %%ymm3\n\t"                           \
-            "vmovaps %%ymm0, 384(%[out])\n\t"                                        \
-            "vmovaps %%ymm1, 416(%[out])\n\t"                                        \
-            "vmovaps %%ymm2, 448(%[out])\n\t"                                        \
-            "vmovaps %%ymm3, 480(%[out])\n\t"                                        \
+            "add $128, %[a]\n\t"                                                    \
+            "add $128, %[b]\n\t"                                                    \
+            "add $128, %[out]\n\t"                                                  \
+            "dec %[chunks]\n\t"                                                       \
+            "jnz 1b\n\t"                                                             \
             "vzeroupper"                                                               \
+            : [a] "+r"(a), [b] "+r"(b), [out] "+r"(out),                           \
+              [chunks] "+r"(chunks)                                                   \
             :                                                                          \
-            : [a] "r"(a), [b] "r"(b), [out] "r"(out)                                \
-            : "ymm0", "ymm1", "ymm2", "ymm3", "memory");                         \
+            : "ymm0", "ymm1", "ymm2", "ymm3", "cc", "memory");                   \
     }
 
 CEDAR_BINARY_AVX2_KERNEL(add_avx2, "vaddps")
