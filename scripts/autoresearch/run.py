@@ -45,6 +45,9 @@ def backend_for(name, model, effort=None):
     if name == "openrouter":
         from backends.openrouter import OpenRouter
         return OpenRouter(model)
+    if name == "codex":
+        from backends.codex import Codex
+        return Codex(model, effort)
     if name == "local":
         from backends.local_openai import LocalOpenAI
         return LocalOpenAI(model)
@@ -212,12 +215,12 @@ def setup_run(a):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", choices=["claude-code", "openrouter", "local"])
+    ap.add_argument("--backend", choices=["claude-code", "openrouter", "local", "codex"])
     ap.add_argument("--model")
     ap.add_argument("--target", choices=sorted(TARGETS))
     ap.add_argument("--iterations", type=int, default=8)
     ap.add_argument("--budget-usd", type=float, default=BUDGET_USD)
-    ap.add_argument("--effort", help="claude-code only")
+    ap.add_argument("--effort", help="claude-code / codex (codex default: medium)")
     ap.add_argument("--keep-worktree", action="store_true")
     ap.add_argument("--resume", metavar="RUN_DIR",
                     help="continue a stopped run at its next iteration (same worktree + branch)")
