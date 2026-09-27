@@ -73,6 +73,15 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
     alignas(32) float delayed_values[FreeverbState::NUM_COMBS];
     alignas(32) float feedback_values[FreeverbState::NUM_COMBS];
     const __m256i index_one = _mm256_set1_epi64x(1);
+    __m256 filter_state[2] = {
+        _mm256_loadu_ps(state.comb_filter_state[0]),
+        _mm256_loadu_ps(state.comb_filter_state[1])};
+    __m256 dc_x1_state[2] = {
+        _mm256_loadu_ps(state.dc_x1[0]),
+        _mm256_loadu_ps(state.dc_x1[1])};
+    __m256 dc_y1_state[2] = {
+        _mm256_loadu_ps(state.dc_y1[0]),
+        _mm256_loadu_ps(state.dc_y1[1])};
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         const float x_l = input[i];
@@ -88,6 +97,7 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
         const float feedback = room * room_scale + room_offset;
 
         float y_lr[2] = {0.0f, 0.0f};
+#pragma GCC unroll 2
         for (std::size_t ch = 0; ch < 2; ++ch) {
             const float x = ch == 0 ? x_l : x_r;
             float comb_sum = 0.0f;
@@ -101,18 +111,15 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
             const __m256 delayed = _mm256_load_ps(delayed_values);
             const __m256 damp_v = _mm256_set1_ps(damp);
             const __m256 one_minus_damp_v = _mm256_set1_ps(1.0f - damp);
-            const __m256 old_filter = _mm256_loadu_ps(state.comb_filter_state[ch]);
             const __m256 filtered = _mm256_add_ps(
                 _mm256_mul_ps(delayed, one_minus_damp_v),
-                _mm256_mul_ps(old_filter, damp_v));
-            const __m256 old_x1 = _mm256_loadu_ps(state.dc_x1[ch]);
-            const __m256 old_y1 = _mm256_loadu_ps(state.dc_y1[ch]);
+                _mm256_mul_ps(filter_state[ch], damp_v));
             const __m256 dc_out = _mm256_add_ps(
-                _mm256_sub_ps(filtered, old_x1),
-                _mm256_mul_ps(_mm256_set1_ps(DC_BLOCKER_R), old_y1));
-            _mm256_storeu_ps(state.comb_filter_state[ch], filtered);
-            _mm256_storeu_ps(state.dc_x1[ch], filtered);
-            _mm256_storeu_ps(state.dc_y1[ch], dc_out);
+                _mm256_sub_ps(filtered, dc_x1_state[ch]),
+                _mm256_mul_ps(_mm256_set1_ps(DC_BLOCKER_R), dc_y1_state[ch]));
+            filter_state[ch] = filtered;
+            dc_x1_state[ch] = filtered;
+            dc_y1_state[ch] = dc_out;
             const __m256 writes = _mm256_add_ps(
                 _mm256_set1_ps(x),
                 _mm256_mul_ps(_mm256_set1_ps(feedback), dc_out));
@@ -160,6 +167,184 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
 
         out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
         out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
+    }
+#pragma GCC unroll 2
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        _mm256_storeu_ps(state.comb_filter_state[ch], filter_state[ch]);
+        _mm256_storeu_ps(state.dc_x1[ch], dc_x1_state[ch]);
+        _mm256_storeu_ps(state.dc_y1[ch], dc_y1_state[ch]);
+    }
+}
+
+CEDAR_TARGET_AVX2 inline void freeverb_transpose8(__m256& r0, __m256& r1,
+                                                  __m256& r2, __m256& r3,
+                                                  __m256& r4, __m256& r5,
+                                                  __m256& r6, __m256& r7) noexcept {
+    const __m256 t0 = _mm256_unpacklo_ps(r0, r1);
+    const __m256 t1 = _mm256_unpackhi_ps(r0, r1);
+    const __m256 t2 = _mm256_unpacklo_ps(r2, r3);
+    const __m256 t3 = _mm256_unpackhi_ps(r2, r3);
+    const __m256 t4 = _mm256_unpacklo_ps(r4, r5);
+    const __m256 t5 = _mm256_unpackhi_ps(r4, r5);
+    const __m256 t6 = _mm256_unpacklo_ps(r6, r7);
+    const __m256 t7 = _mm256_unpackhi_ps(r6, r7);
+    const __m256 s0 = _mm256_shuffle_ps(t0, t2, 0x44);
+    const __m256 s1 = _mm256_shuffle_ps(t0, t2, 0xee);
+    const __m256 s2 = _mm256_shuffle_ps(t1, t3, 0x44);
+    const __m256 s3 = _mm256_shuffle_ps(t1, t3, 0xee);
+    const __m256 s4 = _mm256_shuffle_ps(t4, t6, 0x44);
+    const __m256 s5 = _mm256_shuffle_ps(t4, t6, 0xee);
+    const __m256 s6 = _mm256_shuffle_ps(t5, t7, 0x44);
+    const __m256 s7 = _mm256_shuffle_ps(t5, t7, 0xee);
+    r0 = _mm256_permute2f128_ps(s0, s4, 0x20);
+    r1 = _mm256_permute2f128_ps(s1, s5, 0x20);
+    r2 = _mm256_permute2f128_ps(s2, s6, 0x20);
+    r3 = _mm256_permute2f128_ps(s3, s7, 0x20);
+    r4 = _mm256_permute2f128_ps(s0, s4, 0x31);
+    r5 = _mm256_permute2f128_ps(s1, s5, 0x31);
+    r6 = _mm256_permute2f128_ps(s2, s6, 0x31);
+    r7 = _mm256_permute2f128_ps(s3, s7, 0x31);
+}
+
+CEDAR_TARGET_AVX2 inline void reverb_freeverb_tiled_avx2(
+    ExecutionContext& ctx, const Instruction& inst) noexcept {
+    float* out_l = ctx.buffers->get(inst.out_buffer);
+    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+    const float* input = ctx.buffers->get(inst.inputs[0]);
+    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
+    const float* input_r = stereo_in
+        ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1)) : nullptr;
+    const float* room_size = ctx.buffers->get(inst.inputs[1]);
+    const float* damping = ctx.buffers->get(inst.inputs[2]);
+    const float* room_scale_in = ctx.buffers->get(inst.inputs[3]);
+    const float* room_offset_in = ctx.buffers->get(inst.inputs[4]);
+    auto& state = ctx.states->get_or_create<FreeverbState>(inst.state_id);
+
+    state.ensure_buffers(ctx.arena);
+    if (!state.buffers_ready()) {
+        CEDAR_LOG_ONCE("[CEDAR] audio arena exhausted: reverb(freeverb) → dry passthrough\n");
+        drywet::passthrough_stereo(input, input_r, stereo_in, out_l, out_r, BLOCK_SIZE);
+        return;
+    }
+
+    const auto* ext = ctx.states->get_if<ExtendedParams<2>>(ext_params_state_id(inst.state_id));
+    const float* dry_buf = nullptr; float dry_const = 1.0f;
+    const float* wet_buf = nullptr; float wet_const = 0.5f;
+    if (ext) {
+        const auto& d = ext->params[0];
+        if (d.is_constant()) dry_const = d.constant; else dry_buf = ctx.buffers->get(d.buffer_idx);
+        const auto& w = ext->params[1];
+        if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+    }
+
+    alignas(32) float lanes[FreeverbState::NUM_COMBS];
+    __m256 tile[2][8];
+    std::size_t tile_pos[2][FreeverbState::NUM_COMBS];
+    __m256 filter_state[2] = {
+        _mm256_loadu_ps(state.comb_filter_state[0]),
+        _mm256_loadu_ps(state.comb_filter_state[1])};
+    __m256 dc_x1_state[2] = {
+        _mm256_loadu_ps(state.dc_x1[0]),
+        _mm256_loadu_ps(state.dc_x1[1])};
+    __m256 dc_y1_state[2] = {
+        _mm256_loadu_ps(state.dc_y1[0]),
+        _mm256_loadu_ps(state.dc_y1[1])};
+    constexpr float ALLPASS_GAIN = 0.5f;
+
+    for (std::size_t base = 0; base < BLOCK_SIZE; base += 8) {
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                const std::size_t pos = state.comb_pos[ch][c];
+                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+                tile_pos[ch][c] = pos;
+                if (pos + 8 <= size) {
+                    tile[ch][c] = _mm256_loadu_ps(state.comb_buffers[ch][c] + pos);
+                } else {
+                    for (std::size_t j = 0; j < 8; ++j)
+                        lanes[j] = state.comb_buffers[ch][c][(pos + j) % size];
+                    tile[ch][c] = _mm256_load_ps(lanes);
+                }
+            }
+            freeverb_transpose8(tile[ch][0], tile[ch][1], tile[ch][2], tile[ch][3],
+                                tile[ch][4], tile[ch][5], tile[ch][6], tile[ch][7]);
+        }
+
+        for (std::size_t j = 0; j < 8; ++j) {
+            const std::size_t i = base + j;
+            const float x_l = input[i];
+            const float x_r = stereo_in ? input_r[i] : x_l;
+            const float dry = drywet::coeff(dry_buf, i, dry_const);
+            const float wet = drywet::coeff(wet_buf, i, wet_const);
+            const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+            const float damp = std::clamp(damping[i], 0.0f, 1.0f);
+            const float room_scale = room_scale_in[i] > 0.0f
+                ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
+            const float room_offset = room_offset_in[i] > 0.0f
+                ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+            const float feedback = room * room_scale + room_offset;
+            float y_lr[2];
+
+            for (std::size_t ch = 0; ch < 2; ++ch) {
+                const __m256 delayed = tile[ch][j];
+                _mm256_store_ps(lanes, delayed);
+                float comb_sum = 0.0f;
+                for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c)
+                    comb_sum += lanes[c];
+
+                const __m256 filtered = _mm256_add_ps(
+                    _mm256_mul_ps(delayed, _mm256_set1_ps(1.0f - damp)),
+                    _mm256_mul_ps(filter_state[ch], _mm256_set1_ps(damp)));
+                const __m256 dc_out = _mm256_add_ps(
+                    _mm256_sub_ps(filtered, dc_x1_state[ch]),
+                    _mm256_mul_ps(_mm256_set1_ps(DC_BLOCKER_R),
+                                  dc_y1_state[ch]));
+                filter_state[ch] = filtered;
+                dc_x1_state[ch] = filtered;
+                dc_y1_state[ch] = dc_out;
+                const float x = ch == 0 ? x_l : x_r;
+                tile[ch][j] = _mm256_add_ps(
+                    _mm256_set1_ps(x),
+                    _mm256_mul_ps(_mm256_set1_ps(feedback), dc_out));
+
+                float y = comb_sum;
+                for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
+                    float* buffer = state.allpass_buffers[ch][a];
+                    const std::size_t pos = state.allpass_pos[ch][a];
+                    const float delayed_ap = buffer[pos];
+                    const float output = delayed_ap - ALLPASS_GAIN * y;
+                    buffer[pos] = y + ALLPASS_GAIN * output;
+                    state.allpass_pos[ch][a] = pos + 1 == FreeverbState::ALLPASS_SIZES_LR[ch][a]
+                        ? 0 : pos + 1;
+                    y = output;
+                }
+                y_lr[ch] = y;
+            }
+            out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
+            out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
+        }
+
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            freeverb_transpose8(tile[ch][0], tile[ch][1], tile[ch][2], tile[ch][3],
+                                tile[ch][4], tile[ch][5], tile[ch][6], tile[ch][7]);
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                const std::size_t pos = tile_pos[ch][c];
+                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+                if (pos + 8 <= size) {
+                    _mm256_storeu_ps(state.comb_buffers[ch][c] + pos, tile[ch][c]);
+                } else {
+                    _mm256_store_ps(lanes, tile[ch][c]);
+                    for (std::size_t j = 0; j < 8; ++j)
+                        state.comb_buffers[ch][c][(pos + j) % size] = lanes[j];
+                }
+                const std::size_t next = pos + 8;
+                state.comb_pos[ch][c] = next >= size ? next - size : next;
+            }
+        }
+    }
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        _mm256_storeu_ps(state.comb_filter_state[ch], filter_state[ch]);
+        _mm256_storeu_ps(state.dc_x1[ch], dc_x1_state[ch]);
+        _mm256_storeu_ps(state.dc_y1[ch], dc_y1_state[ch]);
     }
 }
 #endif
