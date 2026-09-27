@@ -1,0 +1,38 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 1c3328f..29a5300 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -91,15 +91,26 @@ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float*
+ 
+ // Exact vector form of the scalar soft clipper: soft(x / t) * t.
+ CEDAR_TARGET_AVX2 inline __m256 soft_clip_avx2(__m256 x, __m256 t) noexcept {
+-    const __m256 u = _mm256_div_ps(x, t);
++    // Clamping u to [-3, 3] replaces the two clip branches: the rational at +-3
++    // evaluates exactly (3*(27+9) = 27+9*9 = 108) to +-108/108 = +-1, and inside
++    // the range u is unchanged. max/min with the constant first return u when it
++    // is NaN, so NaN propagates like the scalar path.
++    // Divider-bound: if every lane has |x| > 3.001*t (margin far above the
++    // rounding of t*3.001), each u = x/t rounds beyond +-3, so the result is
++    // exactly +-1 * t = copysign(t, x) and both divisions can be skipped.
++    // NaN x fails the compare and takes the full path.
++    const __m256 sign = _mm256_set1_ps(-0.0f);
++    if (_mm256_movemask_ps(_mm256_cmp_ps(_mm256_andnot_ps(sign, x),
++                                         _mm256_mul_ps(t, _mm256_set1_ps(3.001f)),
++                                         _CMP_GT_OQ)) == 0xFF) {
++        return _mm256_or_ps(_mm256_and_ps(sign, x), t);
++    }
++    const __m256 u = _mm256_min_ps(
++        _mm256_set1_ps(3.0f), _mm256_max_ps(_mm256_set1_ps(-3.0f), _mm256_div_ps(x, t)));
+     const __m256 u2 = _mm256_mul_ps(u, u);
+     const __m256 c27 = _mm256_set1_ps(27.0f);
+-    __m256 v = _mm256_div_ps(_mm256_mul_ps(u, _mm256_add_ps(c27, u2)),
+-                             _mm256_add_ps(c27, _mm256_mul_ps(_mm256_set1_ps(9.0f), u2)));
+-    v = _mm256_blendv_ps(v, _mm256_set1_ps(-1.0f),
+-                         _mm256_cmp_ps(u, _mm256_set1_ps(-3.0f), _CMP_LT_OQ));
+-    v = _mm256_blendv_ps(v, _mm256_set1_ps(1.0f),
+-                         _mm256_cmp_ps(u, _mm256_set1_ps(3.0f), _CMP_GT_OQ));
++    const __m256 v = _mm256_div_ps(_mm256_mul_ps(u, _mm256_add_ps(c27, u2)),
++                                   _mm256_add_ps(c27, _mm256_mul_ps(_mm256_set1_ps(9.0f), u2)));
+     return _mm256_mul_ps(v, t);
+ }
+ 

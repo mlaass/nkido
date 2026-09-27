@@ -1,0 +1,111 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0d74114..5f7dd8b 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -74,6 +74,26 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        bool constant_block;
++        if (stereo_in) {
++            constant_block = kernels::freeverb_constant_block<true>(
++                input, input_r, out_l, out_r, room_size, damping,
++                room_scale_in, room_offset_in, dry_buf, dry_const,
++                wet_buf, wet_const, state, FREEVERB_ROOM_SCALE_DEFAULT,
++                FREEVERB_ROOM_OFFSET_DEFAULT, DC_BLOCKER_R, drywet::mix);
++        } else {
++            constant_block = kernels::freeverb_constant_block<false>(
++                input, nullptr, out_l, out_r, room_size, damping,
++                room_scale_in, room_offset_in, dry_buf, dry_const,
++                wet_buf, wet_const, state, FREEVERB_ROOM_SCALE_DEFAULT,
++                FREEVERB_ROOM_OFFSET_DEFAULT, DC_BLOCKER_R, drywet::mix);
++        }
++        if (constant_block) return;
++    }
++#endif
++
+     constexpr float ALLPASS_GAIN = 0.5f;
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+@@ -469,3 +489,79 @@ inline void op_reverb_fdn(ExecutionContext& ctx, const Instruction& inst) {
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"
++
++namespace kernels {
++#if CEDAR_SIMD_X86
++[[gnu::target("avx2")]] inline bool freeverb_constant(const float* p) noexcept {
++    if (!p) return true;
++    const __m256 v = _mm256_set1_ps(p[0]);
++    for (std::size_t i = 0; i < 128; i += 8) {
++        const __m256 x = _mm256_load_ps(p + i);
++        if (_mm256_movemask_ps(_mm256_cmp_ps(x, v, _CMP_EQ_OQ)) != 0xff) return false;
++    }
++    return true;
++}
++
++template <bool STEREO, typename State, typename Mix>
++CEDAR_TARGET_AVX2 inline bool freeverb_constant_block(
++    const float* input, const float* input_r, float* out_l, float* out_r,
++    const float* room_size, const float* damping, const float* room_scale_in,
++    const float* room_offset_in, const float* dry_buf, float dry_const,
++    const float* wet_buf, float wet_const, State& state, float room_scale_default,
++    float room_offset_default, float dc_blocker_r, Mix mix) noexcept {
++    if (!freeverb_constant(room_size) || !freeverb_constant(damping) ||
++        !freeverb_constant(room_scale_in) || !freeverb_constant(room_offset_in) ||
++        !freeverb_constant(dry_buf) || !freeverb_constant(wet_buf)) return false;
++
++    const float room = std::clamp(room_size[0], 0.0f, 1.0f);
++    const float damp = std::clamp(damping[0], 0.0f, 1.0f);
++    const float room_scale = room_scale_in[0] > 0.0f
++        ? room_scale_in[0] : room_scale_default;
++    const float room_offset = room_offset_in[0] > 0.0f
++        ? room_offset_in[0] : room_offset_default;
++    const float feedback = room * room_scale + room_offset;
++    if (dry_buf) dry_const = dry_buf[0];
++    if (wet_buf) wet_const = wet_buf[0];
++
++    for (std::size_t i = 0; i < 128; ++i) {
++        const float x_l = input[i];
++        const float x_r = STEREO ? input_r[i] : x_l;
++        float y_lr[2] = {0.0f, 0.0f};
++        for (std::size_t ch = 0; ch < 2; ++ch) {
++            const float x = ch == 0 ? x_l : x_r;
++            float comb_sum = 0.0f;
++            for (std::size_t c = 0; c < State::NUM_COMBS; ++c) {
++                float* buffer = state.comb_buffers[ch][c];
++                const std::size_t size = State::COMB_SIZES_LR[ch][c];
++                const float delayed = buffer[state.comb_pos[ch][c]];
++                state.comb_filter_state[ch][c] =
++                    delayed * (1.0f - damp) + state.comb_filter_state[ch][c] * damp;
++                const float dc_in = state.comb_filter_state[ch][c];
++                const float dc_out = dc_in - state.dc_x1[ch][c] +
++                    dc_blocker_r * state.dc_y1[ch][c];
++                state.dc_x1[ch][c] = dc_in;
++                state.dc_y1[ch][c] = dc_out;
++                buffer[state.comb_pos[ch][c]] = x + feedback * dc_out;
++                state.comb_pos[ch][c] = (state.comb_pos[ch][c] + 1) % size;
++                comb_sum += delayed;
++            }
++            float y = comb_sum;
++            for (std::size_t a = 0; a < State::NUM_ALLPASSES; ++a) {
++                float* buffer = state.allpass_buffers[ch][a];
++                const std::size_t size = State::ALLPASS_SIZES_LR[ch][a];
++                const float delayed = buffer[state.allpass_pos[ch][a]];
++                const float output = delayed - 0.5f * y;
++                buffer[state.allpass_pos[ch][a]] = y + 0.5f * output;
++                state.allpass_pos[ch][a] = (state.allpass_pos[ch][a] + 1) % size;
++                y = output;
++            }
++            y_lr[ch] = y;
++        }
++        out_l[i] = mix(x_l, y_lr[0], dry_const, wet_const);
++        out_r[i] = mix(x_r, y_lr[1], dry_const, wet_const);
++    }
++    return true;
++}
++#endif
++}

@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-27T1318Z_gpt-reserve_freeverb",
+  "provider": "codex",
+  "model": "gpt-reserve (gpt-reserve)",
+  "target": "freeverb",
+  "iterations": 8,
+  "accepts": 1,
+  "rejects": 7,
+  "reject_reasons": {
+    "speed": 6,
+    "build": 1
+  },
+  "first_accept_iteration": 8,
+  "best_speedup": 1.494,
+  "tokens": {
+    "input": 3658068,
+    "output": 67594,
+    "cached": 3344640
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2484.6,
+  "gpu_s": null,
+  "active_s": 1812.9,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/gpt-reserve-freeverb-202609271318",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

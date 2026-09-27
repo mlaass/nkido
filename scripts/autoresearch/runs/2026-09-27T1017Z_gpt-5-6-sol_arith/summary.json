@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-27T1017Z_gpt-5-6-sol_arith",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 4,
+  "rejects": 4,
+  "reject_reasons": {
+    "empty patch": 1,
+    "speed": 3
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 1.417,
+  "tokens": {
+    "input": 2908422,
+    "output": 73118,
+    "cached": 2723968
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2607.1,
+  "gpu_s": null,
+  "active_s": 2247.9,
+  "unstable_iterations": 3,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-arith-202609271017",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

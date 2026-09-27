@@ -1,0 +1,74 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index e2d974a..effa560 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -21,27 +21,27 @@ inline __m256 coeff8(const float* buf, std::size_t i, float fallback) noexcept {
+     return buf ? _mm256_load_ps(buf + i) : _mm256_set1_ps(fallback);
+ }
+ 
+-// simd: approx -- replaces std::tanh(z). Takes t = 2z; tanh(z) = 1 - 2 / (e + 1),
+-// e = exp(t), t clamped to [-20, 20] so e stays finite (tanh(10) == 1 to 4e-9).
+-// exp via 2^n * poly5(r), r in [-ln2/2, ln2/2]; relative error ~3e-6 (tanh err ~1e-6).
++// simd: approx -- replaces std::tanh(z). Takes w = 2z*log2(e); tanh(z) = 1 - 2 / (e + 1),
++// e = 2^w, w clamped to [-28, 28] so e stays finite (tanh(9.7) == 1 to 4e-9).
++// 2^w = 2^n * poly4(f), f = w - n in [-1/2, 1/2] (no ln2 multiply); relative error ~5e-6
++// (tanh err ~2.5e-6).
+ CEDAR_TARGET_AVX2 [[gnu::always_inline]]
+-inline __m256 tanh8(__m256 t) noexcept {
+-    // All |z| < 0.01: tanh(z) = z - z^3/3, error < 4e-7, so return z = t/2 and
++inline __m256 tanh8(__m256 w) noexcept {
++    // All |z| < 0.0097: tanh(z) = z - z^3/3, error < 4e-7, so return z = w/(2 log2 e) and
+     // skip the exp polynomial and divide (silent/quiet blocks). NaN -> slow path.
+-    if (_mm256_movemask_ps(_mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0f), t),
+-                                         _mm256_set1_ps(0.02f), _CMP_LT_OQ)) == 0xFF)
+-        return _mm256_mul_ps(t, _mm256_set1_ps(0.5f));
+-    t = _mm256_min_ps(_mm256_set1_ps(20.0f), t);  // NaN in t propagates (2nd operand)
+-    t = _mm256_max_ps(_mm256_set1_ps(-20.0f), t);
+-    const __m256i n = _mm256_cvtps_epi32(_mm256_mul_ps(t, _mm256_set1_ps(1.44269504088896341f)));
+-    const __m256 nf = _mm256_cvtepi32_ps(n);
+-    const __m256 r = _mm256_sub_ps(t, _mm256_mul_ps(nf, _mm256_set1_ps(0.693147182f)));
+-    // Degree-5 Taylor with the r^5 term Chebyshev-economised onto r, r^3 (a = ln2/2):
+-    // r^5 ~ 1.25 a^2 r^3 - 0.3125 a^4 r; adds ~3e-6 relative error.
+-    __m256 p = _mm256_set1_ps(1.0f / 24.0f);
+-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.16791785f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.5f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.99996243f));
++    if (_mm256_movemask_ps(_mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0f), w),
++                                         _mm256_set1_ps(0.028f), _CMP_LT_OQ)) == 0xFF)
++        return _mm256_mul_ps(w, _mm256_set1_ps(0.34657359f));
++    w = _mm256_min_ps(_mm256_set1_ps(28.0f), w);  // NaN in w propagates (2nd operand)
++    w = _mm256_max_ps(_mm256_set1_ps(-28.0f), w);
++    const __m256i n = _mm256_cvtps_epi32(w);
++    const __m256 r = _mm256_sub_ps(w, _mm256_cvtepi32_ps(n));
++    // 2^f = sum (ln2 f)^k / k!, degree-5 term Chebyshev-economised onto f, f^3 (a = 1/2):
++    // f^5 ~ 1.25 a^2 f^3 - 0.3125 a^4 f; omitted f^6 term is ~2.4e-6.
++    __m256 p = _mm256_set1_ps(0.0096181291f);
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.055920783f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.240226507f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.6931211385f));
+     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f));
+     // p in [0.7, 1.42] is normal: adding n to its exponent field scales by 2^n.
+     const __m256 e = _mm256_castsi256_ps(
+@@ -55,11 +55,12 @@ inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
+                       const float* dry_level, const float* wet_level,
+                       float* out_l, float* out_r) noexcept {
+     const __m256 dmin = _mm256_set1_ps(0.1f);
++    const __m256 k = _mm256_set1_ps(2.88539008f);  // 2 * log2(e)
+     if (!dry_level && !wet_level) {
+         // Default dry=0, wet=1: x*0 + y*1 == y for finite x, so skip the mix.
+         for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+             const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);
+-            const __m256 d2 = _mm256_add_ps(d, d);
++            const __m256 d2 = _mm256_mul_ps(d, k);
+             const __m256 yl = tanh8(_mm256_mul_ps(_mm256_load_ps(in_l + i), d2));
+             _mm256_store_ps(out_l + i, yl);
+             _mm256_store_ps(out_r + i, in_r ? tanh8(_mm256_mul_ps(_mm256_load_ps(in_r + i), d2)) : yl);
+@@ -68,7 +69,7 @@ inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
+     }
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);  // == (0.1f < d) ? d : 0.1f
+-        const __m256 d2 = _mm256_add_ps(d, d);  // 2*d exact; tanh8 takes 2*x*d
++        const __m256 d2 = _mm256_mul_ps(d, k);  // tanh8 takes w = x*d*2*log2(e)
+         const __m256 dry = coeff8(dry_level, i, 0.0f);
+         const __m256 wet = coeff8(wet_level, i, 1.0f);
+         const __m256 xl = _mm256_load_ps(in_l + i);

@@ -1,0 +1,11 @@
+I added AVX2 kernels for `op_add`, `op_sub` and `op_mul` in `cedar/include/cedar/opcodes/arithmetic.hpp`. `check.sh` passes: the allowlist, build and exact-equality checks are OK. The unit suites, experiments and full benchmark only run at the real verification.
+
+Each kernel processes 16 floats per iteration (two 8-wide loads and stores). The scalar loops are unchanged and remain the fallback. Bit-identity holds because the kernels use plain `add`/`sub`/`mul` with no FMA.
+
+| Opcode | Baseline | Now | Speedup |
+|---|---|---|---|
+| `op_add` | 14.54 ns | 11.18 ns | 1.30x |
+| `op_sub` | 14.59 ns | 11.13 ns | 1.31x |
+| `op_mul` | 14.49 ns | 10.88 ns | 1.33x |
+
+I did not add NEON or WASM paths. The changes are left uncommitted in the working tree.

@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-26T2112Z_qwen-qwen3-8-27b-free_distort",
+  "provider": "openrouter",
+  "model": "qwen/qwen3.8-27b:free",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 0,
+  "rejects": 8,
+  "reject_reasons": {
+    "backend error": 8
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 163.2,
+  "gpu_s": null,
+  "active_s": 163.2,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/qwen-qwen3-8-27b-free-distort-202609262112",
+  "base_rev": "d5afd067a4dde71d81028b8c2a1d4b866ae761e5"
+}

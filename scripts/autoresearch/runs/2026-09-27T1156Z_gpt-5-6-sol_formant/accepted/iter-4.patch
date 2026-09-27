@@ -1,0 +1,175 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index ea9c77f..72d2967 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -475,6 +475,10 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+     const __m256 zero = _mm256_setzero_ps();
+     const __m256 four = _mm256_set1_ps(4.0f);
+     const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 va_first = _mm256_set1_ps(vowel_a[0]);
++    const __m256 vb_first = _mm256_set1_ps(vowel_b[0]);
++    const __m256 morph_first = _mm256_set1_ps(morph[0]);
++    int formant_constant_mask = 0xff;
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         __m256 original = _mm256_load_ps(q_in + i);
+         __m256 clamped = _mm256_min_ps(q_max, _mm256_max_ps(q_min, original));
+@@ -484,22 +488,43 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         _mm256_store_ps(q_coefs + i, _mm256_div_ps(one, clamped));
+ 
+         __m256 va = _mm256_load_ps(vowel_a + i);
++        formant_constant_mask &= _mm256_movemask_ps(
++            _mm256_cmp_ps(va, va_first, _CMP_EQ_OQ));
+         __m256 va_clamped = _mm256_min_ps(four, _mm256_max_ps(zero, va));
+         va_clamped = _mm256_blendv_ps(va_clamped, va,
+                                       _mm256_cmp_ps(va, va, _CMP_UNORD_Q));
+         _mm256_store_ps(va_values + i, va_clamped);
+         __m256 vb = _mm256_load_ps(vowel_b + i);
++        formant_constant_mask &= _mm256_movemask_ps(
++            _mm256_cmp_ps(vb, vb_first, _CMP_EQ_OQ));
+         __m256 vb_clamped = _mm256_min_ps(four, _mm256_max_ps(zero, vb));
+         vb_clamped = _mm256_blendv_ps(vb_clamped, vb,
+                                       _mm256_cmp_ps(vb, vb, _CMP_UNORD_Q));
+         _mm256_store_ps(vb_values + i, vb_clamped);
+         __m256 mv = _mm256_load_ps(morph + i);
++        formant_constant_mask &= _mm256_movemask_ps(
++            _mm256_cmp_ps(mv, morph_first, _CMP_EQ_OQ));
+         __m256 mv_clamped = _mm256_min_ps(one, _mm256_max_ps(zero, mv));
+         mv_clamped = _mm256_blendv_ps(mv_clamped, mv,
+                                       _mm256_cmp_ps(mv, mv, _CMP_UNORD_Q));
+         _mm256_store_ps(morph_values + i, mv_clamped);
+     }
+ 
++    const bool block_formants_constant = formant_constant_mask == 0xff;
++    const __m128 state_l0 = _mm_setr_ps(state.bp1_z1[0], state.bp1_z2[0],
++                                        state.bp2_z1[0], state.bp2_z2[0]);
++    const __m128 state_r0 = _mm_setr_ps(state.bp1_z1[1], state.bp1_z2[1],
++                                        state.bp2_z1[1], state.bp2_z2[1]);
++    const __m128 state_l1 = _mm_setr_ps(state.bp3_z1[0], state.bp3_z2[0], 0.0f, 0.0f);
++    const __m128 state_r1 = _mm_setr_ps(state.bp3_z1[1], state.bp3_z2[1], 0.0f, 0.0f);
++    const bool mono_identical = !stereo_in &&
++        _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(
++            _mm_castps_si128(state_l0), _mm_castps_si128(state_r0)))) == 0xf &&
++        _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpeq_epi32(
++            _mm_castps_si128(state_l1), _mm_castps_si128(state_r1)))) == 0xf;
++    float f1_coef = 0.0f;
++    float f2_coef = 0.0f;
++    float f3_coef = 0.0f;
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float va = va_values[i];
+         float vb = vb_values[i];
+@@ -507,11 +532,10 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         float q = q_values[i];
+ 
+         if (va != state.last_vowel_a || vb != state.last_vowel_b ||
+-            m != state.last_morph || q != state.last_q) {
++            m != state.last_morph) {
+             state.last_vowel_a = va;
+             state.last_vowel_b = vb;
+             state.last_morph = m;
+-            state.last_q = q;
+ 
+             int idx_a = static_cast<int>(va);
+             int idx_b = static_cast<int>(vb);
+@@ -542,30 +566,79 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+             state.g1 = values[3]; state.g2 = values[4]; state.g3 = values[5];
+         }
+ 
+-        auto prewarp_coef = [&](float freq) -> float {
+-            float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
+-            return std::min(1.9f, 2.0f * std::tan(w));
+-        };
+-        float f1_coef = prewarp_coef(state.f1);
+-        float f2_coef = prewarp_coef(state.f2);
+-        float f3_coef = prewarp_coef(state.f3);
++        state.last_q = q;
++        if (!block_formants_constant || i == 0) {
++            auto prewarp_coef = [&](float freq) -> float {
++                float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
++                return std::min(1.9f, 2.0f * std::tan(w));
++            };
++            f1_coef = prewarp_coef(state.f1);
++            f2_coef = prewarp_coef(state.f2);
++            f3_coef = prewarp_coef(state.f3);
++        }
+         float q_coef = q_coefs[i];
+-        for (std::size_t ch = 0; ch < 2; ++ch) {
+-            float x = (ch == 0) ? input[i] : input_r[i];
+-            float hp1 = x - state.bp1_z1[ch] * q_coef - state.bp1_z2[ch];
+-            float bp1 = state.bp1_z1[ch] + f1_coef * hp1;
+-            float lp1 = state.bp1_z2[ch] + f1_coef * state.bp1_z1[ch];
+-            state.bp1_z1[ch] = clamp_audio(bp1); state.bp1_z2[ch] = clamp_audio(lp1);
+-            float hp2 = x - state.bp2_z1[ch] * q_coef - state.bp2_z2[ch];
+-            float bp2 = state.bp2_z1[ch] + f2_coef * hp2;
+-            float lp2 = state.bp2_z2[ch] + f2_coef * state.bp2_z1[ch];
+-            state.bp2_z1[ch] = clamp_audio(bp2); state.bp2_z2[ch] = clamp_audio(lp2);
+-            float hp3 = x - state.bp3_z1[ch] * q_coef - state.bp3_z2[ch];
+-            float bp3 = state.bp3_z1[ch] + f3_coef * hp3;
+-            float lp3 = state.bp3_z2[ch] + f3_coef * state.bp3_z1[ch];
+-            state.bp3_z1[ch] = clamp_audio(bp3); state.bp3_z2[ch] = clamp_audio(lp3);
+-            float processed = bp1 * state.g1 + bp2 * state.g2 + bp3 * state.g3;
+-            (ch == 0 ? processed_l : processed_r)[i] = processed;
++        if (mono_identical) {
++            const float x = input[i];
++            float hp1 = x - state.bp1_z1[0] * q_coef - state.bp1_z2[0];
++            float bp1 = state.bp1_z1[0] + f1_coef * hp1;
++            float lp1 = state.bp1_z2[0] + f1_coef * state.bp1_z1[0];
++            state.bp1_z1[0] = clamp_audio(bp1);
++            state.bp1_z2[0] = clamp_audio(lp1);
++            float hp2 = x - state.bp2_z1[0] * q_coef - state.bp2_z2[0];
++            float bp2 = state.bp2_z1[0] + f2_coef * hp2;
++            float lp2 = state.bp2_z2[0] + f2_coef * state.bp2_z1[0];
++            state.bp2_z1[0] = clamp_audio(bp2);
++            state.bp2_z2[0] = clamp_audio(lp2);
++            float hp3 = x - state.bp3_z1[0] * q_coef - state.bp3_z2[0];
++            float bp3 = state.bp3_z1[0] + f3_coef * hp3;
++            float lp3 = state.bp3_z2[0] + f3_coef * state.bp3_z1[0];
++            state.bp3_z1[0] = clamp_audio(bp3);
++            state.bp3_z2[0] = clamp_audio(lp3);
++            state.bp1_z1[1] = state.bp1_z1[0]; state.bp1_z2[1] = state.bp1_z2[0];
++            state.bp2_z1[1] = state.bp2_z1[0]; state.bp2_z2[1] = state.bp2_z2[0];
++            state.bp3_z1[1] = state.bp3_z1[0]; state.bp3_z2[1] = state.bp3_z2[0];
++            const float processed = bp1 * state.g1 + bp2 * state.g2 + bp3 * state.g3;
++            processed_l[i] = processed;
++            processed_r[i] = processed;
++        } else {
++        const float xl = input[i];
++        const float xr = input_r[i];
++        const __m256 x = _mm256_setr_ps(xl, xr, xl, xr, xl, xr, 0.0f, 0.0f);
++        const __m256 z1 = _mm256_setr_ps(
++            state.bp1_z1[0], state.bp1_z1[1],
++            state.bp2_z1[0], state.bp2_z1[1],
++            state.bp3_z1[0], state.bp3_z1[1], 0.0f, 0.0f);
++        const __m256 z2 = _mm256_setr_ps(
++            state.bp1_z2[0], state.bp1_z2[1],
++            state.bp2_z2[0], state.bp2_z2[1],
++            state.bp3_z2[0], state.bp3_z2[1], 0.0f, 0.0f);
++        const __m256 fc = _mm256_setr_ps(
++            f1_coef, f1_coef, f2_coef, f2_coef,
++            f3_coef, f3_coef, 0.0f, 0.0f);
++        const __m256 hp = _mm256_sub_ps(
++            _mm256_sub_ps(x, _mm256_mul_ps(z1, _mm256_set1_ps(q_coef))), z2);
++        const __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(fc, hp));
++        const __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(fc, z1));
++        alignas(32) float bp_values[8];
++        alignas(32) float lp_values[8];
++        _mm256_store_ps(bp_values, bp);
++        _mm256_store_ps(lp_values, lp);
++        state.bp1_z1[0] = clamp_audio(bp_values[0]);
++        state.bp1_z1[1] = clamp_audio(bp_values[1]);
++        state.bp2_z1[0] = clamp_audio(bp_values[2]);
++        state.bp2_z1[1] = clamp_audio(bp_values[3]);
++        state.bp3_z1[0] = clamp_audio(bp_values[4]);
++        state.bp3_z1[1] = clamp_audio(bp_values[5]);
++        state.bp1_z2[0] = clamp_audio(lp_values[0]);
++        state.bp1_z2[1] = clamp_audio(lp_values[1]);
++        state.bp2_z2[0] = clamp_audio(lp_values[2]);
++        state.bp2_z2[1] = clamp_audio(lp_values[3]);
++        state.bp3_z2[0] = clamp_audio(lp_values[4]);
++        state.bp3_z2[1] = clamp_audio(lp_values[5]);
++        processed_l[i] = bp_values[0] * state.g1 + bp_values[2] * state.g2
++                       + bp_values[4] * state.g3;
++        processed_r[i] = bp_values[1] * state.g1 + bp_values[3] * state.g2
++                       + bp_values[5] * state.g3;
+         }
+     }
+ 

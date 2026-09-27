@@ -1,0 +1,117 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 7149e49..1eed8ee 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -67,6 +67,62 @@ CEDAR_TARGET_AVX2 inline __m256 svf_tan_avx2(__m256 x) noexcept {
+     return _mm256_blendv_ps(t, _mm256_div_ps(_mm256_set1_ps(1.0f), t), big);
+ }
+ 
++// Serial state recurrence. Clamp=true applies clamp_audio to the state each sample.
++// Clamp=false skips it and returns true if any state value would have been changed by it
++// (|n| > 10 or NaN), in which case the results are to be discarded and recomputed.
++template <int Mode, bool Clamp>
++CEDAR_TARGET_AVX2 inline bool svf_recur_avx2(const float* in_l, const float* in_r,
++                                             const float* m11, const float* A2,
++                                             const float* m22, const float* A3,
++                                             float* p1l, float* p1r, float* p2l, float* p2r,
++                                             __m128& ic1_io, __m128& ic2_io) noexcept {
++    const __m128 dc2 = _mm_set1_ps(2.0f * DENORMAL_DC);
++    const __m128 half = _mm_set1_ps(0.5f);
++    const __m128 lim_hi = _mm_set1_ps(10.0f);
++    [[maybe_unused]] const __m128 lim_lo = _mm_set1_ps(-10.0f);
++    const __m128 absmask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
++    __m128 ic1 = ic1_io;
++    __m128 ic2 = ic2_io;
++    __m128 bad = _mm_setzero_ps();
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const __m128 x = _mm_unpacklo_ps(_mm_load_ss(in_l + i), _mm_load_ss(in_r + i));
++        const __m128 c11 = _mm_set1_ps(m11[i]);
++        const __m128 cA2 = _mm_set1_ps(A2[i]);
++        const __m128 c22 = _mm_set1_ps(m22[i]);
++        const __m128 cA3 = _mm_set1_ps(A3[i]);
++        // Input terms (off the recurrence's critical path); dc2 keeps the state out of denormals.
++        const __m128 b1 = _mm_add_ps(_mm_mul_ps(cA2, x), dc2);
++        const __m128 b2 = _mm_add_ps(_mm_mul_ps(cA3, x), dc2);
++        const __m128 n1 = _mm_add_ps(_mm_sub_ps(_mm_mul_ps(c11, ic1), _mm_mul_ps(cA2, ic2)), b1);
++        const __m128 n2 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(cA2, ic1), _mm_mul_ps(c22, ic2)), b2);
++        // n = 2*v - ic  =>  v = (n + ic) / 2
++        const __m128 v1 = _mm_mul_ps(half, _mm_add_ps(n1, ic1));
++        const __m128 v2 = _mm_mul_ps(half, _mm_add_ps(n2, ic2));
++        if constexpr (Clamp) {
++            // clamp_audio: NaN -> 0, else clamp to +-10
++            ic1 = _mm_and_ps(_mm_min_ps(_mm_max_ps(n1, lim_lo), lim_hi), _mm_cmpord_ps(n1, n1));
++            ic2 = _mm_and_ps(_mm_min_ps(_mm_max_ps(n2, lim_lo), lim_hi), _mm_cmpord_ps(n2, n2));
++        } else {
++            // not(|n| <= 10) is also true for NaN
++            bad = _mm_or_ps(bad, _mm_or_ps(_mm_cmpnle_ps(_mm_and_ps(n1, absmask), lim_hi),
++                                           _mm_cmpnle_ps(_mm_and_ps(n2, absmask), lim_hi)));
++            ic1 = n1;
++            ic2 = n2;
++        }
++        if constexpr (Mode != SvfLP) {
++            p1l[i] = _mm_cvtss_f32(v1);
++            p1r[i] = _mm_cvtss_f32(_mm_shuffle_ps(v1, v1, 1));
++        }
++        if constexpr (Mode != SvfBP) {
++            p2l[i] = _mm_cvtss_f32(v2);
++            p2r[i] = _mm_cvtss_f32(_mm_shuffle_ps(v2, v2, 1));
++        }
++    }
++    ic1_io = ic1;
++    ic2_io = ic2;
++    return (_mm_movemask_ps(bad) & 3) != 0;
++}
++
+ template <int Mode>
+ CEDAR_TARGET_AVX2 inline void svf_avx2(const float* in_l, const float* in_r,
+                                        const float* freq, const float* q,
+@@ -112,38 +168,18 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(const float* in_l, const float* in_r,
+     }
+ 
+     // Pass 2: serial recurrence, L/R as the two lanes of one SSE register.
++    // Speculatively run without the clamp (shorter dependency chain); if any state value
++    // left +-10 or went NaN, restore the state and redo the block with the exact clamp.
+     {
+-        const __m128 dc2 = _mm_set1_ps(2.0f * DENORMAL_DC);
+-        const __m128 half = _mm_set1_ps(0.5f);
+-        const __m128 lim_hi = _mm_set1_ps(10.0f);
+-        const __m128 lim_lo = _mm_set1_ps(-10.0f);
+-        __m128 ic1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+-        __m128 ic2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+-        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-            const __m128 x = _mm_unpacklo_ps(_mm_load_ss(in_l + i), _mm_load_ss(in_r + i));
+-            const __m128 c11 = _mm_set1_ps(m11[i]);
+-            const __m128 cA2 = _mm_set1_ps(A2[i]);
+-            const __m128 c22 = _mm_set1_ps(m22[i]);
+-            const __m128 cA3 = _mm_set1_ps(A3[i]);
+-            // Input terms (off the recurrence's critical path); dc2 keeps the state out of denormals.
+-            const __m128 b1 = _mm_add_ps(_mm_mul_ps(cA2, x), dc2);
+-            const __m128 b2 = _mm_add_ps(_mm_mul_ps(cA3, x), dc2);
+-            const __m128 n1 = _mm_add_ps(_mm_sub_ps(_mm_mul_ps(c11, ic1), _mm_mul_ps(cA2, ic2)), b1);
+-            const __m128 n2 = _mm_add_ps(_mm_add_ps(_mm_mul_ps(cA2, ic1), _mm_mul_ps(c22, ic2)), b2);
+-            // n = 2*v - ic  =>  v = (n + ic) / 2
+-            const __m128 v1 = _mm_mul_ps(half, _mm_add_ps(n1, ic1));
+-            const __m128 v2 = _mm_mul_ps(half, _mm_add_ps(n2, ic2));
+-            // clamp_audio: NaN -> 0, else clamp to +-10
+-            ic1 = _mm_and_ps(_mm_min_ps(_mm_max_ps(n1, lim_lo), lim_hi), _mm_cmpord_ps(n1, n1));
+-            ic2 = _mm_and_ps(_mm_min_ps(_mm_max_ps(n2, lim_lo), lim_hi), _mm_cmpord_ps(n2, n2));
+-            if constexpr (Mode != SvfLP) {
+-                p1l[i] = _mm_cvtss_f32(v1);
+-                p1r[i] = _mm_cvtss_f32(_mm_shuffle_ps(v1, v1, 1));
+-            }
+-            if constexpr (Mode != SvfBP) {
+-                p2l[i] = _mm_cvtss_f32(v2);
+-                p2r[i] = _mm_cvtss_f32(_mm_shuffle_ps(v2, v2, 1));
+-            }
++        const float s1l = state.ic1eq[0], s1r = state.ic1eq[1];
++        const float s2l = state.ic2eq[0], s2r = state.ic2eq[1];
++        __m128 ic1 = _mm_setr_ps(s1l, s1r, 0.0f, 0.0f);
++        __m128 ic2 = _mm_setr_ps(s2l, s2r, 0.0f, 0.0f);
++        bool clipped = svf_recur_avx2<Mode, false>(in_l, in_r, m11, A2, m22, A3, p1l, p1r, p2l, p2r, ic1, ic2);
++        if (clipped) {
++            ic1 = _mm_setr_ps(s1l, s1r, 0.0f, 0.0f);
++            ic2 = _mm_setr_ps(s2l, s2r, 0.0f, 0.0f);
++            svf_recur_avx2<Mode, true>(in_l, in_r, m11, A2, m22, A3, p1l, p1r, p2l, p2r, ic1, ic2);
+         }
+         state.ic1eq[0] = _mm_cvtss_f32(ic1);
+         state.ic1eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(ic1, ic1, 1));

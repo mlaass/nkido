@@ -1,0 +1,136 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 14946e7..0e13816 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -55,17 +55,10 @@ inline void ring_write(float* buf, std::size_t size, std::size_t pos,
+ }
+ 
+ #if CEDAR_SIMD_X86
+-// In-place-safe 8x8 transpose: rows src[r*src_stride .. +8] -> dst rows.
+-CEDAR_TARGET_AVX2 inline void transpose8x8_avx2(const float* src, std::size_t src_stride,
+-                                                float* dst, std::size_t dst_stride) noexcept {
+-    __m256 r0 = _mm256_load_ps(src + 0 * src_stride);
+-    __m256 r1 = _mm256_load_ps(src + 1 * src_stride);
+-    __m256 r2 = _mm256_load_ps(src + 2 * src_stride);
+-    __m256 r3 = _mm256_load_ps(src + 3 * src_stride);
+-    __m256 r4 = _mm256_load_ps(src + 4 * src_stride);
+-    __m256 r5 = _mm256_load_ps(src + 5 * src_stride);
+-    __m256 r6 = _mm256_load_ps(src + 6 * src_stride);
+-    __m256 r7 = _mm256_load_ps(src + 7 * src_stride);
++// 8x8 register transpose.
++[[gnu::always_inline]] CEDAR_TARGET_AVX2 inline void transpose8x8_avx2(__m256 (&r)[8]) noexcept {
++    const __m256 r0 = r[0], r1 = r[1], r2 = r[2], r3 = r[3];
++    const __m256 r4 = r[4], r5 = r[5], r6 = r[6], r7 = r[7];
+     __m256 t0 = _mm256_unpacklo_ps(r0, r1);
+     __m256 t1 = _mm256_unpackhi_ps(r0, r1);
+     __m256 t2 = _mm256_unpacklo_ps(r2, r3);
+@@ -82,14 +75,21 @@ CEDAR_TARGET_AVX2 inline void transpose8x8_avx2(const float* src, std::size_t sr
+     __m256 s5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3, 2, 3, 2));
+     __m256 s6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1, 0, 1, 0));
+     __m256 s7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3, 2, 3, 2));
+-    _mm256_store_ps(dst + 0 * dst_stride, _mm256_permute2f128_ps(s0, s4, 0x20));
+-    _mm256_store_ps(dst + 1 * dst_stride, _mm256_permute2f128_ps(s1, s5, 0x20));
+-    _mm256_store_ps(dst + 2 * dst_stride, _mm256_permute2f128_ps(s2, s6, 0x20));
+-    _mm256_store_ps(dst + 3 * dst_stride, _mm256_permute2f128_ps(s3, s7, 0x20));
+-    _mm256_store_ps(dst + 4 * dst_stride, _mm256_permute2f128_ps(s0, s4, 0x31));
+-    _mm256_store_ps(dst + 5 * dst_stride, _mm256_permute2f128_ps(s1, s5, 0x31));
+-    _mm256_store_ps(dst + 6 * dst_stride, _mm256_permute2f128_ps(s2, s6, 0x31));
+-    _mm256_store_ps(dst + 7 * dst_stride, _mm256_permute2f128_ps(s3, s7, 0x31));
++    r[0] = _mm256_permute2f128_ps(s0, s4, 0x20);
++    r[1] = _mm256_permute2f128_ps(s1, s5, 0x20);
++    r[2] = _mm256_permute2f128_ps(s2, s6, 0x20);
++    r[3] = _mm256_permute2f128_ps(s3, s7, 0x20);
++    r[4] = _mm256_permute2f128_ps(s0, s4, 0x31);
++    r[5] = _mm256_permute2f128_ps(s1, s5, 0x31);
++    r[6] = _mm256_permute2f128_ps(s2, s6, 0x31);
++    r[7] = _mm256_permute2f128_ps(s3, s7, 0x31);
++}
++
++// Ring position of block offset i for a line of `size` (> BLOCK_SIZE).
++[[gnu::always_inline]] inline std::size_t ring_at(std::size_t pos, std::size_t i,
++                                                  std::size_t size) noexcept {
++    std::size_t p = pos + i;
++    return p >= size ? p - size : p;
+ }
+ 
+ // Every comb/allpass delay (>= 225 samples) exceeds BLOCK_SIZE, so a block's
+@@ -108,8 +108,8 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     alignas(32) float damp_a[N];
+     alignas(32) float omd_a[N];
+     alignas(32) float fb_a[N];
+-    alignas(32) float lin[NC][N];      // [comb][sample]
+     alignas(32) float tr[2][N][NC];    // [lane][sample][comb]
++    alignas(32) float wrap_tmp[NC][8]; // chunks straddling a ring's wrap point
+     alignas(32) float ysum[2][N];
+     alignas(32) float apd[N];
+ 
+@@ -123,16 +123,28 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         fb_a[i] = room * room_scale + room_offset;
+     }
+ 
+-    // Gather delayed comb outputs, sum them in scalar order, transpose.
++    // Gather delayed comb outputs straight from the rings, sum them in scalar
++    // order, transpose. Only a chunk straddling a wrap point is staged.
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+-        for (std::size_t c = 0; c < NC; ++c)
+-            ring_read(state.comb_buffers[ch][c], FreeverbState::COMB_SIZES_LR[ch][c],
+-                      state.comb_pos[ch][c], lin[c], N);
+         for (std::size_t i = 0; i < N; i += 8) {
++            __m256 r[8];
++            for (std::size_t c = 0; c < NC; ++c) {
++                const float* buf = state.comb_buffers[ch][c];
++                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
++                const std::size_t p = ring_at(state.comb_pos[ch][c], i, size);
++                if (p + 8 <= size) [[likely]] {
++                    r[c] = _mm256_loadu_ps(buf + p);
++                } else {
++                    for (std::size_t k = 0; k < 8; ++k)
++                        wrap_tmp[c][k] = buf[ring_at(p, k, size)];
++                    r[c] = _mm256_load_ps(wrap_tmp[c]);
++                }
++            }
+             __m256 s = _mm256_setzero_ps();
+-            for (std::size_t c = 0; c < NC; ++c) s = _mm256_add_ps(s, _mm256_load_ps(lin[c] + i));
++            for (std::size_t c = 0; c < NC; ++c) s = _mm256_add_ps(s, r[c]);
+             _mm256_store_ps(ysum[ch] + i, s);
+-            transpose8x8_avx2(&lin[0][i], N, &tr[ch][i][0], NC);
++            transpose8x8_avx2(r);
++            for (std::size_t k = 0; k < 8; ++k) _mm256_store_ps(tr[ch][i + k], r[k]);
+         }
+     }
+ 
+@@ -166,15 +178,28 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     _mm256_storeu_ps(state.dc_y1[0], y10);
+     _mm256_storeu_ps(state.dc_y1[1], y11);
+ 
+-    // Transpose back and write comb lines.
++    // Transpose back and write straight into the comb rings.
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+-        for (std::size_t i = 0; i < N; i += 8)
+-            transpose8x8_avx2(&tr[ch][i][0], NC, &lin[0][i], N);
++        for (std::size_t i = 0; i < N; i += 8) {
++            __m256 r[8];
++            for (std::size_t k = 0; k < 8; ++k) r[k] = _mm256_load_ps(tr[ch][i + k]);
++            transpose8x8_avx2(r);
++            for (std::size_t c = 0; c < NC; ++c) {
++                float* buf = state.comb_buffers[ch][c];
++                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
++                const std::size_t p = ring_at(state.comb_pos[ch][c], i, size);
++                if (p + 8 <= size) [[likely]] {
++                    _mm256_storeu_ps(buf + p, r[c]);
++                } else {
++                    _mm256_store_ps(wrap_tmp[c], r[c]);
++                    for (std::size_t k = 0; k < 8; ++k)
++                        buf[ring_at(p, k, size)] = wrap_tmp[c][k];
++                }
++            }
++        }
+         for (std::size_t c = 0; c < NC; ++c) {
+             const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+-            const std::size_t pos = state.comb_pos[ch][c];
+-            ring_write(state.comb_buffers[ch][c], size, pos, lin[c], N);
+-            state.comb_pos[ch][c] = (pos + N) % size;
++            state.comb_pos[ch][c] = ring_at(state.comb_pos[ch][c], N, size);
+         }
+     }
+ 

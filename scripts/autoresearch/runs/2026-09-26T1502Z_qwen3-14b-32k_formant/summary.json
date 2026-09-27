@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-26T1502Z_qwen3-14b-32k_formant",
+  "provider": "local",
+  "model": "qwen3:14b-32k (qwen3:14b-32k@?)",
+  "target": "formant",
+  "iterations": 8,
+  "accepts": 0,
+  "rejects": 8,
+  "reject_reasons": {
+    "build": 7,
+    "empty patch": 1
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 1204069,
+    "output": 109810,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 8203.9,
+  "gpu_s": 8057.6,
+  "active_s": 8078.3,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/qwen3-14b-32k-formant-202609261502",
+  "base_rev": "917a79d87bfa8ca59470fbb4ba5a9cc2b3e718d5"
+}

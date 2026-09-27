@@ -1,0 +1,47 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 26df3c1..ff56283 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -18,6 +18,22 @@ constexpr float DENORMAL_DC = 1e-18f;
+ #if CEDAR_SIMD_X86
+ namespace kernels {
+ 
++// simd: approx std::tan
++CEDAR_TARGET_AVX2 inline float tan_svf_avx2(float x) noexcept {
++    constexpr float HALF_PI = 1.57079632679489661923f;
++    constexpr float QUARTER_PI = 0.78539816339744830962f;
++    const bool reciprocal = x > QUARTER_PI;
++    const float y = reciprocal ? HALF_PI - x : x;
++    const float y2 = y * y;
++    const float p = 0.3333333333333333f + y2 *
++        (0.1333333333333333f + y2 *
++        (0.0539682539682540f + y2 *
++        (0.0218694885361552f + y2 *
++        (0.0088632355299022f + y2 * 0.0035921280365725f))));
++    const float t = y + y * y2 * p;
++    return reciprocal ? 1.0f / t : t;
++}
++
+ template <int Mode>
+ CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
+     float* out_l, float* out_r, const float* input, const float* input_r,
+@@ -25,7 +41,18 @@ CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
+     const float* wet_level, bool stereo_in, SVFState& state,
+     float sample_rate) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        calc_svf(state, freq[i], q[i], sample_rate);
++        float f = std::max(0.0f, freq[i]);
++        if (!(f == state.last_freq && q[i] == state.last_q)) {
++            state.last_freq = f;
++            state.last_q = q[i];
++            f = std::clamp(f, 20.0f, sample_rate * 0.49f);
++            const float qq = std::max(0.1f, q[i]);
++            state.g = tan_svf_avx2(PI * f / sample_rate);
++            state.k = 1.0f / qq;
++            state.a1 = 1.0f / (1.0f + state.g * (state.g + state.k));
++            state.a2 = state.g * state.a1;
++            state.a3 = state.g * state.a2;
++        }
+         const float dry = drywet::coeff(dry_level, i, 0.0f);
+         const float wet = drywet::coeff(wet_level, i, 1.0f);
+ 

@@ -1,0 +1,12 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..f762887 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -3,6 +3,7 @@
+ #include "../vm/context.hpp"
+ #include "../vm/instruction.hpp"
+ #include "../dsp/constants.hpp"
++#include "../dsp/simd.hpp"
+ #include "dsp_state.hpp"
+ #include "drywet.hpp"
+ #include <cmath>

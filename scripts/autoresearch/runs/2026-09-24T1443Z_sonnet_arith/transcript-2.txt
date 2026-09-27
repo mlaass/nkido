@@ -1,0 +1,11 @@
+I couldn't do anything this round. The harness denied my Bash call, which was the unroll edit plus `check.sh`. I haven't modified any files, and the working tree is still at the iteration-1 commit (`fd00d46`).
+
+**What I was going to try:** add `#pragma GCC unroll 8` to the loops in `add_avx2`, `sub_avx2` and `mul_avx2`. The unroll would remove loop-counter overhead in the 16-vector-per-block kernels. I'd then run `check.sh` to see whether it gives a measurable gain over the 1.31–1.32x from iteration 1.
+
+**Why I stopped:** the unroll would be a small, speculative gain, and without `check.sh` I can't confirm it's bit-identical or a real speedup. I don't want to leave an unverified edit in the tree. I also didn't try to get around the denial, for example by editing through `Edit` and skipping the check.
+
+**Realistic ceiling:** the remaining overhead is probably the non-inlined call. A `[[gnu::target("avx2")]]` function can't be inlined into a non-AVX2 caller. Further gains may be small, and a further attempt might not clear the 5% bar over the committed baseline.
+
+**To proceed, either:**
+- allow Bash (or at least `check.sh` and `git diff`) and I'll try the unroll and verify it, or
+- accept iteration 1 as the final state.

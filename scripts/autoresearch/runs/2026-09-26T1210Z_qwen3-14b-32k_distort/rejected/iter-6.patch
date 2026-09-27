@@ -1,0 +1,153 @@
+diff --git a/cedar/include/cedar/dsp/simd.hpp b/cedar/include/cedar/dsp/simd.hpp
+index ee273e4..414b128 100644
+--- a/cedar/include/cedar/dsp/simd.hpp
++++ b/cedar/include/cedar/dsp/simd.hpp
+@@ -1,74 +1,85 @@
+-#pragma once
++#include "../dsp/simd.hpp"
+ 
+-// Runtime SIMD dispatch (docs/prd-simd-autoresearch.md §5.1).
+-//
+-// Opcodes keep their scalar body as oracle + fallback and add kernels behind
+-// `if (simd::has(...))`. Kernels only exist when the build sets CEDAR_SIMD
+-// (the `simd` / `wasm-simd` presets); default builds compile to the scalar
+-// bodies exactly as before.
+-//
+-//   x86-64 (GCC/Clang): kernels carry CEDAR_TARGET_AVX2, so no TU needs
+-//     -mavx2; the ISA is detected once at static init. SSE2 is baseline.
+-//   aarch64: NEON is baseline — CEDAR_SIMD_NEON kernels need no dispatch.
+-//   WASM:    SIMD128 when built with -msimd128 (CEDAR_SIMD_WASM).
+-//
+-// Kernels must not allocate, lock or syscall (the [zero_alloc] trap enforces),
+-// and may assume 32-byte aligned buffers (BufferPool slabs are alignas(32)) —
+-// assert it with CEDAR_SIMD_ASSERT_ALIGNED.
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* input, const float* drive, float* output, const float* dry_level, const float* wet_level, bool stereo_in, const float* input_r) noexcept {
++    constexpr size_t VEC_SIZE = 8;
++    for (size_t i = 0; i < BLOCK_SIZE; i += VEC_SIZE) {
++        // Load vectors
++        __m256 vin = _mm256_load_ps(input + i);
++        __m256 vdrive = _mm256_load_ps(drive + i);
++        __m256 vdry = _mm256_load_ps(dry_level + i);
++        __m256 vwet = _mm256_load_ps(wet_level + i);
++        __m256 vinput_r = stereo_in ? _mm256_load_ps(input_r + i) : vin;
+ 
+-#include <cassert>
+-#include <cstdint>
++        // Compute tanh(x * d)
++        __m256 vprod = _mm256_mul_ps(vin, vdrive);
++        __m256 vtanh = _mm256_tanh_ps(vprod);
++        __m256 vout_l = _mm256_mul_ps(vtanh, vwet);
++        vout_l = _mm256_add_ps(vout_l, _mm256_mul_ps(vin, vdry));
++        _mm256_store_ps(output + i, vout_l);
+ 
+-#if defined(CEDAR_SIMD) && (defined(__x86_64__) || defined(__i386__)) && \
+-    (defined(__GNUC__) || defined(__clang__))
+-#  define CEDAR_SIMD_X86 1
+-#  include <immintrin.h>
+-#  define CEDAR_TARGET_AVX2 [[gnu::target("avx2")]]
+-#else
+-#  define CEDAR_SIMD_X86 0
+-#endif
+-
+-#if defined(CEDAR_SIMD) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+-#  define CEDAR_SIMD_NEON 1
+-#  include <arm_neon.h>
+-#else
+-#  define CEDAR_SIMD_NEON 0
+-#endif
++        // Process right channel if stereo
++        if (stereo_in) {
++            __m256 vprod_r = _mm256_mul_ps(vinput_r, vdrive);
++            __m256 vtanh_r = _mm256_tanh_ps(vprod_r);
++            __m256 vout_r = _mm256_mul_ps(vtanh_r, vwet);
++            vout_r = _mm256_add_ps(vout_r, _mm256_mul_ps(vinput_r, vdry));
++            _mm256_store_ps(output + i + VEC_SIZE, vout_r);
++        }
++    }
++}
+ 
+-#if defined(CEDAR_SIMD) && defined(__wasm_simd128__)
+-#  define CEDAR_SIMD_WASM 1
+-#  include <wasm_simd128.h>
+-#else
+-#  define CEDAR_SIMD_WASM 0
+-#endif
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* input, const float* threshold, float* output, const float* dry_level, const float* wet_level, bool stereo_in, const float* input_r) noexcept {
++    constexpr size_t VEC_SIZE = 8;
++    for (size_t i = 0; i < BLOCK_SIZE; i += VEC_SIZE) {
++        __m256 vin = _mm256_load_ps(input + i);
++        __m256 vthreshold = _mm256_load_ps(threshold + i);
++        __m256 vdry = _mm256_load_ps(dry_level + i);
++        __m256 vwet = _mm256_load_ps(wet_level + i);
++        __m256 vinput_r = stereo_in ? _mm256_load_ps(input_r + i) : vin;
+ 
+-#define CEDAR_SIMD_ASSERT_ALIGNED(p, n) \
+-    assert((reinterpret_cast<std::uintptr_t>(p) % (n)) == 0 && "SIMD kernel: misaligned buffer")
++        // Clamp threshold
++        __m256 vclamp = _mm256_max_ps(_mm256_set1_ps(0.1f), _mm256_min_ps(vthreshold, _mm256_set1_ps(2.0f)));
+ 
+-namespace cedar::simd {
++        // Compute x/t
++        __m256 vx_div_t = _mm256_div_ps(vin, vclamp);
++        __m256 vinput_r_div_t = _mm256_div_ps(vinput_r, vclamp);
+ 
+-enum class Isa : std::uint8_t { Scalar, Sse2, Avx2, Neon, Wasm128 };
++        // Soft clipping function
++        __m256 vabs = _mm256_abs_ps(vx_div_t);
++        __m256 vcmp_gt3 = _mm256_cmp_ps(vabs, _mm256_set1_ps(3.0f), _CMP_GT_OQ);
++        __m256 vcmp_lt3 = _mm256_cmp_ps(vabs, _mm256_set1_ps(3.0f), _CMP_LT_OQ);
++        __m256 vsign = _mm256_sign_ps(_mm256_set1_ps(1.0f), vx_div_t);
+ 
+-namespace detail {
+-// Written once during static initialisation (src/dsp/simd.cpp); read-only after.
+-extern Isa g_active;
+-}
++        __m256 vres = _mm256_blendv_ps(
++            _mm256_blendv_ps(
++                _mm256_set1_ps(1.0f),
++                _mm256_set1_ps(-1.0f),
++                vcmp_lt3
++            ),
++            _mm256_mul_ps(
++                vx_div_t,
++                _mm256_div_ps(
++                    _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(vabs, vabs)),
++                    _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), _mm256_mul_ps(vabs, vabs)))
++                )
++            ),
++            vcmp_gt3
++        );
+ 
+-// Best ISA available on this CPU *and* compiled into this build.
+-[[nodiscard]] inline Isa active() noexcept { return detail::g_active; }
++        __m256 vsoft = _mm256_mul_ps(vres, vclamp);
++        __m256 vout_l = _mm256_mul_ps(vsoft, vwet);
++        vout_l = _mm256_add_ps(vout_l, _mm256_mul_ps(vin, vdry));
++        _mm256_store_ps(output + i, vout_l);
+ 
+-// True when kernels for `isa` may run. x86 levels nest (Avx2 implies Sse2).
+-[[nodiscard]] inline bool has(Isa isa) noexcept {
+-    const Isa a = detail::g_active;
+-    if (isa == Isa::Scalar) return true;
+-    if (isa == Isa::Sse2) return a == Isa::Sse2 || a == Isa::Avx2;
+-    return a == isa;
++        if (stereo_in) {
++            __m256 vsoft_r = _mm256_mul_ps(vres, vclamp);
++            __m256 vout_r = _mm256_mul_ps(vsoft_r, vwet);
++            vout_r = _mm256_add_ps(vout_r, _mm256_mul_ps(vinput_r, vdry));
++            _mm256_store_ps(output + i + VEC_SIZE, vout_r);
++        }
++    }
++}
++#endif
+ }
+-
+-[[nodiscard]] const char* name(Isa isa) noexcept;
+-
+-// Test/bench hook: force a lower ISA (e.g. Scalar) to A/B the fallback path.
+-// Not for use while audio is running.
+-void force(Isa isa) noexcept;
+-
+-}  // namespace cedar::simd

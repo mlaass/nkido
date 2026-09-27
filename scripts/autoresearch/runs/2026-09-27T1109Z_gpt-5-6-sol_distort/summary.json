@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-27T1109Z_gpt-5-6-sol_distort",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 4,
+  "rejects": 4,
+  "reject_reasons": {
+    "speed": 4
+  },
+  "first_accept_iteration": 2,
+  "best_speedup": 10.209,
+  "tokens": {
+    "input": 2743966,
+    "output": 50954,
+    "cached": 2545024
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2056.1,
+  "gpu_s": null,
+  "active_s": 1565.5,
+  "unstable_iterations": 3,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-distort-202609271109",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

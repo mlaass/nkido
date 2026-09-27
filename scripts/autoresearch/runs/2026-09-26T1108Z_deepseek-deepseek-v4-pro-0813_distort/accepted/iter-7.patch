@@ -1,0 +1,29 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index c6fb6b6..33c1a43 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -138,18 +138,17 @@ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float*
+ }
+ 
+ // Exact soft-clip shape from the scalar body: a clamped cubic rational with
+-// branches only for |x| > 3, implemented with comparisons and blends.
++// branches only for |x| > 3. Clamping is enough: at +3 the rational evaluates
++// to exactly 1 and at -3 to exactly -1 in IEEE single precision, so the
++// comparison/blend branches are redundant and can be dropped.
+ CEDAR_TARGET_AVX2 inline __m256 soft_clip_avx2(__m256 x) noexcept {
+     const __m256 v3 = _mm256_set1_ps(3.0f);
+-    const __m256 upper = _mm256_cmp_ps(x, v3, _CMP_GT_OQ);
+-    const __m256 lower = _mm256_cmp_ps(x, _mm256_sub_ps(_mm256_setzero_ps(), v3), _CMP_LT_OQ);
+-    const __m256 xc = _mm256_min_ps(_mm256_max_ps(x, _mm256_set1_ps(-3.0f)), v3);
++    const __m256 vn3 = _mm256_set1_ps(-3.0f);
++    const __m256 xc = _mm256_min_ps(_mm256_max_ps(x, vn3), v3);
+     const __m256 x2 = _mm256_mul_ps(xc, xc);
+     const __m256 num = _mm256_mul_ps(xc, _mm256_add_ps(_mm256_set1_ps(27.0f), x2));
+     const __m256 den = _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), x2));
+-    const __m256 body = _mm256_div_ps(num, den);
+-    const __m256 clipped = _mm256_blendv_ps(body, _mm256_set1_ps(1.0f), upper);
+-    return _mm256_blendv_ps(clipped, _mm256_set1_ps(-1.0f), lower);
++    return _mm256_div_ps(num, den);
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* in_l, const float* in_r,

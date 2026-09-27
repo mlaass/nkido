@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-26T1115Z_deepseek-deepseek-v4-pro-0813_formant",
+  "target": "formant",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517",
+  "branch": "autoresearch/deepseek-deepseek-v4-pro-0813-formant-202609261115",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-26T1115Z_deepseek-deepseek-v4-pro-0813_formant/check.sh",
+  "model": "deepseek/deepseek-v4-pro-0813",
+  "provider": "openrouter",
+  "iterations": 8,
+  "budget_usd": 6.0
+}

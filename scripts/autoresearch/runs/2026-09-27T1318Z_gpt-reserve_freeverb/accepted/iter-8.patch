@@ -1,0 +1,167 @@
+diff --git a/cedar/include/cedar/opcodes/dsp_state.hpp b/cedar/include/cedar/opcodes/dsp_state.hpp
+index 238fe60..fc3bdd9 100644
+--- a/cedar/include/cedar/opcodes/dsp_state.hpp
++++ b/cedar/include/cedar/opcodes/dsp_state.hpp
+@@ -883,6 +883,7 @@ struct FreeverbState {
+ 
+     // Arena-allocated buffers: [channel][filter_index]
+     float* comb_buffers[2][NUM_COMBS] = {};
++    float* comb_cursor[2][NUM_COMBS] = {};
+     std::size_t comb_pos[2][NUM_COMBS] = {};
+     float comb_filter_state[2][NUM_COMBS] = {};
+ 
+@@ -891,6 +892,7 @@ struct FreeverbState {
+     float dc_y1[2][NUM_COMBS] = {};
+ 
+     float* allpass_buffers[2][NUM_ALLPASSES] = {};
++    float* allpass_cursor[2][NUM_ALLPASSES] = {};
+     std::size_t allpass_pos[2][NUM_ALLPASSES] = {};
+ 
+     void ensure_buffers(AudioArena* arena) {
+@@ -900,11 +902,17 @@ struct FreeverbState {
+                 if (!comb_buffers[c][i]) {
+                     comb_buffers[c][i] = arena->allocate(COMB_SIZES_LR[c][i]);
+                 }
++                if (comb_buffers[c][i] && !comb_cursor[c][i]) {
++                    comb_cursor[c][i] = comb_buffers[c][i] + comb_pos[c][i];
++                }
+             }
+             for (std::size_t i = 0; i < NUM_ALLPASSES; ++i) {
+                 if (!allpass_buffers[c][i]) {
+                     allpass_buffers[c][i] = arena->allocate(ALLPASS_SIZES_LR[c][i]);
+                 }
++                if (allpass_buffers[c][i] && !allpass_cursor[c][i]) {
++                    allpass_cursor[c][i] = allpass_buffers[c][i] + allpass_pos[c][i];
++                }
+             }
+         }
+     }
+@@ -920,10 +928,10 @@ struct FreeverbState {
+     void release(AudioArena& arena) {
+         for (std::size_t c = 0; c < 2; ++c) {
+             for (std::size_t i = 0; i < NUM_COMBS; ++i) {
+-                if (comb_buffers[c][i]) { arena.release(comb_buffers[c][i], COMB_SIZES_LR[c][i]); comb_buffers[c][i] = nullptr; }
++                if (comb_buffers[c][i]) { arena.release(comb_buffers[c][i], COMB_SIZES_LR[c][i]); comb_buffers[c][i] = nullptr; comb_cursor[c][i] = nullptr; }
+             }
+             for (std::size_t i = 0; i < NUM_ALLPASSES; ++i) {
+-                if (allpass_buffers[c][i]) { arena.release(allpass_buffers[c][i], ALLPASS_SIZES_LR[c][i]); allpass_buffers[c][i] = nullptr; }
++                if (allpass_buffers[c][i]) { arena.release(allpass_buffers[c][i], ALLPASS_SIZES_LR[c][i]); allpass_buffers[c][i] = nullptr; allpass_cursor[c][i] = nullptr; }
+             }
+         }
+     }
+@@ -935,6 +943,7 @@ struct FreeverbState {
+                     std::memset(comb_buffers[c][i], 0,
+                                 COMB_SIZES_LR[c][i] * sizeof(float));
+                     comb_pos[c][i] = 0;
++                    comb_cursor[c][i] = comb_buffers[c][i];
+                     comb_filter_state[c][i] = 0.0f;
+                     dc_x1[c][i] = 0.0f;
+                     dc_y1[c][i] = 0.0f;
+@@ -945,6 +954,7 @@ struct FreeverbState {
+                     std::memset(allpass_buffers[c][i], 0,
+                                 ALLPASS_SIZES_LR[c][i] * sizeof(float));
+                     allpass_pos[c][i] = 0;
++                    allpass_cursor[c][i] = allpass_buffers[c][i];
+                 }
+             }
+         }
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0d74114..7bbf9ec 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -3,6 +3,7 @@
+ #include "../vm/context.hpp"
+ #include "../vm/instruction.hpp"
+ #include "../dsp/constants.hpp"
++#include "../dsp/simd.hpp"
+ #include "dsp_state.hpp"
+ #include "dsp_utils.hpp"
+ #include "drywet.hpp"
+@@ -12,6 +13,71 @@
+ 
+ namespace cedar {
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void freeverb_avx2(
++    const float* input, const float* input_r, bool stereo_in,
++    const float* room_size, const float* damping,
++    const float* room_scale_in, const float* room_offset_in,
++    const float* dry_buf, float dry_const, const float* wet_buf, float wet_const,
++    float* out_l, float* out_r, FreeverbState& state) noexcept {
++    constexpr float ALLPASS_GAIN = 0.5f;
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float x_l = input[i];
++        const float x_r = stereo_in ? input_r[i] : x_l;
++        const float dry = drywet::coeff(dry_buf, i, dry_const);
++        const float wet = drywet::coeff(wet_buf, i, wet_const);
++        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
++        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
++        const float room_scale = room_scale_in[i] > 0.0f ? room_scale_in[i] : 0.28f;
++        const float room_offset = room_offset_in[i] > 0.0f ? room_offset_in[i] : 0.7f;
++        const float feedback = room * room_scale + room_offset;
++        float y_lr[2] = {0.0f, 0.0f};
++
++        for (std::size_t ch = 0; ch < 2; ++ch) {
++            const float x = ch == 0 ? x_l : x_r;
++            float comb_sum = 0.0f;
++            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
++                float* const buffer = state.comb_buffers[ch][c];
++                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
++                float* cursor = state.comb_cursor[ch][c];
++                const float delayed = *cursor;
++                state.comb_filter_state[ch][c] =
++                    delayed * (1.0f - damp) + state.comb_filter_state[ch][c] * damp;
++                const float dc_in = state.comb_filter_state[ch][c];
++                const float dc_out = dc_in - state.dc_x1[ch][c] +
++                                     0.997f * state.dc_y1[ch][c];
++                state.dc_x1[ch][c] = dc_in;
++                state.dc_y1[ch][c] = dc_out;
++                *cursor = x + feedback * dc_out;
++                if (++cursor == buffer + size) cursor = buffer;
++                state.comb_cursor[ch][c] = cursor;
++                if (++state.comb_pos[ch][c] == size) state.comb_pos[ch][c] = 0;
++                comb_sum += delayed;
++            }
++
++            float y = comb_sum;
++            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
++                float* const buffer = state.allpass_buffers[ch][a];
++                const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
++                float* cursor = state.allpass_cursor[ch][a];
++                const float delayed = *cursor;
++                const float output = delayed - ALLPASS_GAIN * y;
++                *cursor = y + ALLPASS_GAIN * output;
++                if (++cursor == buffer + size) cursor = buffer;
++                state.allpass_cursor[ch][a] = cursor;
++                if (++state.allpass_pos[ch][a] == size) state.allpass_pos[ch][a] = 0;
++                y = output;
++            }
++            y_lr[ch] = y;
++        }
++        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
++        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
++    }
++}
++#endif
++}  // namespace kernels
++
+ // DC blocker coefficient: R ≈ 0.997 gives ~23Hz cutoff at 48kHz
+ // y[n] = x[n] - x[n-1] + R * y[n-1]
+ constexpr float DC_BLOCKER_R = 0.997f;
+@@ -74,6 +140,15 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::freeverb_avx2(input, input_r, stereo_in, room_size, damping,
++                               room_scale_in, room_offset_in, dry_buf, dry_const,
++                               wet_buf, wet_const, out_l, out_r, state);
++        return;
++    }
++#endif
++
+     constexpr float ALLPASS_GAIN = 0.5f;
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {

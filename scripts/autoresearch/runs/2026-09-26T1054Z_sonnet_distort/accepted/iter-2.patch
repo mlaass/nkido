@@ -1,0 +1,29 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 977445b..83ea958 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -23,19 +23,18 @@ inline __m256 coeff8(const float* buf, std::size_t i, float fallback) noexcept {
+ 
+ // simd: approx -- replaces std::tanh(z). tanh(z) = sign(z) * (e - 1) / (e + 1),
+ // e = exp(2|z|), |z| clamped so e stays finite (tanh(10) == 1 to 4e-9).
+-// exp via 2^n * poly6(r), r in [-ln2/2, ln2/2]; relative error ~1e-7.
++// exp via 2^n * poly5(r), r in [-ln2/2, ln2/2]; relative error ~3e-6 (tanh err ~1e-6).
+ CEDAR_TARGET_AVX2 [[gnu::always_inline]]
+ inline __m256 tanh8(__m256 z) noexcept {
+     const __m256 sign_mask = _mm256_set1_ps(-0.0f);
+     const __m256 sign = _mm256_and_ps(z, sign_mask);
+-    __m256 t = _mm256_add_ps(_mm256_andnot_ps(sign_mask, z), _mm256_andnot_ps(sign_mask, z));
++    const __m256 az = _mm256_andnot_ps(sign_mask, z);
++    __m256 t = _mm256_add_ps(az, az);
+     t = _mm256_min_ps(_mm256_set1_ps(20.0f), t);  // NaN in t propagates
+     const __m256i n = _mm256_cvtps_epi32(_mm256_mul_ps(t, _mm256_set1_ps(1.44269504088896341f)));
+     const __m256 nf = _mm256_cvtepi32_ps(n);
+-    __m256 r = _mm256_sub_ps(t, _mm256_mul_ps(nf, _mm256_set1_ps(0.693359375f)));
+-    r = _mm256_sub_ps(r, _mm256_mul_ps(nf, _mm256_set1_ps(-2.12194440e-4f)));
+-    __m256 p = _mm256_set1_ps(1.0f / 720.0f);
+-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f / 120.0f));
++    const __m256 r = _mm256_sub_ps(t, _mm256_mul_ps(nf, _mm256_set1_ps(0.693147182f)));
++    __m256 p = _mm256_set1_ps(1.0f / 120.0f);
+     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f / 24.0f));
+     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f / 6.0f));
+     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.5f));

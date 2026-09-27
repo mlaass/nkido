@@ -1,0 +1,6 @@
+{
+  "run_id": "selftest-20260924T224700-distort",
+  "target": "distort",
+  "base_rev": "24652821f8f8f4bff6426c9110503dab30d5b62b",
+  "branch": null
+}

@@ -1,0 +1,26 @@
+{
+  "run_id": "2026-09-25T1820Z_opus_formant",
+  "provider": "claude-code",
+  "model": "opus (claude-opus-5-5)",
+  "target": "formant",
+  "iterations": 8,
+  "accepts": 7,
+  "rejects": 1,
+  "reject_reasons": {
+    "speed": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 8.132,
+  "tokens": {
+    "input": 7426703,
+    "output": 272684,
+    "cached": 6895846
+  },
+  "cost_usd": 11.0784,
+  "wall_clock_s": 3781.0,
+  "gpu_s": null,
+  "unstable_iterations": 6,
+  "status": "complete",
+  "branch": "autoresearch/opus-formant-202609251820",
+  "base_rev": "8778ac4820c4c65a908051f76e0b91aaaf9f35b7"
+}

@@ -1,0 +1,47 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 73c9a73..31453fb 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -11,20 +11,36 @@ namespace cedar {
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    // 2x unroll with explicit register reuse for better ILP
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
++        __m256 va0 = _mm256_load_ps(a + i);
++        __m256 vb0 = _mm256_load_ps(b + i);
++        __m256 va1 = _mm256_load_ps(a + i + 8);
++        __m256 vb1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i, _mm256_add_ps(va0, vb0));
++        _mm256_store_ps(out + i + 8, _mm256_add_ps(va1, vb1));
+     }
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
++        __m256 va0 = _mm256_load_ps(a + i);
++        __m256 vb0 = _mm256_load_ps(b + i);
++        __m256 va1 = _mm256_load_ps(a + i + 8);
++        __m256 vb1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i, _mm256_sub_ps(va0, vb0));
++        _mm256_store_ps(out + i + 8, _mm256_sub_ps(va1, vb1));
+     }
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
++        __m256 va0 = _mm256_load_ps(a + i);
++        __m256 vb0 = _mm256_load_ps(b + i);
++        __m256 va1 = _mm256_load_ps(a + i + 8);
++        __m256 vb1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i, _mm256_mul_ps(va0, vb0));
++        _mm256_store_ps(out + i + 8, _mm256_mul_ps(va1, vb1));
+     }
+ }
+ #endif

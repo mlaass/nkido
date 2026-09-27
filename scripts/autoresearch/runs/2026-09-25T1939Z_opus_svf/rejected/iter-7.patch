@@ -1,0 +1,136 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 8536d86..17a88c1 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -129,6 +129,17 @@ CEDAR_TARGET_AVX2 inline __m128 svf_clamp_ps(__m128 v) noexcept {
+     return _mm_and_ps(c, _mm_cmpord_ps(v, v));  // NaN -> 0
+ }
+ 
++// True unless every |lane| of a[0:1], b[0:1] lies in [2^-35, 10] (NaN fails).
++// In that range s + DENORMAL_DC == s exactly and clamp_audio is the identity.
++CEDAR_TARGET_AVX2 inline bool svf_out_of_range(__m128 a, __m128 b) noexcept {
++    const __m128i ab = _mm_castps_si128(_mm_and_ps(_mm_movelh_ps(a, b),
++                                                   _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF))));
++    // Unsigned range test via a bias: bits(2^-35) = 0x2E000000, bits(10) = 0x41200000.
++    const __m128i biased = _mm_add_epi32(ab, _mm_set1_epi32(0x52000000));
++    const __m128i bad = _mm_cmpgt_epi32(biased, _mm_set1_epi32(static_cast<int>(0x93200000u)));
++    return _mm_movemask_ps(_mm_castsi128_ps(bad)) != 0;
++}
++
+ // Mode: 0 = lowpass (v2), 1 = highpass, 2 = bandpass (v1).
+ // Coefficients are a pure function of (freq, q), so they are computed for the
+ // whole block first; only the integrator recurrence stays serial.
+@@ -148,7 +159,7 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+     const __m256 one = _mm256_set1_ps(1.0f);
+     const __m256 qmin = _mm256_set1_ps(0.1f);
+     const __m256 pi = _mm256_set1_ps(PI);
+-    const __m256 sr = _mm256_set1_ps(sample_rate);
++    const __m256d inv_sr = _mm256_set1_pd(1.0 / static_cast<double>(sample_rate));
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         const __m256 f = _mm256_load_ps(freq + i);
+         const __m256 f0 = _mm256_and_ps(_mm256_cmp_ps(zero, f, _CMP_LT_OQ), f);  // max(0, f)
+@@ -156,7 +167,13 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+         fc = _mm256_blendv_ps(fc, lo, _mm256_cmp_ps(f0, lo, _CMP_LT_OQ));
+         const __m256 qv = _mm256_load_ps(q + i);
+         const __m256 qc = _mm256_blendv_ps(qmin, qv, _mm256_cmp_ps(qmin, qv, _CMP_LT_OQ));
+-        const __m256 x = _mm256_div_ps(_mm256_mul_ps(pi, fc), sr);
++        // (pi*fc)/sr, correctly rounded: the double product is within ~2^-52
++        // of the true quotient, which is >= 2^-49 (relative) from any float
++        // rounding midpoint, so the final double->float rounding is exact.
++        const __m256 pf = _mm256_mul_ps(pi, fc);
++        const __m128 xlo = _mm256_cvtpd_ps(_mm256_mul_pd(_mm256_cvtps_pd(_mm256_castps256_ps128(pf)), inv_sr));
++        const __m128 xhi = _mm256_cvtpd_ps(_mm256_mul_pd(_mm256_cvtps_pd(_mm256_extractf128_ps(pf, 1)), inv_sr));
++        const __m256 x = _mm256_insertf128_ps(_mm256_castps128_ps256(xlo), xhi, 1);
+         const __m256 g = svf_tanf_ps(x);
+         const __m256 k = _mm256_div_ps(one, qc);
+         const __m256 a1 = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(g, _mm256_add_ps(g, k))));
+@@ -165,47 +182,63 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+         _mm256_store_ps(F0 + i, f0);
+         _mm256_store_ps(G + i, g);
+         _mm256_store_ps(K + i, k);
+-        _mm256_store_ps(A1 + i, a1);
+-        _mm256_store_ps(A2 + i, a2);
+-        _mm256_store_ps(A3 + i, a3);
++        // Stored doubled (exact: a1 >= ~7e-4, a3 >= ~1e-9, all normal).
++        _mm256_store_ps(A1 + i, _mm256_add_ps(a1, a1));
++        _mm256_store_ps(A2 + i, _mm256_add_ps(a2, a2));
++        _mm256_store_ps(A3 + i, _mm256_add_ps(a3, a3));
+     }
+     // Honour the scalar coefficient cache for a leading run of unchanged params.
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         if (!(F0[i] == state.last_freq && q[i] == state.last_q)) break;
+-        G[i] = state.g; K[i] = state.k; A1[i] = state.a1; A2[i] = state.a2; A3[i] = state.a3;
++        G[i] = state.g; K[i] = state.k;
++        A1[i] = 2.0f * state.a1; A2[i] = 2.0f * state.a2; A3[i] = 2.0f * state.a3;
+     }
+     constexpr std::size_t L = BLOCK_SIZE - 1;
+     state.last_freq = F0[L];
+     state.last_q = q[L];
+-    state.g = G[L]; state.k = K[L]; state.a1 = A1[L]; state.a2 = A2[L]; state.a3 = A3[L];
++    state.g = G[L]; state.k = K[L];
++    state.a1 = 0.5f * A1[L]; state.a2 = 0.5f * A2[L]; state.a3 = 0.5f * A3[L];
+ 
++    // Fast path, valid while every state lane has |s| in [2^-35, 10]: then
++    // s + DENORMAL_DC == s, and with doubled coefficients 2*v is formed
++    // directly (products stay >= 2^-90, so doubling commutes with rounding),
++    // leaving a 4-op chain. A result outside the range is recomputed exactly.
+     __m128 s1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+     __m128 s2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+-    const __m128 dc = _mm_set1_ps(DENORMAL_DC);
+-    const __m128 two = _mm_set1_ps(2.0f);
+-    const __m128 lim = _mm_set1_ps(10.0f);
+-    const __m128 absmask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
++    const __m128 half = _mm_set1_ps(0.5f);
++    bool fast = !svf_out_of_range(s1, s2);
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         const __m128 x = in_r ? _mm_unpacklo_ps(_mm_load_ss(in_l + i), _mm_load_ss(in_r + i))
+                               : _mm_set1_ps(in_l[i]);
+-        const __m128 a1 = _mm_set1_ps(A1[i]);
+-        const __m128 a2 = _mm_set1_ps(A2[i]);
+-        const __m128 a3 = _mm_set1_ps(A3[i]);
+-        const __m128 t1 = _mm_add_ps(s1, dc);
+-        const __m128 t2 = _mm_add_ps(s2, dc);
+-        const __m128 v3 = _mm_sub_ps(x, t2);
+-        const __m128 v1 = _mm_add_ps(_mm_mul_ps(a1, t1), _mm_mul_ps(a2, v3));
+-        const __m128 v2 = _mm_add_ps(_mm_add_ps(t2, _mm_mul_ps(a2, t1)), _mm_mul_ps(a3, v3));
+-        __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), s1);
+-        __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), s2);
+-        const __m128 bad = _mm_or_ps(_mm_cmp_ps(_mm_and_ps(n1, absmask), lim, _CMP_NLE_UQ),
+-                                     _mm_cmp_ps(_mm_and_ps(n2, absmask), lim, _CMP_NLE_UQ));
+-        if (__builtin_expect((_mm_movemask_ps(bad) & 3) != 0, 0)) {
+-            n1 = svf_clamp_ps(n1);
+-            n2 = svf_clamp_ps(n2);
++        const __m128 d1 = _mm_set1_ps(A1[i]);
++        const __m128 d2 = _mm_set1_ps(A2[i]);
++        const __m128 d3 = _mm_set1_ps(A3[i]);
++        const __m128 v3 = _mm_sub_ps(x, s2);
++        const __m128 w1 = _mm_add_ps(_mm_mul_ps(d1, s1), _mm_mul_ps(d2, v3));
++        const __m128 w2 = _mm_add_ps(_mm_add_ps(_mm_add_ps(s2, s2), _mm_mul_ps(d2, s1)),
++                                     _mm_mul_ps(d3, v3));
++        const __m128 n1 = _mm_sub_ps(w1, s1);
++        const __m128 n2 = _mm_sub_ps(w2, s2);
++        __m128 v1 = _mm_mul_ps(half, w1);
++        __m128 v2 = _mm_mul_ps(half, w2);
++        if (__builtin_expect(fast && !svf_out_of_range(n1, n2), 1)) {
++            s1 = n1;
++            s2 = n2;
++        } else {
++            const __m128 dc = _mm_set1_ps(DENORMAL_DC);
++            const __m128 two = _mm_set1_ps(2.0f);
++            const __m128 a1 = _mm_mul_ps(half, d1);
++            const __m128 a2 = _mm_mul_ps(half, d2);
++            const __m128 a3 = _mm_mul_ps(half, d3);
++            const __m128 t1 = _mm_add_ps(s1, dc);
++            const __m128 t2 = _mm_add_ps(s2, dc);
++            const __m128 e3 = _mm_sub_ps(x, t2);
++            v1 = _mm_add_ps(_mm_mul_ps(a1, t1), _mm_mul_ps(a2, e3));
++            v2 = _mm_add_ps(_mm_add_ps(t2, _mm_mul_ps(a2, t1)), _mm_mul_ps(a3, e3));
++            s1 = svf_clamp_ps(_mm_sub_ps(_mm_mul_ps(two, v1), s1));
++            s2 = svf_clamp_ps(_mm_sub_ps(_mm_mul_ps(two, v2), s2));
++            fast = !svf_out_of_range(s1, s2);
+         }
+-        s1 = n1;
+-        s2 = n2;
+         __m128 y;
+         if constexpr (Mode == 0) y = v2;
+         else if constexpr (Mode == 2) y = v1;

@@ -1,0 +1,24 @@
+{
+  "run_id": "2026-09-25T1739Z_opus_distort",
+  "provider": "claude-code",
+  "model": "opus (claude-opus-5-5)",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 8,
+  "rejects": 0,
+  "reject_reasons": {},
+  "first_accept_iteration": 1,
+  "best_speedup": 15.556,
+  "tokens": {
+    "input": 1731471,
+    "output": 124795,
+    "cached": 1494222
+  },
+  "cost_usd": 4.6922,
+  "wall_clock_s": 1829.4,
+  "gpu_s": null,
+  "unstable_iterations": 7,
+  "status": "complete",
+  "branch": "autoresearch/opus-distort-202609251739",
+  "base_rev": "8778ac4820c4c65a908051f76e0b91aaaf9f35b7"
+}

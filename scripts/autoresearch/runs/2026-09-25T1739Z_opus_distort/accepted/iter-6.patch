@@ -1,0 +1,49 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 99d2bef..1c3328f 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -14,23 +14,23 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+-// simd: approx tanh — evaluated on a = |y| as tanh(a) = 2 / (1 + e^(-2a)) - 1
+-// with the sign of y xored back in, so only one clamp is needed. The absolute
+-// tanh error is at most half the relative error of e^(-2a). e^(-2a) = 2^(k/8) * 2^f with
+-// k = round(-2a*log2e*8) via the 1.5*2^20 magic add, |f| <= 1/16: 2^(j/8),
++// simd: approx tanh — evaluated on the signed y as tanh(y) = 1 - 2 / (1 + e^(2y))
++// with 2y*log2e clamped to [-120, 120] (both ends already round to -1 / 1), which
++// needs no sign split. The absolute tanh error is at most half the relative error
++// of e^(2y). e^(2y) = 2^(k/8) * 2^f with
++// k = round(2y*log2e*8) via the 1.5*2^20 magic add, |f| <= 1/16: 2^(j/8),
+ // j = k & 7, comes from an 8-entry vpermps table (vpermps only reads the low 3
+ // index bits) whose entries have j<<20 pre-subtracted, so adding k<<20 as an
+ // integer both cancels that and adds floor(k/8) to the exponent. 2^f is a
+ // Chebyshev-economised quadratic (relative error < 3.5e-6), so the absolute
+ // tanh error is < 2e-6.
+ CEDAR_TARGET_AVX2 inline __m256 tanh_approx_avx2(__m256 y) noexcept {
+-    const __m256 sign_mask = _mm256_set1_ps(-0.0f);
+-    const __m256 sign = _mm256_and_ps(y, sign_mask);
+-    const __m256 a = _mm256_andnot_ps(sign_mask, y);
+-    // e^(-240) already makes the result round to 1; max with the constant first
+-    // returns the product when it is NaN, so NaN propagates
+-    const __m256 t = _mm256_max_ps(_mm256_set1_ps(-120.0f),
+-                                   _mm256_mul_ps(a, _mm256_set1_ps(-2.88539008177792681f)));
++    // max/min with the constant first return the product when it is NaN, so NaN
++    // propagates
++    const __m256 t = _mm256_min_ps(
++        _mm256_set1_ps(120.0f),
++        _mm256_max_ps(_mm256_set1_ps(-120.0f),
++                      _mm256_mul_ps(y, _mm256_set1_ps(2.88539008177792681f))));
+     const __m256 magic = _mm256_set1_ps(1572864.0f);  // 1.5 * 2^20: rounds t to 1/8
+     const __m256 s = _mm256_add_ps(t, magic);
+     const __m256 f = _mm256_sub_ps(t, _mm256_sub_ps(s, magic));
+@@ -49,8 +49,7 @@ CEDAR_TARGET_AVX2 inline __m256 tanh_approx_avx2(__m256 y) noexcept {
+     const __m256 one = _mm256_set1_ps(1.0f);
+     p = _mm256_add_ps(_mm256_mul_ps(p, f), one);
+     const __m256 e = _mm256_mul_ps(p, pow2);
+-    const __m256 r = _mm256_sub_ps(_mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(one, e)), one);
+-    return _mm256_xor_ps(r, sign);
++    return _mm256_sub_ps(one, _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(one, e)));
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,

@@ -1,0 +1,49 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 26df3c1..4a8644b 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -18,11 +18,11 @@ constexpr float DENORMAL_DC = 1e-18f;
+ #if CEDAR_SIMD_X86
+ namespace kernels {
+ 
+-template <int Mode>
+-CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
++template <int Mode, bool Stereo>
++CEDAR_TARGET_AVX2 inline void filter_svf_avx2_impl(
+     float* out_l, float* out_r, const float* input, const float* input_r,
+     const float* freq, const float* q, const float* dry_level,
+-    const float* wet_level, bool stereo_in, SVFState& state,
++    const float* wet_level, SVFState& state,
+     float sample_rate) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], sample_rate);
+@@ -42,7 +42,7 @@ CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
+         else
+             out_l[i] = drywet::mix(xl, v1l, dry, wet);
+ 
+-        const float xr = stereo_in ? input_r[i] : xl;
++        const float xr = Stereo ? input_r[i] : xl;
+         const float v3r = xr - (state.ic2eq[1] + DENORMAL_DC);
+         const float v1r = state.a1 * (state.ic1eq[1] + DENORMAL_DC) + state.a2 * v3r;
+         const float v2r = (state.ic2eq[1] + DENORMAL_DC) + state.a2 * (state.ic1eq[1] + DENORMAL_DC) + state.a3 * v3r;
+@@ -57,6 +57,20 @@ CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
+     }
+ }
+ 
++template <int Mode>
++CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
++    float* out_l, float* out_r, const float* input, const float* input_r,
++    const float* freq, const float* q, const float* dry_level,
++    const float* wet_level, bool stereo_in, SVFState& state,
++    float sample_rate) noexcept {
++    if (stereo_in)
++        filter_svf_avx2_impl<Mode, true>(out_l, out_r, input, input_r, freq, q,
++                                         dry_level, wet_level, state, sample_rate);
++    else
++        filter_svf_avx2_impl<Mode, false>(out_l, out_r, input, input_r, freq, q,
++                                          dry_level, wet_level, state, sample_rate);
++}
++
+ }  // namespace kernels
+ #endif
+ 

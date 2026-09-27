@@ -1,0 +1,15 @@
+I stopped before making any edit, because the sandbox denied Bash and I can't run `check.sh`. That script is the only way to check bit-identity, the 1e-5 tanh error bound and the ≥5 % speedup. It is also limited to 10 runs, so I don't want to leave an unverified kernel change in the tree.
+
+What I found with the read-only tools:
+- **How the benchmark drives them:** `bench_opcodes.cpp:148-149` feeds a single hot audio input and a ramped parameter. The dry and wet inputs are unwired, so both kernels take the mono path.
+- **Cost per block:** each block is 16 vectors of 8 samples. That is about 3 ns per vector for tanh (51.8 ns) and 3.1 ns for soft (49.3 ns).
+
+**Hypothesis:** both kernels are limited by the 256-bit `vdivps`, which has a throughput of roughly 5–8 cycles per vector on the gate CPU. Tanh has one divide per vector, and soft has two. The 10-step dependent Horner chain in tanh adds latency.
+
+**Change I would make, one focused edit:**
+- **Tanh (approximate, allowed):** replace `_mm256_div_ps(p, q)` with `_mm256_rcp_ps(q)` plus one Newton–Raphson step. Non-FMA, that is `r*(2 - q*r)`, and the error comes to about 1e-7 relative, far below the 1e-5 limit. It cuts the divider's throughput cost.
+- **Soft (must stay bit-exact):** the `x/t` and `num/den` divides can't be replaced, so I'd leave that kernel untouched.
+
+If you want me to proceed, I need either Bash permission for `check.sh` or your go-ahead to make the edit without running it.
+
+IDEA: vdivps throughput in tanh8 (and 2 divides per vector in soft) -> no change made because Bash/check.sh was denied by the sandbox; proposed replacing the tanh divide with rcp_ps + one Newton-Raphson step (not run, nothing measured)

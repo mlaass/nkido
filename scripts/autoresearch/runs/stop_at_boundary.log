@@ -1,0 +1,7 @@
+20:38:44 2026-09-25T1939Z_opus_svf: stopped after iteration 3 (pid 1576531, pgid 1576511)
+20:38:46 2026-09-25T1941Z_z-ai-glm-5-3_arith: stopped after iteration 2 (pid 1595719, pgid 1595704)
+20:39:27 2026-09-25T1943Z_qwen-qwen3-8-27b_arith: stopped after iteration 2 (pid 1615105, pgid 1615090)
+20:40:26 2026-09-25T1940Z_sonnet_arith: stopped after iteration 7 (pid 1586161, pgid 1586150)
+20:45:06 2026-09-25T1952Z_deepseek-deepseek-v4-pro-0813_arith: stopped after iteration 3 (pid 1738293, pgid 1738271)
+20:55:24 2026-09-25T1944Z_qwen3-14b-32k_arith: stopped after iteration 2 (pid 1623829, pgid 1623818)
+all stopped

@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-27T1046Z_gpt-reserve_distort",
+  "provider": "codex",
+  "model": "gpt-reserve (gpt-reserve)",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 4,
+  "rejects": 4,
+  "reject_reasons": {
+    "speed": 4
+  },
+  "first_accept_iteration": 4,
+  "best_speedup": 7.2,
+  "tokens": {
+    "input": 2617406,
+    "output": 48543,
+    "cached": 2358272
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 1818.7,
+  "gpu_s": null,
+  "active_s": 1587.9,
+  "unstable_iterations": 3,
+  "status": "complete",
+  "branch": "autoresearch/gpt-reserve-distort-202609271046",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

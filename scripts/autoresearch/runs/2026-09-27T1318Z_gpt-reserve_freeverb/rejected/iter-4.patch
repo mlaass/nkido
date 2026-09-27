@@ -1,0 +1,104 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0d74114..740b68e 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -34,7 +34,76 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
+ // then through 4 series allpass filters. Creates lush, dense reverb.
+ 
+ [[gnu::always_inline]]
+-inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++template <int CH>
++CEDAR_TARGET_AVX2 inline void freeverb_lane_avx2(
++    const float* input, float* output, const float* room_size,
++    const float* damping, const float* room_scale_in,
++    const float* room_offset_in, const float* dry_buf, float dry_const,
++    const float* wet_buf, float wet_const, FreeverbState& state) noexcept {
++    constexpr float ALLPASS_GAIN = 0.5f;
++    const auto& comb_sizes = FreeverbState::COMB_SIZES_LR[CH];
++    const auto& allpass_sizes = FreeverbState::ALLPASS_SIZES_LR[CH];
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float x = input[i];
++        const float dry = drywet::coeff(dry_buf, i, dry_const);
++        const float wet = drywet::coeff(wet_buf, i, wet_const);
++        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
++        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
++        const float room_scale = room_scale_in[i] > 0.0f
++            ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
++        const float room_offset = room_offset_in[i] > 0.0f
++            ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
++        const float feedback = room * room_scale + room_offset;
++
++        float comb_sum = 0.0f;
++        for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
++            float* buffer = state.comb_buffers[CH][c];
++            const std::size_t pos = state.comb_pos[CH][c];
++            const float delayed = buffer[pos];
++            const float dc_in = delayed * (1.0f - damp) +
++                                state.comb_filter_state[CH][c] * damp;
++            state.comb_filter_state[CH][c] = dc_in;
++            const float dc_out = dc_in - state.dc_x1[CH][c] +
++                                 DC_BLOCKER_R * state.dc_y1[CH][c];
++            state.dc_x1[CH][c] = dc_in;
++            state.dc_y1[CH][c] = dc_out;
++            buffer[pos] = x + feedback * dc_out;
++            state.comb_pos[CH][c] = (pos + 1) % comb_sizes[c];
++            comb_sum += delayed;
++        }
++
++        float y = comb_sum;
++        for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
++            float* buffer = state.allpass_buffers[CH][a];
++            const std::size_t pos = state.allpass_pos[CH][a];
++            const float delayed = buffer[pos];
++            const float allpass_output = delayed - ALLPASS_GAIN * y;
++            buffer[pos] = y + ALLPASS_GAIN * allpass_output;
++            state.allpass_pos[CH][a] = (pos + 1) % allpass_sizes[a];
++            y = allpass_output;
++        }
++        output[i] = drywet::mix(x, y, dry, wet);
++    }
++}
++
++CEDAR_TARGET_AVX2 inline void freeverb_avx2(
++    const float* input_l, const float* input_r, bool stereo_in,
++    float* output_l, float* output_r, const float* room_size,
++    const float* damping, const float* room_scale_in,
++    const float* room_offset_in, const float* dry_buf, float dry_const,
++    const float* wet_buf, float wet_const, FreeverbState& state) noexcept {
++    freeverb_lane_avx2<0>(input_l, output_l, room_size, damping,
++                          room_scale_in, room_offset_in, dry_buf, dry_const,
++                          wet_buf, wet_const, state);
++    freeverb_lane_avx2<1>(stereo_in ? input_r : input_l, output_r, room_size,
++                          damping, room_scale_in, room_offset_in, dry_buf,
++                          dry_const, wet_buf, wet_const, state);
++}
++#endif
++
++ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
+     // Stereo-native: writes out_buffer (L) and out_buffer+1 (R) in one call.
+     // When STEREO_INPUT is set in inst.flags, the primary signal input is a
+     // stereo pair (inputs[0] = L, inputs[0]+1 = R). When unset, the mono input
+@@ -74,6 +143,16 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        freeverb_avx2(input, input_r, stereo_in, out_l, out_r,
++                               room_size, damping, room_scale_in,
++                               room_offset_in, dry_buf, dry_const, wet_buf,
++                               wet_const, state);
++        return;
++    }
++#endif
++
+     constexpr float ALLPASS_GAIN = 0.5f;
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+@@ -469,3 +548,4 @@ inline void op_reverb_fdn(ExecutionContext& ctx, const Instruction& inst) {
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"

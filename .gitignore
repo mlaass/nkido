@@ -60,5 +60,3 @@ docs/*proposal.md
 .claude/settings.local.json
 whats-next.md
 test-results/
-# SIMD autoresearch run output (docs/prd-simd-autoresearch.md)
-scripts/autoresearch/runs/

@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-26T1054Z_sonnet_distort",
+  "provider": "claude-code",
+  "model": "sonnet (claude-sonnet-5)",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 7,
+  "rejects": 1,
+  "reject_reasons": {
+    "speed": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 14.464,
+  "tokens": {
+    "input": 1241800,
+    "output": 84796,
+    "cached": 1039726
+  },
+  "cost_usd": 1.864,
+  "wall_clock_s": 1557.8,
+  "gpu_s": null,
+  "active_s": 1183.2,
+  "unstable_iterations": 6,
+  "status": "complete",
+  "branch": "autoresearch/sonnet-distort-202609261054",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

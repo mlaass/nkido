@@ -1,0 +1,16 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 5c8a3f4..6ffa698 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -119,8 +119,9 @@ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* input_l,
+         const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : one;
+         const __m256 x_l = _mm256_load_ps(input_l + i);
+         const __m256 x_r = stereo ? _mm256_load_ps(input_r + i) : x_l;
+-        const __m256 z_l = _mm256_div_ps(x_l, t);
+-        const __m256 z_r = _mm256_div_ps(x_r, t);
++        const __m256 inv_t = _mm256_div_ps(one, t);
++        const __m256 z_l = _mm256_mul_ps(x_l, inv_t);
++        const __m256 z_r = _mm256_mul_ps(x_r, inv_t);
+         const __m256 z2_l = _mm256_mul_ps(z_l, z_l);
+         const __m256 z2_r = _mm256_mul_ps(z_r, z_r);
+         const __m256 y_l = _mm256_div_ps(_mm256_mul_ps(z_l, _mm256_add_ps(twenty_seven, z2_l)), _mm256_add_ps(twenty_seven, _mm256_mul_ps(nine, z2_l)));

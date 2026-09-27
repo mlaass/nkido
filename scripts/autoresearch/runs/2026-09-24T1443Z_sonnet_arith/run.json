@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-24T1443Z_sonnet_arith",
+  "target": "arith",
+  "base_rev": "d29a6483f206116ba1d2b4b526da932479df40a9",
+  "branch": "autoresearch/sonnet-arith-202609241443",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-24T1443Z_sonnet_arith/check.sh",
+  "model": "sonnet",
+  "provider": "claude-code",
+  "iterations": 2,
+  "budget_usd": 20.0
+}

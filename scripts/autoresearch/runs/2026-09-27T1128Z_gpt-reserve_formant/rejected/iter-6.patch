@@ -1,0 +1,52 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 912f87c..893bd1e 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -470,6 +470,9 @@ CEDAR_TARGET_AVX2 inline bool filter_formant_mono_avx2(ExecutionContext& ctx,
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++    float bp1_z1 = state.bp1_z1[0], bp1_z2 = state.bp1_z2[0];
++    float bp2_z1 = state.bp2_z1[0], bp2_z2 = state.bp2_z2[0];
++    float bp3_z1 = state.bp3_z1[0], bp3_z2 = state.bp3_z2[0];
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float va = std::clamp(vowel_a[i], 0.0f, 4.0f);
+         float vb = std::clamp(vowel_b[i], 0.0f, 4.0f);
+@@ -509,22 +512,25 @@ CEDAR_TARGET_AVX2 inline bool filter_formant_mono_avx2(ExecutionContext& ctx,
+         float f1_coef = prewarp_coef(state.f1), f2_coef = prewarp_coef(state.f2);
+         float f3_coef = prewarp_coef(state.f3), q_coef = 1.0f / q;
+         float x = input[i];
+-        float hp1 = x - state.bp1_z1[0] * q_coef - state.bp1_z2[0];
+-        float bp1 = state.bp1_z1[0] + f1_coef * hp1;
+-        float lp1 = state.bp1_z2[0] + f1_coef * state.bp1_z1[0];
+-        state.bp1_z1[0] = clamp_audio(bp1); state.bp1_z2[0] = clamp_audio(lp1);
+-        float hp2 = x - state.bp2_z1[0] * q_coef - state.bp2_z2[0];
+-        float bp2 = state.bp2_z1[0] + f2_coef * hp2;
+-        float lp2 = state.bp2_z2[0] + f2_coef * state.bp2_z1[0];
+-        state.bp2_z1[0] = clamp_audio(bp2); state.bp2_z2[0] = clamp_audio(lp2);
+-        float hp3 = x - state.bp3_z1[0] * q_coef - state.bp3_z2[0];
+-        float bp3 = state.bp3_z1[0] + f3_coef * hp3;
+-        float lp3 = state.bp3_z2[0] + f3_coef * state.bp3_z1[0];
+-        state.bp3_z1[0] = clamp_audio(bp3); state.bp3_z2[0] = clamp_audio(lp3);
++        float hp1 = x - bp1_z1 * q_coef - bp1_z2;
++        float bp1 = bp1_z1 + f1_coef * hp1;
++        float lp1 = bp1_z2 + f1_coef * bp1_z1;
++        bp1_z1 = clamp_audio(bp1); bp1_z2 = clamp_audio(lp1);
++        float hp2 = x - bp2_z1 * q_coef - bp2_z2;
++        float bp2 = bp2_z1 + f2_coef * hp2;
++        float lp2 = bp2_z2 + f2_coef * bp2_z1;
++        bp2_z1 = clamp_audio(bp2); bp2_z2 = clamp_audio(lp2);
++        float hp3 = x - bp3_z1 * q_coef - bp3_z2;
++        float bp3 = bp3_z1 + f3_coef * hp3;
++        float lp3 = bp3_z2 + f3_coef * bp3_z1;
++        bp3_z1 = clamp_audio(bp3); bp3_z2 = clamp_audio(lp3);
+         float processed = bp1 * state.g1 + bp2 * state.g2 + bp3 * state.g3;
+         float y = drywet::mix(x, processed, dry, wet);
+         out_l[i] = y; out_r[i] = y;
+     }
++    state.bp1_z1[0] = bp1_z1; state.bp1_z2[0] = bp1_z2;
++    state.bp2_z1[0] = bp2_z1; state.bp2_z2[0] = bp2_z2;
++    state.bp3_z1[0] = bp3_z1; state.bp3_z2[0] = bp3_z2;
+     for (int k = 1; k < 2; ++k) {
+         state.bp1_z1[k] = state.bp1_z1[0]; state.bp1_z2[k] = state.bp1_z2[0];
+         state.bp2_z1[k] = state.bp2_z1[0]; state.bp2_z2[k] = state.bp2_z2[0];

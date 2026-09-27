@@ -1,0 +1,212 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index cc55467..79911b3 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -531,15 +531,14 @@ CEDAR_TARGET_AVX2 inline __m256 formant_prewarp_avx2(__m256 f, __m256 lim, __m25
+     const __m256 hi = _mm256_castsi256_ps(_mm256_set1_epi32(0x3f2ca140));  // 0.6744
+     const __m256 ok = _mm256_and_ps(_mm256_cmp_ps(w, lo, _CMP_GE_OQ),
+                                     _mm256_cmp_ps(w, hi, _CMP_LT_OQ));
+-    __m256 t;
+-    if (__builtin_expect(_mm256_movemask_ps(ok) == 0xFF, 1)) {
+-        t = formant_tan_kernel_avx2(w);
+-    } else {
+-        alignas(32) float lanes[8];
+-        _mm256_store_ps(lanes, w);
+-        formant_tan_lanes_cold(lanes);
+-        t = _mm256_load_ps(lanes);
+-    }
++    // In the kernel's range tan(w) < 0.7985, so 2 * tan(w) < 1.9 and the min
++    // only matters on the fallback.
++    if (__builtin_expect(_mm256_movemask_ps(ok) == 0xFF, 1))
++        return _mm256_mul_ps(_mm256_set1_ps(2.0f), formant_tan_kernel_avx2(w));
++    alignas(32) float lanes[8];
++    _mm256_store_ps(lanes, w);
++    formant_tan_lanes_cold(lanes);
++    const __m256 t = _mm256_load_ps(lanes);
+     return _mm256_min_ps(_mm256_mul_ps(_mm256_set1_ps(2.0f), t), _mm256_set1_ps(1.9f));
+ }
+ 
+@@ -615,12 +614,13 @@ CEDAR_TARGET_AVX2 inline __m256 formant_clamp_audio_nonan_avx2(__m256 v) noexcep
+         _mm256_min_epu32(c, _mm256_set1_epi32(static_cast<int>(0xC1200000u))));
+ }
+ 
+-// One sample of the recurrence with the NaN-less clamp on the critical path;
+-// an unordered compare of bp/lp is accumulated into nan alongside, and if any
+-// was a NaN the caller redoes the chunk with the exact clamp.
++// One sample of the recurrence with the NaN-less clamp on the critical path.
++// z1, z2 stay in [-10, 10] and qc, coef are never NaN once q is not, so bp
++// and lp can only be NaN when x is non-finite or q is NaN; the pre-pass flags
++// such chunks and the caller redoes them with the exact clamp.
+ template <bool Mono>
+ [[gnu::always_inline]] CEDAR_TARGET_AVX2 inline void
+-formant_svf_step_avx2(std::size_t i, __m256& z1, __m256& z2, __m256& nan, const float* coefs,
++formant_svf_step_avx2(std::size_t i, __m256& z1, __m256& z2, const float* coefs,
+                       const float* qcs, const float* xs, float* bps) noexcept {
+     const __m256 coef = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(coefs + i * 4));
+     const __m256 qc = _mm256_broadcast_ss(qcs + i);
+@@ -629,24 +629,28 @@ formant_svf_step_avx2(std::size_t i, __m256& z1, __m256& z2, __m256& nan, const
+     __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(z1, qc)), z2);
+     __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(coef, hp));
+     __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(coef, z1));
+-    nan = _mm256_or_ps(nan, _mm256_cmp_ps(bp, lp, _CMP_UNORD_Q));
+     z1 = formant_clamp_audio_nonan_avx2(bp);
+     z2 = formant_clamp_audio_nonan_avx2(lp);
+     _mm256_store_ps(bps + i * 8, bp);
+ }
+ 
+-// (b1*g1 + b2*g2) + b3*g3
+-CEDAR_TARGET_AVX2 inline __m256 formant_gsum_avx2(__m256 b1, __m256 b2, __m256 b3, __m256 g1,
++// Every vowel has g1 == 1, and lerping/morphing two ones with a weight in
++// [0, 1] rounds back to exactly 1 ((1 - f) + f), so the g1 target is 1.
++static_assert(VOWEL_TABLE[0].g1 == 1.0f && VOWEL_TABLE[1].g1 == 1.0f &&
++              VOWEL_TABLE[2].g1 == 1.0f && VOWEL_TABLE[3].g1 == 1.0f &&
++              VOWEL_TABLE[4].g1 == 1.0f);
++
++// (b1*g1 + b2*g2) + b3*g3 with g1 == 1 (b1 * 1 == b1 exactly)
++CEDAR_TARGET_AVX2 inline __m256 formant_gsum_avx2(__m256 b1, __m256 b2, __m256 b3,
+                                                   __m256 g2, __m256 g3) noexcept {
+-    return _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(b1, g1), _mm256_mul_ps(b2, g2)),
+-                         _mm256_mul_ps(b3, g3));
++    return _mm256_add_ps(_mm256_add_ps(b1, _mm256_mul_ps(b2, g2)), _mm256_mul_ps(b3, g3));
+ }
+ 
+ // Formant gain sum (bp1*g1 + bp2*g2) + bp3*g3, then drywet::mix, over
+ // samples [i, i + 8). bps rows are transposed to per-band columns first.
+ CEDAR_TARGET_AVX2 inline void formant_mix_avx2(std::size_t i, const float* in_l,
+                                                const float* in_r, const float* bps,
+-                                               const float* g1s, const float* g2s,
++                                               const float* g2s,
+                                                const float* g3s, const float* dry_buf,
+                                                float dry_const, const float* wet_buf,
+                                                float wet_const, float* out_l,
+@@ -664,15 +668,14 @@ CEDAR_TARGET_AVX2 inline void formant_mix_avx2(std::size_t i, const float* in_l,
+     __m256 u0 = _mm256_shuffle_ps(t0, t2, 0x44), v0 = _mm256_shuffle_ps(t4, t6, 0x44);
+     __m256 u1 = _mm256_shuffle_ps(t0, t2, 0xEE), v1 = _mm256_shuffle_ps(t4, t6, 0xEE);
+     __m256 u2 = _mm256_shuffle_ps(t1, t3, 0x44), v2 = _mm256_shuffle_ps(t5, t7, 0x44);
+-    const __m256 g1 = _mm256_load_ps(g1s + i);
+     const __m256 g2 = _mm256_load_ps(g2s + i);
+     const __m256 g3 = _mm256_load_ps(g3s + i);
+     const __m256 proc_l = formant_gsum_avx2(_mm256_permute2f128_ps(u0, v0, 0x20),
+                                             _mm256_permute2f128_ps(u1, v1, 0x20),
+-                                            _mm256_permute2f128_ps(u2, v2, 0x20), g1, g2, g3);
++                                            _mm256_permute2f128_ps(u2, v2, 0x20), g2, g3);
+     const __m256 proc_r = formant_gsum_avx2(_mm256_permute2f128_ps(u0, v0, 0x31),
+                                             _mm256_permute2f128_ps(u1, v1, 0x31),
+-                                            _mm256_permute2f128_ps(u2, v2, 0x31), g1, g2, g3);
++                                            _mm256_permute2f128_ps(u2, v2, 0x31), g2, g3);
+ 
+     __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + i) : _mm256_set1_ps(dry_const);
+     __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + i) : _mm256_set1_ps(wet_const);
+@@ -686,14 +689,15 @@ CEDAR_TARGET_AVX2 inline void formant_mix_avx2(std::size_t i, const float* in_l,
+ 
+ // Block-invariant inputs of the coefficient pre-pass.
+ struct FormantPrepassConsts {
+-    __m256 tf1, tf2, tf3, tg1, tg2, tg3, lim, srv;
++    __m256 tf1, tf2, tf3, tg2, tg3, lim, srv;
+     const float *vowel_a, *vowel_b, *morph, *q_in, *in_l, *in_r;
+-    float *coefs, *g1s, *g2s, *g3s, *qcs, *xs;
++    float *coefs, *g2s, *g3s, *qcs, *xs;
+ };
+ 
+-// Values carried between the stages of one chunk's pre-pass.
++// Values carried between the stages of one chunk's pre-pass. bad: lanes
++// where x is non-finite or q is NaN, i.e. where the SVF may produce a NaN.
+ struct FormantPrepassVals {
+-    __m256 m, nm, fa, fb, nfa, nfb, f1, f2, f3;
++    __m256 m, nm, fa, fb, nfa, nfb, f1, f2, f3, bad;
+     __m256i ia, ib, ia2, ib2;
+ };
+ 
+@@ -716,6 +720,16 @@ formant_prepass_avx2(std::size_t i, const FormantPrepassConsts& K,
+         P.m = formant_clamp_avx2(_mm256_loadu_ps(K.morph + i), zero, one);
+         __m256 q = formant_clamp_avx2(_mm256_loadu_ps(K.q_in + i), one, twenty);
+         _mm256_store_ps(K.qcs + i, _mm256_div_ps(one, q));
++        const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7fffffff));
++        const __m256 inf = _mm256_set1_ps(HUGE_VALF);
++        P.bad = _mm256_or_ps(
++            _mm256_cmp_ps(q, q, _CMP_UNORD_Q),
++            _mm256_cmp_ps(_mm256_and_ps(_mm256_loadu_ps(K.in_l + i), abs_mask), inf,
++                          _CMP_NLT_UQ));
++        if constexpr (!Mono)
++            P.bad = _mm256_or_ps(
++                P.bad, _mm256_cmp_ps(_mm256_and_ps(_mm256_loadu_ps(K.in_r + i), abs_mask), inf,
++                                     _CMP_NLT_UQ));
+ 
+         __m256i ia = _mm256_cvttps_epi32(va);
+         __m256i ib = _mm256_cvttps_epi32(vb);
+@@ -733,7 +747,6 @@ formant_prepass_avx2(std::size_t i, const FormantPrepassConsts& K,
+         P.f2 = CEDAR_FORMANT_TARGET(K.tf2);
+     } else if constexpr (S == 2) {
+         P.f3 = CEDAR_FORMANT_TARGET(K.tf3);
+-        _mm256_store_ps(K.g1s + i, CEDAR_FORMANT_TARGET(K.tg1));
+     } else if constexpr (S == 3) {
+         _mm256_store_ps(K.g2s + i, CEDAR_FORMANT_TARGET(K.tg2));
+         _mm256_store_ps(K.g3s + i, CEDAR_FORMANT_TARGET(K.tg3));
+@@ -782,7 +795,7 @@ CEDAR_TARGET_AVX2 inline void formant_avx2_impl(const float* in_l, const float*
+     __m256 z2 = _mm256_setr_ps(state.bp1_z2[0], state.bp2_z2[0], state.bp3_z2[0], 0.0f,
+                                state.bp1_z2[1], state.bp2_z2[1], state.bp3_z2[1], 0.0f);
+     alignas(32) float coefs[BLOCK_SIZE * 4];
+-    alignas(32) float g1s[BLOCK_SIZE], g2s[BLOCK_SIZE], g3s[BLOCK_SIZE];
++    alignas(32) float g2s[BLOCK_SIZE], g3s[BLOCK_SIZE];
+     alignas(32) float qcs[BLOCK_SIZE];
+     alignas(32) float xs[BLOCK_SIZE * 8];
+     alignas(32) float bps[BLOCK_SIZE * 8];
+@@ -792,12 +805,11 @@ CEDAR_TARGET_AVX2 inline void formant_avx2_impl(const float* in_l, const float*
+         _mm256_setr_ps(T[0].f1, T[1].f1, T[2].f1, T[3].f1, T[4].f1, 0, 0, 0),
+         _mm256_setr_ps(T[0].f2, T[1].f2, T[2].f2, T[3].f2, T[4].f2, 0, 0, 0),
+         _mm256_setr_ps(T[0].f3, T[1].f3, T[2].f3, T[3].f3, T[4].f3, 0, 0, 0),
+-        _mm256_setr_ps(T[0].g1, T[1].g1, T[2].g1, T[3].g1, T[4].g1, 0, 0, 0),
+         _mm256_setr_ps(T[0].g2, T[1].g2, T[2].g2, T[3].g2, T[4].g2, 0, 0, 0),
+         _mm256_setr_ps(T[0].g3, T[1].g3, T[2].g3, T[3].g3, T[4].g3, 0, 0, 0),
+         _mm256_set1_ps(sr * 0.48f), _mm256_set1_ps(sr),
+         vowel_a, vowel_b, morph, q_in, in_l, in_r,
+-        coefs, g1s, g2s, g3s, qcs, xs,
++        coefs, g2s, g3s, qcs, xs,
+     };
+     FormantPrepassVals P;
+     const float* xsrc = Mono ? in_l : xs;
+@@ -825,9 +837,9 @@ CEDAR_TARGET_AVX2 inline void formant_avx2_impl(const float* in_l, const float*
+     // its stalls without overflowing the reorder window.
+ #define CEDAR_FORMANT_PRE(S) formant_prepass_avx2<Mono, S>(i, K, P)
+ #define CEDAR_FORMANT_STEP(k) \
+-    formant_svf_step_avx2<Mono>(i - 8 + (k), z1, z2, nan, coefs, qcs, xsrc, bps)
++    formant_svf_step_avx2<Mono>(i - 8 + (k), z1, z2, coefs, qcs, xsrc, bps)
+ #define CEDAR_FORMANT_NAN_REDO()                                                          \
+-    if (__builtin_expect(!_mm256_testz_ps(nan, nan), 0)) {                                \
++    if (__builtin_expect(!_mm256_testz_ps(bad, bad), 0)) {                                \
+         z1 = z1c;                                                                         \
+         z2 = z2c;                                                                         \
+         formant_svf_clamped_avx2<Mono>(i - 8, z1, z2, coefs, qcs, xsrc, bps);             \
+@@ -840,14 +852,14 @@ CEDAR_TARGET_AVX2 inline void formant_avx2_impl(const float* in_l, const float*
+     }
+     for (std::size_t i = 8; i < BLOCK_SIZE; i += 8) {
+         const __m256 z1c = z1, z2c = z2;
+-        __m256 nan = _mm256_setzero_ps();
++        const __m256 bad = P.bad;  // chunk i - 8's, before PRE(0) overwrites it
+         CEDAR_FORMANT_STEP(0); CEDAR_FORMANT_PRE(0);
+         CEDAR_FORMANT_STEP(1); CEDAR_FORMANT_PRE(1);
+         CEDAR_FORMANT_STEP(2); CEDAR_FORMANT_PRE(2);
+         CEDAR_FORMANT_STEP(3); CEDAR_FORMANT_PRE(3);
+         CEDAR_FORMANT_STEP(4);
+         if (i >= 16)
+-            formant_mix_avx2(i - 16, in_l, in_r, bps, g1s, g2s, g3s, dry_buf, dry_const,
++            formant_mix_avx2(i - 16, in_l, in_r, bps, g2s, g3s, dry_buf, dry_const,
+                              wet_buf, wet_const, out_l, out_r);
+         CEDAR_FORMANT_STEP(5); CEDAR_FORMANT_PRE(4);
+         CEDAR_FORMANT_STEP(6); CEDAR_FORMANT_PRE(5);
+@@ -858,12 +870,12 @@ CEDAR_TARGET_AVX2 inline void formant_avx2_impl(const float* in_l, const float*
+     {
+         const std::size_t i = BLOCK_SIZE;
+         const __m256 z1c = z1, z2c = z2;
+-        __m256 nan = _mm256_setzero_ps();
+-        formant_mix_avx2(i - 16, in_l, in_r, bps, g1s, g2s, g3s, dry_buf, dry_const,
++        const __m256 bad = P.bad;
++        formant_mix_avx2(i - 16, in_l, in_r, bps, g2s, g3s, dry_buf, dry_const,
+                          wet_buf, wet_const, out_l, out_r);
+         for (std::size_t k = 0; k < 8; ++k) CEDAR_FORMANT_STEP(k);
+         CEDAR_FORMANT_NAN_REDO()
+-        formant_mix_avx2(i - 8, in_l, in_r, bps, g1s, g2s, g3s, dry_buf, dry_const,
++        formant_mix_avx2(i - 8, in_l, in_r, bps, g2s, g3s, dry_buf, dry_const,
+                          wet_buf, wet_const, out_l, out_r);
+     }
+ #undef CEDAR_FORMANT_NAN_REDO

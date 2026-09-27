@@ -1,0 +1,164 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 15b2030..4836c98 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -97,7 +97,6 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     alignas(32) float fb[N];
+     alignas(32) float damp[N];
+     alignas(32) float omd[N];
+-    alignas(32) float ys[2][N];
+     alignas(32) float stage[2][NC][N];  // only touched when a comb line wraps inside the block
+ 
+     {
+@@ -141,6 +140,25 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         }
+     }
+ 
++    // Allpass lines are processed in place with no staging. Block time n maps to
++    // lo + n before the line wraps (n < afirst) and to buf + (n - afirst) after.
++    // afirst == N when the line does not wrap inside this block. The single
++    // 8-sample chunk that straddles the wrap point takes a scalar path.
++    float* alo[2][NA];
++    float* abuf[2][NA];
++    std::size_t afirst[2][NA];
++    for (std::size_t ch = 0; ch < 2; ++ch) {
++        for (std::size_t a = 0; a < NA; ++a) {
++            float* buf = st.allpass_buffers[ch][a];
++            const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
++            const std::size_t pos = st.allpass_pos[ch][a];
++            abuf[ch][a] = buf;
++            alo[ch][a] = buf + pos;
++            afirst[ch][a] = pos + N <= size ? N : size - pos;
++        }
++    }
++
++    const __m256 g = _mm256_set1_ps(0.5f);
+     const __m256 rv = _mm256_set1_ps(DC_BLOCKER_R);
+     __m256 fs[2], x1[2], y1[2];
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+@@ -152,45 +170,82 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+ 
+     for (std::size_t n = 0; n < N; n += 8) {
+         // Comb sums first: they read the delayed samples this iteration overwrites.
++        // The sum then runs through the four series allpasses in registers.
++        alignas(32) float yv[2][8];  // parked in memory to keep the recurrence out of spills
+         for (std::size_t ch = 0; ch < 2; ++ch) {
+             __m256 s = _mm256_setzero_ps();
+             for (std::size_t c = 0; c < NC; ++c) s = _mm256_add_ps(s, _mm256_loadu_ps(cp[ch][c] + n));
+-            _mm256_store_ps(ys[ch] + n, s);
++            for (std::size_t a = 0; a < NA; ++a) {
++                const std::size_t f = afirst[ch][a];
++                if (__builtin_expect(n < f && f < n + 8, 0)) {
++                    alignas(32) float yin[8];
++                    alignas(32) float yout[8];
++                    _mm256_store_ps(yin, s);
++                    for (std::size_t k = 0; k < 8; ++k) {
++                        float* q = (n + k < f) ? alo[ch][a] + (n + k) : abuf[ch][a] + (n + k - f);
++                        const float d = *q;
++                        const float o = d - 0.5f * yin[k];
++                        *q = yin[k] + 0.5f * o;
++                        yout[k] = o;
++                    }
++                    s = _mm256_load_ps(yout);
++                } else {
++                    float* p = (n >= f) ? abuf[ch][a] + (n - f) : alo[ch][a] + n;
++                    const __m256 o = _mm256_sub_ps(_mm256_loadu_ps(p), _mm256_mul_ps(g, s));
++                    _mm256_storeu_ps(p, _mm256_add_ps(s, _mm256_mul_ps(g, o)));
++                    s = o;
++                }
++            }
++            _mm256_store_ps(yv[ch], s);
+         }
+         for (std::size_t h = 0; h < 2; ++h) {
+             const std::size_t nh = n + 4 * h;
+-            // v[ch][t]: lanes 0..7 = combs 0..7 at time nh+t.
++            // Before the transpose a row is one comb (low lane i, high lane i+4)
++            // over times nh..nh+3, so the per-time factors are 128-bit broadcasts
++            // and the (1 - damp) multiply / feedback+input steps stay off the
++            // recurrence. After the transpose v[ch][t] holds combs 0..7 at time nh+t.
++            const __m256 omd4 = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(omd + nh));
++            const __m256 fb4 = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(fb + nh));
+             __m256 v[2][4];
+             for (std::size_t ch = 0; ch < 2; ++ch) {
+                 for (std::size_t i = 0; i < 4; ++i) {
+-                    v[ch][i] = _mm256_insertf128_ps(
++                    v[ch][i] = _mm256_mul_ps(_mm256_insertf128_ps(
+                         _mm256_castps128_ps256(_mm_loadu_ps(cp[ch][i] + nh)),
+-                        _mm_loadu_ps(cp[ch][i + 4] + nh), 1);
++                        _mm_loadu_ps(cp[ch][i + 4] + nh), 1), omd4);
+                 }
+                 transpose4x4_lanes(v[ch]);
+             }
+             for (std::size_t t = 0; t < 4; ++t) {
+                 const __m256 bd = _mm256_broadcast_ss(damp + nh + t);
+-                const __m256 bo = _mm256_broadcast_ss(omd + nh + t);
+-                const __m256 bf = _mm256_broadcast_ss(fb + nh + t);
+                 for (std::size_t ch = 0; ch < 2; ++ch) {
+-                    const __m256 x = _mm256_broadcast_ss(xin[ch] + nh + t);
+-                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
++                    fs[ch] = _mm256_add_ps(v[ch][t], _mm256_mul_ps(fs[ch], bd));
+                     const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
+                                                         _mm256_mul_ps(rv, y1[ch]));
+                     x1[ch] = fs[ch];
+                     y1[ch] = dc_out;
+-                    v[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
++                    v[ch][t] = dc_out;
+                 }
+             }
+             for (std::size_t ch = 0; ch < 2; ++ch) {
+                 transpose4x4_lanes(v[ch]);
++                const __m256 x4 = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(xin[ch] + nh));
++                for (std::size_t i = 0; i < 4; ++i) {
++                    v[ch][i] = _mm256_add_ps(x4, _mm256_mul_ps(fb4, v[ch][i]));
++                }
+                 for (std::size_t i = 0; i < 4; ++i) {
+                     _mm_storeu_ps(cp[ch][i] + nh, _mm256_castps256_ps128(v[ch][i]));
+                     _mm_storeu_ps(cp[ch][i + 4] + nh, _mm256_extractf128_ps(v[ch][i], 1));
+                 }
+             }
+         }
++
++        // Dry/wet mix; inputs are read only now so in-place output buffers stay safe.
++        const __m256 xl = _mm256_loadu_ps(in_l + n);
++        const __m256 xr = _mm256_loadu_ps(in_r + n);
++        const __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + n) : _mm256_set1_ps(dry_const);
++        const __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + n) : _mm256_set1_ps(wet_const);
++        _mm256_storeu_ps(out_l + n, _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(_mm256_load_ps(yv[0]), wet)));
++        _mm256_storeu_ps(out_r + n, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(_mm256_load_ps(yv[1]), wet)));
+     }
+ 
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+@@ -215,32 +270,15 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         }
+     }
+ 
+-    // Series allpasses, vectorised over time.
++    // Advance the allpass positions.
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         for (std::size_t a = 0; a < NA; ++a) {
+-            float* buf = st.allpass_buffers[ch][a];
+             const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
+             const std::size_t pos = st.allpass_pos[ch][a];
+-            const std::size_t first = std::min(N, size - pos);
+-            allpass_run(buf + pos, ys[ch], first);
+-            if (first < N) allpass_run(buf, ys[ch] + first, N - first);
+             const std::size_t np = pos + N;
+             st.allpass_pos[ch][a] = np >= size ? np - size : np;
+         }
+     }
+-
+-    for (std::size_t i = 0; i < N; i += 8) {
+-        const __m256 xl = _mm256_loadu_ps(in_l + i);
+-        const __m256 xr = _mm256_loadu_ps(in_r + i);
+-        const __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + i) : _mm256_set1_ps(dry_const);
+-        const __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + i) : _mm256_set1_ps(wet_const);
+-        const __m256 ol = _mm256_add_ps(_mm256_mul_ps(xl, dry),
+-                                        _mm256_mul_ps(_mm256_load_ps(ys[0] + i), wet));
+-        const __m256 orr = _mm256_add_ps(_mm256_mul_ps(xr, dry),
+-                                         _mm256_mul_ps(_mm256_load_ps(ys[1] + i), wet));
+-        _mm256_storeu_ps(out_l + i, ol);
+-        _mm256_storeu_ps(out_r + i, orr);
+-    }
+ }
+ #endif
+ }  // namespace freeverb_kernels

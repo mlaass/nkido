@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-26T1155Z_opus_freeverb",
+  "provider": "claude-code",
+  "model": "opus (claude-opus-5-5)",
+  "target": "freeverb",
+  "iterations": 8,
+  "accepts": 6,
+  "rejects": 2,
+  "reject_reasons": {
+    "speed": 1,
+    "empty patch": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 6.76,
+  "tokens": {
+    "input": 3524753,
+    "output": 190653,
+    "cached": 3164429
+  },
+  "cost_usd": 7.3279,
+  "wall_clock_s": 2771.3,
+  "gpu_s": null,
+  "active_s": 2193.3,
+  "unstable_iterations": 5,
+  "status": "complete",
+  "branch": "autoresearch/opus-freeverb-202609261155",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

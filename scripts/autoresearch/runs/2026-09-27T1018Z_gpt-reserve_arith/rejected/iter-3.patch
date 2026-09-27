@@ -1,0 +1,83 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index d2ac383..777cbb9 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -11,30 +11,60 @@ namespace cedar {
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32) {
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+-        _mm256_store_ps(out + i + 8, _mm256_add_ps(_mm256_load_ps(a + i + 8), _mm256_load_ps(b + i + 8)));
+-        _mm256_store_ps(out + i + 16, _mm256_add_ps(_mm256_load_ps(a + i + 16), _mm256_load_ps(b + i + 16)));
+-        _mm256_store_ps(out + i + 24, _mm256_add_ps(_mm256_load_ps(a + i + 24), _mm256_load_ps(b + i + 24)));
+-    }
++    _mm256_store_ps(out, _mm256_add_ps(_mm256_load_ps(a), _mm256_load_ps(b)));
++    _mm256_store_ps(out + 8, _mm256_add_ps(_mm256_load_ps(a + 8), _mm256_load_ps(b + 8)));
++    _mm256_store_ps(out + 16, _mm256_add_ps(_mm256_load_ps(a + 16), _mm256_load_ps(b + 16)));
++    _mm256_store_ps(out + 24, _mm256_add_ps(_mm256_load_ps(a + 24), _mm256_load_ps(b + 24)));
++    _mm256_store_ps(out + 32, _mm256_add_ps(_mm256_load_ps(a + 32), _mm256_load_ps(b + 32)));
++    _mm256_store_ps(out + 40, _mm256_add_ps(_mm256_load_ps(a + 40), _mm256_load_ps(b + 40)));
++    _mm256_store_ps(out + 48, _mm256_add_ps(_mm256_load_ps(a + 48), _mm256_load_ps(b + 48)));
++    _mm256_store_ps(out + 56, _mm256_add_ps(_mm256_load_ps(a + 56), _mm256_load_ps(b + 56)));
++    _mm256_store_ps(out + 64, _mm256_add_ps(_mm256_load_ps(a + 64), _mm256_load_ps(b + 64)));
++    _mm256_store_ps(out + 72, _mm256_add_ps(_mm256_load_ps(a + 72), _mm256_load_ps(b + 72)));
++    _mm256_store_ps(out + 80, _mm256_add_ps(_mm256_load_ps(a + 80), _mm256_load_ps(b + 80)));
++    _mm256_store_ps(out + 88, _mm256_add_ps(_mm256_load_ps(a + 88), _mm256_load_ps(b + 88)));
++    _mm256_store_ps(out + 96, _mm256_add_ps(_mm256_load_ps(a + 96), _mm256_load_ps(b + 96)));
++    _mm256_store_ps(out + 104, _mm256_add_ps(_mm256_load_ps(a + 104), _mm256_load_ps(b + 104)));
++    _mm256_store_ps(out + 112, _mm256_add_ps(_mm256_load_ps(a + 112), _mm256_load_ps(b + 112)));
++    _mm256_store_ps(out + 120, _mm256_add_ps(_mm256_load_ps(a + 120), _mm256_load_ps(b + 120)));
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32) {
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+-        _mm256_store_ps(out + i + 8, _mm256_sub_ps(_mm256_load_ps(a + i + 8), _mm256_load_ps(b + i + 8)));
+-        _mm256_store_ps(out + i + 16, _mm256_sub_ps(_mm256_load_ps(a + i + 16), _mm256_load_ps(b + i + 16)));
+-        _mm256_store_ps(out + i + 24, _mm256_sub_ps(_mm256_load_ps(a + i + 24), _mm256_load_ps(b + i + 24)));
+-    }
++    _mm256_store_ps(out, _mm256_sub_ps(_mm256_load_ps(a), _mm256_load_ps(b)));
++    _mm256_store_ps(out + 8, _mm256_sub_ps(_mm256_load_ps(a + 8), _mm256_load_ps(b + 8)));
++    _mm256_store_ps(out + 16, _mm256_sub_ps(_mm256_load_ps(a + 16), _mm256_load_ps(b + 16)));
++    _mm256_store_ps(out + 24, _mm256_sub_ps(_mm256_load_ps(a + 24), _mm256_load_ps(b + 24)));
++    _mm256_store_ps(out + 32, _mm256_sub_ps(_mm256_load_ps(a + 32), _mm256_load_ps(b + 32)));
++    _mm256_store_ps(out + 40, _mm256_sub_ps(_mm256_load_ps(a + 40), _mm256_load_ps(b + 40)));
++    _mm256_store_ps(out + 48, _mm256_sub_ps(_mm256_load_ps(a + 48), _mm256_load_ps(b + 48)));
++    _mm256_store_ps(out + 56, _mm256_sub_ps(_mm256_load_ps(a + 56), _mm256_load_ps(b + 56)));
++    _mm256_store_ps(out + 64, _mm256_sub_ps(_mm256_load_ps(a + 64), _mm256_load_ps(b + 64)));
++    _mm256_store_ps(out + 72, _mm256_sub_ps(_mm256_load_ps(a + 72), _mm256_load_ps(b + 72)));
++    _mm256_store_ps(out + 80, _mm256_sub_ps(_mm256_load_ps(a + 80), _mm256_load_ps(b + 80)));
++    _mm256_store_ps(out + 88, _mm256_sub_ps(_mm256_load_ps(a + 88), _mm256_load_ps(b + 88)));
++    _mm256_store_ps(out + 96, _mm256_sub_ps(_mm256_load_ps(a + 96), _mm256_load_ps(b + 96)));
++    _mm256_store_ps(out + 104, _mm256_sub_ps(_mm256_load_ps(a + 104), _mm256_load_ps(b + 104)));
++    _mm256_store_ps(out + 112, _mm256_sub_ps(_mm256_load_ps(a + 112), _mm256_load_ps(b + 112)));
++    _mm256_store_ps(out + 120, _mm256_sub_ps(_mm256_load_ps(a + 120), _mm256_load_ps(b + 120)));
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32) {
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+-        _mm256_store_ps(out + i + 8, _mm256_mul_ps(_mm256_load_ps(a + i + 8), _mm256_load_ps(b + i + 8)));
+-        _mm256_store_ps(out + i + 16, _mm256_mul_ps(_mm256_load_ps(a + i + 16), _mm256_load_ps(b + i + 16)));
+-        _mm256_store_ps(out + i + 24, _mm256_mul_ps(_mm256_load_ps(a + i + 24), _mm256_load_ps(b + i + 24)));
+-    }
++    _mm256_store_ps(out, _mm256_mul_ps(_mm256_load_ps(a), _mm256_load_ps(b)));
++    _mm256_store_ps(out + 8, _mm256_mul_ps(_mm256_load_ps(a + 8), _mm256_load_ps(b + 8)));
++    _mm256_store_ps(out + 16, _mm256_mul_ps(_mm256_load_ps(a + 16), _mm256_load_ps(b + 16)));
++    _mm256_store_ps(out + 24, _mm256_mul_ps(_mm256_load_ps(a + 24), _mm256_load_ps(b + 24)));
++    _mm256_store_ps(out + 32, _mm256_mul_ps(_mm256_load_ps(a + 32), _mm256_load_ps(b + 32)));
++    _mm256_store_ps(out + 40, _mm256_mul_ps(_mm256_load_ps(a + 40), _mm256_load_ps(b + 40)));
++    _mm256_store_ps(out + 48, _mm256_mul_ps(_mm256_load_ps(a + 48), _mm256_load_ps(b + 48)));
++    _mm256_store_ps(out + 56, _mm256_mul_ps(_mm256_load_ps(a + 56), _mm256_load_ps(b + 56)));
++    _mm256_store_ps(out + 64, _mm256_mul_ps(_mm256_load_ps(a + 64), _mm256_load_ps(b + 64)));
++    _mm256_store_ps(out + 72, _mm256_mul_ps(_mm256_load_ps(a + 72), _mm256_load_ps(b + 72)));
++    _mm256_store_ps(out + 80, _mm256_mul_ps(_mm256_load_ps(a + 80), _mm256_load_ps(b + 80)));
++    _mm256_store_ps(out + 88, _mm256_mul_ps(_mm256_load_ps(a + 88), _mm256_load_ps(b + 88)));
++    _mm256_store_ps(out + 96, _mm256_mul_ps(_mm256_load_ps(a + 96), _mm256_load_ps(b + 96)));
++    _mm256_store_ps(out + 104, _mm256_mul_ps(_mm256_load_ps(a + 104), _mm256_load_ps(b + 104)));
++    _mm256_store_ps(out + 112, _mm256_mul_ps(_mm256_load_ps(a + 112), _mm256_load_ps(b + 112)));
++    _mm256_store_ps(out + 120, _mm256_mul_ps(_mm256_load_ps(a + 120), _mm256_load_ps(b + 120)));
+ }
+ #endif
+ }

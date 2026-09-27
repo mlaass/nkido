@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-27T1018Z_gpt-reserve_arith",
+  "provider": "codex",
+  "model": "gpt-reserve (gpt-reserve)",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 1,
+  "rejects": 7,
+  "reject_reasons": {
+    "speed": 5,
+    "empty patch": 2
+  },
+  "first_accept_iteration": 2,
+  "best_speedup": 1.333,
+  "tokens": {
+    "input": 1575256,
+    "output": 35714,
+    "cached": 1384960
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 1264.9,
+  "gpu_s": null,
+  "active_s": 1030.4,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/gpt-reserve-arith-202609271018",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

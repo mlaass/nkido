@@ -1,0 +1,126 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 79f01eb..ec4b2e6 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -11,62 +11,67 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+-#define CEDAR_BINARY_AVX2_KERNEL(name, intrinsic)                                      \
+-    CEDAR_TARGET_AVX2 inline void name(const float* a, const float* b, float* out)     \
+-        noexcept {                                                                     \
+-        const __m256 a0 = _mm256_load_ps(a + 0);                                      \
+-        const __m256 b0 = _mm256_load_ps(b + 0);                                      \
+-        const __m256 a1 = _mm256_load_ps(a + 8);                                      \
+-        const __m256 b1 = _mm256_load_ps(b + 8);                                      \
+-        const __m256 a2 = _mm256_load_ps(a + 16);                                     \
+-        const __m256 b2 = _mm256_load_ps(b + 16);                                     \
+-        const __m256 a3 = _mm256_load_ps(a + 24);                                     \
+-        const __m256 b3 = _mm256_load_ps(b + 24);                                     \
+-        _mm256_store_ps(out + 0, intrinsic(a0, b0));                                  \
+-        _mm256_store_ps(out + 8, intrinsic(a1, b1));                                  \
+-        _mm256_store_ps(out + 16, intrinsic(a2, b2));                                 \
+-        _mm256_store_ps(out + 24, intrinsic(a3, b3));                                 \
+-        const __m256 a4 = _mm256_load_ps(a + 32);                                     \
+-        const __m256 b4 = _mm256_load_ps(b + 32);                                     \
+-        const __m256 a5 = _mm256_load_ps(a + 40);                                     \
+-        const __m256 b5 = _mm256_load_ps(b + 40);                                     \
+-        const __m256 a6 = _mm256_load_ps(a + 48);                                     \
+-        const __m256 b6 = _mm256_load_ps(b + 48);                                     \
+-        const __m256 a7 = _mm256_load_ps(a + 56);                                     \
+-        const __m256 b7 = _mm256_load_ps(b + 56);                                     \
+-        _mm256_store_ps(out + 32, intrinsic(a4, b4));                                 \
+-        _mm256_store_ps(out + 40, intrinsic(a5, b5));                                 \
+-        _mm256_store_ps(out + 48, intrinsic(a6, b6));                                 \
+-        _mm256_store_ps(out + 56, intrinsic(a7, b7));                                 \
+-        const __m256 a8 = _mm256_load_ps(a + 64);                                     \
+-        const __m256 b8 = _mm256_load_ps(b + 64);                                     \
+-        const __m256 a9 = _mm256_load_ps(a + 72);                                     \
+-        const __m256 b9 = _mm256_load_ps(b + 72);                                     \
+-        const __m256 a10 = _mm256_load_ps(a + 80);                                    \
+-        const __m256 b10 = _mm256_load_ps(b + 80);                                    \
+-        const __m256 a11 = _mm256_load_ps(a + 88);                                    \
+-        const __m256 b11 = _mm256_load_ps(b + 88);                                    \
+-        _mm256_store_ps(out + 64, intrinsic(a8, b8));                                 \
+-        _mm256_store_ps(out + 72, intrinsic(a9, b9));                                 \
+-        _mm256_store_ps(out + 80, intrinsic(a10, b10));                               \
+-        _mm256_store_ps(out + 88, intrinsic(a11, b11));                               \
+-        const __m256 a12 = _mm256_load_ps(a + 96);                                    \
+-        const __m256 b12 = _mm256_load_ps(b + 96);                                    \
+-        const __m256 a13 = _mm256_load_ps(a + 104);                                   \
+-        const __m256 b13 = _mm256_load_ps(b + 104);                                   \
+-        const __m256 a14 = _mm256_load_ps(a + 112);                                   \
+-        const __m256 b14 = _mm256_load_ps(b + 112);                                   \
+-        const __m256 a15 = _mm256_load_ps(a + 120);                                   \
+-        const __m256 b15 = _mm256_load_ps(b + 120);                                   \
+-        _mm256_store_ps(out + 96, intrinsic(a12, b12));                               \
+-        _mm256_store_ps(out + 104, intrinsic(a13, b13));                              \
+-        _mm256_store_ps(out + 112, intrinsic(a14, b14));                              \
+-        _mm256_store_ps(out + 120, intrinsic(a15, b15));                              \
++#define CEDAR_BINARY_AVX2_KERNEL(name, instruction)                                   \
++    [[gnu::always_inline]] inline void name(const float* a, const float* b,           \
++                                             float* out) noexcept {                    \
++        asm volatile(                                                                 \
++            "vmovaps 0(%[a]), %%ymm0\n\t"                                             \
++            "vmovaps 32(%[a]), %%ymm1\n\t"                                            \
++            "vmovaps 64(%[a]), %%ymm2\n\t"                                            \
++            "vmovaps 96(%[a]), %%ymm3\n\t"                                            \
++            instruction " 0(%[b]), %%ymm0, %%ymm0\n\t"                              \
++            instruction " 32(%[b]), %%ymm1, %%ymm1\n\t"                             \
++            instruction " 64(%[b]), %%ymm2, %%ymm2\n\t"                             \
++            instruction " 96(%[b]), %%ymm3, %%ymm3\n\t"                             \
++            "vmovaps %%ymm0, 0(%[out])\n\t"                                          \
++            "vmovaps %%ymm1, 32(%[out])\n\t"                                         \
++            "vmovaps %%ymm2, 64(%[out])\n\t"                                         \
++            "vmovaps %%ymm3, 96(%[out])\n\t"                                         \
++            "vmovaps 128(%[a]), %%ymm0\n\t"                                         \
++            "vmovaps 160(%[a]), %%ymm1\n\t"                                         \
++            "vmovaps 192(%[a]), %%ymm2\n\t"                                         \
++            "vmovaps 224(%[a]), %%ymm3\n\t"                                         \
++            instruction " 128(%[b]), %%ymm0, %%ymm0\n\t"                           \
++            instruction " 160(%[b]), %%ymm1, %%ymm1\n\t"                           \
++            instruction " 192(%[b]), %%ymm2, %%ymm2\n\t"                           \
++            instruction " 224(%[b]), %%ymm3, %%ymm3\n\t"                           \
++            "vmovaps %%ymm0, 128(%[out])\n\t"                                        \
++            "vmovaps %%ymm1, 160(%[out])\n\t"                                        \
++            "vmovaps %%ymm2, 192(%[out])\n\t"                                        \
++            "vmovaps %%ymm3, 224(%[out])\n\t"                                        \
++            "vmovaps 256(%[a]), %%ymm0\n\t"                                         \
++            "vmovaps 288(%[a]), %%ymm1\n\t"                                         \
++            "vmovaps 320(%[a]), %%ymm2\n\t"                                         \
++            "vmovaps 352(%[a]), %%ymm3\n\t"                                         \
++            instruction " 256(%[b]), %%ymm0, %%ymm0\n\t"                           \
++            instruction " 288(%[b]), %%ymm1, %%ymm1\n\t"                           \
++            instruction " 320(%[b]), %%ymm2, %%ymm2\n\t"                           \
++            instruction " 352(%[b]), %%ymm3, %%ymm3\n\t"                           \
++            "vmovaps %%ymm0, 256(%[out])\n\t"                                        \
++            "vmovaps %%ymm1, 288(%[out])\n\t"                                        \
++            "vmovaps %%ymm2, 320(%[out])\n\t"                                        \
++            "vmovaps %%ymm3, 352(%[out])\n\t"                                        \
++            "vmovaps 384(%[a]), %%ymm0\n\t"                                         \
++            "vmovaps 416(%[a]), %%ymm1\n\t"                                         \
++            "vmovaps 448(%[a]), %%ymm2\n\t"                                         \
++            "vmovaps 480(%[a]), %%ymm3\n\t"                                         \
++            instruction " 384(%[b]), %%ymm0, %%ymm0\n\t"                           \
++            instruction " 416(%[b]), %%ymm1, %%ymm1\n\t"                           \
++            instruction " 448(%[b]), %%ymm2, %%ymm2\n\t"                           \
++            instruction " 480(%[b]), %%ymm3, %%ymm3\n\t"                           \
++            "vmovaps %%ymm0, 384(%[out])\n\t"                                        \
++            "vmovaps %%ymm1, 416(%[out])\n\t"                                        \
++            "vmovaps %%ymm2, 448(%[out])\n\t"                                        \
++            "vmovaps %%ymm3, 480(%[out])\n\t"                                        \
++            "vzeroupper"                                                               \
++            :                                                                          \
++            : [a] "r"(a), [b] "r"(b), [out] "r"(out)                                \
++            : "ymm0", "ymm1", "ymm2", "ymm3", "memory");                         \
+     }
+ 
+-CEDAR_BINARY_AVX2_KERNEL(add_avx2, _mm256_add_ps)
+-CEDAR_BINARY_AVX2_KERNEL(sub_avx2, _mm256_sub_ps)
+-CEDAR_BINARY_AVX2_KERNEL(mul_avx2, _mm256_mul_ps)
++CEDAR_BINARY_AVX2_KERNEL(add_avx2, "vaddps")
++CEDAR_BINARY_AVX2_KERNEL(sub_avx2, "vsubps")
++CEDAR_BINARY_AVX2_KERNEL(mul_avx2, "vmulps")
+ 
+ #undef CEDAR_BINARY_AVX2_KERNEL
+ #endif

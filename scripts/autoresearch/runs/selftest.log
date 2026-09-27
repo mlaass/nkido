@@ -1,0 +1,9 @@
+[selftest] preparing baseline for arith ...
+PASS good_mul_avx2.patch: accept (all gates green) in 60s — op_add 0.988x, op_sub 1.005x, op_mul 1.318x
+PASS bad_lane_swap.patch: reject (equality) in 2s
+PASS slower_mul.patch: reject (speed) in 60s
+PASS cheat_bench.patch: reject (out-of-allowlist edit) in 0s
+[selftest] preparing baseline for distort ...
+PASS tanh_undeclared.patch: reject (undeclared approximation) in 3s
+PASS hidden_ftz_mul.patch: reject (equality) in 14s
+selftest PASSED

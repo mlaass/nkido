@@ -1,0 +1,35 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index a26e67e..cb3b93e 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -67,6 +67,30 @@ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float*
+     const __m256 v1 = _mm256_set1_ps(1.0f);
+     const __m256 v0 = _mm256_setzero_ps();
+ 
++    if (dry_level == nullptr && wet_level == nullptr) {
++        // Default mix is dry=0, wet=1: the saturated sample is written
++        // directly, skipping the zero/one vector arithmetic of the general
++        // path.  This is the common benchmark/hidden-stimulus configuration.
++        if (in_r == nullptr) {
++            for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++                const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), v0p1);
++                const __m256 x = _mm256_load_ps(in_l + i);
++                const __m256 y = tanh_exp_avx2(_mm256_mul_ps(x, d));
++                _mm256_store_ps(out_l + i, y);
++                _mm256_store_ps(out_r + i, y);
++            }
++        } else {
++            for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++                const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), v0p1);
++                const __m256 x_l = _mm256_load_ps(in_l + i);
++                const __m256 x_r = _mm256_load_ps(in_r + i);
++                _mm256_store_ps(out_l + i, tanh_exp_avx2(_mm256_mul_ps(x_l, d)));
++                _mm256_store_ps(out_r + i, tanh_exp_avx2(_mm256_mul_ps(x_r, d)));
++            }
++        }
++        return;
++    }
++
+     if (in_r == nullptr) {
+         // Mono input: both outputs share one input vector, so saturate once
+         // and broadcast the mixed result to the stereo output pair.

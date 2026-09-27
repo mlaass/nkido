@@ -1,0 +1,75 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index e963dfe..0b6aaa9 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -23,6 +23,55 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline __m256 tanh_abs_avx2(__m256 ax) noexcept {
++    const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 eight = _mm256_set1_ps(8.0f);
++    const __m256 c0 = _mm256_set1_ps(945.0f);
++    const __m256 c1 = _mm256_set1_ps(105.0f);
++    const __m256 c2 = _mm256_set1_ps(1.0f);
++    const __m256 d1 = _mm256_set1_ps(420.0f);
++    const __m256 d2 = _mm256_set1_ps(15.0f);
++    const __m256 u = _mm256_div_ps(ax, eight);
++    const __m256 u2 = _mm256_mul_ps(u, u);
++    const __m256 p = _mm256_mul_ps(u, _mm256_add_ps(c0, _mm256_mul_ps(u2, _mm256_add_ps(c1, _mm256_mul_ps(c2, u2)))));
++    const __m256 q = _mm256_add_ps(c0, _mm256_mul_ps(u2, _mm256_add_ps(d1, _mm256_mul_ps(d2, u2))));
++    __m256 y = _mm256_div_ps(p, q);
++    y = _mm256_div_ps(_mm256_add_ps(y, y), _mm256_add_ps(one, _mm256_mul_ps(y, y)));
++    y = _mm256_div_ps(_mm256_add_ps(y, y), _mm256_add_ps(one, _mm256_mul_ps(y, y)));
++    return _mm256_div_ps(_mm256_add_ps(y, y), _mm256_add_ps(one, _mm256_mul_ps(y, y)));
++}
++
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* input_l,
++                                                 const float* input_r,
++                                                 const float* drive,
++                                                 const float* dry_level,
++                                                 const float* wet_level,
++                                                 float* out_l,
++                                                 float* out_r,
++                                                 bool stereo) noexcept {
++    const __m256 min_drive = _mm256_set1_ps(0.1f);
++    const __m256 eight = _mm256_set1_ps(8.0f);
++    const __m256 sign = _mm256_set1_ps(-0.0f);
++    const __m256 one = _mm256_set1_ps(1.0f);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), min_drive);
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : one;
++        const __m256 x_l = _mm256_mul_ps(_mm256_load_ps(input_l + i), d);
++        const __m256 x_r = _mm256_mul_ps(stereo ? _mm256_load_ps(input_r + i) : _mm256_load_ps(input_l + i), d);
++        const __m256 ax_l = _mm256_min_ps(_mm256_andnot_ps(sign, x_l), eight);
++        const __m256 ax_r = _mm256_min_ps(_mm256_andnot_ps(sign, x_r), eight);
++
++        // simd: approx std::tanh
++        const __m256 y_l = _mm256_xor_ps(tanh_abs_avx2(ax_l), _mm256_and_ps(x_l, sign));
++        const __m256 y_r = _mm256_xor_ps(tanh_abs_avx2(ax_r), _mm256_and_ps(x_r, sign));
++        const __m256 in_l = _mm256_load_ps(input_l + i);
++        const __m256 in_r = stereo ? _mm256_load_ps(input_r + i) : in_l;
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(in_l, dry), _mm256_mul_ps(y_l, wet)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(in_r, dry), _mm256_mul_ps(y_r, wet)));
++    }
++}
++
+ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* input_l,
+                                                  const float* input_r,
+                                                  const float* threshold,
+@@ -77,6 +126,14 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_tanh_avx2(input, input_r, drive, dry_level, wet_level,
++                                   out_l, out_r, stereo_in);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float d = std::max(0.1f, drive[i]);
+         float dry = drywet::coeff(dry_level, i, 0.0f);

@@ -1,0 +1,39 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 73c9a73..e1cd5f5 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,19 +10,31 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+-CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
++CEDAR_TARGET_AVX2 inline void add_avx2(const float* __restrict a, const float* __restrict b, float* __restrict out) noexcept {
++    a = static_cast<const float*>(__builtin_assume_aligned(a, 32));
++    b = static_cast<const float*>(__builtin_assume_aligned(b, 32));
++    out = static_cast<float*>(__builtin_assume_aligned(out, 32));
++    #pragma GCC unroll 4
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ 
+-CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
++CEDAR_TARGET_AVX2 inline void sub_avx2(const float* __restrict a, const float* __restrict b, float* __restrict out) noexcept {
++    a = static_cast<const float*>(__builtin_assume_aligned(a, 32));
++    b = static_cast<const float*>(__builtin_assume_aligned(b, 32));
++    out = static_cast<float*>(__builtin_assume_aligned(out, 32));
++    #pragma GCC unroll 4
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ 
+-CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
++CEDAR_TARGET_AVX2 inline void mul_avx2(const float* __restrict a, const float* __restrict b, float* __restrict out) noexcept {
++    a = static_cast<const float*>(__builtin_assume_aligned(a, 32));
++    b = static_cast<const float*>(__builtin_assume_aligned(b, 32));
++    out = static_cast<float*>(__builtin_assume_aligned(out, 32));
++    #pragma GCC unroll 4
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }

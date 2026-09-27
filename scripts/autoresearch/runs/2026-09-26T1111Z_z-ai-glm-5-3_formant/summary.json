@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-26T1111Z_z-ai-glm-5-3_formant",
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.3 (z-ai/glm-5.3@InferenceNet)",
+  "target": "formant",
+  "iterations": 6,
+  "accepts": 0,
+  "rejects": 6,
+  "reject_reasons": {
+    "backend error": 5,
+    "empty patch": 1
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 3401531,
+    "output": 1802795,
+    "cached": 3004416
+  },
+  "cost_usd": 6.0033,
+  "wall_clock_s": 8758.7,
+  "gpu_s": null,
+  "active_s": 8758.7,
+  "unstable_iterations": 0,
+  "status": "budget-stopped",
+  "branch": "autoresearch/z-ai-glm-5-3-formant-202609261111",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

@@ -1,0 +1,20 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 26df3c1..833c4a8 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -24,10 +24,13 @@ CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
+     const float* freq, const float* q, const float* dry_level,
+     const float* wet_level, bool stereo_in, SVFState& state,
+     float sample_rate) noexcept {
++    // Keep invariant input/default choices out of the sample loop.
++    const bool has_dry = dry_level != nullptr;
++    const bool has_wet = wet_level != nullptr;
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], sample_rate);
+-        const float dry = drywet::coeff(dry_level, i, 0.0f);
+-        const float wet = drywet::coeff(wet_level, i, 1.0f);
++        const float dry = has_dry ? dry_level[i] : 0.0f;
++        const float wet = has_wet ? wet_level[i] : 1.0f;
+ 
+         const float xl = input[i];
+         const float v3l = xl - (state.ic2eq[0] + DENORMAL_DC);

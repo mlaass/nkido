@@ -1,0 +1,347 @@
+== 2026-09-27T10:17:31Z codex gpt-5.6-sol arith
+[2026-09-27T1017Z_gpt-5-6-sol_arith] preparing baseline ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 1/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 1: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 1: accept (all gates green), $0.00 spent
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 2/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 2: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 2: accept (all gates green), $0.00 spent
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 3/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 3: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 3: reject (empty patch), $0.00 spent
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 4/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 4: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 4: reject (speed), $0.00 spent
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 5/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 5: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 5: reject (speed), $0.00 spent
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 6/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 6: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 6: accept (all gates green), $0.00 spent
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 7/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 7: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 7: accept (all gates green), $0.00 spent
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 8/8: proposing ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 8: verifying ...
+[2026-09-27T1017Z_gpt-5-6-sol_arith] iteration 8: reject (speed), $0.00 spent
+{
+  "run_id": "2026-09-27T1017Z_gpt-5-6-sol_arith",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 4,
+  "rejects": 4,
+  "reject_reasons": {
+    "empty patch": 1,
+    "speed": 3
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 1.417,
+  "tokens": {
+    "input": 2908422,
+    "output": 73118,
+    "cached": 2723968
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2607.1,
+  "gpu_s": null,
+  "active_s": 2247.9,
+  "unstable_iterations": 3,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-arith-202609271017",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}
+== 2026-09-27T11:09:41Z codex gpt-5.6-sol distort
+[2026-09-27T1109Z_gpt-5-6-sol_distort] preparing baseline ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 1/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 1: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 1: reject (speed), $0.00 spent
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 2/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 2: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 2: accept (all gates green), $0.00 spent
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 3/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 3: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 3: accept (all gates green), $0.00 spent
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 4/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 4: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 4: reject (speed), $0.00 spent
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 5/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 5: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 5: accept (all gates green), $0.00 spent
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 6/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 6: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 6: accept (all gates green), $0.00 spent
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 7/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 7: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 7: reject (speed), $0.00 spent
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 8/8: proposing ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 8: verifying ...
+[2026-09-27T1109Z_gpt-5-6-sol_distort] iteration 8: reject (speed), $0.00 spent
+{
+  "run_id": "2026-09-27T1109Z_gpt-5-6-sol_distort",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 4,
+  "rejects": 4,
+  "reject_reasons": {
+    "speed": 4
+  },
+  "first_accept_iteration": 2,
+  "best_speedup": 10.209,
+  "tokens": {
+    "input": 2743966,
+    "output": 50954,
+    "cached": 2545024
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2056.1,
+  "gpu_s": null,
+  "active_s": 1565.5,
+  "unstable_iterations": 3,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-distort-202609271109",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}
+== 2026-09-27T11:56:18Z codex gpt-5.6-sol formant
+[2026-09-27T1156Z_gpt-5-6-sol_formant] preparing baseline ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 1/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 1: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 1: reject (speed), $0.00 spent
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 2/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 2: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 2: accept (all gates green), $0.00 spent
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 3/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 3: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 3: reject (speed), $0.00 spent
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 4/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 4: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 4: accept (all gates green), $0.00 spent
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 5/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 5: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 5: reject (equality), $0.00 spent
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 6/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 6: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 6: reject (equality), $0.00 spent
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 7/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 7: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 7: reject (equality), $0.00 spent
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 8/8: proposing ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 8: verifying ...
+[2026-09-27T1156Z_gpt-5-6-sol_formant] iteration 8: accept (all gates green), $0.00 spent
+{
+  "run_id": "2026-09-27T1156Z_gpt-5-6-sol_formant",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "formant",
+  "iterations": 8,
+  "accepts": 3,
+  "rejects": 5,
+  "reject_reasons": {
+    "speed": 2,
+    "equality": 3
+  },
+  "first_accept_iteration": 2,
+  "best_speedup": 1.453,
+  "tokens": {
+    "input": 6594417,
+    "output": 103098,
+    "cached": 6262400
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 4476.0,
+  "gpu_s": null,
+  "active_s": 3546.9,
+  "unstable_iterations": 1,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-formant-202609271156",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}
+== 2026-09-27T13:29:48Z codex gpt-5.6-sol svf
+[2026-09-27T1329Z_gpt-5-6-sol_svf] preparing baseline ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 1/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 1: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 1: accept (all gates green), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 2/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 2: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 2: accept (all gates green), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 3/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 3: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 3: accept (all gates green), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 4/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 4: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 4: accept (all gates green), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 5/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 5: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 5: accept (all gates green), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 6/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 6: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 6: reject (equality), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 7/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 7: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 7: reject (backend error), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 8/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 8: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 8: reject (backend error), $0.00 spent
+{
+  "run_id": "2026-09-27T1329Z_gpt-5-6-sol_svf",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "svf",
+  "iterations": 8,
+  "accepts": 5,
+  "rejects": 3,
+  "reject_reasons": {
+    "equality": 1,
+    "backend error": 2
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 2.62,
+  "tokens": {
+    "input": 2092100,
+    "output": 37361,
+    "cached": 1923456
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 1637.3,
+  "gpu_s": null,
+  "active_s": 1167.6,
+  "unstable_iterations": 3,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-svf-202609271329",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}
+== 2026-09-27T14:10:38Z codex gpt-5.6-sol freeverb
+[2026-09-27T1410Z_gpt-5-6-sol_freeverb] preparing baseline ...
+== skip gpt-5.6-sol arith (done)
+== skip gpt-5.6-sol distort (done)
+== skip gpt-5.6-sol formant (done)
+== 2026-09-27T15:14:00Z resume runs/2026-09-27T1329Z_gpt-5-6-sol_svf
+[2026-09-27T1329Z_gpt-5-6-sol_svf] resuming
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 6/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 6: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 6: reject (equality), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 7/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 7: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 7: reject (equality), $0.00 spent
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 8/8: proposing ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 8: verifying ...
+[2026-09-27T1329Z_gpt-5-6-sol_svf] iteration 8: reject (speed), $0.00 spent
+{
+  "run_id": "2026-09-27T1329Z_gpt-5-6-sol_svf",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "svf",
+  "iterations": 8,
+  "accepts": 5,
+  "rejects": 3,
+  "reject_reasons": {
+    "equality": 2,
+    "speed": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 2.62,
+  "tokens": {
+    "input": 2965057,
+    "output": 50204,
+    "cached": 2716160
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2212.6,
+  "gpu_s": null,
+  "active_s": 1565.3,
+  "unstable_iterations": 3,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-svf-202609271329",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}
+== 2026-09-27T15:26:43Z resume runs/2026-09-27T1410Z_gpt-5-6-sol_freeverb
+[2026-09-27T1410Z_gpt-5-6-sol_freeverb] resuming
+[2026-09-27T1410Z_gpt-5-6-sol_freeverb] iteration 1/8: proposing ...
+[2026-09-27T1410Z_gpt-5-6-sol_freeverb] iteration 1: verifying ...
+Traceback (most recent call last):
+  File "/home/moritz/workspace/nkido/scripts/autoresearch/./run.py", line 322, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/moritz/workspace/nkido/scripts/autoresearch/./run.py", line 273, in main
+    v = verify.verify(run_dir, meta)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/moritz/workspace/nkido/scripts/autoresearch/verify.py", line 343, in verify
+    return _verify(run_dir, meta)
+           ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/moritz/workspace/nkido/scripts/autoresearch/verify.py", line 356, in _verify
+    gates.update(gate_equality(run_dir, meta))
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/moritz/workspace/nkido/scripts/autoresearch/verify.py", line 271, in gate_equality
+    for n in json.loads((base / "cases.json").read_text()):
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/moritz/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu/lib/python3.12/pathlib.py", line 1027, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors) as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/moritz/.local/share/uv/python/cpython-3.12.6-linux-x86_64-gnu/lib/python3.12/pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-27T1410Z_gpt-5-6-sol_freeverb/baseline/cases.json'
+== stopped/failed runs/2026-09-27T1410Z_gpt-5-6-sol_freeverb (exit 1)
+== sweep done 2026-09-27T15:29:19Z
+== skip gpt-5.6-sol arith (done)
+== skip gpt-5.6-sol distort (done)
+== skip gpt-5.6-sol formant (done)
+== skip gpt-5.6-sol svf (done)
+== 2026-09-27T15:33:44Z codex gpt-5.6-sol freeverb
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] preparing baseline ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 1/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 1: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 1: accept (all gates green), $0.00 spent
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 2/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 2: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 2: reject (empty patch), $0.00 spent
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 3/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 3: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 3: reject (speed), $0.00 spent
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 4/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 4: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 4: accept (all gates green), $0.00 spent
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 5/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 5: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 5: reject (speed), $0.00 spent
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 6/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 6: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 6: reject (speed), $0.00 spent
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 7/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 7: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 7: reject (speed), $0.00 spent
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 8/8: proposing ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 8: verifying ...
+[2026-09-27T1533Z_gpt-5-6-sol_freeverb] iteration 8: accept (all gates green), $0.00 spent
+{
+  "run_id": "2026-09-27T1533Z_gpt-5-6-sol_freeverb",
+  "provider": "codex",
+  "model": "gpt-5.6-sol (gpt-5.6-sol)",
+  "target": "freeverb",
+  "iterations": 8,
+  "accepts": 3,
+  "rejects": 5,
+  "reject_reasons": {
+    "empty patch": 1,
+    "speed": 4
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 3.105,
+  "tokens": {
+    "input": 3194377,
+    "output": 83361,
+    "cached": 2924800
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2554.6,
+  "gpu_s": null,
+  "active_s": 2554.6,
+  "unstable_iterations": 2,
+  "status": "complete",
+  "branch": "autoresearch/gpt-5-6-sol-freeverb-202609271533",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}
+== sweep done 2026-09-27T16:30:39Z

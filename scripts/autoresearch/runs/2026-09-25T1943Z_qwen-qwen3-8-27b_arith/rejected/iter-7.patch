@@ -1,0 +1,67 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index eeecd64..4744ff7 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,6 +10,54 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// C1 kernels process 16 independent 256-bit lanes. They are written
++// straight-line — four independent groups of four lanes, peak 12 ymm
++// registers — rather than as a 16-iteration loop: -O3 does not
++// unroll the loop, and its per-iteration control flow (address bumps,
++// compare, jump) caps how far ahead the two 512 B input loads can run.
++// Straight-line form lets the scheduler issue every load of a group
++// before the group's stores, keeping both input streams in flight.
++#define CEDAR_BINOP_128(op)                                                              \
++    _mm256_store_ps(out +  0, _mm256_##op##_ps(_mm256_load_ps(a +  0), _mm256_load_ps(b +  0))); \
++    _mm256_store_ps(out +  8, _mm256_##op##_ps(_mm256_load_ps(a +  8), _mm256_load_ps(b +  8))); \
++    _mm256_store_ps(out + 16, _mm256_##op##_ps(_mm256_load_ps(a + 16), _mm256_load_ps(b + 16))); \
++    _mm256_store_ps(out + 24, _mm256_##op##_ps(_mm256_load_ps(a + 24), _mm256_load_ps(b + 24))); \
++    _mm256_store_ps(out + 32, _mm256_##op##_ps(_mm256_load_ps(a + 32), _mm256_load_ps(b + 32))); \
++    _mm256_store_ps(out + 40, _mm256_##op##_ps(_mm256_load_ps(a + 40), _mm256_load_ps(b + 40))); \
++    _mm256_store_ps(out + 48, _mm256_##op##_ps(_mm256_load_ps(a + 48), _mm256_load_ps(b + 48))); \
++    _mm256_store_ps(out + 56, _mm256_##op##_ps(_mm256_load_ps(a + 56), _mm256_load_ps(b + 56))); \
++    _mm256_store_ps(out + 64, _mm256_##op##_ps(_mm256_load_ps(a + 64), _mm256_load_ps(b + 64))); \
++    _mm256_store_ps(out + 72, _mm256_##op##_ps(_mm256_load_ps(a + 72), _mm256_load_ps(b + 72))); \
++    _mm256_store_ps(out + 80, _mm256_##op##_ps(_mm256_load_ps(a + 80), _mm256_load_ps(b + 80))); \
++    _mm256_store_ps(out + 88, _mm256_##op##_ps(_mm256_load_ps(a + 88), _mm256_load_ps(b + 88))); \
++    _mm256_store_ps(out + 96, _mm256_##op##_ps(_mm256_load_ps(a + 96), _mm256_load_ps(b + 96))); \
++    _mm256_store_ps(out + 104, _mm256_##op##_ps(_mm256_load_ps(a + 104), _mm256_load_ps(b + 104))); \
++    _mm256_store_ps(out + 112, _mm256_##op##_ps(_mm256_load_ps(a + 112), _mm256_load_ps(b + 112))); \
++    _mm256_store_ps(out + 120, _mm256_##op##_ps(_mm256_load_ps(a + 120), _mm256_load_ps(b + 120)));
++
++#if BLOCK_SIZE == 128
++CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++    CEDAR_BINOP_128(add)
++}
++
++CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++    CEDAR_BINOP_128(sub)
++}
++
++CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++    CEDAR_BINOP_128(mul)
++}
++#else
++// Generic fallback for non-default block sizes (e.g. CEDAR_BLOCK_SIZE).
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
+@@ -37,6 +85,7 @@ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* ou
+     }
+ }
+ #endif
++#endif  // CEDAR_SIMD_X86
+ }  // namespace kernels
+ 
+ // ADD: out = in0 + in1

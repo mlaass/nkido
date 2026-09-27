@@ -1,0 +1,241 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0bc8234..20014e3 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -97,9 +97,6 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     alignas(32) float damp_a[N];
+     alignas(32) float omd_a[N];
+     alignas(32) float fb_a[N];
+-    alignas(32) float wrap_in[NC][8];  // chunks straddling a ring's wrap point
+-    alignas(32) float wrap_out[NC][8];
+-    alignas(32) float apd[8];
+ 
+     {
+         // max_ps(0, v) / min_ps(1, v) return v for NaN, matching std::clamp.
+@@ -127,39 +124,65 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     constexpr std::size_t NA = FreeverbState::NUM_ALLPASSES;
+     const __m256 g = _mm256_set1_ps(0.5f);
+     const __m256 R = _mm256_set1_ps(DC_BLOCKER_R);
+-    float* cb[2][NC];
+-    std::size_t cpos[2][NC];
+-    float* ap_buf[2][NA];
+-    std::size_t ap_pos[2][NA];
+-    // cbase/apbase + i addresses block offset i while no wrap has been passed;
+-    // each ring wraps at most once per block (size > N). Per-chunk bitmasks
+-    // (bit ch*8+c for combs, 16+ch*4+a for allpasses) say which rings straddle
+-    // their wrap point in that chunk and which rebase (-= size) after it.
+-    float* cbase[2][NC];
+-    float* apbase[2][NA];
+-    std::uint32_t straddle[N / 8] = {};
+-    std::uint32_t rebase[N / 8] = {};
+-    auto mark = [&](std::size_t pos, std::size_t size, unsigned bit) {
+-        const std::size_t rem = size - pos;  // samples until wrap, >= 1
+-        if (rem <= N) {
+-            rebase[(rem - 1) / 8] |= 1u << bit;
+-            if (rem % 8 != 0) straddle[(rem - 1) / 8] |= 1u << bit;
+-        }
+-    };
++    // Rings r: combs ch*8+c, then allpasses 16+ch*4+a. Each ring wraps at most
++    // once per block (size > N). Chunk k of ring r lives at
++    //   (k < T[r] ? A[r] : k == T[r] ? M[r] : B[r]) + 32*k   (byte addresses)
++    // where A is the pre-wrap base, B = A - size the post-wrap base, and M
++    // either B or, for the one chunk straddling the wrap, an 8-float staging
++    // slot pre-gathered before the loop and flushed after it. Computing the
++    // pointers with vector compares keeps the chunk loop free of branches.
++    constexpr std::size_t NR = 2 * NC + 2 * NA;
++    static_assert(NR == 24, "freeverb_avx2 assumes 24 rings");
++    float* rbuf[NR];
++    std::size_t rsize[NR];
++    std::size_t rpos[NR];
++    alignas(32) std::int64_t A[NR], B[NR], M[NR], T[NR];
++    alignas(32) float stage[NR][8];
++    alignas(32) std::uintptr_t ptrs[NR];
++    std::uint32_t smask = 0;
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         for (std::size_t c = 0; c < NC; ++c) {
+-            cb[ch][c] = state.comb_buffers[ch][c];
+-            cpos[ch][c] = state.comb_pos[ch][c];
+-            cbase[ch][c] = cb[ch][c] + cpos[ch][c];
+-            mark(cpos[ch][c], FreeverbState::COMB_SIZES_LR[ch][c], unsigned(ch * NC + c));
++            rbuf[ch * NC + c] = state.comb_buffers[ch][c];
++            rsize[ch * NC + c] = FreeverbState::COMB_SIZES_LR[ch][c];
++            rpos[ch * NC + c] = state.comb_pos[ch][c];
+         }
+         for (std::size_t a = 0; a < NA; ++a) {
+-            ap_buf[ch][a] = state.allpass_buffers[ch][a];
+-            ap_pos[ch][a] = state.allpass_pos[ch][a];
+-            apbase[ch][a] = ap_buf[ch][a] + ap_pos[ch][a];
+-            mark(ap_pos[ch][a], FreeverbState::ALLPASS_SIZES_LR[ch][a], unsigned(16 + ch * NA + a));
++            rbuf[2 * NC + ch * NA + a] = state.allpass_buffers[ch][a];
++            rsize[2 * NC + ch * NA + a] = FreeverbState::ALLPASS_SIZES_LR[ch][a];
++            rpos[2 * NC + ch * NA + a] = state.allpass_pos[ch][a];
++        }
++    }
++    for (std::size_t r = 0; r < NR; ++r) {
++        const std::size_t rem = rsize[r] - rpos[r];  // samples until wrap, >= 1
++        A[r] = std::int64_t(reinterpret_cast<std::uintptr_t>(rbuf[r] + rpos[r]));
++        B[r] = A[r] - std::int64_t(rsize[r] * sizeof(float));
++        M[r] = B[r];
++        T[r] = std::int64_t(N / 8);
++        if (rem <= N) {
++            T[r] = std::int64_t(rem / 8);
++            if (rem % 8 != 0) {
++                M[r] = std::int64_t(reinterpret_cast<std::uintptr_t>(stage[r])) - T[r] * 32;
++                smask |= 1u << r;
++            }
+         }
+     }
++    // mask_lo[8-n+k] set iff k < n; mask_hi[8-n+k] set iff k >= n.
++    alignas(32) static constexpr std::int32_t mask_lo[16] = {-1, -1, -1, -1, -1, -1, -1, -1,
++                                                             0, 0, 0, 0, 0, 0, 0, 0};
++    alignas(32) static constexpr std::int32_t mask_hi[16] = {0, 0, 0, 0, 0, 0, 0, 0,
++                                                             -1, -1, -1, -1, -1, -1, -1, -1};
++    // Straddle chunk s of ring r: first n1 samples at A + 8s, rest at buf[0..].
++    // Masked-off lanes are never accessed, so the out-of-ring addresses are safe.
++    for (std::uint32_t m = smask; m; m &= m - 1) {
++        const unsigned r = unsigned(__builtin_ctz(m));
++        const std::size_t s = std::size_t(T[r]);
++        const std::size_t n1 = rsize[r] - rpos[r] - 8 * s;
++        const __m256i mlo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(mask_lo + 8 - n1));
++        const __m256i mhi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(mask_hi + 8 - n1));
++        const __m256 v = _mm256_or_ps(_mm256_maskload_ps(rbuf[r] + rpos[r] + 8 * s, mlo),
++                                      _mm256_maskload_ps(rbuf[r] - n1, mhi));
++        _mm256_store_ps(stage[r], v);
++    }
+     __m256 fs0 = _mm256_loadu_ps(state.comb_filter_state[0]);
+     __m256 fs1 = _mm256_loadu_ps(state.comb_filter_state[1]);
+     __m256 x10 = _mm256_loadu_ps(state.dc_x1[0]);
+@@ -168,22 +191,27 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     __m256 y11 = _mm256_loadu_ps(state.dc_y1[1]);
+ 
+     for (std::size_t i = 0; i < N; i += 8) {
+-        const std::uint32_t sm = straddle[i / 8];
++        {
++            const __m256i kv = _mm256_set1_epi64x(std::int64_t(i / 8));
++            const __m256i off = _mm256_set1_epi64x(std::int64_t(i * sizeof(float)));
++            for (std::size_t v = 0; v < NR; v += 4) {
++                const __m256i t = _mm256_load_si256(reinterpret_cast<const __m256i*>(T + v));
++                const __m256i lt = _mm256_cmpgt_epi64(t, kv);
++                const __m256i eq = _mm256_cmpeq_epi64(t, kv);
++                __m256i base = _mm256_blendv_epi8(
++                    _mm256_load_si256(reinterpret_cast<const __m256i*>(B + v)),
++                    _mm256_load_si256(reinterpret_cast<const __m256i*>(M + v)), eq);
++                base = _mm256_blendv_epi8(
++                    base, _mm256_load_si256(reinterpret_cast<const __m256i*>(A + v)), lt);
++                _mm256_store_si256(reinterpret_cast<__m256i*>(ptrs + v), _mm256_add_epi64(base, off));
++            }
++        }
+         __m256 d[2][8];  // [lane][sample in chunk] -> 8 combs
+         __m256 ych[2];
+         for (std::size_t ch = 0; ch < 2; ++ch) {
+             const float* src[NC];
+-            for (std::size_t c = 0; c < NC; ++c) {
+-                src[c] = cbase[ch][c] + i;
+-                if (sm & (1u << (ch * NC + c))) [[unlikely]] {
+-                    const float* buf = cb[ch][c];
+-                    const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+-                    const std::size_t p = cpos[ch][c] + i;  // < size before the wrap
+-                    for (std::size_t k = 0; k < 8; ++k)
+-                        wrap_in[c][k] = buf[ring_at(p, k, size)];
+-                    src[c] = wrap_in[c];
+-                }
+-            }
++            for (std::size_t c = 0; c < NC; ++c)
++                src[c] = reinterpret_cast<const float*>(ptrs[ch * NC + c]);
+             __m256 lo[4], hi[4];
+             for (std::size_t j = 0; j < 4; ++j) {
+                 lo[j] = load_2x128_avx2(src[j], src[j + 4]);
+@@ -199,21 +227,10 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+             __m256 y = _mm256_setzero_ps();
+             for (std::size_t c = 0; c < NC; ++c) y = _mm256_add_ps(y, _mm256_loadu_ps(src[c]));
+             for (std::size_t a = 0; a < NA; ++a) {
+-                if (!(sm & (1u << (16 + ch * NA + a)))) [[likely]] {
+-                    float* q = apbase[ch][a] + i;
+-                    __m256 out = _mm256_sub_ps(_mm256_loadu_ps(q), _mm256_mul_ps(g, y));
+-                    _mm256_storeu_ps(q, _mm256_add_ps(y, _mm256_mul_ps(g, out)));
+-                    y = out;
+-                } else {
+-                    float* buf = ap_buf[ch][a];
+-                    const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
+-                    const std::size_t p = ap_pos[ch][a] + i;
+-                    for (std::size_t k = 0; k < 8; ++k) apd[k] = buf[ring_at(p, k, size)];
+-                    __m256 out = _mm256_sub_ps(_mm256_load_ps(apd), _mm256_mul_ps(g, y));
+-                    _mm256_store_ps(apd, _mm256_add_ps(y, _mm256_mul_ps(g, out)));
+-                    for (std::size_t k = 0; k < 8; ++k) buf[ring_at(p, k, size)] = apd[k];
+-                    y = out;
+-                }
++                float* q = reinterpret_cast<float*>(ptrs[2 * NC + ch * NA + a]);
++                __m256 out = _mm256_sub_ps(_mm256_loadu_ps(q), _mm256_mul_ps(g, y));
++                _mm256_storeu_ps(q, _mm256_add_ps(y, _mm256_mul_ps(g, out)));
++                y = out;
+             }
+             ych[ch] = y;
+         }
+@@ -244,34 +261,13 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+             transpose4x4_lanes_avx2(hi);
+             float* dst[NC];
+             for (std::size_t c = 0; c < NC; ++c)
+-                dst[c] = (sm & (1u << (ch * NC + c))) ? wrap_out[c] : cbase[ch][c] + i;
++                dst[c] = reinterpret_cast<float*>(ptrs[ch * NC + c]);
+             for (std::size_t j = 0; j < 4; ++j) {
+                 _mm_storeu_ps(dst[j], _mm256_castps256_ps128(lo[j]));
+                 _mm_storeu_ps(dst[j] + 4, _mm256_castps256_ps128(hi[j]));
+                 _mm_storeu_ps(dst[j + 4], _mm256_extractf128_ps(lo[j], 1));
+                 _mm_storeu_ps(dst[j + 4] + 4, _mm256_extractf128_ps(hi[j], 1));
+             }
+-            if (sm) [[unlikely]] {
+-                for (std::size_t c = 0; c < NC; ++c) {
+-                    if (sm & (1u << (ch * NC + c))) {
+-                        const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+-                        const std::size_t p = cpos[ch][c] + i;
+-                        for (std::size_t k = 0; k < 8; ++k)
+-                            cb[ch][c][ring_at(p, k, size)] = wrap_out[c][k];
+-                    }
+-                }
+-            }
+-        }
+-
+-        if (const std::uint32_t rm = rebase[i / 8]) [[unlikely]] {
+-            for (std::size_t ch = 0; ch < 2; ++ch) {
+-                for (std::size_t c = 0; c < NC; ++c)
+-                    if (rm & (1u << (ch * NC + c)))
+-                        cbase[ch][c] -= FreeverbState::COMB_SIZES_LR[ch][c];
+-                for (std::size_t a = 0; a < NA; ++a)
+-                    if (rm & (1u << (16 + ch * NA + a)))
+-                        apbase[ch][a] -= FreeverbState::ALLPASS_SIZES_LR[ch][a];
+-            }
+         }
+ 
+         __m256 xl = _mm256_loadu_ps(x_l + i);
+@@ -282,6 +278,17 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         _mm256_storeu_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(ych[1], wet)));
+     }
+ 
++    for (std::uint32_t m = smask; m; m &= m - 1) {
++        const unsigned r = unsigned(__builtin_ctz(m));
++        const std::size_t s = std::size_t(T[r]);
++        const std::size_t n1 = rsize[r] - rpos[r] - 8 * s;
++        const __m256i mlo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(mask_lo + 8 - n1));
++        const __m256i mhi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(mask_hi + 8 - n1));
++        const __m256 v = _mm256_load_ps(stage[r]);
++        _mm256_maskstore_ps(rbuf[r] + rpos[r] + 8 * s, mlo, v);
++        _mm256_maskstore_ps(rbuf[r] - n1, mhi, v);
++    }
++
+     _mm256_storeu_ps(state.comb_filter_state[0], fs0);
+     _mm256_storeu_ps(state.comb_filter_state[1], fs1);
+     _mm256_storeu_ps(state.dc_x1[0], x10);
+@@ -290,11 +297,10 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     _mm256_storeu_ps(state.dc_y1[1], y11);
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         for (std::size_t c = 0; c < NC; ++c)
+-            state.comb_pos[ch][c] =
+-                ring_at(cpos[ch][c], N, FreeverbState::COMB_SIZES_LR[ch][c]);
++            state.comb_pos[ch][c] = ring_at(rpos[ch * NC + c], N, rsize[ch * NC + c]);
+         for (std::size_t a = 0; a < NA; ++a)
+             state.allpass_pos[ch][a] =
+-                ring_at(ap_pos[ch][a], N, FreeverbState::ALLPASS_SIZES_LR[ch][a]);
++                ring_at(rpos[2 * NC + ch * NA + a], N, rsize[2 * NC + ch * NA + a]);
+     }
+ }
+ #endif

@@ -1,0 +1,90 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0d74114..6996cc9 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -33,6 +33,65 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
+ // Classic algorithm: 8 parallel lowpass-feedback comb filters summed,
+ // then through 4 series allpass filters. Creates lush, dense reverb.
+ 
++#if CEDAR_SIMD_X86
++namespace kernels {
++
++CEDAR_TARGET_AVX2 inline void freeverb_avx2(
++    float* out_l, float* out_r, const float* input, const float* input_r,
++    bool stereo_in, const float* room_size, const float* damping,
++    const float* room_scale_in, const float* room_offset_in, FreeverbState& state,
++    const float* dry_buf, float dry_const, const float* wet_buf, float wet_const) noexcept {
++    constexpr float ALLPASS_GAIN = 0.5f;
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float x_l = input[i];
++        const float x_r = stereo_in ? input_r[i] : x_l;
++        const float dry = drywet::coeff(dry_buf, i, dry_const);
++        const float wet = drywet::coeff(wet_buf, i, wet_const);
++        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
++        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
++        const float room_scale = room_scale_in[i] > 0.0f ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
++        const float room_offset = room_offset_in[i] > 0.0f ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
++        const float feedback = room * room_scale + room_offset;
++        float y_lr[2] = {0.0f, 0.0f};
++#pragma GCC unroll 2
++        for (std::size_t ch = 0; ch < 2; ++ch) {
++            const float x = ch == 0 ? x_l : x_r;
++            float comb_sum = 0.0f;
++            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
++                float* buffer = state.comb_buffers[ch][c];
++                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
++                const std::size_t pos = state.comb_pos[ch][c];
++                const float delayed = buffer[pos];
++                state.comb_filter_state[ch][c] = delayed * (1.0f - damp) + state.comb_filter_state[ch][c] * damp;
++                const float dc_in = state.comb_filter_state[ch][c];
++                const float dc_out = dc_in - state.dc_x1[ch][c] + DC_BLOCKER_R * state.dc_y1[ch][c];
++                state.dc_x1[ch][c] = dc_in;
++                state.dc_y1[ch][c] = dc_out;
++                buffer[pos] = x + feedback * dc_out;
++                state.comb_pos[ch][c] = pos + 1 == size ? 0 : pos + 1;
++                comb_sum += delayed;
++            }
++            float y = comb_sum;
++            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
++                float* buffer = state.allpass_buffers[ch][a];
++                const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
++                const std::size_t pos = state.allpass_pos[ch][a];
++                const float delayed = buffer[pos];
++                const float output = delayed - ALLPASS_GAIN * y;
++                buffer[pos] = y + ALLPASS_GAIN * output;
++                state.allpass_pos[ch][a] = pos + 1 == size ? 0 : pos + 1;
++                y = output;
++            }
++            y_lr[ch] = y;
++        }
++        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
++        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
++    }
++}
++
++} // namespace kernels
++#endif
++
+ [[gnu::always_inline]]
+ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
+     // Stereo-native: writes out_buffer (L) and out_buffer+1 (R) in one call.
+@@ -74,6 +133,14 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::freeverb_avx2(out_l, out_r, input, input_r, stereo_in, room_size, damping,
++                               room_scale_in, room_offset_in, state, dry_buf, dry_const, wet_buf, wet_const);
++        return;
++    }
++#endif
++
+     constexpr float ALLPASS_GAIN = 0.5f;
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+@@ -469,3 +536,4 @@ inline void op_reverb_fdn(ExecutionContext& ctx, const Instruction& inst) {
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"

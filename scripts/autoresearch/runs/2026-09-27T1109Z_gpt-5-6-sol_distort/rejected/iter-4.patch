@@ -1,0 +1,58 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 0218d3b..e12986f 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -68,13 +68,19 @@ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(
+             _mm256_store_ps(shaped_r + i, distort_tanh_vec_avx2(_mm256_mul_ps(xr, d)));
+         }
+     }
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        const float dry = drywet::coeff(dry_level, i, 0.0f);
+-        const float wet = drywet::coeff(wet_level, i, 1.0f);
+-        const float x_l = input[i];
+-        const float x_r = stereo_in ? input_r[i] : x_l;
+-        out_l[i] = drywet::mix(x_l, shaped_l[i], dry, wet);
+-        out_r[i] = drywet::mix(x_r, stereo_in ? shaped_r[i] : shaped_l[i], dry, wet);
++    const __m256 default_dry = _mm256_setzero_ps();
++    const __m256 default_wet = _mm256_set1_ps(1.0f);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : default_dry;
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : default_wet;
++        const __m256 xl = _mm256_load_ps(input + i);
++        const __m256 xr = stereo_in ? _mm256_load_ps(input_r + i) : xl;
++        const __m256 yl = _mm256_load_ps(shaped_l + i);
++        const __m256 yr = stereo_in ? _mm256_load_ps(shaped_r + i) : yl;
++        _mm256_store_ps(out_l + i, _mm256_add_ps(
++            _mm256_mul_ps(xl, dry), _mm256_mul_ps(yl, wet)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(
++            _mm256_mul_ps(xr, dry), _mm256_mul_ps(yr, wet)));
+     }
+ }
+ 
+@@ -112,13 +118,19 @@ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(
+             _mm256_store_ps(shaped_r + i, _mm256_mul_ps(distort_soft_vec_avx2(yr), t));
+         }
+     }
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        const float dry = drywet::coeff(dry_level, i, 0.0f);
+-        const float wet = drywet::coeff(wet_level, i, 1.0f);
+-        const float x_l = input[i];
+-        const float x_r = stereo_in ? input_r[i] : x_l;
+-        out_l[i] = drywet::mix(x_l, shaped_l[i], dry, wet);
+-        out_r[i] = drywet::mix(x_r, stereo_in ? shaped_r[i] : shaped_l[i], dry, wet);
++    const __m256 default_dry = _mm256_setzero_ps();
++    const __m256 default_wet = _mm256_set1_ps(1.0f);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : default_dry;
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : default_wet;
++        const __m256 xl = _mm256_load_ps(input + i);
++        const __m256 xr = stereo_in ? _mm256_load_ps(input_r + i) : xl;
++        const __m256 yl = _mm256_load_ps(shaped_l + i);
++        const __m256 yr = stereo_in ? _mm256_load_ps(shaped_r + i) : yl;
++        _mm256_store_ps(out_l + i, _mm256_add_ps(
++            _mm256_mul_ps(xl, dry), _mm256_mul_ps(yl, wet)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(
++            _mm256_mul_ps(xr, dry), _mm256_mul_ps(yr, wet)));
+     }
+ }
+ #endif

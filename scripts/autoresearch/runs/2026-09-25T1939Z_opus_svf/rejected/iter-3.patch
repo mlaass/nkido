@@ -1,0 +1,171 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index b2cd5ef..ac65c2a 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -121,6 +121,37 @@ CEDAR_TARGET_AVX2 inline __m128 svf_clamp_ps(__m128 v) noexcept {
+     return _mm_and_ps(c, _mm_cmpord_ps(v, v));  // NaN -> 0
+ }
+ 
++// calc_svf for 8 samples at i; returns a lane mask of (max(0,f), q) == (cf, cq).
++CEDAR_TARGET_AVX2 inline std::uint32_t svf_coeffs8(const float* freq, const float* q, std::size_t i,
++                                                  float* G, float* K, float* A1, float* A2, float* A3,
++                                                  float cf, float cq, float sample_rate) noexcept {
++    const __m256 hi = _mm256_set1_ps(sample_rate * 0.49f);
++    const __m256 lo = _mm256_set1_ps(20.0f);
++    const __m256 zero = _mm256_setzero_ps();
++    const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 qmin = _mm256_set1_ps(0.1f);
++    const __m256 f = _mm256_load_ps(freq + i);
++    const __m256 f0 = _mm256_and_ps(_mm256_cmp_ps(zero, f, _CMP_LT_OQ), f);  // max(0, f)
++    __m256 fc = _mm256_blendv_ps(f0, hi, _mm256_cmp_ps(hi, f0, _CMP_LT_OQ));
++    fc = _mm256_blendv_ps(fc, lo, _mm256_cmp_ps(f0, lo, _CMP_LT_OQ));
++    const __m256 qv = _mm256_load_ps(q + i);
++    const __m256 qc = _mm256_blendv_ps(qmin, qv, _mm256_cmp_ps(qmin, qv, _CMP_LT_OQ));
++    const __m256 x = _mm256_div_ps(_mm256_mul_ps(_mm256_set1_ps(PI), fc), _mm256_set1_ps(sample_rate));
++    const __m256 g = svf_tanf_ps(x);
++    const __m256 k = _mm256_div_ps(one, qc);
++    const __m256 a1 = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(g, _mm256_add_ps(g, k))));
++    const __m256 a2 = _mm256_mul_ps(g, a1);
++    const __m256 a3 = _mm256_mul_ps(g, a2);
++    _mm256_store_ps(G + i, g);
++    _mm256_store_ps(K + i, k);
++    _mm256_store_ps(A1 + i, a1);
++    _mm256_store_ps(A2 + i, a2);
++    _mm256_store_ps(A3 + i, a3);
++    const __m256 same = _mm256_and_ps(_mm256_cmp_ps(f0, _mm256_set1_ps(cf), _CMP_EQ_OQ),
++                                      _mm256_cmp_ps(qv, _mm256_set1_ps(cq), _CMP_EQ_OQ));
++    return static_cast<std::uint32_t>(_mm256_movemask_ps(same));
++}
++
+ // Mode: 0 = lowpass (v2), 1 = highpass, 2 = bandpass (v1).
+ // Coefficients are a pure function of (freq, q), so they are computed for the
+ // whole block first; only the integrator recurrence stays serial.
+@@ -131,53 +162,37 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+                                        const float* dry_level, const float* wet_level,
+                                        float sample_rate) noexcept {
+     alignas(32) float A1[BLOCK_SIZE], A2[BLOCK_SIZE], A3[BLOCK_SIZE], K[BLOCK_SIZE], G[BLOCK_SIZE];
+-    alignas(32) float F0[BLOCK_SIZE];
+     alignas(32) float Y[2 * BLOCK_SIZE];
++    alignas(32) float Y2[Mode == 1 ? 2 * BLOCK_SIZE : 4];
+ 
+-    const __m256 hi = _mm256_set1_ps(sample_rate * 0.49f);
+-    const __m256 lo = _mm256_set1_ps(20.0f);
+-    const __m256 zero = _mm256_setzero_ps();
+-    const __m256 one = _mm256_set1_ps(1.0f);
+-    const __m256 qmin = _mm256_set1_ps(0.1f);
+-    const __m256 pi = _mm256_set1_ps(PI);
+-    const __m256 sr = _mm256_set1_ps(sample_rate);
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        const __m256 f = _mm256_load_ps(freq + i);
+-        const __m256 f0 = _mm256_and_ps(_mm256_cmp_ps(zero, f, _CMP_LT_OQ), f);  // max(0, f)
+-        __m256 fc = _mm256_blendv_ps(f0, hi, _mm256_cmp_ps(hi, f0, _CMP_LT_OQ));
+-        fc = _mm256_blendv_ps(fc, lo, _mm256_cmp_ps(f0, lo, _CMP_LT_OQ));
+-        const __m256 qv = _mm256_load_ps(q + i);
+-        const __m256 qc = _mm256_blendv_ps(qmin, qv, _mm256_cmp_ps(qmin, qv, _CMP_LT_OQ));
+-        const __m256 x = _mm256_div_ps(_mm256_mul_ps(pi, fc), sr);
+-        const __m256 g = svf_tanf_ps(x);
+-        const __m256 k = _mm256_div_ps(one, qc);
+-        const __m256 a1 = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(g, _mm256_add_ps(g, k))));
+-        const __m256 a2 = _mm256_mul_ps(g, a1);
+-        const __m256 a3 = _mm256_mul_ps(g, a2);
+-        _mm256_store_ps(F0 + i, f0);
+-        _mm256_store_ps(G + i, g);
+-        _mm256_store_ps(K + i, k);
+-        _mm256_store_ps(A1 + i, a1);
+-        _mm256_store_ps(A2 + i, a2);
+-        _mm256_store_ps(A3 + i, a3);
+-    }
+     // Honour the scalar coefficient cache for a leading run of unchanged params.
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        if (!(F0[i] == state.last_freq && q[i] == state.last_q)) break;
+-        G[i] = state.g; K[i] = state.k; A1[i] = state.a1; A2[i] = state.a2; A3[i] = state.a3;
+-    }
+-    constexpr std::size_t L = BLOCK_SIZE - 1;
+-    state.last_freq = F0[L];
+-    state.last_q = q[L];
+-    state.g = G[L]; state.k = K[L]; state.a1 = A1[L]; state.a2 = A2[L]; state.a3 = A3[L];
++    const float c_freq = state.last_freq, c_q = state.last_q;
++    const float c_g = state.g, c_k = state.k, c_a1 = state.a1, c_a2 = state.a2, c_a3 = state.a3;
++    bool leading = true;
++    auto apply_cache = [&](std::size_t i, std::uint32_t m) {
++        for (std::size_t j = 0; j < 8; ++j) {
++            if (!((m >> j) & 1u)) { leading = false; return; }
++            G[i + j] = c_g; K[i + j] = c_k; A1[i + j] = c_a1; A2[i + j] = c_a2; A3[i + j] = c_a3;
++        }
++    };
+ 
+     __m128 s1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+     __m128 s2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+     const __m128 dc = _mm_set1_ps(DENORMAL_DC);
+-    const __m128 two = _mm_set1_ps(2.0f);
+     const __m128 lim = _mm_set1_ps(10.0f);
+     const __m128 absmask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++    // Software-pipelined: coefficients for the next chunk are computed while the
++    // latency-bound recurrence runs over the current one.
++    {
++        const std::uint32_t m = svf_coeffs8(freq, q, 0, G, K, A1, A2, A3, c_freq, c_q, sample_rate);
++        apply_cache(0, m);
++    }
++    for (std::size_t c = 0; c < BLOCK_SIZE; c += 8) {
++    if (c + 8 < BLOCK_SIZE) {
++        const std::uint32_t m = svf_coeffs8(freq, q, c + 8, G, K, A1, A2, A3, c_freq, c_q, sample_rate);
++        if (leading) apply_cache(c + 8, m);
++    }
++    for (std::size_t i = c; i < c + 8; ++i) {
+         const __m128 x = in_r ? _mm_unpacklo_ps(_mm_load_ss(in_l + i), _mm_load_ss(in_r + i))
+                               : _mm_set1_ps(in_l[i]);
+         const __m128 a1 = _mm_set1_ps(A1[i]);
+@@ -188,8 +203,8 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+         const __m128 v3 = _mm_sub_ps(x, t2);
+         const __m128 v1 = _mm_add_ps(_mm_mul_ps(a1, t1), _mm_mul_ps(a2, v3));
+         const __m128 v2 = _mm_add_ps(_mm_add_ps(t2, _mm_mul_ps(a2, t1)), _mm_mul_ps(a3, v3));
+-        __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), s1);
+-        __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), s2);
++        __m128 n1 = _mm_sub_ps(_mm_add_ps(v1, v1), s1);  // v+v == 2*v exactly
++        __m128 n2 = _mm_sub_ps(_mm_add_ps(v2, v2), s2);
+         const __m128 bad = _mm_or_ps(_mm_cmp_ps(_mm_and_ps(n1, absmask), lim, _CMP_NLE_UQ),
+                                      _mm_cmp_ps(_mm_and_ps(n2, absmask), lim, _CMP_NLE_UQ));
+         if (__builtin_expect((_mm_movemask_ps(bad) & 3) != 0, 0)) {
+@@ -198,12 +213,15 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+         }
+         s1 = n1;
+         s2 = n2;
+-        __m128 y;
+-        if constexpr (Mode == 0) y = v2;
+-        else if constexpr (Mode == 2) y = v1;
+-        else y = _mm_sub_ps(_mm_sub_ps(x, _mm_mul_ps(_mm_set1_ps(K[i]), v1)), v2);
+-        _mm_storel_pi(reinterpret_cast<__m64*>(Y + 2 * i), y);
++        // Highpass is formed 4-wide in the output pass from v1 (Y) and v2 (Y2).
++        _mm_storel_pi(reinterpret_cast<__m64*>(Y + 2 * i), Mode == 0 ? v2 : v1);
++        if constexpr (Mode == 1) _mm_storel_pi(reinterpret_cast<__m64*>(Y2 + 2 * i), v2);
++    }
+     }
++    constexpr std::size_t L = BLOCK_SIZE - 1;
++    state.last_freq = freq[L] > 0.0f ? freq[L] : 0.0f;
++    state.last_q = q[L];
++    state.g = G[L]; state.k = K[L]; state.a1 = A1[L]; state.a2 = A2[L]; state.a3 = A3[L];
+     alignas(16) float st1[4], st2[4];
+     _mm_store_ps(st1, s1);
+     _mm_store_ps(st2, s2);
+@@ -213,10 +231,18 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 4) {
+         const __m128 a = _mm_load_ps(Y + 2 * i);
+         const __m128 b = _mm_load_ps(Y + 2 * i + 4);
+-        const __m128 yl = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0));
+-        const __m128 yr = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
++        __m128 yl = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0));
++        __m128 yr = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
+         const __m128 xl = _mm_load_ps(in_l + i);
+         const __m128 xr = in_r ? _mm_load_ps(in_r + i) : xl;
++        if constexpr (Mode == 1) {
++            // hp = x - k*v1 - v2
++            const __m128 a2 = _mm_load_ps(Y2 + 2 * i);
++            const __m128 b2 = _mm_load_ps(Y2 + 2 * i + 4);
++            const __m128 kv = _mm_load_ps(K + i);
++            yl = _mm_sub_ps(_mm_sub_ps(xl, _mm_mul_ps(kv, yl)), _mm_shuffle_ps(a2, b2, _MM_SHUFFLE(2, 0, 2, 0)));
++            yr = _mm_sub_ps(_mm_sub_ps(xr, _mm_mul_ps(kv, yr)), _mm_shuffle_ps(a2, b2, _MM_SHUFFLE(3, 1, 3, 1)));
++        }
+         const __m128 dry = dry_level ? _mm_load_ps(dry_level + i) : _mm_setzero_ps();
+         const __m128 wet = wet_level ? _mm_load_ps(wet_level + i) : _mm_set1_ps(1.0f);
+         _mm_store_ps(out_l + i, _mm_add_ps(_mm_mul_ps(xl, dry), _mm_mul_ps(yl, wet)));

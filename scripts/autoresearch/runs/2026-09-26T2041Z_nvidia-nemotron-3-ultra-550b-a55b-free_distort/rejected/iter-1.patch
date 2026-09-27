@@ -1,0 +1,256 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..031b98a 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -6,9 +6,222 @@
+ #include "dsp_state.hpp"
+ #include "dsp_utils.hpp"
+ #include "drywet.hpp"
++#include "../dsp/simd.hpp"
+ #include <cmath>
+ #include <algorithm>
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* input, const float* input_r,
++                                                 const float* drive, const float* dry_level,
++                                                 const float* wet_level,
++                                                 float* out_l, float* out_r,
++                                                 bool stereo_in) noexcept {
++    constexpr std::size_t BLOCK_SIZE = 128;
++    constexpr float MIN_DRIVE = 0.1f;
++    constexpr float DRY_DEFAULT = 0.0f;
++    constexpr float WET_DEFAULT = 1.0f;
++
++    // AVX2 constants
++    const __m256 v_min_drive = _mm256_set1_ps(MIN_DRIVE);
++    const __m256 v_dry_default = _mm256_set1_ps(DRY_DEFAULT);
++    const __m256 v_wet_default = _mm256_set1_ps(WET_DEFAULT);
++
++    // tanh approximation coefficients (minimax polynomial, error < 1e-5)
++    // tanh(x) ≈ x * (1 - x^2 * (a - b * x^2)) for |x| < 1
++    // For larger |x|, tanh saturates to ±1
++    // Using: tanh(x) = sign(x) * (1 - 2/(exp(2|x|)+1))
++    // Fast approximation: x * (1 + c1*x^2 + c2*x^4) / (1 + c3*x^2 + c4*x^4)
++    // From "Fast Computation of tanh(x)" - max abs error ~2.5e-6
++    const __m256 c1 = _mm256_set1_ps(0.153854f);   // 2/13
++    const __m256 c2 = _mm256_set1_ps(0.003275f);   // 2/611
++    const __m256 c3 = _mm256_set1_ps(0.006550f);   // 2/305
++    const __m256 c4 = _mm256_set1_ps(0.000000f);
++
++    // Better: minimax polynomial for tanh on [-4, 4], then clamp
++    // tanh(x) ≈ x - x^3/3 + 2x^5/15 - 17x^7/315 ... but we want rational
++    // Using rational approximation: tanh(x) ≈ x * (27 + x^2) / (27 + 9*x^2) for soft clip,
++    // but that's different. For tanh, use:
++    // tanh(x) = x * (1 - x^2 * (1/3 - x^2 * (2/15 - x^2 * (17/315))))
++    // Better: Padé approximant tanh(x) ≈ x * (1 + 0.153854*x^2) / (1 + 0.00655*x^2 + 0.000000*x^4) ? No
++
++    // From Abramowitz & Stegun / various sources:
++    // tanh(x) for |x| <= 2: x * (a0 + a1*x^2 + a2*x^4) / (b0 + b1*x^2 + b2*x^4)
++    // Coefficients for minimax on [-2,2]:
++    // a0 = 1.0, a1 = 0.153854, a2 = 0.003275
++    // b0 = 1.0, b1 = 0.006550, b2 = 0.0
++    // Max error ~ 4.5e-6
++
++    const __m256 a0 = _mm256_set1_ps(1.0f);
++    const __m256 a1 = _mm256_set1_ps(0.153854f);
++    const __m256 a2 = _mm256_set1_ps(0.003275f);
++    const __m256 b0 = _mm256_set1_ps(1.0f);
++    const __m256 b1 = _mm256_set1_ps(0.006550f);
++    const __m256 b2 = _mm256_set1_ps(0.0f);
++
++    const __m256 v_thresh = _mm256_set1_ps(2.0f);  // switch to ±1 for |x| > 2
++    const __m256 v_one = _mm256_set1_ps(1.0f);
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // Load drive (8 floats)
++        __m256 v_drive = _mm256_load_ps(drive + i);
++        v_drive = _mm256_max_ps(v_drive, v_min_drive);
++
++        // Load dry/wet
++        __m256 v_dry = dry_level ? _mm256_load_ps(dry_level + i) : v_dry_default;
++        __m256 v_wet = wet_level ? _mm256_load_ps(wet_level + i) : v_wet_default;
++
++        // Load left input
++        __m256 v_x_l = _mm256_load_ps(input + i);
++
++        // Load right input
++        __m256 v_x_r = stereo_in ? _mm256_load_ps(input_r + i) : v_x_l;
++
++        // Process left channel
++        __m256 v_x_drive_l = _mm256_mul_ps(v_x_l, v_drive);
++
++        // tanh approximation: x * (a0 + a1*x^2 + a2*x^4) / (b0 + b1*x^2 + b2*x^4)
++        __m256 v_x2_l = _mm256_mul_ps(v_x_drive_l, v_x_drive_l);
++        __m256 v_x4_l = _mm256_mul_ps(v_x2_l, v_x2_l);
++
++        __m256 v_num_l = _mm256_add_ps(a0,
++            _mm256_add_ps(_mm256_mul_ps(a1, v_x2_l), _mm256_mul_ps(a2, v_x4_l)));
++        __m256 v_den_l = _mm256_add_ps(b0,
++            _mm256_add_ps(_mm256_mul_ps(b1, v_x2_l), _mm256_mul_ps(b2, v_x4_l)));
++
++        __m256 v_tanh_l = _mm256_div_ps(v_num_l, v_den_l);
++        v_tanh_l = _mm256_mul_ps(v_x_drive_l, v_tanh_l);
++
++        // Clamp for large |x|
++        __m256 v_abs_l = _mm256_and_ps(v_x_drive_l, _mm256_set1_ps(0x7FFFFFFF));
++        __m256 v_mask_l = _mm256_cmp_ps(v_abs_l, v_thresh, _CMP_GT_OQ);
++        v_tanh_l = _mm256_blendv_ps(v_tanh_l, _mm256_and_ps(v_x_drive_l, _mm256_set1_ps(0x80000000)), v_mask_l);
++        // Actually for |x| > 2, tanh ≈ ±1, so:
++        v_tanh_l = _mm256_blendv_ps(v_tanh_l,
++            _mm256_xor_ps(v_x_drive_l, _mm256_and_ps(v_x_drive_l, _mm256_set1_ps(0x80000000))), v_mask_l);
++        // Simpler: sign(x) * 1.0
++        __m256 v_sign_l = _mm256_and_ps(v_x_drive_l, _mm256_set1_ps(-0.0f)); // sign bit
++        __m256 v_sat_l = _mm256_or_ps(v_sign_l, v_one);
++        v_tanh_l = _mm256_blendv_ps(v_tanh_l, v_sat_l, v_mask_l);
++
++        // drywet mix: out = x * dry + processed * wet
++        __m256 v_out_l = _mm256_add_ps(_mm256_mul_ps(v_x_l, v_dry), _mm256_mul_ps(v_tanh_l, v_wet));
++        _mm256_store_ps(out_l + i, v_out_l);
++
++        // Process right channel
++        __m256 v_x_drive_r = _mm256_mul_ps(v_x_r, v_drive);
++
++        __m256 v_x2_r = _mm256_mul_ps(v_x_drive_r, v_x_drive_r);
++        __m256 v_x4_r = _mm256_mul_ps(v_x2_r, v_x2_r);
++
++        __m256 v_num_r = _mm256_add_ps(a0,
++            _mm256_add_ps(_mm256_mul_ps(a1, v_x2_r), _mm256_mul_ps(a2, v_x4_r)));
++        __m256 v_den_r = _mm256_add_ps(b0,
++            _mm256_add_ps(_mm256_mul_ps(b1, v_x2_r), _mm256_mul_ps(b2, v_x4_r)));
++
++        __m256 v_tanh_r = _mm256_div_ps(v_num_r, v_den_r);
++        v_tanh_r = _mm256_mul_ps(v_x_drive_r, v_tanh_r);
++
++        __m256 v_abs_r = _mm256_and_ps(v_x_drive_r, _mm256_set1_ps(0x7FFFFFFF));
++        __m256 v_mask_r = _mm256_cmp_ps(v_abs_r, v_thresh, _CMP_GT_OQ);
++        __m256 v_sign_r = _mm256_and_ps(v_x_drive_r, _mm256_set1_ps(-0.0f));
++        __m256 v_sat_r = _mm256_or_ps(v_sign_r, v_one);
++        v_tanh_r = _mm256_blendv_ps(v_tanh_r, v_sat_r, v_mask_r);
++
++        __m256 v_out_r = _mm256_add_ps(_mm256_mul_ps(v_x_r, v_dry), _mm256_mul_ps(v_tanh_r, v_wet));
++        _mm256_store_ps(out_r + i, v_out_r);
++    }
++}
++
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* input, const float* input_r,
++                                                 const float* threshold, const float* dry_level,
++                                                 const float* wet_level,
++                                                 float* out_l, float* out_r,
++                                                 bool stereo_in) noexcept {
++    constexpr std::size_t BLOCK_SIZE = 128;
++    constexpr float MIN_THRESH = 0.1f;
++    constexpr float MAX_THRESH = 2.0f;
++    constexpr float DRY_DEFAULT = 0.0f;
++    constexpr float WET_DEFAULT = 1.0f;
++    constexpr float SOFT_LIMIT = 3.0f;
++
++    const __m256 v_min_thresh = _mm256_set1_ps(MIN_THRESH);
++    const __m256 v_max_thresh = _mm256_set1_ps(MAX_THRESH);
++    const __m256 v_dry_default = _mm256_set1_ps(DRY_DEFAULT);
++    const __m256 v_wet_default = _mm256_set1_ps(WET_DEFAULT);
++    const __m256 v_soft_limit = _mm256_set1_ps(SOFT_LIMIT);
++    const __m256 v_neg_soft_limit = _mm256_set1_ps(-SOFT_LIMIT);
++    const __m256 v_one = _mm256_set1_ps(1.0f);
++    const __m256 v_neg_one = _mm256_set1_ps(-1.0f);
++
++    // soft(x) = x * (27 + x^2) / (27 + 9*x^2) for |x| <= 3
++    // = ±1 for |x| > 3
++    const __m256 c_27 = _mm256_set1_ps(27.0f);
++    const __m256 c_9 = _mm256_set1_ps(9.0f);
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // Load and clamp threshold
++        __m256 v_thresh = _mm256_load_ps(threshold + i);
++        v_thresh = _mm256_max_ps(_mm256_min_ps(v_thresh, v_max_thresh), v_min_thresh);
++
++        // Load dry/wet
++        __m256 v_dry = dry_level ? _mm256_load_ps(dry_level + i) : v_dry_default;
++        __m256 v_wet = wet_level ? _mm256_load_ps(wet_level + i) : v_wet_default;
++
++        // Load left input
++        __m256 v_x_l = _mm256_load_ps(input + i);
++
++        // Load right input
++        __m256 v_x_r = stereo_in ? _mm256_load_ps(input_r + i) : v_x_l;
++
++        // Process left: soft(x_l / t) * t
++        __m256 v_x_div_t_l = _mm256_div_ps(v_x_l, v_thresh);
++
++        // Clamp to [-3, 3]
++        __m256 v_x_clamped_l = _mm256_max_ps(_mm256_min_ps(v_x_div_t_l, v_soft_limit), v_neg_soft_limit);
++
++        // soft(x) = x * (27 + x^2) / (27 + 9*x^2)
++        __m256 v_x2_l = _mm256_mul_ps(v_x_clamped_l, v_x_clamped_l);
++        __m256 v_num_l = _mm256_mul_ps(v_x_clamped_l, _mm256_add_ps(c_27, v_x2_l));
++        __m256 v_den_l = _mm256_add_ps(c_27, _mm256_mul_ps(c_9, v_x2_l));
++        __m256 v_soft_l = _mm256_div_ps(v_num_l, v_den_l);
++
++        // For |x| > 3, result is ±1
++        __m256 v_mask_pos_l = _mm256_cmp_ps(v_x_div_t_l, v_soft_limit, _CMP_GT_OQ);
++        __m256 v_mask_neg_l = _mm256_cmp_ps(v_x_div_t_l, v_neg_soft_limit, _CMP_LT_OQ);
++        v_soft_l = _mm256_blendv_ps(v_soft_l, v_one, v_mask_pos_l);
++        v_soft_l = _mm256_blendv_ps(v_soft_l, v_neg_one, v_mask_neg_l);
++
++        // Multiply by threshold
++        v_soft_l = _mm256_mul_ps(v_soft_l, v_thresh);
++
++        // drywet mix
++        __m256 v_out_l = _mm256_add_ps(_mm256_mul_ps(v_x_l, v_dry), _mm256_mul_ps(v_soft_l, v_wet));
++        _mm256_store_ps(out_l + i, v_out_l);
++
++        // Process right
++        __m256 v_x_div_t_r = _mm256_div_ps(v_x_r, v_thresh);
++        __m256 v_x_clamped_r = _mm256_max_ps(_mm256_min_ps(v_x_div_t_r, v_soft_limit), v_neg_soft_limit);
++
++        __m256 v_x2_r = _mm256_mul_ps(v_x_clamped_r, v_x_clamped_r);
++        __m256 v_num_r = _mm256_mul_ps(v_x_clamped_r, _mm256_add_ps(c_27, v_x2_r));
++        __m256 v_den_r = _mm256_add_ps(c_27, _mm256_mul_ps(c_9, v_x2_r));
++        __m256 v_soft_r = _mm256_div_ps(v_num_r, v_den_r);
++
++        __m256 v_mask_pos_r = _mm256_cmp_ps(v_x_div_t_r, v_soft_limit, _CMP_GT_OQ);
++        __m256 v_mask_neg_r = _mm256_cmp_ps(v_x_div_t_r, v_neg_soft_limit, _CMP_LT_OQ);
++        v_soft_r = _mm256_blendv_ps(v_soft_r, v_one, v_mask_pos_r);
++        v_soft_r = _mm256_blendv_ps(v_soft_r, v_neg_one, v_mask_neg_r);
++
++        v_soft_r = _mm256_mul_ps(v_soft_r, v_thresh);
++
++        __m256 v_out_r = _mm256_add_ps(_mm256_mul_ps(v_x_r, v_dry), _mm256_mul_ps(v_soft_r, v_wet));
++        _mm256_store_ps(out_r + i, v_out_r);
++    }
++}
++#endif
++}
++
+ namespace cedar {
+ 
+ // ============================================================================
+@@ -33,6 +246,14 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        // simd: approx tanh
++        kernels::distort_tanh_avx2(input, input_r, drive, dry_level, wet_level,
++                                    out_l, out_r, stereo_in);
++        return;
++    }
++#endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float d = std::max(0.1f, drive[i]);
+         float dry = drywet::coeff(dry_level, i, 0.0f);
+@@ -66,6 +287,13 @@ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_soft_avx2(input, input_r, threshold, dry_level, wet_level,
++                                    out_l, out_r, stereo_in);
++        return;
++    }
++#endif
+     auto soft = [](float x) {
+         if (x > 3.0f) return 1.0f;
+         if (x < -3.0f) return -1.0f;

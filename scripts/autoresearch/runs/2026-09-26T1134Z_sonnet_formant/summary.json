@@ -1,0 +1,25 @@
+{
+  "run_id": "2026-09-26T1134Z_sonnet_formant",
+  "provider": "claude-code",
+  "model": "sonnet (claude-sonnet-5)",
+  "target": "formant",
+  "iterations": 8,
+  "accepts": 8,
+  "rejects": 0,
+  "reject_reasons": {},
+  "first_accept_iteration": 1,
+  "best_speedup": 5.964,
+  "tokens": {
+    "input": 3383605,
+    "output": 207228,
+    "cached": 2982975
+  },
+  "cost_usd": 4.271,
+  "wall_clock_s": 3147.6,
+  "gpu_s": null,
+  "active_s": 2481.5,
+  "unstable_iterations": 7,
+  "status": "complete",
+  "branch": "autoresearch/sonnet-formant-202609261134",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

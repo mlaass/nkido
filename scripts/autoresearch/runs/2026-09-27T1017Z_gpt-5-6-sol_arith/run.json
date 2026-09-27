@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-27T1017Z_gpt-5-6-sol_arith",
+  "target": "arith",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315",
+  "branch": "autoresearch/gpt-5-6-sol-arith-202609271017",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-27T1017Z_gpt-5-6-sol_arith/check.sh",
+  "model": "gpt-5.6-sol",
+  "provider": "codex",
+  "iterations": 8,
+  "budget_usd": 20.0
+}

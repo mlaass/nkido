@@ -1,0 +1,50 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0bc8234..0c50800 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -219,22 +219,30 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         }
+ 
+         // Comb recurrences (same per-lane op order as scalar), lanes interleaved.
++        // d[ch][k] receives the DC-blocker output; x + fb * o is applied after
++        // the back-transpose, where fb/x are per-sample 128-bit broadcasts.
+         for (std::size_t k = 0; k < 8; ++k) {
+             const __m256 dmp = _mm256_broadcast_ss(damp_a + i + k);
+             const __m256 omd = _mm256_broadcast_ss(omd_a + i + k);
+-            const __m256 fb = _mm256_broadcast_ss(fb_a + i + k);
+             fs0 = _mm256_add_ps(_mm256_mul_ps(d[0][k], omd), _mm256_mul_ps(fs0, dmp));
+             fs1 = _mm256_add_ps(_mm256_mul_ps(d[1][k], omd), _mm256_mul_ps(fs1, dmp));
+             __m256 o0 = _mm256_add_ps(_mm256_sub_ps(fs0, x10), _mm256_mul_ps(R, y10));
+             __m256 o1 = _mm256_add_ps(_mm256_sub_ps(fs1, x11), _mm256_mul_ps(R, y11));
+             x10 = fs0; x11 = fs1;
+             y10 = o0; y11 = o1;
+-            d[0][k] = _mm256_add_ps(_mm256_broadcast_ss(x_l + i + k), _mm256_mul_ps(fb, o0));
+-            d[1][k] = _mm256_add_ps(_mm256_broadcast_ss(x_r + i + k), _mm256_mul_ps(fb, o1));
++            d[0][k] = o0;
++            d[1][k] = o1;
+         }
+ 
+-        // Transpose back and write the comb inputs into the rings.
++        // Transpose back, form the comb inputs and write them into the rings.
++        // After the transpose lo[j] = [comb j | comb j+4] at samples 0..3 and
++        // hi[j] likewise at samples 4..7.
++        const __m256 fb_lo = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(fb_a + i));
++        const __m256 fb_hi = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(fb_a + i + 4));
+         for (std::size_t ch = 0; ch < 2; ++ch) {
++            const float* xin = ch == 0 ? x_l : x_r;
++            const __m256 x_lo = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(xin + i));
++            const __m256 x_hi = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(xin + i + 4));
+             __m256 lo[4], hi[4];
+             for (std::size_t k = 0; k < 4; ++k) {
+                 lo[k] = d[ch][k];
+@@ -242,6 +250,10 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+             }
+             transpose4x4_lanes_avx2(lo);
+             transpose4x4_lanes_avx2(hi);
++            for (std::size_t j = 0; j < 4; ++j) {
++                lo[j] = _mm256_add_ps(x_lo, _mm256_mul_ps(fb_lo, lo[j]));
++                hi[j] = _mm256_add_ps(x_hi, _mm256_mul_ps(fb_hi, hi[j]));
++            }
+             float* dst[NC];
+             for (std::size_t c = 0; c < NC; ++c)
+                 dst[c] = (sm & (1u << (ch * NC + c))) ? wrap_out[c] : cbase[ch][c] + i;

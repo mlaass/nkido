@@ -1,0 +1,80 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 15b2030..ff2f061 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -52,10 +52,10 @@ namespace freeverb_kernels {
+ 
+ // Same semantics as std::clamp(v, 0, 1): NaN and -0 pass through.
+ [[gnu::always_inline]] CEDAR_TARGET_AVX2 inline __m256 clamp01_ps(__m256 v) noexcept {
+-    const __m256 hi = _mm256_blendv_ps(v, _mm256_set1_ps(1.0f),
+-                                       _mm256_cmp_ps(_mm256_set1_ps(1.0f), v, _CMP_LT_OQ));
+-    return _mm256_blendv_ps(hi, _mm256_setzero_ps(),
+-                            _mm256_cmp_ps(v, _mm256_setzero_ps(), _CMP_LT_OQ));
++    // maxps(a, b) = a > b ? a : b and minps(a, b) = a < b ? a : b return the
++    // second operand for NaN and equal inputs, so with v second they pick
++    // exactly (v < 0 ? 0 : v) and (1 < v ? 1 : v) as std::clamp does.
++    return _mm256_min_ps(_mm256_set1_ps(1.0f), _mm256_max_ps(_mm256_setzero_ps(), v));
+ }
+ 
+ // One allpass stage over a contiguous run of the delay line. y holds the stage
+@@ -71,12 +71,16 @@ CEDAR_TARGET_AVX2 inline void allpass_run(float* p, float* y, std::size_t len) n
+         _mm256_storeu_ps(p + j, _mm256_add_ps(yy, _mm256_mul_ps(g, o)));
+         _mm256_storeu_ps(y + j, o);
+     }
+-    for (; j < len; ++j) {
+-        const float d = p[j];
+-        const float yy = y[j];
+-        const float o = d - 0.5f * yy;
+-        p[j] = yy + 0.5f * o;
+-        y[j] = o;
++    if (j < len) {
++        // Ragged tail (window wraps the delay line): masked lanes neither
++        // read nor write, so the surviving lanes match the scalar result.
++        const __m256i m = _mm256_cmpgt_epi32(_mm256_set1_epi32(static_cast<int>(len - j)),
++                                             _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7));
++        const __m256 d = _mm256_maskload_ps(p + j, m);
++        const __m256 yy = _mm256_maskload_ps(y + j, m);
++        const __m256 o = _mm256_sub_ps(d, _mm256_mul_ps(g, yy));
++        _mm256_maskstore_ps(p + j, m, _mm256_add_ps(yy, _mm256_mul_ps(g, o)));
++        _mm256_maskstore_ps(y + j, m, o);
+     }
+ }
+ 
+@@ -142,10 +146,12 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     }
+ 
+     const __m256 rv = _mm256_set1_ps(DC_BLOCKER_R);
+-    __m256 fs[2], x1[2], y1[2];
++    // The DC blocker's x1 always equals the previous lowpass state (both are
++    // written from the same value every sample), so only fs and y1 stay live
++    // in registers; the 16 YMM registers are otherwise oversubscribed.
++    __m256 fs[2], y1[2];
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         fs[ch] = _mm256_loadu_ps(st.comb_filter_state[ch]);
+-        x1[ch] = _mm256_loadu_ps(st.dc_x1[ch]);
+         y1[ch] = _mm256_loadu_ps(st.dc_y1[ch]);
+     }
+     const float* xin[2] = {in_l, in_r};
+@@ -175,10 +181,10 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+                 const __m256 bf = _mm256_broadcast_ss(fb + nh + t);
+                 for (std::size_t ch = 0; ch < 2; ++ch) {
+                     const __m256 x = _mm256_broadcast_ss(xin[ch] + nh + t);
+-                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
+-                    const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
++                    const __m256 fprev = fs[ch];
++                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fprev, bd));
++                    const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], fprev),
+                                                         _mm256_mul_ps(rv, y1[ch]));
+-                    x1[ch] = fs[ch];
+                     y1[ch] = dc_out;
+                     v[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
+                 }
+@@ -195,7 +201,7 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+ 
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         _mm256_storeu_ps(st.comb_filter_state[ch], fs[ch]);
+-        _mm256_storeu_ps(st.dc_x1[ch], x1[ch]);
++        _mm256_storeu_ps(st.dc_x1[ch], fs[ch]);
+         _mm256_storeu_ps(st.dc_y1[ch], y1[ch]);
+     }
+ 

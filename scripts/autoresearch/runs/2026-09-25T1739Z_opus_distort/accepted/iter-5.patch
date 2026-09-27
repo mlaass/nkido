@@ -1,0 +1,67 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index d896c22..99d2bef 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -14,29 +14,43 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+-// simd: approx tanh — tanh(y) = 1 - 2 / (1 + e^(2y)) on y clamped to +-9.
+-// e^(2y) = 2^n * 2^f with n = round(2y*log2e) via the 1.5*2^23 magic add (the
+-// low mantissa bits of the sum are n + 127, shifted straight into the exponent)
+-// and 2^f, |f| <= 0.5, from a Chebyshev-economised degree-4 Taylor polynomial
+-// (relative error < 8e-6). The absolute tanh error is at most half the relative
+-// error of e^(2y), so < 4e-6 everywhere; the formula is valid for both signs.
++// simd: approx tanh — evaluated on a = |y| as tanh(a) = 2 / (1 + e^(-2a)) - 1
++// with the sign of y xored back in, so only one clamp is needed. The absolute
++// tanh error is at most half the relative error of e^(-2a). e^(-2a) = 2^(k/8) * 2^f with
++// k = round(-2a*log2e*8) via the 1.5*2^20 magic add, |f| <= 1/16: 2^(j/8),
++// j = k & 7, comes from an 8-entry vpermps table (vpermps only reads the low 3
++// index bits) whose entries have j<<20 pre-subtracted, so adding k<<20 as an
++// integer both cancels that and adds floor(k/8) to the exponent. 2^f is a
++// Chebyshev-economised quadratic (relative error < 3.5e-6), so the absolute
++// tanh error is < 2e-6.
+ CEDAR_TARGET_AVX2 inline __m256 tanh_approx_avx2(__m256 y) noexcept {
+-    // min/max with the constant first return y when y is NaN, so NaN propagates
+-    const __m256 x = _mm256_max_ps(_mm256_set1_ps(-9.0f),
+-                                   _mm256_min_ps(_mm256_set1_ps(9.0f), y));
+-    const __m256 t = _mm256_mul_ps(x, _mm256_set1_ps(2.88539008177792681f));  // 2*log2(e)
+-    const __m256 magic = _mm256_set1_ps(12583039.0f);  // 1.5 * 2^23 + 127
++    const __m256 sign_mask = _mm256_set1_ps(-0.0f);
++    const __m256 sign = _mm256_and_ps(y, sign_mask);
++    const __m256 a = _mm256_andnot_ps(sign_mask, y);
++    // e^(-240) already makes the result round to 1; max with the constant first
++    // returns the product when it is NaN, so NaN propagates
++    const __m256 t = _mm256_max_ps(_mm256_set1_ps(-120.0f),
++                                   _mm256_mul_ps(a, _mm256_set1_ps(-2.88539008177792681f)));
++    const __m256 magic = _mm256_set1_ps(1572864.0f);  // 1.5 * 2^20: rounds t to 1/8
+     const __m256 s = _mm256_add_ps(t, magic);
+     const __m256 f = _mm256_sub_ps(t, _mm256_sub_ps(s, magic));
+-    __m256 p = _mm256_set1_ps(9.61812910762847716e-03f);
+-    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(5.59208190e-02f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(2.40226506959100712e-01f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(6.93121138e-01f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, f), _mm256_set1_ps(1.0f));
+-    const __m256 pow2n = _mm256_castsi256_ps(_mm256_slli_epi32(_mm256_castps_si256(s), 23));
+-    const __m256 e = _mm256_mul_ps(p, pow2n);
++    const __m256i k = _mm256_castps_si256(s);  // low bits hold k = round(8t)
++    const __m256i table = _mm256_sub_epi32(
++        _mm256_castps_si256(_mm256_setr_ps(1.0f, 1.0905077326652577f, 1.1892071150027210f,
++                                           1.2968395546510096f, 1.4142135623730951f,
++                                           1.5422108254079407f, 1.6817928305074290f,
++                                           1.8340080864093424f)),
++        _mm256_setr_epi32(0, 1 << 20, 2 << 20, 3 << 20, 4 << 20, 5 << 20, 6 << 20, 7 << 20));
++    const __m256 pow2 = _mm256_castsi256_ps(_mm256_add_epi32(
++        _mm256_castps_si256(_mm256_permutevar8x32_ps(_mm256_castsi256_ps(table), k)),
++        _mm256_slli_epi32(k, 20)));
++    __m256 p = _mm256_add_ps(_mm256_mul_ps(_mm256_set1_ps(2.402640778e-01f), f),
++                             _mm256_set1_ps(6.933097903e-01f));
+     const __m256 one = _mm256_set1_ps(1.0f);
+-    return _mm256_sub_ps(one, _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(one, e)));
++    p = _mm256_add_ps(_mm256_mul_ps(p, f), one);
++    const __m256 e = _mm256_mul_ps(p, pow2);
++    const __m256 r = _mm256_sub_ps(_mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(one, e)), one);
++    return _mm256_xor_ps(r, sign);
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,

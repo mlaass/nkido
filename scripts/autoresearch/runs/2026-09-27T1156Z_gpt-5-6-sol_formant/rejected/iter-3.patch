@@ -1,0 +1,62 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index ea9c77f..a63ba19 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -463,7 +463,6 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         const auto& w = ext->params[1];
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+-    alignas(32) float q_values[BLOCK_SIZE];
+     alignas(32) float q_coefs[BLOCK_SIZE];
+     alignas(32) float va_values[BLOCK_SIZE];
+     alignas(32) float vb_values[BLOCK_SIZE];
+@@ -475,12 +474,13 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+     const __m256 zero = _mm256_setzero_ps();
+     const __m256 four = _mm256_set1_ps(4.0f);
+     const __m256 one = _mm256_set1_ps(1.0f);
++    __m256 last_qs = one;
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         __m256 original = _mm256_load_ps(q_in + i);
+         __m256 clamped = _mm256_min_ps(q_max, _mm256_max_ps(q_min, original));
+         __m256 unordered = _mm256_cmp_ps(original, original, _CMP_UNORD_Q);
+         clamped = _mm256_blendv_ps(clamped, original, unordered);
+-        _mm256_store_ps(q_values + i, clamped);
++        last_qs = clamped;
+         _mm256_store_ps(q_coefs + i, _mm256_div_ps(one, clamped));
+ 
+         __m256 va = _mm256_load_ps(vowel_a + i);
+@@ -499,19 +499,22 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+                                       _mm256_cmp_ps(mv, mv, _CMP_UNORD_Q));
+         _mm256_store_ps(morph_values + i, mv_clamped);
+     }
++    alignas(32) float final_q_values[8];
++    _mm256_store_ps(final_q_values, last_qs);
++    state.last_q = final_q_values[7];
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float va = va_values[i];
+         float vb = vb_values[i];
+         float m = morph_values[i];
+-        float q = q_values[i];
+ 
+-        if (va != state.last_vowel_a || vb != state.last_vowel_b ||
+-            m != state.last_morph || q != state.last_q) {
++        const bool formants_changed = va != state.last_vowel_a ||
++                                      vb != state.last_vowel_b ||
++                                      m != state.last_morph;
++        if (formants_changed) {
+             state.last_vowel_a = va;
+             state.last_vowel_b = vb;
+             state.last_morph = m;
+-            state.last_q = q;
+ 
+             int idx_a = static_cast<int>(va);
+             int idx_b = static_cast<int>(vb);
+@@ -541,7 +544,6 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+             state.f1 = values[0]; state.f2 = values[1]; state.f3 = values[2];
+             state.g1 = values[3]; state.g2 = values[4]; state.g3 = values[5];
+         }
+-
+         auto prewarp_coef = [&](float freq) -> float {
+             float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
+             return std::min(1.9f, 2.0f * std::tan(w));

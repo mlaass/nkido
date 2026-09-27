@@ -1,0 +1,26 @@
+{
+  "run_id": "2026-09-24T1443Z_sonnet_arith",
+  "model": "sonnet",
+  "provider": "claude-code",
+  "target": "arith",
+  "iterations": 2,
+  "accepts": 1,
+  "rejects": 1,
+  "reject_reasons": {
+    "speed": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 1.314,
+  "tokens": {
+    "input": 87012,
+    "output": 3044,
+    "cached": 54850
+  },
+  "cost_usd": 0.17,
+  "wall_clock_s": 48.4,
+  "gpu_s": null,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/sonnet-arith-202609241443",
+  "base_rev": "d29a6483f206116ba1d2b4b526da932479df40a9"
+}

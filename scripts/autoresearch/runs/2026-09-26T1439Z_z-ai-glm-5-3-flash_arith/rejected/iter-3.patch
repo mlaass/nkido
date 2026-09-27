@@ -1,0 +1,73 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index dc2804a..70ad94d 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,17 +10,59 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+-CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++// One block = 128 floats = 16 AVX2 vectors of trivially parallel work. What is
++// left to shave after the vectoriser-independent kernels of attempt 1 is loop
++// bookkeeping (the 16-iteration form is not unrolled by GCC) and the
++// load/store serialisation across iterations: without a proven no-alias
++// guarantee between `out` and `a`/`b`, GCC must keep iteration k+1's loads
++// behind iteration k's stores. __restrict removes both. Two vectors per
++// iteration, unrolled to straight-line code: no increment/test/branch µops,
++// loads scheduled freely ahead of the stores. Buffers are 32-byte aligned
++// (BufferPool slabs), so aligned loads/stores are valid for the whole block.
++CEDAR_TARGET_AVX2 inline void add_avx2(const float* __restrict a, const float* __restrict b,
++                                       float* __restrict out) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++#pragma GCC unroll 8
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
++        const __m256 a0 = _mm256_load_ps(a + i);
++        const __m256 b0 = _mm256_load_ps(b + i);
++        const __m256 a1 = _mm256_load_ps(a + i + 8);
++        const __m256 b1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i,     _mm256_add_ps(a0, b0));
++        _mm256_store_ps(out + i + 8, _mm256_add_ps(a1, b1));
++    }
+ }
+-CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++CEDAR_TARGET_AVX2 inline void sub_avx2(const float* __restrict a, const float* __restrict b,
++                                       float* __restrict out) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++#pragma GCC unroll 8
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
++        const __m256 a0 = _mm256_load_ps(a + i);
++        const __m256 b0 = _mm256_load_ps(b + i);
++        const __m256 a1 = _mm256_load_ps(a + i + 8);
++        const __m256 b1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i,     _mm256_sub_ps(a0, b0));
++        _mm256_store_ps(out + i + 8, _mm256_sub_ps(a1, b1));
++    }
+ }
+-CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++CEDAR_TARGET_AVX2 inline void mul_avx2(const float* __restrict a, const float* __restrict b,
++                                       float* __restrict out) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++#pragma GCC unroll 8
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
++        const __m256 a0 = _mm256_load_ps(a + i);
++        const __m256 b0 = _mm256_load_ps(b + i);
++        const __m256 a1 = _mm256_load_ps(a + i + 8);
++        const __m256 b1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i,     _mm256_mul_ps(a0, b0));
++        _mm256_store_ps(out + i + 8, _mm256_mul_ps(a1, b1));
++    }
+ }
+ #endif
+ }  // namespace kernels

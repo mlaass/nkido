@@ -1,0 +1,43 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index e1cd5f5..48a1dcc 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -97,9 +97,9 @@ inline void mul_wasm(const float* a, const float* b, float* out) noexcept {
+ // ADD: out = in0 + in1
+ [[gnu::always_inline]]
+ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+-    float* out = ctx.buffers->get(inst.out_buffer);
+-    const float* a = ctx.buffers->get(inst.inputs[0]);
+-    const float* b = ctx.buffers->get(inst.inputs[1]);
++    float* out = static_cast<float*>(__builtin_assume_aligned(ctx.buffers->get(inst.out_buffer), 32));
++    const float* a = static_cast<const float*>(__builtin_assume_aligned(ctx.buffers->get(inst.inputs[0]), 32));
++    const float* b = static_cast<const float*>(__builtin_assume_aligned(ctx.buffers->get(inst.inputs[1]), 32));
+ 
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) { kernels::add_avx2(a, b, out); return; }
+@@ -118,9 +118,9 @@ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+ // SUB: out = in0 - in1
+ [[gnu::always_inline]]
+ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+-    float* out = ctx.buffers->get(inst.out_buffer);
+-    const float* a = ctx.buffers->get(inst.inputs[0]);
+-    const float* b = ctx.buffers->get(inst.inputs[1]);
++    float* out = static_cast<float*>(__builtin_assume_aligned(ctx.buffers->get(inst.out_buffer), 32));
++    const float* a = static_cast<const float*>(__builtin_assume_aligned(ctx.buffers->get(inst.inputs[0]), 32));
++    const float* b = static_cast<const float*>(__builtin_assume_aligned(ctx.buffers->get(inst.inputs[1]), 32));
+ 
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) { kernels::sub_avx2(a, b, out); return; }
+@@ -139,9 +139,9 @@ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+ // MUL: out = in0 * in1
+ [[gnu::always_inline]]
+ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
+-    float* out = ctx.buffers->get(inst.out_buffer);
+-    const float* a = ctx.buffers->get(inst.inputs[0]);
+-    const float* b = ctx.buffers->get(inst.inputs[1]);
++    float* out = static_cast<float*>(__builtin_assume_aligned(ctx.buffers->get(inst.out_buffer), 32));
++    const float* a = static_cast<const float*>(__builtin_assume_aligned(ctx.buffers->get(inst.inputs[0]), 32));
++    const float* b = static_cast<const float*>(__builtin_assume_aligned(ctx.buffers->get(inst.inputs[1]), 32));
+ 
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) { kernels::mul_avx2(a, b, out); return; }

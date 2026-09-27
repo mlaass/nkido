@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-26T2159Z_qwen-qwen3-8-27b_freeverb",
+  "target": "freeverb",
+  "base_rev": "d5afd067a4dde71d81028b8c2a1d4b866ae761e5",
+  "branch": "autoresearch/qwen-qwen3-8-27b-freeverb-202609262159",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-26T2159Z_qwen-qwen3-8-27b_freeverb/check.sh",
+  "model": "qwen/qwen3.8-27b",
+  "provider": "openrouter",
+  "iterations": 8,
+  "budget_usd": 6.0
+}

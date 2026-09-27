@@ -1,0 +1,29 @@
+{
+  "run_id": "2026-09-27T1226Z_gpt-reserve_svf",
+  "provider": "codex",
+  "model": "gpt-reserve (gpt-reserve)",
+  "target": "svf",
+  "iterations": 8,
+  "accepts": 1,
+  "rejects": 7,
+  "reject_reasons": {
+    "speed": 5,
+    "empty patch": 1,
+    "equality": 1
+  },
+  "first_accept_iteration": 4,
+  "best_speedup": 1.066,
+  "tokens": {
+    "input": 3210085,
+    "output": 51583,
+    "cached": 2834944
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2051.4,
+  "gpu_s": null,
+  "active_s": 1348.3,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/gpt-reserve-svf-202609271226",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

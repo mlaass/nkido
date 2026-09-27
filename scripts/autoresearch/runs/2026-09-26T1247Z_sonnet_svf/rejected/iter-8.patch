@@ -1,0 +1,63 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index a483c60..0445594 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -265,6 +265,11 @@ CEDAR_TARGET_AVX2_FMA inline bool svf_recur2c_avx2(const float* xlr, __m128 a, _
+     return (_mm_movemask_ps(_mm_cmpnle_ps(mx, lim_hi)) | _mm_movemask_ps(_mm_cmpunord_ps(s, s))) != 0;
+ }
+ 
++CEDAR_TARGET_AVX2 inline float svf_lane7_avx2(__m256 v) noexcept {
++    const __m128 hi = _mm256_extractf128_ps(v, 1);
++    return _mm_cvtss_f32(_mm_shuffle_ps(hi, hi, 3));
++}
++
+ template <int Mode>
+ CEDAR_TARGET_AVX2_FMA inline void svf_avx2(const float* in_l, const float* in_r,
+                                        const float* freq, const float* q,
+@@ -300,6 +305,8 @@ CEDAR_TARGET_AVX2_FMA inline void svf_avx2(const float* in_l, const float* in_r,
+     const float s2l = state.ic2eq[0], s2r = state.ic2eq[1];
+     __m128 s = _mm_setr_ps(s1l, s1r, s2l, s2r);
+     bool clipped;
++    // Coefficients of the last sample, kept for the state's coefficient cache.
++    __m256 g_last, k_last, a1_last;
+ 
+     if (svf_params_const_avx2(freq, q)) {
+         // Constant freq/q: one set of coefficients for the whole block (same math as pass 1).
+@@ -317,6 +324,9 @@ CEDAR_TARGET_AVX2_FMA inline void svf_avx2(const float* in_l, const float* in_r,
+         const __m256 m11v = _mm256_sub_ps(_mm256_mul_ps(two8, a1v), one);
+         const __m256 A2v = _mm256_mul_ps(two8, a2v);
+         const __m256 m22v = _mm256_sub_ps(one, A3v);
++        g_last = g;
++        k_last = k;
++        a1_last = a1v;
+         for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+             const __m256 xl = _mm256_load_ps(in_l + i);
+             const __m256 xr = _mm256_load_ps(in_r + i);
+@@ -356,6 +366,9 @@ CEDAR_TARGET_AVX2_FMA inline void svf_avx2(const float* in_l, const float* in_r,
+             const __m256 A3v = _mm256_mul_ps(two8, a3v);
+             const __m256 m11v = _mm256_sub_ps(_mm256_mul_ps(two8, a1v), one);
+             const __m256 A2v = _mm256_mul_ps(two8, a2v);
++            g_last = g;
++            k_last = k;
++            a1_last = a1v;
+             _mm256_store_ps(m11 + i, m11v);
+             _mm256_store_ps(A2 + i, A2v);
+             _mm256_store_ps(m22 + i, _mm256_sub_ps(one, A3v));
+@@ -476,8 +489,15 @@ CEDAR_TARGET_AVX2_FMA inline void svf_avx2(const float* in_l, const float* in_r,
+         }
+     }
+ 
+-    // Leave the cached coefficients as the scalar path would after the last sample.
+-    calc_svf(state, freq[BLOCK_SIZE - 1], q[BLOCK_SIZE - 1], sample_rate);
++    // Leave the cached coefficients as the scalar path would after the last sample. They come
++    // from the last lane of the vector coefficient pass (same formulas, so no libm tan/divides).
++    state.last_freq = std::max(0.0f, freq[BLOCK_SIZE - 1]);
++    state.last_q = q[BLOCK_SIZE - 1];
++    state.g = svf_lane7_avx2(g_last);
++    state.k = svf_lane7_avx2(k_last);
++    state.a1 = svf_lane7_avx2(a1_last);
++    state.a2 = state.g * state.a1;
++    state.a3 = state.g * state.a2;
+ }
+ 
+ // Returns true when the AVX2 kernel handled the instruction.

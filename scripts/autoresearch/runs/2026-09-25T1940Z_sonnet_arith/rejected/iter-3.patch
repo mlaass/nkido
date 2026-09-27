@@ -1,0 +1,50 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 8f4ce71..65e5624 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,34 +10,24 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// Fully unrolled: constant offsets from the three base pointers, no loop
++// counter, so loads can fold into the arithmetic op as memory operands.
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
+-        __m256 x0 = _mm256_load_ps(a + i);
+-        __m256 x1 = _mm256_load_ps(a + i + 8);
+-        __m256 y0 = _mm256_load_ps(b + i);
+-        __m256 y1 = _mm256_load_ps(b + i + 8);
+-        _mm256_store_ps(out + i, _mm256_add_ps(x0, y0));
+-        _mm256_store_ps(out + i + 8, _mm256_add_ps(x1, y1));
++#pragma GCC unroll 16
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
+-        __m256 x0 = _mm256_load_ps(a + i);
+-        __m256 x1 = _mm256_load_ps(a + i + 8);
+-        __m256 y0 = _mm256_load_ps(b + i);
+-        __m256 y1 = _mm256_load_ps(b + i + 8);
+-        _mm256_store_ps(out + i, _mm256_sub_ps(x0, y0));
+-        _mm256_store_ps(out + i + 8, _mm256_sub_ps(x1, y1));
++#pragma GCC unroll 16
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
+-        __m256 x0 = _mm256_load_ps(a + i);
+-        __m256 x1 = _mm256_load_ps(a + i + 8);
+-        __m256 y0 = _mm256_load_ps(b + i);
+-        __m256 y1 = _mm256_load_ps(b + i + 8);
+-        _mm256_store_ps(out + i, _mm256_mul_ps(x0, y0));
+-        _mm256_store_ps(out + i + 8, _mm256_mul_ps(x1, y1));
++#pragma GCC unroll 16
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ #endif

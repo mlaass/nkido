@@ -1,0 +1,84 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 72deca0..6246405 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -5,6 +5,8 @@
+ #include "../dsp/constants.hpp"
+ #include <cmath>
+ 
++#include "../dsp/simd.hpp"
++
+ namespace cedar {
+ 
+ // ADD: out = in0 + in1
+@@ -14,6 +16,13 @@ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::add_avx2(a, b, out);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] + b[i];
+     }
+@@ -26,6 +35,13 @@ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::sub_avx2(a, b, out);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] - b[i];
+     }
+@@ -38,6 +54,13 @@ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::mul_avx2(a, b, out);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] * b[i];
+     }
+@@ -78,4 +101,26 @@ inline void op_neg(ExecutionContext& ctx, const Instruction& inst) {
+     }
+ }
+ 
+-}  // namespace cedar
++namespace kernels {
++#if CEDAR_SIMD_X86
++[[gnu::target("avx2")]]
++inline void add_avx2(const float* a, const float* b, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
++        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++}
++
++[[gnu::target("avx2")]]
++inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
++        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++}
++
++[[gnu::target("avx2")]]
++inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
++        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++}
++#endif
++}
++
++}  // namespace cedar
+\ No newline at end of file

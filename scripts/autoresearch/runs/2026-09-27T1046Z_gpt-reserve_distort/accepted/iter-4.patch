@@ -1,0 +1,75 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..e963dfe 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -1,4 +1,5 @@
+ #pragma once
++#include "../dsp/simd.hpp"
+ 
+ #include "../vm/context.hpp"
+ #include "../vm/instruction.hpp"
+@@ -20,6 +21,49 @@ namespace cedar {
+ // Classic warm saturation using hyperbolic tangent.
+ // Higher drive values push the signal into saturation more aggressively.
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* input_l,
++                                                 const float* input_r,
++                                                 const float* threshold,
++                                                 const float* dry_level,
++                                                 const float* wet_level,
++                                                 float* out_l,
++                                                 float* out_r,
++                                                 bool stereo) noexcept {
++    const __m256 lo_t = _mm256_set1_ps(0.1f);
++    const __m256 hi_t = _mm256_set1_ps(2.0f);
++    const __m256 lo_x = _mm256_set1_ps(-3.0f);
++    const __m256 hi_x = _mm256_set1_ps(3.0f);
++    const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 twenty_seven = _mm256_set1_ps(27.0f);
++    const __m256 nine = _mm256_set1_ps(9.0f);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256 t = _mm256_min_ps(_mm256_max_ps(_mm256_load_ps(threshold + i), lo_t), hi_t);
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : one;
++        const __m256 x_l = _mm256_load_ps(input_l + i);
++        const __m256 x_r = stereo ? _mm256_load_ps(input_r + i) : x_l;
++        const __m256 z_l = _mm256_div_ps(x_l, t);
++        const __m256 z_r = _mm256_div_ps(x_r, t);
++        const __m256 z2_l = _mm256_mul_ps(z_l, z_l);
++        const __m256 z2_r = _mm256_mul_ps(z_r, z_r);
++        const __m256 y_l = _mm256_div_ps(_mm256_mul_ps(z_l, _mm256_add_ps(twenty_seven, z2_l)), _mm256_add_ps(twenty_seven, _mm256_mul_ps(nine, z2_l)));
++        const __m256 y_r = _mm256_div_ps(_mm256_mul_ps(z_r, _mm256_add_ps(twenty_seven, z2_r)), _mm256_add_ps(twenty_seven, _mm256_mul_ps(nine, z2_r)));
++        const __m256 s_l = _mm256_mul_ps(y_l, t);
++        const __m256 s_r = _mm256_mul_ps(y_r, t);
++        const __m256 cl_l = _mm256_blendv_ps(s_l, t, _mm256_cmp_ps(z_l, hi_x, _CMP_GT_OQ));
++        const __m256 cl_r = _mm256_blendv_ps(s_r, t, _mm256_cmp_ps(z_r, hi_x, _CMP_GT_OQ));
++        const __m256 neg_t = _mm256_sub_ps(_mm256_setzero_ps(), t);
++        const __m256 nl_l = _mm256_blendv_ps(cl_l, neg_t, _mm256_cmp_ps(z_l, lo_x, _CMP_LT_OQ));
++        const __m256 nl_r = _mm256_blendv_ps(cl_r, neg_t, _mm256_cmp_ps(z_r, lo_x, _CMP_LT_OQ));
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(x_l, dry), _mm256_mul_ps(nl_l, wet)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(x_r, dry), _mm256_mul_ps(nl_r, wet)));
++    }
++}
++#endif
++}
++
+ [[gnu::always_inline]]
+ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+@@ -66,6 +110,14 @@ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_soft_avx2(input, input_r, threshold, dry_level, wet_level,
++                                   out_l, out_r, stereo_in);
++        return;
++    }
++#endif
++
+     auto soft = [](float x) {
+         if (x > 3.0f) return 1.0f;
+         if (x < -3.0f) return -1.0f;

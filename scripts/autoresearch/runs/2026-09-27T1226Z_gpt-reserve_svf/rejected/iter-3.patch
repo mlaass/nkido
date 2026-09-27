@@ -1,0 +1,128 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..1877b8b 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -46,6 +46,9 @@ inline void calc_svf(SVFState& state, float freq, float q, float sample_rate) {
+ // SVF Lowpass — stereo-native (prd-stereo-native-opcodes Phase 4a)
+ [[gnu::always_inline]]
+ inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) { kernels::filter_svf_avx2<kernels::SvfOutput::Low>(ctx, inst); return; }
++#endif
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+     float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+     const float* input = ctx.buffers->get(inst.inputs[0]);
+@@ -79,6 +82,9 @@ inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
+ // SVF Highpass — stereo-native (prd-stereo-native-opcodes Phase 4a)
+ [[gnu::always_inline]]
+ inline void op_filter_svf_hp(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) { kernels::filter_svf_avx2<kernels::SvfOutput::High>(ctx, inst); return; }
++#endif
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+     float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+     const float* input = ctx.buffers->get(inst.inputs[0]);
+@@ -114,6 +120,9 @@ inline void op_filter_svf_hp(ExecutionContext& ctx, const Instruction& inst) {
+ // SVF Bandpass — stereo-native (prd-stereo-native-opcodes Phase 4a)
+ [[gnu::always_inline]]
+ inline void op_filter_svf_bp(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) { kernels::filter_svf_avx2<kernels::SvfOutput::Band>(ctx, inst); return; }
++#endif
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+     float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+     const float* input = ctx.buffers->get(inst.inputs[0]);
+@@ -683,3 +692,93 @@ inline void op_filter_sallenkey(ExecutionContext& ctx, const Instruction& inst)
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"
++
++#if CEDAR_SIMD_X86
++namespace cedar::kernels {
++
++enum class SvfOutput : unsigned char { Low, High, Band };
++
++// simd: approx tan (the polynomial replaces std::tan used by calc_svf)
++CEDAR_TARGET_AVX2 inline void svf_tan8_avx2(const float* freq, float sample_rate, float* g) noexcept {
++    const __m256 x = _mm256_sub_ps(
++        _mm256_mul_ps(_mm256_load_ps(freq), _mm256_set1_ps(3.14159265358979323846f / sample_rate)),
++        _mm256_set1_ps(0.78539816339744830962f));
++    const __m256 z2 = _mm256_mul_ps(x, x);
++    __m256 sin_p = _mm256_set1_ps(-1.0f / 39916800.0f);
++    sin_p = _mm256_add_ps(_mm256_set1_ps(1.0f / 362880.0f), _mm256_mul_ps(z2, sin_p));
++    sin_p = _mm256_add_ps(_mm256_set1_ps(-1.0f / 5040.0f), _mm256_mul_ps(z2, sin_p));
++    sin_p = _mm256_add_ps(_mm256_set1_ps(1.0f / 120.0f), _mm256_mul_ps(z2, sin_p));
++    sin_p = _mm256_add_ps(_mm256_set1_ps(-1.0f / 6.0f), _mm256_mul_ps(z2, sin_p));
++    const __m256 sin_z = _mm256_mul_ps(x, _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(z2, sin_p)));
++    __m256 cos_p = _mm256_set1_ps(-1.0f / 479001600.0f);
++    cos_p = _mm256_add_ps(_mm256_set1_ps(1.0f / 40320.0f), _mm256_mul_ps(z2, cos_p));
++    cos_p = _mm256_add_ps(_mm256_set1_ps(-1.0f / 720.0f), _mm256_mul_ps(z2, cos_p));
++    cos_p = _mm256_add_ps(_mm256_set1_ps(1.0f / 24.0f), _mm256_mul_ps(z2, cos_p));
++    cos_p = _mm256_add_ps(_mm256_set1_ps(-1.0f / 2.0f), _mm256_mul_ps(z2, cos_p));
++    const __m256 cos_z = _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(z2, cos_p));
++    const __m256 t = _mm256_div_ps(sin_z, cos_z);
++    _mm256_store_ps(g, _mm256_div_ps(_mm256_add_ps(_mm256_set1_ps(1.0f), t),
++                                     _mm256_sub_ps(_mm256_set1_ps(1.0f), t)));
++}
++
++template <SvfOutput output>
++CEDAR_TARGET_AVX2 inline void filter_svf_avx2(ExecutionContext& ctx, const Instruction& inst) noexcept {
++    float* out_l = ctx.buffers->get(inst.out_buffer);
++    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++    const float* input = ctx.buffers->get(inst.inputs[0]);
++    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++    const float* input_r = stereo_in
++        ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1))
++        : nullptr;
++    const float* freq = ctx.buffers->get(inst.inputs[1]);
++    const float* q = ctx.buffers->get(inst.inputs[2]);
++    const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
++    const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
++    auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
++
++    alignas(32) float g[8];
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        svf_tan8_avx2(freq + i, ctx.sample_rate, g);
++        for (std::size_t j = 0; j < 8; ++j) {
++            const std::size_t sample = i + j;
++            state.k = 1.0f / q[sample];
++            state.a1 = 1.0f / (1.0f + g[j] * (g[j] + state.k));
++            state.a2 = g[j] * state.a1;
++            state.a3 = g[j] * state.a2;
++            const std::size_t i = sample;
++        const float dry = dry_level ? dry_level[i] : 0.0f;
++        const float wet = wet_level ? wet_level[i] : 1.0f;
++        const float xl = input[i];
++        const float xr = stereo_in ? input_r[i] : xl;
++        const __m128 x = _mm_set_ps(xr, xl, xr, xl);
++        const __m128 ic1 = _mm_set_ps(state.ic1eq[1], state.ic1eq[0], state.ic1eq[1], state.ic1eq[0]);
++        const __m128 ic2 = _mm_set_ps(state.ic2eq[1], state.ic2eq[0], state.ic2eq[1], state.ic2eq[0]);
++        const __m128 dc = _mm_set1_ps(DENORMAL_DC);
++        const __m128 v3 = _mm_sub_ps(x, _mm_add_ps(ic2, dc));
++        const __m128 v1 = _mm_add_ps(
++            _mm_mul_ps(_mm_set1_ps(state.a1), _mm_add_ps(ic1, dc)),
++            _mm_mul_ps(_mm_set1_ps(state.a2), v3));
++        const __m128 v2 = _mm_add_ps(
++            _mm_add_ps(_mm_add_ps(ic2, dc), _mm_mul_ps(_mm_set1_ps(state.a2), _mm_add_ps(ic1, dc))),
++            _mm_mul_ps(_mm_set1_ps(state.a3), v3));
++        alignas(16) float v1v[4];
++        alignas(16) float v2v[4];
++        _mm_store_ps(v1v, v1);
++        _mm_store_ps(v2v, v2);
++        state.ic1eq[0] = clamp_audio(2.0f * v1v[0] - state.ic1eq[0]);
++        state.ic1eq[1] = clamp_audio(2.0f * v1v[1] - state.ic1eq[1]);
++        state.ic2eq[0] = clamp_audio(2.0f * v2v[0] - state.ic2eq[0]);
++        state.ic2eq[1] = clamp_audio(2.0f * v2v[1] - state.ic2eq[1]);
++        const float yl = output == SvfOutput::Low ? v2v[0]
++            : (output == SvfOutput::Band ? v1v[0] : xl - state.k * v1v[0] - v2v[0]);
++        const float yr = output == SvfOutput::Low ? v2v[1]
++            : (output == SvfOutput::Band ? v1v[1] : xr - state.k * v1v[1] - v2v[1]);
++        out_l[i] = drywet::mix(xl, yl, dry, wet);
++        out_r[i] = drywet::mix(xr, yr, dry, wet);
++        }
++    }
++}
++
++} // namespace cedar::kernels
++#endif

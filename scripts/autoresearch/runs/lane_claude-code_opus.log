@@ -1,0 +1,119 @@
+== skip opus arith (done)
+== skip opus distort (done)
+== skip opus formant (done)
+== 2026-09-25T19:39:05Z claude-code opus svf
+[2026-09-25T1939Z_opus_svf] preparing baseline ...
+[2026-09-25T1939Z_opus_svf] iteration 1/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 1: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 1: accept (all gates green), $1.44 spent
+[2026-09-25T1939Z_opus_svf] iteration 2/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 2: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 2: reject (speed), $2.43 spent
+[2026-09-25T1939Z_opus_svf] iteration 3/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 3: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 3: reject (speed), $3.34 spent
+[2026-09-25T1939Z_opus_svf] iteration 4/8: proposing ...
+== skip opus arith (done)
+== skip opus distort (done)
+== skip opus formant (done)
+== 2026-09-26T10:49:39Z resume runs/2026-09-25T1939Z_opus_svf
+[2026-09-25T1939Z_opus_svf] resuming
+[2026-09-25T1939Z_opus_svf] iteration 4/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 4: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 4: accept (all gates green), $4.90 spent
+[2026-09-25T1939Z_opus_svf] iteration 5/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 5: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 5: reject (empty patch), $6.35 spent
+[2026-09-25T1939Z_opus_svf] iteration 6/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 6: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 6: reject (speed), $8.28 spent
+[2026-09-25T1939Z_opus_svf] iteration 7/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 7: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 7: reject (speed), $9.95 spent
+[2026-09-25T1939Z_opus_svf] iteration 8/8: proposing ...
+[2026-09-25T1939Z_opus_svf] iteration 8: verifying ...
+[2026-09-25T1939Z_opus_svf] iteration 8: reject (equality), $11.20 spent
+{
+  "run_id": "2026-09-25T1939Z_opus_svf",
+  "provider": "claude-code",
+  "model": "opus (claude-opus-5-5)",
+  "target": "svf",
+  "iterations": 8,
+  "accepts": 2,
+  "rejects": 6,
+  "reject_reasons": {
+    "speed": 4,
+    "empty patch": 1,
+    "equality": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 3.479,
+  "tokens": {
+    "input": 6532694,
+    "output": 291581,
+    "cached": 6011498
+  },
+  "cost_usd": 11.2024,
+  "wall_clock_s": 6284.6,
+  "gpu_s": null,
+  "active_s": null,
+  "unstable_iterations": 2,
+  "status": "complete",
+  "branch": "autoresearch/opus-svf-202609251939",
+  "base_rev": "3f3d8d9411678c39662ff2021fd168a037137306"
+}
+== 2026-09-26T11:55:57Z claude-code opus freeverb
+[2026-09-26T1155Z_opus_freeverb] preparing baseline ...
+[2026-09-26T1155Z_opus_freeverb] iteration 1/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 1: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 1: accept (all gates green), $0.47 spent
+[2026-09-26T1155Z_opus_freeverb] iteration 2/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 2: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 2: accept (all gates green), $0.95 spent
+[2026-09-26T1155Z_opus_freeverb] iteration 3/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 3: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 3: accept (all gates green), $1.34 spent
+[2026-09-26T1155Z_opus_freeverb] iteration 4/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 4: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 4: accept (all gates green), $2.05 spent
+[2026-09-26T1155Z_opus_freeverb] iteration 5/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 5: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 5: accept (all gates green), $2.60 spent
+[2026-09-26T1155Z_opus_freeverb] iteration 6/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 6: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 6: reject (speed), $4.80 spent
+[2026-09-26T1155Z_opus_freeverb] iteration 7/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 7: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 7: reject (empty patch), $6.39 spent
+[2026-09-26T1155Z_opus_freeverb] iteration 8/8: proposing ...
+[2026-09-26T1155Z_opus_freeverb] iteration 8: verifying ...
+[2026-09-26T1155Z_opus_freeverb] iteration 8: accept (all gates green), $7.33 spent
+{
+  "run_id": "2026-09-26T1155Z_opus_freeverb",
+  "provider": "claude-code",
+  "model": "opus (claude-opus-5-5)",
+  "target": "freeverb",
+  "iterations": 8,
+  "accepts": 6,
+  "rejects": 2,
+  "reject_reasons": {
+    "speed": 1,
+    "empty patch": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 6.76,
+  "tokens": {
+    "input": 3524753,
+    "output": 190653,
+    "cached": 3164429
+  },
+  "cost_usd": 7.3279,
+  "wall_clock_s": 2771.3,
+  "gpu_s": null,
+  "active_s": 2193.3,
+  "unstable_iterations": 5,
+  "status": "complete",
+  "branch": "autoresearch/opus-freeverb-202609261155",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}
+== sweep done 2026-09-26T12:58:09Z

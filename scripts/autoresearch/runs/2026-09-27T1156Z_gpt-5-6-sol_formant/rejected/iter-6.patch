@@ -1,0 +1,65 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 72d2967..74bcd9c 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -463,7 +463,6 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         const auto& w = ext->params[1];
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+-    alignas(32) float q_values[BLOCK_SIZE];
+     alignas(32) float q_coefs[BLOCK_SIZE];
+     alignas(32) float va_values[BLOCK_SIZE];
+     alignas(32) float vb_values[BLOCK_SIZE];
+@@ -484,7 +483,6 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         __m256 clamped = _mm256_min_ps(q_max, _mm256_max_ps(q_min, original));
+         __m256 unordered = _mm256_cmp_ps(original, original, _CMP_UNORD_Q);
+         clamped = _mm256_blendv_ps(clamped, original, unordered);
+-        _mm256_store_ps(q_values + i, clamped);
+         _mm256_store_ps(q_coefs + i, _mm256_div_ps(one, clamped));
+ 
+         __m256 va = _mm256_load_ps(vowel_a + i);
+@@ -510,6 +508,11 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         _mm256_store_ps(morph_values + i, mv_clamped);
+     }
+ 
++    const float q_last_input = q_in[BLOCK_SIZE - 1];
++    state.last_q = std::isnan(q_last_input)
++        ? q_last_input
++        : std::min(20.0f, std::max(1.0f, q_last_input));
++
+     const bool block_formants_constant = formant_constant_mask == 0xff;
+     const __m128 state_l0 = _mm_setr_ps(state.bp1_z1[0], state.bp1_z2[0],
+                                         state.bp2_z1[0], state.bp2_z2[0]);
+@@ -529,7 +532,6 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         float va = va_values[i];
+         float vb = vb_values[i];
+         float m = morph_values[i];
+-        float q = q_values[i];
+ 
+         if (va != state.last_vowel_a || vb != state.last_vowel_b ||
+             m != state.last_morph) {
+@@ -566,11 +568,22 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+             state.g1 = values[3]; state.g2 = values[4]; state.g3 = values[5];
+         }
+ 
+-        state.last_q = q;
+         if (!block_formants_constant || i == 0) {
+             auto prewarp_coef = [&](float freq) -> float {
+                 float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
+-                return std::min(1.9f, 2.0f * std::tan(w));
++                float tangent;
++                if (std::abs(w) <= 0.07f) {
++                    // simd: approx std::tan with a degree-13 small-angle series.
++                    const double x = static_cast<double>(w);
++                    const double x2 = x * x;
++                    const double p = 1.0 / 3.0 + x2 * (2.0 / 15.0 + x2 *
++                        (17.0 / 315.0 + x2 * (62.0 / 2835.0 + x2 *
++                        (1382.0 / 155925.0 + x2 * (21844.0 / 6081075.0)))));
++                    tangent = static_cast<float>(x + x * x2 * p);
++                } else {
++                    tangent = std::tan(w);
++                }
++                return std::min(1.9f, 2.0f * tangent);
+             };
+             f1_coef = prewarp_coef(state.f1);
+             f2_coef = prewarp_coef(state.f2);

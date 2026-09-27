@@ -1,0 +1,169 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index f34eb77..4a24819 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -38,32 +38,16 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
+ namespace freeverb_kernels {
+ #if CEDAR_SIMD_X86
+ 
+-// In-place 8x8 float transpose.
+-[[gnu::always_inline]] CEDAR_TARGET_AVX2 inline void transpose8x8(__m256 (&r)[8]) noexcept {
++// In-place 4x4 float transpose within each 128-bit lane (self-inverse).
++[[gnu::always_inline]] CEDAR_TARGET_AVX2 inline void transpose4x4_lanes(__m256 (&r)[4]) noexcept {
+     const __m256 t0 = _mm256_unpacklo_ps(r[0], r[1]);
+     const __m256 t1 = _mm256_unpackhi_ps(r[0], r[1]);
+     const __m256 t2 = _mm256_unpacklo_ps(r[2], r[3]);
+     const __m256 t3 = _mm256_unpackhi_ps(r[2], r[3]);
+-    const __m256 t4 = _mm256_unpacklo_ps(r[4], r[5]);
+-    const __m256 t5 = _mm256_unpackhi_ps(r[4], r[5]);
+-    const __m256 t6 = _mm256_unpacklo_ps(r[6], r[7]);
+-    const __m256 t7 = _mm256_unpackhi_ps(r[6], r[7]);
+-    const __m256 u0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
+-    const __m256 u1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
+-    const __m256 u2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
+-    const __m256 u3 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+-    const __m256 u4 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(1, 0, 1, 0));
+-    const __m256 u5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3, 2, 3, 2));
+-    const __m256 u6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1, 0, 1, 0));
+-    const __m256 u7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3, 2, 3, 2));
+-    r[0] = _mm256_permute2f128_ps(u0, u4, 0x20);
+-    r[1] = _mm256_permute2f128_ps(u1, u5, 0x20);
+-    r[2] = _mm256_permute2f128_ps(u2, u6, 0x20);
+-    r[3] = _mm256_permute2f128_ps(u3, u7, 0x20);
+-    r[4] = _mm256_permute2f128_ps(u0, u4, 0x31);
+-    r[5] = _mm256_permute2f128_ps(u1, u5, 0x31);
+-    r[6] = _mm256_permute2f128_ps(u2, u6, 0x31);
+-    r[7] = _mm256_permute2f128_ps(u3, u7, 0x31);
++    r[0] = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
++    r[1] = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
++    r[2] = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
++    r[3] = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+ }
+ 
+ // One allpass stage over a contiguous run of the delay line. y holds the stage
+@@ -105,8 +89,8 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     alignas(32) float fb[N];
+     alignas(32) float damp[N];
+     alignas(32) float omd[N];
+-    alignas(32) float dl[2][NC][N];
+     alignas(32) float ys[2][N];
++    alignas(32) float stage[2][NC][N];  // only touched when a comb line wraps inside the block
+ 
+     for (std::size_t i = 0; i < N; ++i) {
+         const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+@@ -118,15 +102,25 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         omd[i] = 1.0f - d;
+     }
+ 
+-    // Read this block's worth of delayed samples from every comb line.
++    // Each comb line is processed in place (read delayed, write feedback to the
++    // same slot). Lines that wrap inside this block go through a staging copy.
++    float* cp[2][NC];
++    bool wrapped[2][NC];
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         for (std::size_t c = 0; c < NC; ++c) {
+-            const float* buf = st.comb_buffers[ch][c];
++            float* buf = st.comb_buffers[ch][c];
+             const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+             const std::size_t pos = st.comb_pos[ch][c];
+-            const std::size_t first = std::min(N, size - pos);
+-            std::memcpy(dl[ch][c], buf + pos, first * sizeof(float));
+-            if (first < N) std::memcpy(dl[ch][c] + first, buf, (N - first) * sizeof(float));
++            if (pos + N <= size) {
++                cp[ch][c] = buf + pos;
++                wrapped[ch][c] = false;
++            } else {
++                const std::size_t first = size - pos;
++                std::memcpy(stage[ch][c], buf + pos, first * sizeof(float));
++                std::memcpy(stage[ch][c] + first, buf, (N - first) * sizeof(float));
++                cp[ch][c] = stage[ch][c];
++                wrapped[ch][c] = true;
++            }
+         }
+     }
+ 
+@@ -140,36 +134,45 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     const float* xin[2] = {in_l, in_r};
+ 
+     for (std::size_t n = 0; n < N; n += 8) {
+-        __m256 v[2][8];
++        // Comb sums first: they read the delayed samples this iteration overwrites.
+         for (std::size_t ch = 0; ch < 2; ++ch) {
+-            __m256 r[8];
+-            for (std::size_t c = 0; c < NC; ++c) r[c] = _mm256_load_ps(dl[ch][c] + n);
+             __m256 s = _mm256_setzero_ps();
+-            for (std::size_t c = 0; c < NC; ++c) s = _mm256_add_ps(s, r[c]);
++            for (std::size_t c = 0; c < NC; ++c) s = _mm256_add_ps(s, _mm256_loadu_ps(cp[ch][c] + n));
+             _mm256_store_ps(ys[ch] + n, s);
+-            transpose8x8(r);
+-            for (std::size_t t = 0; t < 8; ++t) v[ch][t] = r[t];
+         }
+-        __m256 w[2][8];
+-        for (std::size_t t = 0; t < 8; ++t) {
+-            const __m256 bd = _mm256_broadcast_ss(damp + n + t);
+-            const __m256 bo = _mm256_broadcast_ss(omd + n + t);
+-            const __m256 bf = _mm256_broadcast_ss(fb + n + t);
++        for (std::size_t h = 0; h < 2; ++h) {
++            const std::size_t nh = n + 4 * h;
++            // v[ch][t]: lanes 0..7 = combs 0..7 at time nh+t.
++            __m256 v[2][4];
+             for (std::size_t ch = 0; ch < 2; ++ch) {
+-                const __m256 x = _mm256_broadcast_ss(xin[ch] + n + t);
+-                fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
+-                const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
+-                                                    _mm256_mul_ps(rv, y1[ch]));
+-                x1[ch] = fs[ch];
+-                y1[ch] = dc_out;
+-                w[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
++                for (std::size_t i = 0; i < 4; ++i) {
++                    v[ch][i] = _mm256_insertf128_ps(
++                        _mm256_castps128_ps256(_mm_loadu_ps(cp[ch][i] + nh)),
++                        _mm_loadu_ps(cp[ch][i + 4] + nh), 1);
++                }
++                transpose4x4_lanes(v[ch]);
++            }
++            for (std::size_t t = 0; t < 4; ++t) {
++                const __m256 bd = _mm256_broadcast_ss(damp + nh + t);
++                const __m256 bo = _mm256_broadcast_ss(omd + nh + t);
++                const __m256 bf = _mm256_broadcast_ss(fb + nh + t);
++                for (std::size_t ch = 0; ch < 2; ++ch) {
++                    const __m256 x = _mm256_broadcast_ss(xin[ch] + nh + t);
++                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
++                    const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
++                                                        _mm256_mul_ps(rv, y1[ch]));
++                    x1[ch] = fs[ch];
++                    y1[ch] = dc_out;
++                    v[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
++                }
++            }
++            for (std::size_t ch = 0; ch < 2; ++ch) {
++                transpose4x4_lanes(v[ch]);
++                for (std::size_t i = 0; i < 4; ++i) {
++                    _mm_storeu_ps(cp[ch][i] + nh, _mm256_castps256_ps128(v[ch][i]));
++                    _mm_storeu_ps(cp[ch][i + 4] + nh, _mm256_extractf128_ps(v[ch][i], 1));
++                }
+             }
+-        }
+-        for (std::size_t ch = 0; ch < 2; ++ch) {
+-            __m256 r[8];
+-            for (std::size_t t = 0; t < 8; ++t) r[t] = w[ch][t];
+-            transpose8x8(r);
+-            for (std::size_t c = 0; c < NC; ++c) _mm256_store_ps(dl[ch][c] + n, r[c]);
+         }
+     }
+ 
+@@ -185,9 +188,11 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+             float* buf = st.comb_buffers[ch][c];
+             const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
+             const std::size_t pos = st.comb_pos[ch][c];
+-            const std::size_t first = std::min(N, size - pos);
+-            std::memcpy(buf + pos, dl[ch][c], first * sizeof(float));
+-            if (first < N) std::memcpy(buf, dl[ch][c] + first, (N - first) * sizeof(float));
++            if (wrapped[ch][c]) {
++                const std::size_t first = size - pos;
++                std::memcpy(buf + pos, stage[ch][c], first * sizeof(float));
++                std::memcpy(buf, stage[ch][c] + first, (N - first) * sizeof(float));
++            }
+             const std::size_t np = pos + N;
+             st.comb_pos[ch][c] = np >= size ? np - size : np;
+         }

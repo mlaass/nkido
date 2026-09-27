@@ -1,0 +1,28 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 1df8310..643a40d 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -8,6 +8,7 @@
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// Add kernel: simple loop, rely on compiler to vectorize with AVX2
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
+@@ -17,6 +18,7 @@ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* ou
+     }
+ }
+ 
++// Sub kernel: simple loop, rely on compiler to vectorize with AVX2
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
+@@ -26,6 +28,7 @@ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* ou
+     }
+ }
+ 
++// Mul kernel: simple loop, rely on compiler to vectorize with AVX2
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);

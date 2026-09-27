@@ -1,0 +1,39 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 0218d3b..1b0d5ce 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -18,24 +18,22 @@ namespace kernels {
+ // simd: approx std::tanh using a range-reduced exponential polynomial.
+ CEDAR_TARGET_AVX2 inline __m256 distort_exp_avx2(__m256 x) noexcept {
+     const __m256 log2ef = _mm256_set1_ps(1.44269504088896341f);
+-    const __m256 c1 = _mm256_set1_ps(0.693359375f);
+-    const __m256 c2 = _mm256_set1_ps(-2.12194440e-4f);
++    const __m256 ln2 = _mm256_set1_ps(0.6931471805599453f);
+ 
+     __m256 fx = _mm256_add_ps(_mm256_mul_ps(x, log2ef), _mm256_set1_ps(0.5f));
+     const __m256i emm0 = _mm256_cvttps_epi32(fx);
+     fx = _mm256_cvtepi32_ps(emm0);
+-    x = _mm256_sub_ps(x, _mm256_mul_ps(fx, c1));
+-    x = _mm256_sub_ps(x, _mm256_mul_ps(fx, c2));
++    x = _mm256_sub_ps(x, _mm256_mul_ps(fx, ln2));
+ 
+     const __m256 z = _mm256_mul_ps(x, x);
+-    __m256 y = _mm256_set1_ps(1.9875691500e-4f);
+-    y = _mm256_add_ps(_mm256_mul_ps(y, x), _mm256_set1_ps(1.3981999507e-3f));
+-    y = _mm256_add_ps(_mm256_mul_ps(y, x), _mm256_set1_ps(8.3334519073e-3f));
+-    y = _mm256_add_ps(_mm256_mul_ps(y, x), _mm256_set1_ps(4.1665795894e-2f));
+-    y = _mm256_add_ps(_mm256_mul_ps(y, x), _mm256_set1_ps(1.6666665459e-1f));
+-    y = _mm256_add_ps(_mm256_mul_ps(y, x), _mm256_set1_ps(5.0000001201e-1f));
+-    y = _mm256_add_ps(_mm256_mul_ps(y, z), x);
+-    y = _mm256_add_ps(y, _mm256_set1_ps(1.0f));
++    const __m256 p01 = _mm256_add_ps(
++        _mm256_set1_ps(5.0000001201e-1f),
++        _mm256_mul_ps(x, _mm256_set1_ps(1.6666665459e-1f)));
++    const __m256 p23 = _mm256_add_ps(
++        _mm256_set1_ps(4.1665795894e-2f),
++        _mm256_mul_ps(x, _mm256_set1_ps(8.3334519073e-3f)));
++    __m256 y = _mm256_add_ps(p01, _mm256_mul_ps(z, p23));
++    y = _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_add_ps(x, _mm256_mul_ps(z, y)));
+ 
+     const __m256i exponent = _mm256_slli_epi32(_mm256_add_epi32(emm0, _mm256_set1_epi32(127)), 23);
+     return _mm256_mul_ps(y, _mm256_castsi256_ps(exponent));

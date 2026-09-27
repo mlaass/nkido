@@ -1,0 +1,137 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..2fca605 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -33,6 +33,14 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_tanh_avx2(input, input_r, drive, dry_level, wet_level,
++                                   out_l, out_r, stereo_in);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float d = std::max(0.1f, drive[i]);
+         float dry = drywet::coeff(dry_level, i, 0.0f);
+@@ -66,6 +74,14 @@ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_soft_avx2(input, input_r, threshold, dry_level, wet_level,
++                                   out_l, out_r, stereo_in);
++        return;
++    }
++#endif
++
+     auto soft = [](float x) {
+         if (x > 3.0f) return 1.0f;
+         if (x < -3.0f) return -1.0f;
+@@ -575,3 +591,102 @@ inline void op_distort_excite(ExecutionContext& ctx, const Instruction& inst) {
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"
++
++namespace kernels {
++#if CEDAR_SIMD_X86
++// simd: approx replaces std::tanh
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(
++    const float* input, const float* input_r, const float* drive,
++    const float* dry_level, const float* wet_level,
++    float* out_l, float* out_r, bool stereo_in) noexcept {
++    const __m256 v01 = _mm256_set1_ps(0.1f);
++    const __m256 v7 = _mm256_set1_ps(7.0f);
++    const __m256 v135135 = _mm256_set1_ps(135135.0f);
++    const __m256 v17325 = _mm256_set1_ps(17325.0f);
++    const __m256 v378 = _mm256_set1_ps(378.0f);
++    const __m256 v62370 = _mm256_set1_ps(62370.0f);
++    const __m256 v3150 = _mm256_set1_ps(3150.0f);
++    const __m256 v28 = _mm256_set1_ps(28.0f);
++    const __m256 vtwo = _mm256_set1_ps(2.0f);
++    const __m256 sign = _mm256_set1_ps(-0.0f);
++    const __m256 vone = _mm256_set1_ps(1.0f);
++
++    for (std::size_t i = 0; i < cedar::BLOCK_SIZE; i += 8) {
++        __m256 d = _mm256_load_ps(drive + i);
++        d = _mm256_max_ps(v01, d);
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : vone;
++        const __m256 xl = _mm256_load_ps(input + i);
++        const __m256 xr = stereo_in ? _mm256_load_ps(input_r + i) : xl;
++
++        auto tanh_approx = [&](const __m256 x) {
++            const __m256 ax = _mm256_andnot_ps(sign, x);
++            const __m256 x2 = _mm256_mul_ps(ax, ax);
++            __m256 numerator_poly = _mm256_add_ps(x2, v378);
++            numerator_poly = _mm256_add_ps(_mm256_mul_ps(numerator_poly, x2), v17325);
++            numerator_poly = _mm256_add_ps(_mm256_mul_ps(numerator_poly, x2), v135135);
++            const __m256 numerator = _mm256_mul_ps(ax, numerator_poly);
++            __m256 denominator = _mm256_add_ps(x2, v28);
++            denominator = _mm256_add_ps(_mm256_mul_ps(denominator, x2), v3150);
++            denominator = _mm256_add_ps(_mm256_mul_ps(denominator, x2), v62370);
++            denominator = _mm256_add_ps(_mm256_mul_ps(denominator, x2), v135135);
++            __m256 reciprocal = _mm256_rcp_ps(denominator);
++            reciprocal = _mm256_mul_ps(reciprocal,
++                _mm256_sub_ps(vtwo, _mm256_mul_ps(denominator, reciprocal)));
++            const __m256 smooth = _mm256_mul_ps(numerator, reciprocal);
++            const __m256 saturated = _mm256_or_ps(vone, _mm256_and_ps(x, sign));
++            return _mm256_blendv_ps(smooth, saturated, _mm256_cmp_ps(ax, v7, _CMP_GE_OQ));
++        };
++        const __m256 yl = _mm256_mul_ps(tanh_approx(_mm256_mul_ps(xl, d)), d);
++        const __m256 yr = stereo_in ? _mm256_mul_ps(tanh_approx(_mm256_mul_ps(xr, d)), d) : yl;
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(dry, xl), _mm256_mul_ps(wet, yl)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(dry, xr), _mm256_mul_ps(wet, yr)));
++    }
++}
++
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(
++    const float* input, const float* input_r, const float* threshold,
++    const float* dry_level, const float* wet_level,
++    float* out_l, float* out_r, bool stereo_in) noexcept {
++    const __m256 v01 = _mm256_set1_ps(0.1f);
++    const __m256 v2 = _mm256_set1_ps(2.0f);
++    const __m256 v3 = _mm256_set1_ps(3.0f);
++    const __m256 vneg3 = _mm256_set1_ps(-3.0f);
++    const __m256 v27 = _mm256_set1_ps(27.0f);
++    const __m256 v9 = _mm256_set1_ps(9.0f);
++    const __m256 vtwo = _mm256_set1_ps(2.0f);
++
++    for (std::size_t i = 0; i < cedar::BLOCK_SIZE; i += 8) {
++        __m256 t = _mm256_load_ps(threshold + i);
++        t = _mm256_max_ps(v01, _mm256_min_ps(v2, t));
++        __m256 reciprocal_t = _mm256_rcp_ps(t);
++        reciprocal_t = _mm256_mul_ps(reciprocal_t,
++            _mm256_sub_ps(vtwo, _mm256_mul_ps(t, reciprocal_t)));
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++        const __m256 xl = _mm256_load_ps(input + i);
++        const __m256 xr = stereo_in ? _mm256_load_ps(input_r + i) : xl;
++
++        auto clip = [&](const __m256 x) {
++            const __m256 z = _mm256_mul_ps(x, reciprocal_t);
++            const __m256 z2 = _mm256_mul_ps(z, z);
++            const __m256 numerator = _mm256_mul_ps(z, _mm256_add_ps(v27, z2));
++            const __m256 denominator = _mm256_add_ps(v27, _mm256_mul_ps(v9, z2));
++            __m256 reciprocal = _mm256_rcp_ps(denominator);
++            reciprocal = _mm256_mul_ps(reciprocal,
++                _mm256_sub_ps(vtwo, _mm256_mul_ps(denominator, reciprocal)));
++            const __m256 smooth = _mm256_mul_ps(numerator, reciprocal);
++            const __m256 limited = _mm256_blendv_ps(
++                _mm256_blendv_ps(smooth, v01, _mm256_cmp_ps(z, v3, _CMP_GT_OQ)),
++                vneg3, _mm256_cmp_ps(z, vneg3, _CMP_LT_OQ));
++            return _mm256_mul_ps(limited, t);
++        };
++        const __m256 yl = clip(xl);
++        const __m256 yr = stereo_in ? clip(xr) : yl;
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(dry, xl), _mm256_mul_ps(wet, yl)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(dry, xr), _mm256_mul_ps(wet, yr)));
++    }
++}
++#endif
++}

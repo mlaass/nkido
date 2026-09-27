@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-26T1440Z_poolside-laguna-s-2-1-free_arith",
+  "target": "arith",
+  "base_rev": "917a79d87bfa8ca59470fbb4ba5a9cc2b3e718d5",
+  "branch": "autoresearch/poolside-laguna-s-2-1-free-arith-202609261440",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-26T1440Z_poolside-laguna-s-2-1-free_arith/check.sh",
+  "model": "poolside/laguna-s-2.1:free",
+  "provider": "openrouter",
+  "iterations": 8,
+  "budget_usd": 6.0
+}

@@ -1,0 +1,140 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..775d995 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -58,6 +58,12 @@ inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
+     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::svf_avx2(ctx, inst, kernels::SvfOutput::Lowpass);
++        return;
++    }
++#endif
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], ctx.sample_rate);
+@@ -91,6 +97,12 @@ inline void op_filter_svf_hp(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
+     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::svf_avx2(ctx, inst, kernels::SvfOutput::Highpass);
++        return;
++    }
++#endif
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], ctx.sample_rate);
+@@ -126,6 +138,12 @@ inline void op_filter_svf_bp(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
+     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::svf_avx2(ctx, inst, kernels::SvfOutput::Bandpass);
++        return;
++    }
++#endif
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], ctx.sample_rate);
+@@ -683,3 +701,96 @@ inline void op_filter_sallenkey(ExecutionContext& ctx, const Instruction& inst)
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"
++
++namespace cedar {
++namespace kernels {
++#if CEDAR_SIMD_X86
++enum class SvfOutput { Lowpass, Highpass, Bandpass };
++
++CEDAR_TARGET_AVX2 inline void svf_coeffs_avx2(
++    const float* freq, const float* q, float sample_rate,
++    float* a1, float* a2, float* a3, float* k) noexcept {
++    const __m256 pi = _mm256_set1_ps(3.14159265358979323846f);
++    const __m256 half_pi = _mm256_set1_ps(1.57079632679489661923f);
++    const __m256 quarter_pi = _mm256_set1_ps(0.78539816339744830962f);
++    const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 x = _mm256_mul_ps(_mm256_load_ps(freq), _mm256_set1_ps(3.14159265358979323846f / sample_rate));
++    const __m256 reflected = _mm256_cmp_ps(x, quarter_pi, _CMP_GT_OQ);
++    const __m256 z = _mm256_blendv_ps(x, _mm256_sub_ps(half_pi, x), reflected);
++    const __m256 z2 = _mm256_mul_ps(z, z);
++    // simd: approx std::tan
++    __m256 t = _mm256_set1_ps(0.000096923932574315f);
++    t = _mm256_add_ps(_mm256_set1_ps(0.000241518767572604f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.000598194700647919f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.00145620945432529f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.003592128036572481f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.00886323952908219f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.021869488294859542f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.05396825396825397f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.13333333333333333f), _mm256_mul_ps(z2, t));
++    t = _mm256_add_ps(_mm256_set1_ps(0.3333333333333333f), _mm256_mul_ps(z2, t));
++    t = _mm256_mul_ps(z, _mm256_add_ps(one, _mm256_mul_ps(z2, t)));
++    const __m256 g = _mm256_blendv_ps(t, _mm256_div_ps(one, t), reflected);
++    const __m256 kv = _mm256_div_ps(one, _mm256_load_ps(q));
++    const __m256 denom = _mm256_add_ps(one, _mm256_mul_ps(g, _mm256_add_ps(g, kv)));
++    const __m256 a1v = _mm256_div_ps(one, denom);
++    const __m256 a2v = _mm256_mul_ps(g, a1v);
++    const __m256 a3v = _mm256_mul_ps(g, a2v);
++    _mm256_store_ps(a1, a1v);
++    _mm256_store_ps(a2, a2v);
++    _mm256_store_ps(a3, a3v);
++    _mm256_store_ps(k, kv);
++}
++
++CEDAR_TARGET_AVX2 inline void svf_avx2(
++    ExecutionContext& ctx, const Instruction& inst, SvfOutput output) noexcept {
++    float* out_l = ctx.buffers->get(inst.out_buffer);
++    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++    const float* input = ctx.buffers->get(inst.inputs[0]);
++    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++    const float* input_r = stereo_in
++        ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1))
++        : nullptr;
++    const float* freq = ctx.buffers->get(inst.inputs[1]);
++    const float* q = ctx.buffers->get(inst.inputs[2]);
++    const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
++    const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
++    auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
++
++    alignas(32) float v1_lanes[8];
++    alignas(32) float v2_lanes[8];
++    alignas(32) float a1[8], a2[8], a3[8], k[8];
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        if ((i & 7u) == 0)
++            svf_coeffs_avx2(freq + i, q + i, ctx.sample_rate, a1, a2, a3, k);
++        state.a1 = a1[i];
++        state.a2 = a2[i];
++        state.a3 = a3[i];
++        state.k = k[i];
++        const float dry = drywet::coeff(dry_level, i, 0.0f);
++        const float wet = drywet::coeff(wet_level, i, 1.0f);
++        const float xr = stereo_in ? input_r[i] : input[i];
++
++        const float x0 = input[i];
++        const float v30 = x0 - (state.ic2eq[0] + DENORMAL_DC);
++        const float v10 = state.a1 * (state.ic1eq[0] + DENORMAL_DC) + state.a2 * v30;
++        const float v20 = (state.ic2eq[0] + DENORMAL_DC) + state.a2 * (state.ic1eq[0] + DENORMAL_DC) + state.a3 * v30;
++        const float v31 = xr - (state.ic2eq[1] + DENORMAL_DC);
++        const float v11 = state.a1 * (state.ic1eq[1] + DENORMAL_DC) + state.a2 * v31;
++        const float v21 = (state.ic2eq[1] + DENORMAL_DC) + state.a2 * (state.ic1eq[1] + DENORMAL_DC) + state.a3 * v31;
++        state.ic1eq[0] = clamp_audio(2.0f * v10 - state.ic1eq[0]);
++        state.ic1eq[1] = clamp_audio(2.0f * v11 - state.ic1eq[1]);
++        state.ic2eq[0] = clamp_audio(2.0f * v20 - state.ic2eq[0]);
++        state.ic2eq[1] = clamp_audio(2.0f * v21 - state.ic2eq[1]);
++        const float y0 = output == SvfOutput::Lowpass ? v20
++            : output == SvfOutput::Bandpass ? v10 : x0 - state.k * v10 - v20;
++        const float y1 = output == SvfOutput::Lowpass ? v21
++            : output == SvfOutput::Bandpass ? v11 : xr - state.k * v11 - v21;
++        out_l[i] = drywet::mix(input[i], y0, dry, wet);
++        out_r[i] = drywet::mix(xr, y1, dry, wet);
++    }
++}
++}
++#endif
++}

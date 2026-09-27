@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-26T1607Z_z-ai-glm-5-3-flash_distort",
+  "target": "distort",
+  "base_rev": "d5afd067a4dde71d81028b8c2a1d4b866ae761e5",
+  "branch": "autoresearch/z-ai-glm-5-3-flash-distort-202609261607",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-26T1607Z_z-ai-glm-5-3-flash_distort/check.sh",
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "openrouter",
+  "iterations": 8,
+  "budget_usd": 6.0
+}

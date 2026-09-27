@@ -1,0 +1,11 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index eeecd64..6248739 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -128,4 +128,4 @@ inline void op_neg(ExecutionContext& ctx, const Instruction& inst) {
+     }
+ }
+ 
+-}  // namespace cedar
++}  // namespace cedar
+\ No newline at end of file

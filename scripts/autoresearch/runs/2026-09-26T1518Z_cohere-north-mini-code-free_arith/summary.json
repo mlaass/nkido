@@ -1,0 +1,29 @@
+{
+  "run_id": "2026-09-26T1518Z_cohere-north-mini-code-free_arith",
+  "provider": "openrouter",
+  "model": "cohere/north-mini-code:free (cohere/north-mini-code:free@Cohere)",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 1,
+  "rejects": 7,
+  "reject_reasons": {
+    "speed": 4,
+    "empty patch": 2,
+    "build": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 1.319,
+  "tokens": {
+    "input": 13669138,
+    "output": 610653,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 7857.8,
+  "gpu_s": null,
+  "active_s": 7014.3,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/cohere-north-mini-code-free-arith-202609261518",
+  "base_rev": "d5afd067a4dde71d81028b8c2a1d4b866ae761e5"
+}

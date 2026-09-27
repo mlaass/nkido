@@ -1,0 +1,57 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index b2cd5ef..8536d86 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -95,25 +95,33 @@ CEDAR_TARGET_AVX2 inline __m256 svf_tanf_ps(__m256 xin) noexcept {
+     r = _mm256_add_ps(r, _mm256_mul_ps(c(3.3333334327e-01f), s));
+     const __m256 W = _mm256_add_ps(X, r);
+ 
+-    // big: sgn * (iy - 2*(X - (W*W/(W+iy) - r)))
+-    const __m256 sgn = _mm256_blendv_ps(c(1.0f), c(-1.0f), neg);
+-    __m256 rb = _mm256_sub_ps(_mm256_div_ps(_mm256_mul_ps(W, W), _mm256_add_ps(W, iy)), r);
+-    rb = _mm256_mul_ps(sgn, _mm256_sub_ps(iy, _mm256_mul_ps(c(2.0f), _mm256_sub_ps(X, rb))));
+-    // big and |X| < 2^-13: sgn*iy * (1 - 2*iy*X)
+-    const __m256 tiny = _mm256_cmp_ps(_mm256_andnot_ps(signmask, xb), c(0x1p-13f), _CMP_LT_OQ);
+-    const __m256 rt = _mm256_mul_ps(_mm256_mul_ps(sgn, iy),
+-                                    _mm256_sub_ps(c(1.0f), _mm256_mul_ps(_mm256_mul_ps(c(2.0f), iy), xb)));
+-    rb = _mm256_blendv_ps(rb, rt, tiny);
+-    // small, iy = -1: -1/(X+r) computed accurately
+-    const __m256 hmask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<int>(0xfffff000u)));
+-    const __m256 zt = _mm256_and_ps(W, hmask);
+-    const __m256 vt = _mm256_sub_ps(r, _mm256_sub_ps(zt, X));
+-    const __m256 a = _mm256_div_ps(c(-1.0f), W);
+-    const __m256 t = _mm256_and_ps(a, hmask);
+-    const __m256 st = _mm256_add_ps(c(1.0f), _mm256_mul_ps(t, zt));
+-    const __m256 rm = _mm256_add_ps(t, _mm256_mul_ps(a, _mm256_add_ps(st, _mm256_mul_ps(t, vt))));
+-    const __m256 rs = _mm256_blendv_ps(W, rm, caseb);
+-    return _mm256_blendv_ps(rs, rb, big);
++    // The two divide-bearing tails below are skipped when no lane needs them
++    // (typical for audio-range cutoffs well below sample_rate / 4).
++    __m256 res = W;
++    if (_mm256_movemask_ps(_mm256_andnot_ps(big, caseb)) != 0) {
++        // small, iy = -1: -1/(X+r) computed accurately
++        const __m256 hmask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<int>(0xfffff000u)));
++        const __m256 zt = _mm256_and_ps(W, hmask);
++        const __m256 vt = _mm256_sub_ps(r, _mm256_sub_ps(zt, X));
++        const __m256 a = _mm256_div_ps(c(-1.0f), W);
++        const __m256 t = _mm256_and_ps(a, hmask);
++        const __m256 st = _mm256_add_ps(c(1.0f), _mm256_mul_ps(t, zt));
++        const __m256 rm = _mm256_add_ps(t, _mm256_mul_ps(a, _mm256_add_ps(st, _mm256_mul_ps(t, vt))));
++        res = _mm256_blendv_ps(W, rm, caseb);
++    }
++    if (_mm256_movemask_ps(big) != 0) {
++        // big: sgn * (iy - 2*(X - (W*W/(W+iy) - r)))
++        const __m256 sgn = _mm256_blendv_ps(c(1.0f), c(-1.0f), neg);
++        __m256 rb = _mm256_sub_ps(_mm256_div_ps(_mm256_mul_ps(W, W), _mm256_add_ps(W, iy)), r);
++        rb = _mm256_mul_ps(sgn, _mm256_sub_ps(iy, _mm256_mul_ps(c(2.0f), _mm256_sub_ps(X, rb))));
++        // big and |X| < 2^-13: sgn*iy * (1 - 2*iy*X)
++        const __m256 tiny = _mm256_cmp_ps(_mm256_andnot_ps(signmask, xb), c(0x1p-13f), _CMP_LT_OQ);
++        const __m256 rt = _mm256_mul_ps(_mm256_mul_ps(sgn, iy),
++                                        _mm256_sub_ps(c(1.0f), _mm256_mul_ps(_mm256_mul_ps(c(2.0f), iy), xb)));
++        rb = _mm256_blendv_ps(rb, rt, tiny);
++        res = _mm256_blendv_ps(res, rb, big);
++    }
++    return res;
+ }
+ 
+ CEDAR_TARGET_AVX2 inline __m128 svf_clamp_ps(__m128 v) noexcept {

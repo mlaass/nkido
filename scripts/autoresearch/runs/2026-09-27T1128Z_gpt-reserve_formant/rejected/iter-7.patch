@@ -1,0 +1,35 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 912f87c..d435b88 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -439,6 +439,20 @@ constexpr VowelFormants VOWEL_TABLE[5] = {
+ // Uses 3 parallel Chamberlin SVF bandpass filters.
+ #if CEDAR_SIMD_X86
+ namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline float formant_prewarp_tan(float x) noexcept {
++    // The caller clamps 2*tan(x) to 1.9.  Above atan(0.95), return the
++    // already-clamped value and avoid evaluating the irrelevant tail.
++    if (x >= 0.1f && x < 0.75976275f) return std::tan(x);
++    if (x >= 0.75976275f) return 0.95f;
++    const double xd = static_cast<double>(x);
++    const double x2 = xd * xd;
++    return static_cast<float>(xd * (1.0 + x2 * (0.3333333333333333 + x2 * (0.1333333333333333 +
++        x2 * (0.0539682539682540 + x2 * (0.0218694885361552 + x2 * (0.00886323552990220 +
++        x2 * (0.00359212803657248 + x2 * (0.00145583438705132 +
++        x2 * (0.000590027440945586 + x2 * (0.000239129114243552 + x2 * 0.0000969)))))))))));
++}
++#endif
+ CEDAR_TARGET_AVX2 inline bool filter_formant_mono_avx2(ExecutionContext& ctx,
+                                                         const Instruction& inst) noexcept {
+     if ((inst.flags & InstructionFlag::STEREO_INPUT) != 0)
+@@ -504,7 +518,8 @@ CEDAR_TARGET_AVX2 inline bool filter_formant_mono_avx2(ExecutionContext& ctx,
+ 
+         auto prewarp_coef = [&](float freq) -> float {
+             float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
+-            return std::min(1.9f, 2.0f * std::tan(w));
++            // simd: approx std::tan
++            return std::min(1.9f, 2.0f * formant_prewarp_tan(w));
+         };
+         float f1_coef = prewarp_coef(state.f1), f2_coef = prewarp_coef(state.f2);
+         float f3_coef = prewarp_coef(state.f3), q_coef = 1.0f / q;

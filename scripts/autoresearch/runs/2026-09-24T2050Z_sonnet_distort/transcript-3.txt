@@ -1,0 +1,11 @@
+I couldn't run anything this attempt. Bash is denied in this session ("don't ask mode"), and `check.sh` needs it for the build, the bit-identity checks and the benchmark. Attempt 2 was rejected for the same reason.
+
+I made no edits. I'm not going to hand-write new tanh coefficients or a rcp/Newton-Raphson divide without being able to check them. The error bound is about 1e-5, and the hidden stimuli include denormals and extreme levels. An unverified change would probably be rejected, or worse, would pass the check and fail later.
+
+**Hypothesis:** with mono input, `tanh8` costs about 11 mul+add pairs per vector, with no FMA allowed. Together with one `vdivps`, that is roughly 175 cycles per block at 50 ns, which fits an ALU-bound loop. The `vdivps` is a smaller share. `op_distort_soft` needs two exact divides per vector (`x/t` and `num/den`), and bit-identity forbids changing either. So `op_distort_tanh` is the only opcode with room to improve.
+
+**Planned change:** replace the 7/6-degree rational in `tanh8` with a lower-degree minimax fit. Roughly a 5/4 or 7/4 form with the clamp near ±7 and peak error around 3e-6 or better would cut about 4 mul+add pairs per vector. If needed, I'd also swap the divide for `rcp_ps` plus one Newton-Raphson step. I'd fit the coefficients offline with numpy and check them against `std::tanh` on a dense grid before running `check.sh`.
+
+**To proceed:** allow Bash for this worktree, or at least `check.sh` and `python3`, and I'll do the fit and the single focused edit within the 10-run budget.
+
+IDEA: tanh8's long mul/add polynomial chain plus vdivps (ALU-bound, no FMA allowed) -> no change made because Bash/check.sh was denied by the sandbox again; proposed a lower-degree minimax rational (≈5/4 or 7/4, error ≤3e-6) and optionally rcp_ps+one Newton step in place of the divide (not run, nothing measured)

@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-25T1952Z_deepseek-deepseek-v4-pro-0813_arith",
+  "target": "arith",
+  "base_rev": "f2f822f5636629d3612ed4141b1123bd429ccdfd",
+  "branch": "autoresearch/deepseek-deepseek-v4-pro-0813-arith-202609251952",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-25T1952Z_deepseek-deepseek-v4-pro-0813_arith/check.sh",
+  "model": "deepseek/deepseek-v4-pro-0813",
+  "provider": "openrouter",
+  "iterations": 8,
+  "budget_usd": 6.0
+}

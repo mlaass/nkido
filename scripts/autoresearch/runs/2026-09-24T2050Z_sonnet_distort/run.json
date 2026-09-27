@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-24T2050Z_sonnet_distort",
+  "target": "distort",
+  "base_rev": "24652821f8f8f4bff6426c9110503dab30d5b62b",
+  "branch": "autoresearch/sonnet-distort-202609242050",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-24T2050Z_sonnet_distort/check.sh",
+  "model": "sonnet",
+  "provider": "claude-code",
+  "iterations": 3,
+  "budget_usd": 20.0
+}

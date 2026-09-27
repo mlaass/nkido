@@ -1,0 +1,102 @@
+diff --git a/cedar/include/cedar/dsp/simd.hpp b/cedar/include/cedar/dsp/simd.hpp
+index ee273e4..e9e06bc 100644
+--- a/cedar/include/cedar/dsp/simd.hpp
++++ b/cedar/include/cedar/dsp/simd.hpp
+@@ -71,4 +71,4 @@ extern Isa g_active;
+ // Not for use while audio is running.
+ void force(Isa isa) noexcept;
+ 
+-}  // namespace cedar::simd
++}  // namespace cedar::simd
+\ No newline at end of file
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index eeecd64..895d09a 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -45,12 +45,21 @@ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+     float* out = ctx.buffers->get(inst.out_buffer);
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
++    const bool inplace = (out == a) || (out == b);
+ 
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) {
+-        kernels::add_avx2(a, b, out);
++        if (inplace) {
++            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++                out[i] = a[i] + b[i];
++            }
++        } else {
++            kernels::add_avx2(a, b, out);
++        }
+         return;
+     }
++#else
++    (void)inplace;
+ #endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] + b[i];
+@@ -63,12 +72,21 @@ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+     float* out = ctx.buffers->get(inst.out_buffer);
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
++    const bool inplace = (out == a) || (out == b);
+ 
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) {
+-        kernels::sub_avx2(a, b, out);
++        if (inplace) {
++            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++                out[i] = a[i] - b[i];
++            }
++        } else {
++            kernels::sub_avx2(a, b, out);
++        }
+         return;
+     }
++#else
++    (void)inplace;
+ #endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] - b[i];
+@@ -81,12 +99,21 @@ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
+     float* out = ctx.buffers->get(inst.out_buffer);
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
++    const bool inplace = (out == a) || (out == b);
+ 
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) {
+-        kernels::mul_avx2(a, b, out);
++        if (inplace) {
++            for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++                out[i] = a[i] * b[i];
++            }
++        } else {
++            kernels::mul_avx2(a, b, out);
++        }
+         return;
+     }
++#else
++    (void)inplace;
+ #endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] * b[i];
+@@ -128,4 +155,4 @@ inline void op_neg(ExecutionContext& ctx, const Instruction& inst) {
+     }
+ }
+ 
+-}  // namespace cedar
++}  // namespace cedar
+\ No newline at end of file
+diff --git a/cedar/src/dsp/simd.cpp b/cedar/src/dsp/simd.cpp
+index 326915d..1bf702c 100644
+--- a/cedar/src/dsp/simd.cpp
++++ b/cedar/src/dsp/simd.cpp
+@@ -34,4 +34,4 @@ const char* name(Isa isa) noexcept {
+ 
+ void force(Isa isa) noexcept { detail::g_active = isa; }
+ 
+-}  // namespace cedar::simd
++}  // namespace cedar::simd
+\ No newline at end of file

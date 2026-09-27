@@ -1,0 +1,52 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 46cf541..33b96a7 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -48,6 +48,38 @@ inline void calc_svf(SVFState& state, float freq, float q, float sample_rate) {
+ // SVF Lowpass — stereo-native (prd-stereo-native-opcodes Phase 4a)
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// simd: approx tan -- odd Taylor polynomial after reducing to [0, pi/4].
++// The SVF clamps its argument below pi/2.
++CEDAR_TARGET_AVX2 inline float svf_tan_avx2(float x) noexcept {
++    constexpr float half_pi = 1.57079632679489661923f;
++    constexpr float quarter_pi = 0.78539816339744830962f;
++    const bool reciprocal = x > quarter_pi;
++    const float r = reciprocal ? half_pi - x : x;
++    const float z = r * r;
++    float p = 443861162.0f / 1856156927625.0f;
++    p = p * z + 6404582.0f / 10854718875.0f;
++    p = p * z + 929569.0f / 638512875.0f;
++    p = p * z + 21844.0f / 6081075.0f;
++    p = p * z + 1382.0f / 155925.0f;
++    p = p * z + 62.0f / 2835.0f;
++    p = p * z + 17.0f / 315.0f;
++    p = p * z + 2.0f / 15.0f;
++    p = p * z + 1.0f / 3.0f;
++    const float tangent = r + r * z * p;
++    return reciprocal ? 1.0f / tangent : tangent;
++}
++
++CEDAR_TARGET_AVX2 inline void calc_svf_avx2(
++    SVFState& state, float freq, float q, float sample_rate) noexcept {
++    const float clamped_freq = std::min(freq, sample_rate * 0.45f);
++    const float g = svf_tan_avx2(PI * clamped_freq / sample_rate);
++    const float k = 1.0f / std::max(q, 0.01f);
++    state.a1 = 1.0f / (1.0f + g * (g + k));
++    state.a2 = g * state.a1;
++    state.a3 = g * state.a2;
++    state.k = k;
++}
++
+ // The filter's time-domain recurrence is serial, but its two channel recurrences
+ // are independent.  Keep the coefficient calculation scalar and evaluate both
+ // channels in one vector without changing the operation order within a lane.
+@@ -66,7 +98,7 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
+         state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        calc_svf(state, freq[i], q[i], sample_rate);
++        calc_svf_avx2(state, freq[i], q[i], sample_rate);
+         const float dry = HasDry ? dry_level[i] : 0.0f;
+         const float wet = HasWet ? wet_level[i] : 1.0f;
+         const float xl = input_l[i];

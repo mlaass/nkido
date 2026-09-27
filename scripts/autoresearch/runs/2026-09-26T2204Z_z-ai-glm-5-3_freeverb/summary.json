@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-26T2204Z_z-ai-glm-5-3_freeverb",
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.3",
+  "target": "freeverb",
+  "iterations": 8,
+  "accepts": 0,
+  "rejects": 8,
+  "reject_reasons": {
+    "backend error": 8
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 4.2,
+  "gpu_s": null,
+  "active_s": 4.2,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/z-ai-glm-5-3-freeverb-202609262204",
+  "base_rev": "d5afd067a4dde71d81028b8c2a1d4b866ae761e5"
+}

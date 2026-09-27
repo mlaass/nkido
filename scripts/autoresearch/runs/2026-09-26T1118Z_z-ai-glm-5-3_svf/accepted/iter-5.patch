@@ -1,0 +1,176 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 515b362..a439b1a 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -160,67 +160,122 @@ inline void run_avx2(SVFState& state,
+                                        float sample_rate, int mode) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
++    // Coefficient staging: only the final float vectors (G/K/A1/A2/A3, which
++    // feed the recurrence directly, no memory round-trip) go through stack
++    // arrays. The tan argument (double precision) is computed once here for
++    // the whole block, instead of re-running the fixup chain per 8-lane group.
++    CEDAR_SIMD_ASSERT_ALIGNED(freq, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(q, 32);
++    const __m256 zero = _mm256_setzero_ps();
++    const __m256 fmin = _mm256_set1_ps(20.0f);
++    const __m256 fmax = _mm256_set1_ps(sample_rate * 0.49f);
++    const __m256 qmin = _mm256_set1_ps(0.1f);
++    const __m256 piv = _mm256_set1_ps(PI);
++    const __m256 srv = _mm256_set1_ps(sample_rate);
++    const __m256 one = _mm256_set1_ps(1.0f);
++    alignas(32) float tanarg[BLOCK_SIZE];
+     alignas(32) float g[BLOCK_SIZE], kk[BLOCK_SIZE];
+     alignas(32) float a1[BLOCK_SIZE], a2[BLOCK_SIZE], a3[BLOCK_SIZE];
+-    coefs_avx2(freq, q, sample_rate, g, kk, a1, a2, a3);
++    // Pass 1: clamp + tan argument, 8-wide (k needs no tan, but keep the
++    // output order identical to the scalar cache update).
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += W) {
++        // freq = max(0, freq); clamp(20, sr*0.49); q = max(0.1, q).
++        // maxps returns the second operand when the first is NaN — the same
++        // value std::max(0.0f, x) / std::max(0.1f, x) produce for NaN input.
++        __m256 f = _mm256_max_ps(_mm256_load_ps(freq + i), zero);
++        f = _mm256_max_ps(f, fmin);
++        f = _mm256_min_ps(f, fmax);
++        const __m256 qv = _mm256_max_ps(_mm256_load_ps(q + i), qmin);
++        // tan(PI * freq / sample_rate) — same operand grouping as the scalar.
++        _mm256_store_ps(tanarg + i, _mm256_div_ps(_mm256_mul_ps(piv, f), srv));
++        _mm256_store_ps(kk + i, _mm256_div_ps(one, qv));
++    }
++    // tan for the whole block in one pass (double-precision series, see
++    // tan8_ps / tan4_pd above for the error bound).
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += W) {
++        _mm256_store_ps(g + i, tan8_ps(_mm256_load_ps(tanarg + i)));
++    }
++    // Pass 2: a1/a2/a3, 8-wide, exact float grouping.
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += W) {
++        const __m256 gv = _mm256_load_ps(g + i);
++        const __m256 kv = _mm256_load_ps(kk + i);
++        const __m256 a1v = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(gv, _mm256_add_ps(gv, kv))));
++        const __m256 a2v = _mm256_mul_ps(gv, a1v);
++        const __m256 a3v = _mm256_mul_ps(gv, a2v);
++        _mm256_store_ps(a1 + i, a1v);
++        _mm256_store_ps(a2 + i, a2v);
++        _mm256_store_ps(a3 + i, a3v);
++    }
+ 
+     // Read the cache keys before any output write, in case an output buffer
+     // aliases freq/q (the scalar body reads them at the top of each sample).
+     const float last_f = std::max(0.0f, freq[BLOCK_SIZE - 1]);
+     const float last_q = q[BLOCK_SIZE - 1];
+ 
+-    __m128 ic1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+-    __m128 ic2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+-    const __m128 dc = _mm_set1_ps(DENORMAL_DC);
+-    const __m128 two = _mm256_castps256_ps128(_mm256_set1_ps(2.0f));
+-    const __m128 ten = _mm256_castps256_ps128(_mm256_set1_ps(10.0f));
+-    const __m128 nten = _mm256_castps256_ps128(_mm256_set1_ps(-10.0f));
++    // The mode branch, the per-mode coefficient load and the output lane
++    // extraction are specialised per mode (template) so nothing but the
++    // irreducible serial recurrence remains inside the loop.
+     alignas(16) float tmp[4];
+-
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        const float xl = in_l[i];
+-        const float xr = in_r ? in_r[i] : xl;
+-        const __m128 x = _mm_setr_ps(xl, xr, 0.0f, 0.0f);
+-        const __m128 ic1p = _mm_add_ps(ic1, dc);
+-        const __m128 ic2p = _mm_add_ps(ic2, dc);
+-        const __m128 v3 = _mm_sub_ps(x, ic2p);
+-        const __m128 A1 = _mm_set1_ps(a1[i]);
+-        const __m128 A2 = _mm_set1_ps(a2[i]);
+-        const __m128 A3 = _mm_set1_ps(a3[i]);
+-        const __m128 v1 = _mm_add_ps(_mm_mul_ps(A1, ic1p), _mm_mul_ps(A2, v3));
+-        const __m128 v2 = _mm_add_ps(_mm_add_ps(ic2p, _mm_mul_ps(A2, ic1p)),
+-                                     _mm_mul_ps(A3, v3));
+-        // clamp_audio(2*v1 - ic1) / clamp_audio(2*v2 - ic2):
+-        // NaN -> 0 via the unordered mask (AND-NOT), then min/max clamp —
+-        // identical results to the scalar branches for every input.
+-        __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), ic1);
+-        __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), ic2);
+-        n1 = _mm_min_ps(_mm_max_ps(_mm_andnot_ps(_mm_cmpunord_ps(n1, n1), n1), nten), ten);
+-        n2 = _mm_min_ps(_mm_max_ps(_mm_andnot_ps(_mm_cmpunord_ps(n2, n2), n2), nten), ten);
+-        ic1 = n1;
+-        ic2 = n2;
+-        __m128 sig;
+-        if (mode == 0) {
+-            sig = v2;  // lowpass
+-        } else if (mode == 1) {
+-            sig = _mm_sub_ps(_mm_sub_ps(x, _mm_mul_ps(_mm_set1_ps(kk[i]), v1)), v2);  // highpass
+-        } else {
+-            sig = v1;  // bandpass
++    const auto loop = [&]<int MODE>() noexcept {
++        __m128 ic1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
++        __m128 ic2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
++        const __m128 dc = _mm_set1_ps(DENORMAL_DC);
++        const __m128 two = _mm_set1_ps(2.0f);
++        const __m128 ten = _mm_set1_ps(10.0f);
++        const __m128 nten = _mm_set1_ps(-10.0f);
++        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++            const float xl = in_l[i];
++            const float xr = in_r ? in_r[i] : xl;
++            const __m128 x = _mm_setr_ps(xl, xr, 0.0f, 0.0f);
++            const __m128 ic1p = _mm_add_ps(ic1, dc);
++            const __m128 ic2p = _mm_add_ps(ic2, dc);
++            const __m128 v3 = _mm_sub_ps(x, ic2p);
++            const __m128 A1 = _mm_set1_ps(a1[i]);
++            const __m128 A2 = _mm_set1_ps(a2[i]);
++            const __m128 A3 = _mm_set1_ps(a3[i]);
++            const __m128 v1 = _mm_add_ps(_mm_mul_ps(A1, ic1p), _mm_mul_ps(A2, v3));
++            const __m128 v2 = _mm_add_ps(_mm_add_ps(ic2p, _mm_mul_ps(A2, ic1p)),
++                                         _mm_mul_ps(A3, v3));
++            // clamp_audio(2*v1 - ic1) / clamp_audio(2*v2 - ic2):
++            // NaN -> 0 via the unordered mask (AND-NOT), then min/max clamp —
++            // identical results to the scalar branches for every input.
++            // The unordered test runs on v1/v2 rather than on 2*v - ic: that
++            // keeps the 4-cycle compare off the recurrence's critical path.
++            // It is equivalent because ic1eq/ic2eq are always finite and in
++            // [-10, 10] (zero-init plus clamp_audio on every write), so
++            // 2*v - ic is NaN exactly when v is NaN, and ±Inf in v gives ±Inf
++            // here — the same ±10 bound in both formulations.
++            __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), ic1);
++            __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), ic2);
++            n1 = _mm_min_ps(_mm_max_ps(_mm_andnot_ps(_mm_cmpunord_ps(v1, v1), n1), nten), ten);
++            n2 = _mm_min_ps(_mm_max_ps(_mm_andnot_ps(_mm_cmpunord_ps(v2, v2), n2), nten), ten);
++            ic1 = n1;
++            ic2 = n2;
++            __m128 sig;
++            if constexpr (MODE == 0) {
++                sig = v2;  // lowpass
++            } else if constexpr (MODE == 1) {
++                sig = _mm_sub_ps(_mm_sub_ps(x, _mm_mul_ps(_mm_set1_ps(kk[i]), v1)), v2);  // highpass
++            } else {
++                sig = v1;  // bandpass
++            }
++            const float dry = dry_buf ? dry_buf[i] : 0.0f;
++            const float wet = wet_buf ? wet_buf[i] : 1.0f;
++            const __m128 o = _mm_add_ps(_mm_mul_ps(x, _mm_set1_ps(dry)),
++                                        _mm_mul_ps(sig, _mm_set1_ps(wet)));
++            out_l[i] = _mm_cvtss_f32(o);
++            out_r[i] = _mm_cvtss_f32(_mm_shuffle_ps(o, o, 1));  // lane 1 = right
+         }
+-        const float dry = dry_buf ? dry_buf[i] : 0.0f;
+-        const float wet = wet_buf ? wet_buf[i] : 1.0f;
+-        const __m128 o = _mm_add_ps(_mm_mul_ps(x, _mm_set1_ps(dry)),
+-                                    _mm_mul_ps(sig, _mm_set1_ps(wet)));
+-        _mm_store_ps(tmp, o);
+-        out_l[i] = tmp[0];
+-        out_r[i] = tmp[1];
+-    }
+-    _mm_store_ps(tmp, ic1);
++        _mm_storel_pi(reinterpret_cast<__m64*>(tmp), ic1);
++        _mm_storel_pi(reinterpret_cast<__m64*>(tmp + 2), ic2);
++    };
++    if (mode == 0) loop.template operator()<0>();
++    else if (mode == 1) loop.template operator()<1>();
++    else loop.template operator()<2>();
+     state.ic1eq[0] = tmp[0];
+     state.ic1eq[1] = tmp[1];
+-    _mm_store_ps(tmp, ic2);
+-    state.ic2eq[0] = tmp[0];
+-    state.ic2eq[1] = tmp[1];
++    state.ic2eq[0] = tmp[2];
++    state.ic2eq[1] = tmp[3];
+     // Keep the shared coefficient cache consistent with the scalar body.
+     state.g = g[BLOCK_SIZE - 1];
+     state.k = kk[BLOCK_SIZE - 1];

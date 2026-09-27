@@ -1,0 +1,29 @@
+{
+  "run_id": "2026-09-25T1944Z_qwen3-14b-32k_arith",
+  "provider": "local",
+  "model": "qwen3:14b-32k",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 1,
+  "rejects": 7,
+  "reject_reasons": {
+    "build": 5,
+    "speed": 1,
+    "empty patch": 1
+  },
+  "first_accept_iteration": 5,
+  "best_speedup": 1.316,
+  "tokens": {
+    "input": 256877,
+    "output": 83164,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 7911.0,
+  "gpu_s": 7157.3,
+  "active_s": null,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/qwen3-14b-32k-arith-202609251944",
+  "base_rev": "3f3d8d9411678c39662ff2021fd168a037137306"
+}

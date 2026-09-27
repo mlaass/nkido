@@ -1,0 +1,97 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 6938b7f..b712377 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -15,29 +15,27 @@ namespace kernels {
+     [[gnu::always_inline]] inline void name(const float* a, const float* b,           \
+                                              float* out) noexcept {                    \
+         unsigned int chunks = 4;                                                      \
++        std::size_t offset = 0;                                                       \
+         asm volatile(                                                                 \
+             "1:\n\t"                                                                  \
+-            "vmovaps 0(%[a]), %%ymm0\n\t"                                             \
+-            "vmovaps 32(%[a]), %%ymm1\n\t"                                            \
+-            "vmovaps 64(%[a]), %%ymm2\n\t"                                            \
+-            "vmovaps 96(%[a]), %%ymm3\n\t"                                            \
+-            instruction " 0(%[b]), %%ymm0, %%ymm0\n\t"                              \
+-            instruction " 32(%[b]), %%ymm1, %%ymm1\n\t"                             \
+-            instruction " 64(%[b]), %%ymm2, %%ymm2\n\t"                             \
+-            instruction " 96(%[b]), %%ymm3, %%ymm3\n\t"                             \
+-            "vmovaps %%ymm0, 0(%[out])\n\t"                                          \
+-            "vmovaps %%ymm1, 32(%[out])\n\t"                                         \
+-            "vmovaps %%ymm2, 64(%[out])\n\t"                                         \
+-            "vmovaps %%ymm3, 96(%[out])\n\t"                                         \
+-            "add $128, %[a]\n\t"                                                    \
+-            "add $128, %[b]\n\t"                                                    \
+-            "add $128, %[out]\n\t"                                                  \
+-            "dec %[chunks]\n\t"                                                       \
++            "vmovaps 0(%[a],%[offset]), %%ymm0\n\t"                                 \
++            "vmovaps 32(%[a],%[offset]), %%ymm1\n\t"                                \
++            "vmovaps 64(%[a],%[offset]), %%ymm2\n\t"                                \
++            "vmovaps 96(%[a],%[offset]), %%ymm3\n\t"                                \
++            instruction " 0(%[b],%[offset]), %%ymm0, %%ymm0\n\t"                  \
++            instruction " 32(%[b],%[offset]), %%ymm1, %%ymm1\n\t"                 \
++            instruction " 64(%[b],%[offset]), %%ymm2, %%ymm2\n\t"                 \
++            instruction " 96(%[b],%[offset]), %%ymm3, %%ymm3\n\t"                 \
++            "vmovaps %%ymm0, 0(%[out],%[offset])\n\t"                              \
++            "vmovaps %%ymm1, 32(%[out],%[offset])\n\t"                             \
++            "vmovaps %%ymm2, 64(%[out],%[offset])\n\t"                             \
++            "vmovaps %%ymm3, 96(%[out],%[offset])\n\t"                             \
++            "sub $-128, %[offset]\n\t"                                              \
++            "sub $1, %[chunks]\n\t"                                                   \
+             "jnz 1b\n\t"                                                             \
+             "vzeroupper"                                                               \
+-            : [a] "+r"(a), [b] "+r"(b), [out] "+r"(out),                           \
+-              [chunks] "+r"(chunks)                                                   \
+-            :                                                                          \
++            : [offset] "+&r"(offset), [chunks] "+&r"(chunks)                          \
++            : [a] "r"(a), [b] "r"(b), [out] "r"(out)                                 \
+             : "ymm0", "ymm1", "ymm2", "ymm3", "cc", "memory");                   \
+     }
+ 
+@@ -47,29 +45,27 @@ CEDAR_BINARY_AVX2_KERNEL(sub_avx2, "vsubps")
+ [[gnu::always_inline]] inline void mul_avx2(const float* a, const float* b,
+                                              float* out) noexcept {
+     unsigned int chunks = 4;
++    std::size_t offset = 0;
+     asm volatile(
+         "1:\n\t"
+-        "vmovaps 0(%[a]), %%ymm0\n\t"
+-        "vmovaps 32(%[a]), %%ymm1\n\t"
+-        "vmovaps 64(%[a]), %%ymm2\n\t"
+-        "vmovaps 96(%[a]), %%ymm3\n\t"
+-        "vmulps 0(%[b]), %%ymm0, %%ymm0\n\t"
+-        "vmulps 32(%[b]), %%ymm1, %%ymm1\n\t"
+-        "vmulps 64(%[b]), %%ymm2, %%ymm2\n\t"
+-        "vmulps 96(%[b]), %%ymm3, %%ymm3\n\t"
+-        "vmovaps %%ymm0, 0(%[out])\n\t"
+-        "vmovaps %%ymm1, 32(%[out])\n\t"
+-        "vmovaps %%ymm2, 64(%[out])\n\t"
+-        "vmovaps %%ymm3, 96(%[out])\n\t"
+-        "add $128, %[a]\n\t"
+-        "add $128, %[b]\n\t"
+-        "add $128, %[out]\n\t"
++        "vmovaps 0(%[a],%[offset]), %%ymm0\n\t"
++        "vmovaps 32(%[a],%[offset]), %%ymm1\n\t"
++        "vmovaps 64(%[a],%[offset]), %%ymm2\n\t"
++        "vmovaps 96(%[a],%[offset]), %%ymm3\n\t"
++        "vmulps 0(%[b],%[offset]), %%ymm0, %%ymm0\n\t"
++        "vmulps 32(%[b],%[offset]), %%ymm1, %%ymm1\n\t"
++        "vmulps 64(%[b],%[offset]), %%ymm2, %%ymm2\n\t"
++        "vmulps 96(%[b],%[offset]), %%ymm3, %%ymm3\n\t"
++        "vmovaps %%ymm0, 0(%[out],%[offset])\n\t"
++        "vmovaps %%ymm1, 32(%[out],%[offset])\n\t"
++        "vmovaps %%ymm2, 64(%[out],%[offset])\n\t"
++        "vmovaps %%ymm3, 96(%[out],%[offset])\n\t"
++        "sub $-128, %[offset]\n\t"
+         "dec %[chunks]\n\t"
+         "jnz 1b\n\t"
+         "vzeroupper"
+-        : [a] "+r"(a), [b] "+r"(b), [out] "+r"(out),
+-          [chunks] "+r"(chunks)
+-        :
++        : [offset] "+&r"(offset), [chunks] "+&r"(chunks)
++        : [a] "r"(a), [b] "r"(b), [out] "r"(out)
+         : "ymm0", "ymm1", "ymm2", "ymm3", "cc", "memory");
+ }
+ 

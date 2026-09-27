@@ -1,0 +1,41 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index ec4b2e6..b8acb28 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -71,7 +71,35 @@ namespace kernels {
+ 
+ CEDAR_BINARY_AVX2_KERNEL(add_avx2, "vaddps")
+ CEDAR_BINARY_AVX2_KERNEL(sub_avx2, "vsubps")
+-CEDAR_BINARY_AVX2_KERNEL(mul_avx2, "vmulps")
++
++[[gnu::always_inline]] inline void mul_avx2(const float* a, const float* b,
++                                             float* out) noexcept {
++    unsigned int chunks = 4;
++    asm volatile(
++        "1:\n\t"
++        "vmovaps 0(%[a]), %%ymm0\n\t"
++        "vmovaps 32(%[a]), %%ymm1\n\t"
++        "vmovaps 64(%[a]), %%ymm2\n\t"
++        "vmovaps 96(%[a]), %%ymm3\n\t"
++        "vmulps 0(%[b]), %%ymm0, %%ymm0\n\t"
++        "vmulps 32(%[b]), %%ymm1, %%ymm1\n\t"
++        "vmulps 64(%[b]), %%ymm2, %%ymm2\n\t"
++        "vmulps 96(%[b]), %%ymm3, %%ymm3\n\t"
++        "vmovaps %%ymm0, 0(%[out])\n\t"
++        "vmovaps %%ymm1, 32(%[out])\n\t"
++        "vmovaps %%ymm2, 64(%[out])\n\t"
++        "vmovaps %%ymm3, 96(%[out])\n\t"
++        "add $128, %[a]\n\t"
++        "add $128, %[b]\n\t"
++        "add $128, %[out]\n\t"
++        "dec %[chunks]\n\t"
++        "jnz 1b\n\t"
++        "vzeroupper"
++        : [a] "+r"(a), [b] "+r"(b), [out] "+r"(out),
++          [chunks] "+r"(chunks)
++        :
++        : "ymm0", "ymm1", "ymm2", "ymm3", "cc", "memory");
++}
+ 
+ #undef CEDAR_BINARY_AVX2_KERNEL
+ #endif

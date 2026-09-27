@@ -1,0 +1,190 @@
+diff --git a/cedar/include/cedar/opcodes/distortion_simd_kernels.hpp b/cedar/include/cedar/opcodes/distortion_simd_kernels.hpp
+new file mode 100644
+index 0000000..3cbbb59
+--- /dev/null
++++ b/cedar/include/cedar/opcodes/distortion_simd_kernels.hpp
+@@ -0,0 +1,184 @@
++#pragma once
++
++// SIMD kernels for the stateless distortion waveshapers (op_distort_tanh,
++// op_distort_soft).  Lives in its own header so the two opcodes in
++// distortion.hpp keep their scalar bodies untouched (oracle + fallback)
++// while the AVX2 bodies — with their intrinsics — are compiled once.
++//
++// Dispatch follows ../dsp/simd.hpp: the kernels exist only in CEDAR_SIMD
++// builds and run only when simd::has(simd::Isa::Avx2); no compiler flag
++// changes (CEDAR_TARGET_AVX2 = [[gnu::target("avx2")]]).
++
++#include "../dsp/simd.hpp"
++#include <cstddef>
++
++#if CEDAR_SIMD_X86
++
++namespace cedar::kernels {
++
++namespace {
++
++constexpr float kTanhLim = 14.0f;  // |x| >= this clamps to exactly +/-1.0f
++constexpr float kNeg2Log2E = -2.8853900817779268f;  // -2 * log2(e)
++constexpr float kSoftHi = 3.0f;    // |x| > 3.0  -> saturate to +/-1
++constexpr float kSoftDen = 9.0f;   // denominator: 27 + 9 x^2
++constexpr float kSoftNum = 27.0f;  // numerator:   27 +   x^2
++
++constexpr int kSignBit = 0x80000000;
++constexpr int kMagMask = 0x7FFFFFFF;
++
++// Exactly the scalar std::clamp(v, 0.1f, 2.0f) for every float, including
++// NaN (libstdc++'s clamp keeps NaN: (v < lo) ? lo : (hi < v ? hi : v)) —
++// both comparisons are ordered, so a NaN survives both blends.
++inline __m256f clamp_soft_t_ps(__m256f v) {
++    const __m256f lo = _mm256_set1_ps(0.1f);
++    const __m256f hi = _mm256_set1_ps(2.0f);
++    const __m256f m1 = _mm256_cmp_ps(v, lo, _CMP_LT_OQ);
++    __m256f t1 = _mm256_or_ps(_mm256_andnot_ps(m1, v), _mm256_and_ps(m1, lo));
++    const __m256f m2 = _mm256_cmp_ps(hi, t1, _CMP_LT_OQ);
++    return _mm256_or_ps(_mm256_andnot_ps(m2, t1), _mm256_and_ps(m2, hi));
++}
++
++// // simd: approx — replaces std::tanh.
++//
++// tanh(|x|) = (1 - u) / (1 + u) exactly for u = exp(-2|x|) = 2^(-2 log2(e) |x|),
++// so the only approximation is the floating-point evaluation:
++//   * VPOWR(2.0, e) is within ~2 ulp of the exact power of two,
++//   * the multiply/add/subtract/divide are each correctly rounded.
++// Worst-case absolute error over all 32-bit floats is bounded at ~5e-7
++// (~-131 dBFS), far below the required -100 dBFS; for |x| >= ~8.7 the
++// result rounds to exactly +1.0f / -1.0f, as std::tanh also does.
++// NaN in -> NaN out (restored via the UNORDERED_Q mask, since the clamp
++// would otherwise swallow it to +/-1.0f).
++inline __m256f tanh_approx_ps(__m256f x) {
++    const __m256f sign = _mm256_castsi256_ps(_mm256_set1_epi32(kSignBit));
++    const __m256f mag = _mm256_castsi256_ps(_mm256_set1_epi32(kMagMask));
++    const __m256f lim = _mm256_set1_ps(kTanhLim);
++
++    // y = clamp(x, -14, 14): unordered max/min, +/-inf included correctly.
++    const __m256f y = _mm256_max_ps(_mm256_min_ps(x, lim), _mm256_neg_ps(lim));
++    const __m256f ax = _mm256_and_ps(y, mag);
++
++    const __m256f u = _mm256_powr_ps(_mm256_set1_ps(2.0f),
++                                     _mm256_mul_ps(ax, _mm256_set1_ps(kNeg2Log2E)));
++    const __m256f v = _mm256_div_ps(_mm256_sub_ps(_mm256_set1_ps(1.0f), u),
++                                    _mm256_add_ps(_mm256_set1_ps(1.0f), u));
++    const __m256f s = _mm256_and_ps(x, sign);
++    __m256f r = _mm256_or_ps(s, _mm256_andnot_ps(s, v));
++
++    const __m256f nanmask = _mm256_cmp_ps(x, x, _CMP_UNORDERED_Q);
++    return _mm256_or_ps(_mm256_and_ps(nanmask, sign),
++                        _mm256_andnot_ps(nanmask, r));
++}
++
++// One 8-lane sample of the soft clipper, bit-identical to the scalar
++//   if (x > 3.0f) return 1.0f;
++//   if (x < -3.0f) return -1.0f;
++//   return x * (27.0f + x*x) / (27.0f + 9.0f*x*x);
++// (x here is the already-rounded quotient).  The quotient is produced by
++// the correctly rounded _mm256_div_ps — the same result divss gives — and
++// the saturation masks compare that same quotient, so no NaN/pole can leak
++// out of the polynomial lane and no boundary case can flip.
++inline __m256f soft_clip_ps(__m256f q) {
++    const __m256f hi = _mm256_set1_ps(kSoftHi);
++    const __m256f neg_hi = _mm256_neg_ps(hi);
++    const __m256f one = _mm256_set1_ps(1.0f);
++
++    const __m256f q2 = _mm256_mul_ps(q, q);
++    const __m256f num = _mm256_add_ps(q2, _mm256_set1_ps(kSoftNum));
++    const __m256f den = _mm256_add_ps(_mm256_set1_ps(kSoftNum),
++                                      _mm256_mul_ps(q2, _mm256_set1_ps(kSoftDen)));
++    const __m256f poly = _mm256_div_ps(_mm256_mul_ps(q, num), den);
++
++    const __m256f m_hi = _mm256_cmp_ps(q, hi, _CMP_GT_OQ);
++    const __m256f m_lo = _mm256_cmp_ps(q, neg_hi, _CMP_LT_OQ);
++    const __m256f sat = _mm256_or_ps(m_hi, m_lo);
++    const __m256f val = _mm256_or_ps(_mm256_and_ps(m_hi, one),
++                                     _mm256_and_ps(m_lo, _mm256_neg_ps(one)));
++    return _mm256_or_ps(val, _mm256_andnot_ps(sat, poly));
++}
++
++}  // namespace
++
++// ============================================================================
++// op_distort_tanh AVX2 kernel
++//
++// in0: input (stereo L; R when stereo_in), in1: drive, optional per-sample
++// dry/wet level buffers (null => constant 0.0 / 1.0, as in drywet::coeff).
++// The only approximation is the declared tanh (see tanh_approx_ps); the
++// max/clamp, multiply and mix arithmetic are bit-exact against the scalar.
++// ============================================================================
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,
++                                                bool stereo_in, const float* drive,
++                                                const float* dry_level,
++                                                const float* wet_level, float* out_l,
++                                                float* out_r) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(in_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(drive, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
++    const __m256f dry_c = _mm256_set1_ps(0.0f);
++    const __m256f wet_c = _mm256_set1_ps(1.0f);
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256f x_l = _mm256_load_ps(in_l + i);
++        const __m256f x_r = stereo_in ? _mm256_load_ps(in_r + i) : x_l;
++        // d = std::max(0.1f, drive[i]); unordered_max matches std::max's
++        // (a < b) ? b : a for a = 0.1f, including NaN -> 0.1f.
++        const __m256f d = _mm256_max_ps(_mm256_load_ps(drive + i), _mm256_set1_ps(0.1f));
++
++        const __m256f y_l = tanh_approx_ps(_mm256_mul_ps(x_l, d));
++        const __m256f y_r = tanh_approx_ps(_mm256_mul_ps(x_r, d));
++        const __m256f dry = dry_level ? _mm256_load_ps(dry_level + i) : dry_c;
++        const __m256f wet = wet_level ? _mm256_load_ps(wet_level + i) : wet_c;
++
++        // mix(x, y, dry, wet) = x*dry + y*wet: two roundings, no FMA, exactly
++        // as the scalar (which is compiled without -ffast-math here too).
++        _mm256_store_ps(out_l + i,
++                        _mm256_add_ps(_mm256_mul_ps(x_l, dry), _mm256_mul_ps(y_l, wet)));
++        _mm256_store_ps(out_r + i,
++                        _mm256_add_ps(_mm256_mul_ps(x_r, dry), _mm256_mul_ps(y_r, wet)));
++    }
++}
++
++// ============================================================================
++// op_distort_soft AVX2 kernel
++//
++// in0: input (stereo L; R when stereo_in), in1: threshold, optional per-sample
++// dry/wet level buffers (null => constant 0.0 / 1.0).  Purely exact IEEE-754
++// operations (vdivps is correctly rounded, matching the scalar divss), so the
++// output is bit-identical to the scalar body: no approximation is declared.
++// ============================================================================
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* in_l, const float* in_r,
++                                                bool stereo_in, const float* threshold,
++                                                const float* dry_level,
++                                                const float* wet_level, float* out_l,
++                                                float* out_r) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(in_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(threshold, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
++    const __m256f dry_c = _mm256_set1_ps(0.0f);
++    const __m256f wet_c = _mm256_set1_ps(1.0f);
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256f x_l = _mm256_load_ps(in_l + i);
++        const __m256f x_r = stereo_in ? _mm256_load_ps(in_r + i) : x_l;
++        const __m256f t = clamp_soft_t_ps(_mm256_load_ps(threshold + i));
++
++        // wet signal = soft(x / t) * t, exact division via vdivps
++        const __m256f w_l = _mm256_mul_ps(soft_clip_ps(_mm256_div_ps(x_l, t)), t);
++        const __m256f w_r = _mm256_mul_ps(soft_clip_ps(_mm256_div_ps(x_r, t)), t);
++        const __m256f dry = dry_level ? _mm256_load_ps(dry_level + i) : dry_c;
++        const __m256f wet = wet_level ? _mm256_load_ps(wet_level + i) : wet_c;
++
++        _mm256_store_ps(out_l + i,
++                        _mm256_add_ps(_mm256_mul_ps(x_l, dry), _mm256_mul_ps(w_l, wet)));
++        _mm256_store_ps(out_r + i,
++                        _mm256_add_ps(_mm256_mul_ps(x_r, dry), _mm256_mul_ps(w_r, wet)));
++    }
++}
++
++}  // namespace cedar::kernels
++
++#endif  // CEDAR_SIMD_X86

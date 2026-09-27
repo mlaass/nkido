@@ -1,0 +1,22 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index d563d70..5c8a3f4 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -35,10 +35,14 @@ CEDAR_TARGET_AVX2 inline __m256 tanh_abs_avx2(__m256 ax) noexcept {
+     const __m256 u2 = _mm256_mul_ps(u, u);
+     const __m256 p = _mm256_mul_ps(u, _mm256_add_ps(c0, _mm256_mul_ps(u2, _mm256_add_ps(c1, _mm256_mul_ps(c2, u2)))));
+     const __m256 q = _mm256_add_ps(c0, _mm256_mul_ps(u2, _mm256_add_ps(d1, _mm256_mul_ps(d2, u2))));
++    // simd: approx std::tanh; fuse the three doubling steps into one rational form.
+     __m256 y = _mm256_div_ps(p, q);
+-    y = _mm256_div_ps(_mm256_add_ps(y, y), _mm256_add_ps(one, _mm256_mul_ps(y, y)));
+-    y = _mm256_div_ps(_mm256_add_ps(y, y), _mm256_add_ps(one, _mm256_mul_ps(y, y)));
+-    return _mm256_div_ps(_mm256_add_ps(y, y), _mm256_add_ps(one, _mm256_mul_ps(y, y)));
++    const __m256 y2 = _mm256_mul_ps(y, y);
++    const __m256 a = _mm256_add_ps(one, y2);
++    const __m256 b = _mm256_add_ps(_mm256_mul_ps(a, a), _mm256_mul_ps(_mm256_set1_ps(4.0f), y2));
++    const __m256 numerator = _mm256_mul_ps(_mm256_mul_ps(_mm256_set1_ps(8.0f), y), _mm256_mul_ps(a, b));
++    const __m256 denominator = _mm256_add_ps(_mm256_mul_ps(b, b), _mm256_mul_ps(_mm256_set1_ps(16.0f), _mm256_mul_ps(y2, _mm256_mul_ps(a, a))));
++    return _mm256_div_ps(numerator, denominator);
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* input_l,

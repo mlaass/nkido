@@ -1,0 +1,31 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index d2ac383..ab4491b 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -47,7 +47,7 @@ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
+ #if CEDAR_SIMD_X86
+-    if (simd::has(simd::Isa::Avx2)) { kernels::add_avx2(a, b, out); return; }
++    if (__builtin_expect(simd::has(simd::Isa::Avx2), 1)) { kernels::add_avx2(a, b, out); return; }
+ #endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] + b[i];
+@@ -62,7 +62,7 @@ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
+ #if CEDAR_SIMD_X86
+-    if (simd::has(simd::Isa::Avx2)) { kernels::sub_avx2(a, b, out); return; }
++    if (__builtin_expect(simd::has(simd::Isa::Avx2), 1)) { kernels::sub_avx2(a, b, out); return; }
+ #endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] - b[i];
+@@ -77,7 +77,7 @@ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
+ #if CEDAR_SIMD_X86
+-    if (simd::has(simd::Isa::Avx2)) { kernels::mul_avx2(a, b, out); return; }
++    if (__builtin_expect(simd::has(simd::Isa::Avx2), 1)) { kernels::mul_avx2(a, b, out); return; }
+ #endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] * b[i];

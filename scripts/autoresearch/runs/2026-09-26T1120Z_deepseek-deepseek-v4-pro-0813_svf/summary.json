@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-26T1120Z_deepseek-deepseek-v4-pro-0813_svf",
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v4-pro-0813",
+  "target": "svf",
+  "iterations": 8,
+  "accepts": 0,
+  "rejects": 8,
+  "reject_reasons": {
+    "backend error": 8
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 2.7,
+  "gpu_s": null,
+  "active_s": 2.7,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/deepseek-deepseek-v4-pro-0813-svf-202609261120",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

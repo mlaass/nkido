@@ -1,0 +1,111 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0d74114..97fcf94 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -33,8 +33,101 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
+ // Classic algorithm: 8 parallel lowpass-feedback comb filters summed,
+ // then through 4 series allpass filters. Creates lush, dense reverb.
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx, const Instruction& inst) noexcept {
++    float* out_l = ctx.buffers->get(inst.out_buffer);
++    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++    const float* input = ctx.buffers->get(inst.inputs[0]);
++    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++    const float* input_r = stereo_in ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1)) : nullptr;
++    const float* room_size = ctx.buffers->get(inst.inputs[1]);
++    const float* damping = ctx.buffers->get(inst.inputs[2]);
++    const float* room_scale_in = ctx.buffers->get(inst.inputs[3]);
++    const float* room_offset_in = ctx.buffers->get(inst.inputs[4]);
++    auto& state = ctx.states->get_or_create<FreeverbState>(inst.state_id);
++    state.ensure_buffers(ctx.arena);
++    if (!state.buffers_ready()) {
++        CEDAR_LOG_ONCE("[CEDAR] audio arena exhausted: reverb(freeverb) → dry passthrough\n");
++        drywet::passthrough_stereo(input, input_r, stereo_in, out_l, out_r, BLOCK_SIZE);
++        return;
++    }
++    const auto* ext = ctx.states->get_if<ExtendedParams<2>>(ext_params_state_id(inst.state_id));
++    const float* dry_buf = nullptr; float dry_const = 1.0f;
++    const float* wet_buf = nullptr; float wet_const = 0.5f;
++    if (ext) {
++        const auto& d = ext->params[0];
++        if (d.is_constant()) dry_const = d.constant; else dry_buf = ctx.buffers->get(d.buffer_idx);
++        const auto& w = ext->params[1];
++        if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
++    }
++    constexpr float ALLPASS_GAIN = 0.5f;
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float x_l = input[i];
++        const float x_r = stereo_in ? input_r[i] : x_l;
++        const float dry = drywet::coeff(dry_buf, i, dry_const);
++        const float wet = drywet::coeff(wet_buf, i, wet_const);
++        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
++        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
++        const float room_scale = room_scale_in[i] > 0.0f ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
++        const float room_offset = room_offset_in[i] > 0.0f ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
++        const float feedback = room * room_scale + room_offset;
++        float y_lr[2] = {0.0f, 0.0f};
++        for (std::size_t ch = 0; ch < 2; ++ch) {
++            const float x = ch == 0 ? x_l : x_r;
++            float delayed[FreeverbState::NUM_COMBS];
++            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c)
++                delayed[c] = state.comb_buffers[ch][c][state.comb_pos[ch][c]];
++            const __m256 vd = _mm256_loadu_ps(delayed);
++            const __m256 vdamp = _mm256_set1_ps(damp);
++            const __m256 vfilter = _mm256_add_ps(
++                _mm256_mul_ps(vd, _mm256_sub_ps(_mm256_set1_ps(1.0f), vdamp)),
++                _mm256_mul_ps(_mm256_loadu_ps(state.comb_filter_state[ch]), vdamp));
++            const __m256 vx1 = _mm256_loadu_ps(state.dc_x1[ch]);
++            const __m256 vy1 = _mm256_loadu_ps(state.dc_y1[ch]);
++            const __m256 vdc = _mm256_add_ps(
++                _mm256_sub_ps(vfilter, vx1),
++                _mm256_mul_ps(_mm256_set1_ps(DC_BLOCKER_R), vy1));
++            _mm256_storeu_ps(state.comb_filter_state[ch], vfilter);
++            _mm256_storeu_ps(state.dc_x1[ch], vfilter);
++            _mm256_storeu_ps(state.dc_y1[ch], vdc);
++            const __m256 vwrite = _mm256_add_ps(
++                _mm256_set1_ps(x), _mm256_mul_ps(_mm256_set1_ps(feedback), vdc));
++            float write[FreeverbState::NUM_COMBS];
++            _mm256_storeu_ps(write, vwrite);
++            float comb_sum = 0.0f;
++            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
++                const std::size_t pos = state.comb_pos[ch][c];
++                const std::size_t size = FreeverbState::COMB_SIZES_LR[ch][c];
++                state.comb_buffers[ch][c][pos] = write[c];
++                state.comb_pos[ch][c] = pos + 1 == size ? 0 : pos + 1;
++                comb_sum += delayed[c];
++            }
++            float y = comb_sum;
++            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
++                float* buffer = state.allpass_buffers[ch][a];
++                const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
++                const std::size_t pos = state.allpass_pos[ch][a];
++                const float delayed = buffer[pos];
++                const float output = delayed - ALLPASS_GAIN * y;
++                buffer[pos] = y + ALLPASS_GAIN * output;
++                state.allpass_pos[ch][a] = pos + 1 == size ? 0 : pos + 1;
++                y = output;
++            }
++            y_lr[ch] = y;
++        }
++        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
++        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
++    }
++}
++#endif
++}
++
+ [[gnu::always_inline]]
+ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) { kernels::reverb_freeverb_avx2(ctx, inst); return; }
++#endif
+     // Stereo-native: writes out_buffer (L) and out_buffer+1 (R) in one call.
+     // When STEREO_INPUT is set in inst.flags, the primary signal input is a
+     // stereo pair (inputs[0] = L, inputs[0]+1 = R). When unset, the mono input
+@@ -469,3 +562,4 @@ inline void op_reverb_fdn(ExecutionContext& ctx, const Instruction& inst) {
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"

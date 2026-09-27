@@ -1,0 +1,101 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 0d74114..923d41c 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -35,6 +35,9 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
+ 
+ [[gnu::always_inline]]
+ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) { kernels::freeverb_avx2(ctx, inst); return; }
++#endif
+     // Stereo-native: writes out_buffer (L) and out_buffer+1 (R) in one call.
+     // When STEREO_INPUT is set in inst.flags, the primary signal input is a
+     // stereo pair (inputs[0] = L, inputs[0]+1 = R). When unset, the mono input
+@@ -469,3 +472,86 @@ inline void op_reverb_fdn(ExecutionContext& ctx, const Instruction& inst) {
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"
++
++namespace cedar { namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void freeverb_avx2(ExecutionContext& ctx, const Instruction& inst) noexcept {
++    float* out_l = ctx.buffers->get(inst.out_buffer);
++    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++    const float* input = ctx.buffers->get(inst.inputs[0]);
++    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++    const float* input_r = stereo_in ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1)) : nullptr;
++    const float* room_size = ctx.buffers->get(inst.inputs[1]);
++    const float* damping = ctx.buffers->get(inst.inputs[2]);
++    const float* room_scale_in = ctx.buffers->get(inst.inputs[3]);
++    const float* room_offset_in = ctx.buffers->get(inst.inputs[4]);
++    auto& state = ctx.states->get_or_create<FreeverbState>(inst.state_id);
++    state.ensure_buffers(ctx.arena);
++    if (!state.buffers_ready()) return;
++
++    const auto* ext = ctx.states->get_if<ExtendedParams<2>>(ext_params_state_id(inst.state_id));
++    const float* dry_buf = nullptr; float dry_const = 1.0f;
++    const float* wet_buf = nullptr; float wet_const = 0.5f;
++    if (ext) {
++        const auto& d = ext->params[0];
++        if (d.is_constant()) dry_const = d.constant; else dry_buf = ctx.buffers->get(d.buffer_idx);
++        const auto& w = ext->params[1];
++        if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
++    }
++
++    auto lane = [&](std::size_t ch, float x, float damp, float feedback) {
++        float comb_sum = 0.0f;
++        // The network size is fixed.  Keeping these accesses explicit lets the
++        // target compiler schedule the independent state updates together.
++#define CEDAR_FREEVERB_COMB(C) do { \
++            float* b = state.comb_buffers[ch][C]; \
++            const std::size_t p = state.comb_pos[ch][C]; \
++            const std::size_t n = FreeverbState::COMB_SIZES_LR[ch][C]; \
++            const float delayed = b[p]; \
++            state.comb_filter_state[ch][C] = delayed * (1.0f - damp) + state.comb_filter_state[ch][C] * damp; \
++            const float dc_in = state.comb_filter_state[ch][C]; \
++            const float dc_out = dc_in - state.dc_x1[ch][C] + DC_BLOCKER_R * state.dc_y1[ch][C]; \
++            state.dc_x1[ch][C] = dc_in; state.dc_y1[ch][C] = dc_out; \
++            b[p] = x + feedback * dc_out; \
++            state.comb_pos[ch][C] = (p + 1) % n; \
++            comb_sum += delayed; \
++        } while (false)
++        CEDAR_FREEVERB_COMB(0); CEDAR_FREEVERB_COMB(1); CEDAR_FREEVERB_COMB(2); CEDAR_FREEVERB_COMB(3);
++        CEDAR_FREEVERB_COMB(4); CEDAR_FREEVERB_COMB(5); CEDAR_FREEVERB_COMB(6); CEDAR_FREEVERB_COMB(7);
++#undef CEDAR_FREEVERB_COMB
++
++        float y = comb_sum;
++#define CEDAR_FREEVERB_AP(A) do { \
++            float* b = state.allpass_buffers[ch][A]; \
++            const std::size_t p = state.allpass_pos[ch][A]; \
++            const std::size_t n = FreeverbState::ALLPASS_SIZES_LR[ch][A]; \
++            const float delayed = b[p]; \
++            const float output = delayed - 0.5f * y; \
++            b[p] = y + 0.5f * output; \
++            state.allpass_pos[ch][A] = (p + 1) % n; \
++            y = output; \
++        } while (false)
++        CEDAR_FREEVERB_AP(0); CEDAR_FREEVERB_AP(1); CEDAR_FREEVERB_AP(2); CEDAR_FREEVERB_AP(3);
++#undef CEDAR_FREEVERB_AP
++        return y;
++    };
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float x_l = input[i];
++        const float x_r = stereo_in ? input_r[i] : x_l;
++        const float dry = drywet::coeff(dry_buf, i, dry_const);
++        const float wet = drywet::coeff(wet_buf, i, wet_const);
++        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
++        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
++        const float room_scale = room_scale_in[i] > 0.0f ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
++        const float room_offset = room_offset_in[i] > 0.0f ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
++        const float feedback = room * room_scale + room_offset;
++        const float y_l = lane(0, x_l, damp, feedback);
++        const float y_r = lane(1, x_r, damp, feedback);
++        out_l[i] = drywet::mix(x_l, y_l, dry, wet);
++        out_r[i] = drywet::mix(x_r, y_r, dry, wet);
++    }
++}
++#endif
++} }

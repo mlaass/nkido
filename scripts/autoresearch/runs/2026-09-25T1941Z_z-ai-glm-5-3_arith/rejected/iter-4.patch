@@ -1,0 +1,159 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index e3f4447..7c616fd 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -123,23 +123,60 @@ inline void mul_wasm(const float* a, const float* b, float* out) noexcept {
+ }
+ #endif  // CEDAR_SIMD_WASM
+ 
++// Fast buffer-pointer resolution for the SIMD dispatch path.
++//
++// BufferPool::get() is the guarded diagnostic path: per call it pays a
++// MAX_BUFFERS bounds check, a slab load, a null check and carries cold
++// printf machinery — three calls per ADD/SUB/MUL dispatch. The pool's
++// documented contract (buffer_pool.hpp: "the audio thread only reads slab
++// indices the compile thread has already armed") means a published
++// program's indices always hit live slabs, so the hot path needs only the
++// slab-array load and the fixed 256-buffer stride arithmetic. Any anomaly
++// (out-of-range or un-armed index) falls back to the original guarded
++// get(), so observable behaviour is identical in every case. No allocation,
++// lock or syscall.
++inline float* buf_fast(BufferPool& pool, std::uint16_t index) noexcept {
++    if (index >= MAX_BUFFERS) return pool.get(index);  // cold: guarded path
++    BufferPool::Slab* slab = pool.slabs_[index / SLAB_BUFFERS].get();
++    if (slab == nullptr) return pool.get(index);       // cold: guarded path
++    return slab->data[index % SLAB_BUFFERS].data();
++}
++
+ }  // namespace kernels
+ 
+ // ADD: out = in0 + in1
+ [[gnu::always_inline]]
+ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86 || CEDAR_SIMD_NEON || CEDAR_SIMD_WASM
++    // Hot path: skip the guarded get() diagnostics (see kernels::buf_fast).
++    // Scalar-dispatch builds and any non-SIMD ISA keep the original get()
++    // calls below, so the oracle path is untouched.
++    if (
++#  if CEDAR_SIMD_X86
++        simd::has(simd::Isa::Avx2) || simd::has(simd::Isa::Sse2)
++#  elif CEDAR_SIMD_NEON
++        simd::has(simd::Isa::Neon)
++#  else
++        simd::has(simd::Isa::Wasm128)
++#  endif
++    ) {
++        float* out = kernels::buf_fast(*ctx.buffers, inst.out_buffer);
++        const float* a = kernels::buf_fast(*ctx.buffers, inst.inputs[0]);
++        const float* b = kernels::buf_fast(*ctx.buffers, inst.inputs[1]);
++#  if CEDAR_SIMD_X86
++        if (simd::has(simd::Isa::Avx2)) { kernels::add_avx2(a, b, out); return; }
++        kernels::add_sse2(a, b, out); return;
++#  elif CEDAR_SIMD_NEON
++        kernels::add_neon(a, b, out); return;
++#  else
++        kernels::add_wasm(a, b, out); return;
++#  endif
++    }
++#endif
+     float* out = ctx.buffers->get(inst.out_buffer);
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
+-#if CEDAR_SIMD_X86
+-    if (simd::has(simd::Isa::Avx2)) { kernels::add_avx2(a, b, out); return; }
+-    if (simd::has(simd::Isa::Sse2)) { kernels::add_sse2(a, b, out); return; }
+-#elif CEDAR_SIMD_NEON
+-    if (simd::has(simd::Isa::Neon)) { kernels::add_neon(a, b, out); return; }
+-#elif CEDAR_SIMD_WASM
+-    if (simd::has(simd::Isa::Wasm128)) { kernels::add_wasm(a, b, out); return; }
+-#endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] + b[i];
+     }
+@@ -148,18 +185,34 @@ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+ // SUB: out = in0 - in1
+ [[gnu::always_inline]]
+ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86 || CEDAR_SIMD_NEON || CEDAR_SIMD_WASM
++    // Hot path: skip the guarded get() diagnostics (see kernels::buf_fast).
++    if (
++#  if CEDAR_SIMD_X86
++        simd::has(simd::Isa::Avx2) || simd::has(simd::Isa::Sse2)
++#  elif CEDAR_SIMD_NEON
++        simd::has(simd::Isa::Neon)
++#  else
++        simd::has(simd::Isa::Wasm128)
++#  endif
++    ) {
++        float* out = kernels::buf_fast(*ctx.buffers, inst.out_buffer);
++        const float* a = kernels::buf_fast(*ctx.buffers, inst.inputs[0]);
++        const float* b = kernels::buf_fast(*ctx.buffers, inst.inputs[1]);
++#  if CEDAR_SIMD_X86
++        if (simd::has(simd::Isa::Avx2)) { kernels::sub_avx2(a, b, out); return; }
++        kernels::sub_sse2(a, b, out); return;
++#  elif CEDAR_SIMD_NEON
++        kernels::sub_neon(a, b, out); return;
++#  else
++        kernels::sub_wasm(a, b, out); return;
++#  endif
++    }
++#endif
+     float* out = ctx.buffers->get(inst.out_buffer);
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
+-#if CEDAR_SIMD_X86
+-    if (simd::has(simd::Isa::Avx2)) { kernels::sub_avx2(a, b, out); return; }
+-    if (simd::has(simd::Isa::Sse2)) { kernels::sub_sse2(a, b, out); return; }
+-#elif CEDAR_SIMD_NEON
+-    if (simd::has(simd::Isa::Neon)) { kernels::sub_neon(a, b, out); return; }
+-#elif CEDAR_SIMD_WASM
+-    if (simd::has(simd::Isa::Wasm128)) { kernels::sub_wasm(a, b, out); return; }
+-#endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] - b[i];
+     }
+@@ -168,18 +221,34 @@ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+ // MUL: out = in0 * in1
+ [[gnu::always_inline]]
+ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86 || CEDAR_SIMD_NEON || CEDAR_SIMD_WASM
++    // Hot path: skip the guarded get() diagnostics (see kernels::buf_fast).
++    if (
++#  if CEDAR_SIMD_X86
++        simd::has(simd::Isa::Avx2) || simd::has(simd::Isa::Sse2)
++#  elif CEDAR_SIMD_NEON
++        simd::has(simd::Isa::Neon)
++#  else
++        simd::has(simd::Isa::Wasm128)
++#  endif
++    ) {
++        float* out = kernels::buf_fast(*ctx.buffers, inst.out_buffer);
++        const float* a = kernels::buf_fast(*ctx.buffers, inst.inputs[0]);
++        const float* b = kernels::buf_fast(*ctx.buffers, inst.inputs[1]);
++#  if CEDAR_SIMD_X86
++        if (simd::has(simd::Isa::Avx2)) { kernels::mul_avx2(a, b, out); return; }
++        kernels::mul_sse2(a, b, out); return;
++#  elif CEDAR_SIMD_NEON
++        kernels::mul_neon(a, b, out); return;
++#  else
++        kernels::mul_wasm(a, b, out); return;
++#  endif
++    }
++#endif
+     float* out = ctx.buffers->get(inst.out_buffer);
+     const float* a = ctx.buffers->get(inst.inputs[0]);
+     const float* b = ctx.buffers->get(inst.inputs[1]);
+ 
+-#if CEDAR_SIMD_X86
+-    if (simd::has(simd::Isa::Avx2)) { kernels::mul_avx2(a, b, out); return; }
+-    if (simd::has(simd::Isa::Sse2)) { kernels::mul_sse2(a, b, out); return; }
+-#elif CEDAR_SIMD_NEON
+-    if (simd::has(simd::Isa::Neon)) { kernels::mul_neon(a, b, out); return; }
+-#elif CEDAR_SIMD_WASM
+-    if (simd::has(simd::Isa::Wasm128)) { kernels::mul_wasm(a, b, out); return; }
+-#endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] * b[i];
+     }

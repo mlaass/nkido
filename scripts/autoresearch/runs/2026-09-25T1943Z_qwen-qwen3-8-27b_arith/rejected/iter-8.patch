@@ -1,0 +1,97 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index eeecd64..2b69203 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,6 +10,20 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// Fast buffer-pointer resolution for the binary-arith fast path.
++//
++// ADD/SUB/MUL are pure elementwise: their inputs and output are plain
++// BufferPool buffer indices. Codegen guarantees the indices are in-range
++// (0..MAX_BUFFERS-1) and BufferPool::ensure_capacity() armed every slab the
++// program references at load time (slabs are never freed), so the
++// bounds-check and null-slab check in BufferPool::get() are dead weight on
++// this hot path. Resolving the pointer directly yields the *identical*
++// address (same slab, same row); SLAB_BUFFERS is a power of two, so the
++// / and % below compile to a shift and a mask. Bit-for-bit the same buffer.
++inline float* buf_ptr(BufferPool* bp, std::uint16_t idx) noexcept {
++    return bp->slabs_[idx / SLAB_BUFFERS]->get()->data[idx % SLAB_BUFFERS].data();
++}
++
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
+@@ -42,16 +56,19 @@ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* ou
+ // ADD: out = in0 + in1
+ [[gnu::always_inline]]
+ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+-    float* out = ctx.buffers->get(inst.out_buffer);
+-    const float* a = ctx.buffers->get(inst.inputs[0]);
+-    const float* b = ctx.buffers->get(inst.inputs[1]);
+-
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) {
++        BufferPool* bp = ctx.buffers;
++        const float* a = kernels::buf_ptr(bp, inst.inputs[0]);
++        const float* b = kernels::buf_ptr(bp, inst.inputs[1]);
++        float* out = kernels::buf_ptr(bp, inst.out_buffer);
+         kernels::add_avx2(a, b, out);
+         return;
+     }
+ #endif
++    float* out = ctx.buffers->get(inst.out_buffer);
++    const float* a = ctx.buffers->get(inst.inputs[0]);
++    const float* b = ctx.buffers->get(inst.inputs[1]);
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] + b[i];
+     }
+@@ -60,16 +77,19 @@ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+ // SUB: out = in0 - in1
+ [[gnu::always_inline]]
+ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+-    float* out = ctx.buffers->get(inst.out_buffer);
+-    const float* a = ctx.buffers->get(inst.inputs[0]);
+-    const float* b = ctx.buffers->get(inst.inputs[1]);
+-
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) {
++        BufferPool* bp = ctx.buffers;
++        const float* a = kernels::buf_ptr(bp, inst.inputs[0]);
++        const float* b = kernels::buf_ptr(bp, inst.inputs[1]);
++        float* out = kernels::buf_ptr(bp, inst.out_buffer);
+         kernels::sub_avx2(a, b, out);
+         return;
+     }
+ #endif
++    float* out = ctx.buffers->get(inst.out_buffer);
++    const float* a = ctx.buffers->get(inst.inputs[0]);
++    const float* b = ctx.buffers->get(inst.inputs[1]);
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] - b[i];
+     }
+@@ -78,16 +98,19 @@ inline void op_sub(ExecutionContext& ctx, const Instruction& inst) {
+ // MUL: out = in0 * in1
+ [[gnu::always_inline]]
+ inline void op_mul(ExecutionContext& ctx, const Instruction& inst) {
+-    float* out = ctx.buffers->get(inst.out_buffer);
+-    const float* a = ctx.buffers->get(inst.inputs[0]);
+-    const float* b = ctx.buffers->get(inst.inputs[1]);
+-
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) {
++        BufferPool* bp = ctx.buffers;
++        const float* a = kernels::buf_ptr(bp, inst.inputs[0]);
++        const float* b = kernels::buf_ptr(bp, inst.inputs[1]);
++        float* out = kernels::buf_ptr(bp, inst.out_buffer);
+         kernels::mul_avx2(a, b, out);
+         return;
+     }
+ #endif
++    float* out = ctx.buffers->get(inst.out_buffer);
++    const float* a = ctx.buffers->get(inst.inputs[0]);
++    const float* b = ctx.buffers->get(inst.inputs[1]);
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         out[i] = a[i] * b[i];
+     }

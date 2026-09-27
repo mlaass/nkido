@@ -1,0 +1,51 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 4a24819..15b2030 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -50,6 +50,14 @@ namespace freeverb_kernels {
+     r[3] = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+ }
+ 
++// Same semantics as std::clamp(v, 0, 1): NaN and -0 pass through.
++[[gnu::always_inline]] CEDAR_TARGET_AVX2 inline __m256 clamp01_ps(__m256 v) noexcept {
++    const __m256 hi = _mm256_blendv_ps(v, _mm256_set1_ps(1.0f),
++                                       _mm256_cmp_ps(_mm256_set1_ps(1.0f), v, _CMP_LT_OQ));
++    return _mm256_blendv_ps(hi, _mm256_setzero_ps(),
++                            _mm256_cmp_ps(v, _mm256_setzero_ps(), _CMP_LT_OQ));
++}
++
+ // One allpass stage over a contiguous run of the delay line. y holds the stage
+ // input on entry and the stage output on exit. Elements are independent
+ // because the delay is longer than a block.
+@@ -92,14 +100,23 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     alignas(32) float ys[2][N];
+     alignas(32) float stage[2][NC][N];  // only touched when a comb line wraps inside the block
+ 
+-    for (std::size_t i = 0; i < N; ++i) {
+-        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+-        const float d = std::clamp(damping[i], 0.0f, 1.0f);
+-        const float room_scale = room_scale_in[i] > 0.0f ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
+-        const float room_offset = room_offset_in[i] > 0.0f ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+-        fb[i] = room * room_scale + room_offset;
+-        damp[i] = d;
+-        omd[i] = 1.0f - d;
++    {
++        const __m256 zero = _mm256_setzero_ps();
++        const __m256 one = _mm256_set1_ps(1.0f);
++        const __m256 def_scale = _mm256_set1_ps(FREEVERB_ROOM_SCALE_DEFAULT);
++        const __m256 def_offset = _mm256_set1_ps(FREEVERB_ROOM_OFFSET_DEFAULT);
++        // Same semantics as std::clamp(v, 0, 1): NaN and -0 pass through.
++        for (std::size_t i = 0; i < N; i += 8) {
++            const __m256 room = clamp01_ps(_mm256_loadu_ps(room_size + i));
++            const __m256 d = clamp01_ps(_mm256_loadu_ps(damping + i));
++            const __m256 rs = _mm256_loadu_ps(room_scale_in + i);
++            const __m256 ro = _mm256_loadu_ps(room_offset_in + i);
++            const __m256 room_scale = _mm256_blendv_ps(def_scale, rs, _mm256_cmp_ps(rs, zero, _CMP_GT_OQ));
++            const __m256 room_offset = _mm256_blendv_ps(def_offset, ro, _mm256_cmp_ps(ro, zero, _CMP_GT_OQ));
++            _mm256_store_ps(fb + i, _mm256_add_ps(_mm256_mul_ps(room, room_scale), room_offset));
++            _mm256_store_ps(damp + i, d);
++            _mm256_store_ps(omd + i, _mm256_sub_ps(one, d));
++        }
+     }
+ 
+     // Each comb line is processed in place (read delayed, write feedback to the

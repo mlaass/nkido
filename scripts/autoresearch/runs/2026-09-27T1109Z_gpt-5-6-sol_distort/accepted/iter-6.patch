@@ -1,0 +1,47 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 1b0d5ce..7ecaaa0 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -94,29 +94,26 @@ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(
+     const float* input, const float* input_r, const float* threshold,
+     const float* dry_level, const float* wet_level,
+     float* out_l, float* out_r, bool stereo_in) noexcept {
+-    alignas(32) float shaped_l[BLOCK_SIZE];
+-    alignas(32) float shaped_r[BLOCK_SIZE];
+     const __m256 min_threshold = _mm256_set1_ps(0.1f);
+     const __m256 max_threshold = _mm256_set1_ps(2.0f);
++    const __m256 zero = _mm256_setzero_ps();
++    const __m256 one = _mm256_set1_ps(1.0f);
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         const __m256 t = _mm256_max_ps(
+             min_threshold, _mm256_min_ps(max_threshold, _mm256_load_ps(threshold + i)));
+         const __m256 xl = _mm256_load_ps(input + i);
++        const __m256 xr = stereo_in ? _mm256_load_ps(input_r + i) : xl;
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : zero;
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : one;
+         const __m256 yl = _mm256_div_ps(xl, t);
+-        _mm256_store_ps(shaped_l + i, _mm256_mul_ps(distort_soft_vec_avx2(yl), t));
+-        if (stereo_in) {
+-            const __m256 xr = _mm256_load_ps(input_r + i);
+-            const __m256 yr = _mm256_div_ps(xr, t);
+-            _mm256_store_ps(shaped_r + i, _mm256_mul_ps(distort_soft_vec_avx2(yr), t));
+-        }
+-    }
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        const float dry = drywet::coeff(dry_level, i, 0.0f);
+-        const float wet = drywet::coeff(wet_level, i, 1.0f);
+-        const float x_l = input[i];
+-        const float x_r = stereo_in ? input_r[i] : x_l;
+-        out_l[i] = drywet::mix(x_l, shaped_l[i], dry, wet);
+-        out_r[i] = drywet::mix(x_r, stereo_in ? shaped_r[i] : shaped_l[i], dry, wet);
++        const __m256 shaped_l = _mm256_mul_ps(distort_soft_vec_avx2(yl), t);
++        const __m256 shaped_r = stereo_in
++            ? _mm256_mul_ps(distort_soft_vec_avx2(_mm256_div_ps(xr, t)), t)
++            : shaped_l;
++        _mm256_store_ps(out_l + i, _mm256_add_ps(
++            _mm256_mul_ps(xl, dry), _mm256_mul_ps(shaped_l, wet)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(
++            _mm256_mul_ps(xr, dry), _mm256_mul_ps(shaped_r, wet)));
+     }
+ }
+ #endif

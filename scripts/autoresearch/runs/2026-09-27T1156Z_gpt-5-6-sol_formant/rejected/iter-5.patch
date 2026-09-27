@@ -1,0 +1,29 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 72d2967..a2a4f80 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -570,7 +570,23 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
+         if (!block_formants_constant || i == 0) {
+             auto prewarp_coef = [&](float freq) -> float {
+                 float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
+-                return std::min(1.9f, 2.0f * std::tan(w));
++                // simd: approx tan.  Keep the exact library path for larger
++                // coefficients, where the feedback loop magnifies tiny
++                // coefficient errors; only well-conditioned small-angle
++                // sections use the polynomial.
++                if (w >= 0.1f) return std::min(1.9f, 2.0f * std::tan(w));
++                const double wd = static_cast<double>(w);
++                const double w2 = wd * wd;
++                double p = 6404582.0 / 10854718875.0;
++                p = 929569.0 / 638512875.0 + w2 * p;
++                p = 21844.0 / 6081075.0 + w2 * p;
++                p = 1382.0 / 155925.0 + w2 * p;
++                p = 62.0 / 2835.0 + w2 * p;
++                p = 17.0 / 315.0 + w2 * p;
++                p = 2.0 / 15.0 + w2 * p;
++                p = 1.0 / 3.0 + w2 * p;
++                const float tan_w = static_cast<float>(wd + wd * w2 * p);
++                return std::min(1.9f, 2.0f * tan_w);
+             };
+             f1_coef = prewarp_coef(state.f1);
+             f2_coef = prewarp_coef(state.f2);

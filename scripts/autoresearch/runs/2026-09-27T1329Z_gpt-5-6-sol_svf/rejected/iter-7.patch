@@ -1,0 +1,39 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 22de0ab..f8b21e4 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -82,16 +82,15 @@ CEDAR_TARGET_AVX2 inline void calc_svf_avx2(
+ 
+ // simd: approx tan -- evaluate eight independent coefficient sets together.
+ CEDAR_TARGET_AVX2 inline void calc_svf8_avx2(
+-    const float* freq, const float* q, float sample_rate,
++    const float* freq, const float* q, float max_frequency, float frequency_scale,
+     float* a1_out, float* a2_out, float* a3_out, float* k_out) noexcept {
+-    const __m256 sample_rate_v = _mm256_set1_ps(sample_rate);
+-    const __m256 max_freq = _mm256_mul_ps(
+-        sample_rate_v, _mm256_set1_ps(0.45f));
++    const __m256 max_freq = _mm256_set1_ps(max_frequency);
+     // Put the source values second to match std::min/max for NaNs.
+     const __m256 clamped_freq = _mm256_min_ps(
+         max_freq, _mm256_load_ps(freq));
+-    const __m256 x = _mm256_div_ps(
+-        _mm256_mul_ps(_mm256_set1_ps(PI), clamped_freq), sample_rate_v);
++    // simd: approx tan -- hoist its block-invariant PI/sample-rate reduction.
++    const __m256 x = _mm256_mul_ps(
++        clamped_freq, _mm256_set1_ps(frequency_scale));
+     const __m256 half_pi = _mm256_set1_ps(1.57079632679489661923f);
+     const __m256 quarter_pi = _mm256_set1_ps(0.78539816339744830962f);
+     const __m256 reciprocal = _mm256_cmp_ps(x, quarter_pi, _CMP_GT_OQ);
+@@ -143,8 +142,11 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
+         state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+ 
+     alignas(32) float a1[8], a2[8], a3[8], k[8];
++    const float max_frequency = sample_rate * 0.45f;
++    const float frequency_scale = PI / sample_rate;
+     for (std::size_t base = 0; base < BLOCK_SIZE; base += 8) {
+-        calc_svf8_avx2(freq + base, q + base, sample_rate, a1, a2, a3, k);
++        calc_svf8_avx2(freq + base, q + base, max_frequency, frequency_scale,
++            a1, a2, a3, k);
+         for (std::size_t lane = 0; lane < 8; ++lane) {
+         const std::size_t i = base + lane;
+         state.a1 = a1[lane];

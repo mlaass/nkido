@@ -1,0 +1,144 @@
+diff --git a/cedar/include/cedar/dsp/simd.hpp b/cedar/include/cedar/dsp/simd.hpp
+index ee273e4..3e725d9 100644
+--- a/cedar/include/cedar/dsp/simd.hpp
++++ b/cedar/include/cedar/dsp/simd.hpp
+@@ -24,8 +24,19 @@
+ #  define CEDAR_SIMD_X86 1
+ #  include <immintrin.h>
+ #  define CEDAR_TARGET_AVX2 [[gnu::target("avx2")]]
++// Compile-time mirror of what this binary actually contains (ISA detection
++// still happens at runtime; g_active always reflects the real CPU). Letting
++// opcodes fold `has(Avx2)` on a constexpr lets the compiler drop the
++// "generic ISA" clone of the whole opcode body and allocate registers with
++// the AVX2 ISA in view, instead of emitting code for an ISA it cannot name.
++#  if defined(__AVX2__)
++#    define CEDAR_ACTIVE_ISA_AVX2 1
++#  else
++#    define CEDAR_ACTIVE_ISA_AVX2 0
++#  endif
+ #else
+ #  define CEDAR_SIMD_X86 0
++#  define CEDAR_ACTIVE_ISA_AVX2 0
+ #endif
+ 
+ #if defined(CEDAR_SIMD) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+@@ -52,6 +63,21 @@ enum class Isa : std::uint8_t { Scalar, Sse2, Avx2, Neon, Wasm128 };
+ namespace detail {
+ // Written once during static initialisation (src/dsp/simd.cpp); read-only after.
+ extern Isa g_active;
++// What this binary was compiled with. ISA detection still happens at runtime:
++// g_active is authoritative. g_active_compiled exists so opcode headers can
++// fold the dispatch on a compile-time constant (see arithmetic.hpp).
++inline constexpr Isa g_active_compiled =
++#if CEDAR_ACTIVE_ISA_AVX2
++    Isa::Avx2;
++#elif CEDAR_SIMD_NEON
++    Isa::Neon;
++#elif CEDAR_SIMD_WASM
++    Isa::Wasm128;
++#elif defined(__SSE2__)
++    Isa::Sse2;
++#else
++    Isa::Scalar;
++#endif
+ }
+ 
+ // Best ISA available on this CPU *and* compiled into this build.
+@@ -65,6 +91,19 @@ extern Isa g_active;
+     return a == isa;
+ }
+ 
++// Compile-time counterpart of has(Isa::Avx2): true only when this binary
++// contains the AVX2 kernels. Opcode dispatchers use this so the compiler can
++// fold the branch away; the runtime has() keeps deciding the same thing.
++[[nodiscard]] inline constexpr bool has_compiled(Isa isa) noexcept {
++    switch (isa) {
++        case Isa::Scalar: return true;
++        case Isa::Sse2:
++            return detail::g_active_compiled == Isa::Sse2 ||
++                   detail::g_active_compiled == Isa::Avx2;
++        default: return detail::g_active_compiled == isa;
++    }
++}
++
+ [[nodiscard]] const char* name(Isa isa) noexcept;
+ 
+ // Test/bench hook: force a lower ISA (e.g. Scalar) to A/B the fallback path.
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index dc2804a..13300e8 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,18 +10,67 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++
++// One 8-wide group: out[K..K+7] = op(a[K..K+7], b[K..K+7]). All loads/stores
++// are 32-byte aligned (BufferPool slabs are alignas(32)).
++#define CEDAR_AVX2_BIN_GROUP(OP, A, B, OUT, K)                                   \
++    _mm256_store_ps((OUT) + (K),                                                 \
++                    (OP)(_mm256_load_ps((A) + (K)), _mm256_load_ps((B) + (K))))
++
++#define CEDAR_AVX2_BIN_QUAD(OP, A, B, OUT, Q)                                    \
++    CEDAR_AVX2_BIN_GROUP(OP, A, B, OUT, (Q) +  0);                               \
++    CEDAR_AVX2_BIN_GROUP(OP, A, B, OUT, (Q) +  8);                               \
++    CEDAR_AVX2_BIN_GROUP(OP, A, B, OUT, (Q) + 16);                               \
++    CEDAR_AVX2_BIN_GROUP(OP, A, B, OUT, (Q) + 24)
++
++// The kernels are target("avx2") functions, so the caller (vm.cpp is a
++// baseline-SSE2 TU) keeps them out-of-line — one call per 128-sample block
++// either way. Inside the kernel the trip count is a compile-time constant, so
++// the loop is written out in full: zero loop bookkeeping, and every load is
++// free to issue ahead of the previous group's store (the store-to-load check
++// resolves on addresses, not on program order). Element-wise ops stay safe
++// for aliasing inputs/outputs (out == a is legal) because each group only
++// ever loads the elements it is about to store.
++#if !defined(CEDAR_BLOCK_SIZE) || CEDAR_BLOCK_SIZE == 128
++
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    CEDAR_AVX2_BIN_QUAD(_mm256_add_ps, a, b, out,   0);
++    CEDAR_AVX2_BIN_QUAD(_mm256_add_ps, a, b, out,  32);
++    CEDAR_AVX2_BIN_QUAD(_mm256_add_ps, a, b, out,  64);
++    CEDAR_AVX2_BIN_QUAD(_mm256_add_ps, a, b, out,  96);
+ }
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    CEDAR_AVX2_BIN_QUAD(_mm256_sub_ps, a, b, out,   0);
++    CEDAR_AVX2_BIN_QUAD(_mm256_sub_ps, a, b, out,  32);
++    CEDAR_AVX2_BIN_QUAD(_mm256_sub_ps, a, b, out,  64);
++    CEDAR_AVX2_BIN_QUAD(_mm256_sub_ps, a, b, out,  96);
+ }
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    CEDAR_AVX2_BIN_QUAD(_mm256_mul_ps, a, b, out,   0);
++    CEDAR_AVX2_BIN_QUAD(_mm256_mul_ps, a, b, out,  32);
++    CEDAR_AVX2_BIN_QUAD(_mm256_mul_ps, a, b, out,  64);
++    CEDAR_AVX2_BIN_QUAD(_mm256_mul_ps, a, b, out,  96);
++}
++
++#else  // generic block size: 32-float chunks, still unrolled inside
++
++static_assert(BLOCK_SIZE % 32 == 0, "AVX2 kernels need BLOCK_SIZE as a multiple of 32");
++
++CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32)
++        CEDAR_AVX2_BIN_QUAD(_mm256_add_ps, a, b, out, i);
+ }
++CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32)
++        CEDAR_AVX2_BIN_QUAD(_mm256_sub_ps, a, b, out, i);
++}
++CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32)
++        CEDAR_AVX2_BIN_QUAD(_mm256_mul_ps, a, b, out, i);
++}
++
++#endif  // block size
++
+ #endif
+ }  // namespace kernels
+ 

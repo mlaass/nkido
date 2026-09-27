@@ -1,0 +1,29 @@
+{
+  "run_id": "2026-09-25T1941Z_z-ai-glm-5-3_arith",
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.3",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 2,
+  "rejects": 6,
+  "reject_reasons": {
+    "backend error": 2,
+    "speed": 3,
+    "empty patch": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 1.369,
+  "tokens": {
+    "input": 10408266,
+    "output": 611240,
+    "cached": 9846080
+  },
+  "cost_usd": 6.0015,
+  "wall_clock_s": 7788.9,
+  "gpu_s": null,
+  "active_s": null,
+  "unstable_iterations": 2,
+  "status": "complete",
+  "branch": "autoresearch/z-ai-glm-5-3-arith-202609251941",
+  "base_rev": "3f3d8d9411678c39662ff2021fd168a037137306"
+}

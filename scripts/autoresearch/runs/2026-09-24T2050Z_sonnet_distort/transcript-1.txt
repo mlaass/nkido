@@ -1,0 +1,7 @@
+Both AVX2 kernels are in and the first check passed, so I'm stopping here with the changes uncommitted in the working tree.
+
+- **Bit-identity:** it held on the fixed stimuli. The tanh approximation nulls at −128.9 dBFS against the original, well under the −100 dBFS limit. Only the fixed stimuli were checked; the hidden randomised ones run at the final verify.
+- **Speed:** `op_distort_tanh` went from 973.58 to 51.79 ns/block (18.8x), and `op_distort_soft` from 255.77 to 49.24 ns/block (5.19x). Both are well past the 5 % bar, and neither is slower.
+- **Approximation:** the tanh kernel uses a rational polynomial approximation, marked `// simd: approx std::tanh`. The soft kernel keeps the original operation order and NaN behaviour. Mono input is computed once and written to both channels.
+
+IDEA: scalar libm tanh call and scalar divides/branches per sample -> AVX2 8-wide kernels: rational-approx tanh (marked simd: approx), bit-exact soft clip via compare/blend, mono input computed once and shared by both channels (tanh 973.58->51.79 ns, 18.8x; soft 255.77->49.24 ns, 5.19x; null test -128.9 dBFS)

@@ -1,0 +1,67 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index eeecd64..4fb7719 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,32 +10,53 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// Elementwise add/sub/mul are L1-bound: the scalar fallback is already
++// auto-vectorised to SSE2, so widening to AVX2 only halves the instruction
++// count. The remainder of the cost sits in the load->compute->store chain.
++// Because `out` may alias `a`/`b` (the in-place accumulator pattern), the
++// compiler must order each store before the next load, which serialises the
++// loop. Loading a 32-float (4-vector) chunk into registers before storing it
++// exposes enough independent loads to overlap memory latency, holds only 8
++// live YMM values (no register spill), and stays bit-identical — every lane is
++// read before that lane is overwritten.
++#define CEDAR_ARITH_BODY(OP)                                                 \
++    const float* pa = a;                                                     \
++    const float* pb = b;                                                     \
++    float* po = out;                                                         \
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32) {                       \
++        const __m256 a0 = _mm256_load_ps(pa);      const __m256 b0 = _mm256_load_ps(pb);      \
++        const __m256 a1 = _mm256_load_ps(pa + 8);  const __m256 b1 = _mm256_load_ps(pb + 8);  \
++        const __m256 a2 = _mm256_load_ps(pa + 16); const __m256 b2 = _mm256_load_ps(pb + 16); \
++        const __m256 a3 = _mm256_load_ps(pa + 24); const __m256 b3 = _mm256_load_ps(pb + 24); \
++        _mm256_store_ps(po,      OP(a0, b0));                                \
++        _mm256_store_ps(po + 8,  OP(a1, b1));                                \
++        _mm256_store_ps(po + 16, OP(a2, b2));                                \
++        _mm256_store_ps(po + 24, OP(a3, b3));                                \
++        pa += 32; pb += 32; po += 32;                                        \
++    }
++
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+-    }
++    CEDAR_ARITH_BODY(_mm256_add_ps)
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+-    }
++    CEDAR_ARITH_BODY(_mm256_sub_ps)
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+     CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
+     CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+-    }
++    CEDAR_ARITH_BODY(_mm256_mul_ps)
+ }
++
++#undef CEDAR_ARITH_BODY
+ #endif
+ }  // namespace kernels
+ 

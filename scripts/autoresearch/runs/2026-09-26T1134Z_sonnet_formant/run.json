@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-26T1134Z_sonnet_formant",
+  "target": "formant",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517",
+  "branch": "autoresearch/sonnet-formant-202609261134",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-26T1134Z_sonnet_formant/check.sh",
+  "model": "sonnet",
+  "provider": "claude-code",
+  "iterations": 8,
+  "budget_usd": 20.0
+}

@@ -1,0 +1,85 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index ec4b2e6..4722aa2 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -19,54 +19,55 @@ namespace kernels {
+             "vmovaps 32(%[a]), %%ymm1\n\t"                                            \
+             "vmovaps 64(%[a]), %%ymm2\n\t"                                            \
+             "vmovaps 96(%[a]), %%ymm3\n\t"                                            \
++            "vmovaps 128(%[a]), %%ymm4\n\t"                                         \
++            "vmovaps 160(%[a]), %%ymm5\n\t"                                         \
++            "vmovaps 192(%[a]), %%ymm6\n\t"                                         \
++            "vmovaps 224(%[a]), %%ymm7\n\t"                                         \
+             instruction " 0(%[b]), %%ymm0, %%ymm0\n\t"                              \
+             instruction " 32(%[b]), %%ymm1, %%ymm1\n\t"                             \
+             instruction " 64(%[b]), %%ymm2, %%ymm2\n\t"                             \
+             instruction " 96(%[b]), %%ymm3, %%ymm3\n\t"                             \
++            instruction " 128(%[b]), %%ymm4, %%ymm4\n\t"                           \
++            instruction " 160(%[b]), %%ymm5, %%ymm5\n\t"                           \
++            instruction " 192(%[b]), %%ymm6, %%ymm6\n\t"                           \
++            instruction " 224(%[b]), %%ymm7, %%ymm7\n\t"                           \
+             "vmovaps %%ymm0, 0(%[out])\n\t"                                          \
+             "vmovaps %%ymm1, 32(%[out])\n\t"                                         \
+             "vmovaps %%ymm2, 64(%[out])\n\t"                                         \
+             "vmovaps %%ymm3, 96(%[out])\n\t"                                         \
+-            "vmovaps 128(%[a]), %%ymm0\n\t"                                         \
+-            "vmovaps 160(%[a]), %%ymm1\n\t"                                         \
+-            "vmovaps 192(%[a]), %%ymm2\n\t"                                         \
+-            "vmovaps 224(%[a]), %%ymm3\n\t"                                         \
+-            instruction " 128(%[b]), %%ymm0, %%ymm0\n\t"                           \
+-            instruction " 160(%[b]), %%ymm1, %%ymm1\n\t"                           \
+-            instruction " 192(%[b]), %%ymm2, %%ymm2\n\t"                           \
+-            instruction " 224(%[b]), %%ymm3, %%ymm3\n\t"                           \
+-            "vmovaps %%ymm0, 128(%[out])\n\t"                                        \
+-            "vmovaps %%ymm1, 160(%[out])\n\t"                                        \
+-            "vmovaps %%ymm2, 192(%[out])\n\t"                                        \
+-            "vmovaps %%ymm3, 224(%[out])\n\t"                                        \
++            "vmovaps %%ymm4, 128(%[out])\n\t"                                        \
++            "vmovaps %%ymm5, 160(%[out])\n\t"                                        \
++            "vmovaps %%ymm6, 192(%[out])\n\t"                                        \
++            "vmovaps %%ymm7, 224(%[out])\n\t"                                        \
+             "vmovaps 256(%[a]), %%ymm0\n\t"                                         \
+             "vmovaps 288(%[a]), %%ymm1\n\t"                                         \
+             "vmovaps 320(%[a]), %%ymm2\n\t"                                         \
+             "vmovaps 352(%[a]), %%ymm3\n\t"                                         \
++            "vmovaps 384(%[a]), %%ymm4\n\t"                                         \
++            "vmovaps 416(%[a]), %%ymm5\n\t"                                         \
++            "vmovaps 448(%[a]), %%ymm6\n\t"                                         \
++            "vmovaps 480(%[a]), %%ymm7\n\t"                                         \
+             instruction " 256(%[b]), %%ymm0, %%ymm0\n\t"                           \
+             instruction " 288(%[b]), %%ymm1, %%ymm1\n\t"                           \
+             instruction " 320(%[b]), %%ymm2, %%ymm2\n\t"                           \
+             instruction " 352(%[b]), %%ymm3, %%ymm3\n\t"                           \
++            instruction " 384(%[b]), %%ymm4, %%ymm4\n\t"                           \
++            instruction " 416(%[b]), %%ymm5, %%ymm5\n\t"                           \
++            instruction " 448(%[b]), %%ymm6, %%ymm6\n\t"                           \
++            instruction " 480(%[b]), %%ymm7, %%ymm7\n\t"                           \
+             "vmovaps %%ymm0, 256(%[out])\n\t"                                        \
+             "vmovaps %%ymm1, 288(%[out])\n\t"                                        \
+             "vmovaps %%ymm2, 320(%[out])\n\t"                                        \
+             "vmovaps %%ymm3, 352(%[out])\n\t"                                        \
+-            "vmovaps 384(%[a]), %%ymm0\n\t"                                         \
+-            "vmovaps 416(%[a]), %%ymm1\n\t"                                         \
+-            "vmovaps 448(%[a]), %%ymm2\n\t"                                         \
+-            "vmovaps 480(%[a]), %%ymm3\n\t"                                         \
+-            instruction " 384(%[b]), %%ymm0, %%ymm0\n\t"                           \
+-            instruction " 416(%[b]), %%ymm1, %%ymm1\n\t"                           \
+-            instruction " 448(%[b]), %%ymm2, %%ymm2\n\t"                           \
+-            instruction " 480(%[b]), %%ymm3, %%ymm3\n\t"                           \
+-            "vmovaps %%ymm0, 384(%[out])\n\t"                                        \
+-            "vmovaps %%ymm1, 416(%[out])\n\t"                                        \
+-            "vmovaps %%ymm2, 448(%[out])\n\t"                                        \
+-            "vmovaps %%ymm3, 480(%[out])\n\t"                                        \
++            "vmovaps %%ymm4, 384(%[out])\n\t"                                        \
++            "vmovaps %%ymm5, 416(%[out])\n\t"                                        \
++            "vmovaps %%ymm6, 448(%[out])\n\t"                                        \
++            "vmovaps %%ymm7, 480(%[out])\n\t"                                        \
+             "vzeroupper"                                                               \
+             :                                                                          \
+             : [a] "r"(a), [b] "r"(b), [out] "r"(out)                                \
+-            : "ymm0", "ymm1", "ymm2", "ymm3", "memory");                         \
++            : "ymm0", "ymm1", "ymm2", "ymm3", "ymm4", "ymm5", "ymm6",        \
++              "ymm7", "memory");                                                     \
+     }
+ 
+ CEDAR_BINARY_AVX2_KERNEL(add_avx2, "vaddps")

@@ -1,0 +1,218 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..836f099 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -6,11 +6,213 @@
+ #include "dsp_state.hpp"
+ #include "dsp_utils.hpp"
+ #include "drywet.hpp"
++#include "../dsp/simd.hpp"
+ #include <cmath>
+ #include <algorithm>
+ 
+ namespace cedar {
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++static_assert(BLOCK_SIZE % 8 == 0, "AVX2 kernels process 8 samples per iteration");
++
++// ---------------------------------------------------------------------------
++// simd: approx — vector replacement for std::tanh.  op_distort_tanh is the
++// one opcode the SIMD gate allows an approximation in; this is the only
++// non-bit-exact step of the tanh kernel (every other op below is the same
++// IEEE op, in the same order, as the scalar body).
++//
++// tanh(v), piecewise on a = |v|:
++//   a < 0.45     : v * (1 - a1 u + a2 u^2 - a3 u^3 + a4 u^4), u = v*v, with
++//                  a1 = 1/3, a2 = 2/15, a3 = 17/315, a4 = 62/2835 (Taylor
++//                  coefficients of tanh at 0).  tanh(v)/v = 1 - u/3 + 2u^2/15
++//                  - 17u^3/315 + ... is a Stieltjes series, so the Taylor
++//                  series at 0 is alternating with decreasing terms for
++//                  |v| < pi/2 and the error is bounded by the first omitted
++//                  term: (1382/155925) * |v|^11 <= 1.4e-6, plus a few
++//                  roundings.
++//   8.75 <= a    : sign of v.  1 - tanh(a) <= 2 e^-2a <= 2 e^-17.5 = 1.6e-8
++//                  < ulp(1.0)/2, so fl(tanh(a)) is exactly +-1.0 there.
++//   else         : tanh(v) = 1 - 2/(1 + e^{2v}) = 1 - 2/(1 + 2^t) with
++//                  t = v * (2/ln 2) = n + f, n = rint(t), |f| <= 1/2, and
++//                  2^t = 2^n * P(f) where P is the degree-6 Taylor series of
++//                  2^f (relative error <= 2e-7, the next term at |f| = 1/2 is
++//                  (0.5*ln2)^7/5040 * (1 + ln2/2 + ...) <= 1.9e-7).  2^n is
++//                  exact via its bit pattern (n in [-25, 25] here).  The
++//                  |err| of 1 - 2/(1+E) is bounded by 2E dE/(1+E)^2 with
++//                  dE/E <= 3e-6, i.e. <= ~1.5e-6, plus ~3 roundings.
++//   Specials:  v = +-0 -> +-0 (odd polynomial times v), v = +-Inf -> +-1
++//   (band 8.75), NaN -> NaN (both comparisons false, mid band stays NaN).
++//
++// Peak absolute error over the whole real line: <= ~3e-6 (about -109 dBFS),
++// well inside the gate's -100 dBFS (1e-5) allowance, with 3x margin.
++CEDAR_TARGET_AVX2 inline __m256 approx_tanh_ps(__m256 v) noexcept {
++    const __m256 zero = _mm256_setzero_ps();
++    const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 two = _mm256_set1_ps(2.0f);
++    const __m256 ax = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), v);
++    const __m256 m_lo = _mm256_cmp_ps(ax, _mm256_set1_ps(0.45f), _CMP_LT_OQ);
++    const __m256 m_hi = _mm256_cmp_ps(ax, _mm256_set1_ps(8.75f), _CMP_GE_OQ);
++
++    // Band |v| < 0.45: Stieltjes series truncated after the u^4 term.
++    const __m256 a1 = _mm256_set1_ps(1.0f / 3.0f);
++    const __m256 a2 = _mm256_set1_ps(2.0f / 15.0f);
++    const __m256 a3 = _mm256_set1_ps(17.0f / 315.0f);
++    const __m256 a4 = _mm256_set1_ps(62.0f / 2835.0f);
++    const __m256 u = _mm256_mul_ps(v, v);
++    __m256 inner = _mm256_mul_ps(u, a4);
++    inner = _mm256_mul_ps(u, _mm256_sub_ps(a3, inner));
++    inner = _mm256_mul_ps(u, _mm256_sub_ps(a2, inner));
++    inner = _mm256_sub_ps(a1, inner);
++    const __m256 y_lo = _mm256_mul_ps(v, _mm256_sub_ps(one, _mm256_mul_ps(u, inner)));
++
++    // Band 0.45 <= |v| < 8.75: 1 - 2/(1 + 2^(n+f)), 2^(n+f) = 2^n * P(f).
++    const __m256 n = _mm256_round_ps(_mm256_mul_ps(v, _mm256_set1_ps(2.885390081777927f)),  // 2 / ln 2
++                                     _MM_FROUND_TO_NEAREST_EVEN | _MM_FROUND_NO_EXC);
++    const __m256 f = _mm256_sub_ps(_mm256_mul_ps(v, _mm256_set1_ps(2.885390081777927f)), n);
++    __m256 p = _mm256_mul_ps(f, _mm256_set1_ps(0.00015403536f));   // (ln2)^6 / 720
++    p = _mm256_add_ps(_mm256_set1_ps(0.0013333561f), _mm256_mul_ps(f, p));   // (ln2)^5 / 120
++    p = _mm256_add_ps(_mm256_set1_ps(0.009618129f), _mm256_mul_ps(f, p));    // (ln2)^4 / 24
++    p = _mm256_add_ps(_mm256_set1_ps(0.055504109f), _mm256_mul_ps(f, p));    // (ln2)^3 / 6
++    p = _mm256_add_ps(_mm256_set1_ps(0.24022651f), _mm256_mul_ps(f, p));     // (ln2)^2 / 2
++    p = _mm256_add_ps(_mm256_set1_ps(0.69314718f), _mm256_mul_ps(f, p));     // ln 2
++    const __m256 e2f = _mm256_add_ps(one, _mm256_mul_ps(f, p));
++    const __m256 en = _mm256_castsi256_ps(
++        _mm256_add_epi32(_mm256_cvtps_epi32(n), _mm256_set1_epi32(127 << 23)));  // 2^n, exact
++    const __m256 y_mid = _mm256_sub_ps(one, _mm256_div_ps(two, _mm256_add_ps(one, _mm256_mul_ps(e2f, en))));
++
++    // Band |v| >= 8.75: exactly +-1 (matches fl(tanh(v)) bit for bit).
++    const __m256 y_hi = _mm256_blendv_ps(one, _mm256_set1_ps(-1.0f),
++                                         _mm256_cmp_ps(v, zero, _CMP_LT_OQ));
++    __m256 y = y_mid;
++    y = _mm256_blendv_ps(y, y_lo, m_lo);
++    return _mm256_blendv_ps(y, y_hi, m_hi);
++}
++
++// Bit-exact vector of the DISTORT_SOFT core: the polynomial x * (27 + x^2)
++// / (27 + 9 x^2) with the same IEEE ops in the same order as the scalar
++// lambda (multiply before the IEEE division), and the saturations blended in
++// with the same comparisons (x > 3.0f -> 1, x < -3.0f -> -1).
++CEDAR_TARGET_AVX2 inline __m256 soft_clip_ps(__m256 x) noexcept {
++    const __m256 x2 = _mm256_mul_ps(x, x);
++    const __m256 num = _mm256_add_ps(_mm256_set1_ps(27.0f), x2);
++    const __m256 den = _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), x2));
++    __m256 y = _mm256_div_ps(_mm256_mul_ps(x, num), den);
++    y = _mm256_blendv_ps(y, _mm256_set1_ps(-1.0f), _mm256_cmp_ps(x, _mm256_set1_ps(-3.0f), _CMP_LT_OQ));
++    return _mm256_blendv_ps(y, _mm256_set1_ps(1.0f), _mm256_cmp_ps(x, _mm256_set1_ps(3.0f), _CMP_GT_OQ));
++}
++
++// t = clamp(threshold, 0.1, 2.0) with std::clamp comparison semantics:
++// (th < 0.1) ? 0.1 : ((2.0 < th) ? 2.0 : th).  Note vmin/vmax are NOT used:
++// they prefer the non-NaN operand and would map NaN to 0.1/2.0.
++CEDAR_TARGET_AVX2 inline __m256 clamp_threshold_ps(__m256 th) noexcept {
++    const __m256 c_lo = _mm256_set1_ps(0.1f);
++    const __m256 c_hi = _mm256_set1_ps(2.0f);
++    __m256 t = _mm256_blendv_ps(th, c_lo, _mm256_cmp_ps(th, c_lo, _CMP_LT_OQ));
++    return _mm256_blendv_ps(t, c_hi, _mm256_cmp_ps(c_hi, th, _CMP_LT_OQ));
++}
++
++// d = std::max(0.1f, drive): (0.1f < drive) ? drive : 0.1f.  Both std::max
++// and the ordered comparison return 0.1f for a NaN drive.
++CEDAR_TARGET_AVX2 inline __m256 max_drive_ps(__m256 d) noexcept {
++    const __m256 c = _mm256_set1_ps(0.1f);
++    return _mm256_blendv_ps(c, d, _mm256_cmp_ps(c, d, _CMP_LT_OQ));
++}
++
++// ---------------------------------------------------------------------------
++// AVX2 kernel for op_distort_tanh: d = max(0.1, drive), out = x*dry +
++// approx_tanh(x*d)*wet (approx_tanh is the '// simd: approx' step above;
++// every other op is bit-exact against the scalar body).  With a mono input
++// the scalar body computes the right channel from the left value, so the
++// kernel computes the function once and stores it twice.
++template <bool DRY, bool WET>
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,
++                                                const float* drive,
++                                                const float* dry_level, const float* wet_level,
++                                                float* out_l, float* out_r, bool stereo_in) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(in_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(drive, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
++    if (stereo_in) CEDAR_SIMD_ASSERT_ALIGNED(in_r, 32);
++    const __m256 dry_fb = _mm256_set1_ps(0.0f);
++    const __m256 wet_fb = _mm256_set1_ps(1.0f);
++    if (!stereo_in) {
++        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++            const __m256 d = max_drive_ps(_mm256_load_ps(drive + i));
++            const __m256 xl = _mm256_load_ps(in_l + i);
++            const __m256 y = approx_tanh_ps(_mm256_mul_ps(xl, d));
++            const __m256 dry = DRY ? _mm256_load_ps(dry_level + i) : dry_fb;
++            const __m256 wet = WET ? _mm256_load_ps(wet_level + i) : wet_fb;
++            const __m256 o = _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(y, wet));
++            _mm256_store_ps(out_l + i, o);
++            _mm256_store_ps(out_r + i, o);
++        }
++    } else {
++        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++            const __m256 d = max_drive_ps(_mm256_load_ps(drive + i));
++            const __m256 xl = _mm256_load_ps(in_l + i);
++            const __m256 xr = _mm256_load_ps(in_r + i);
++            const __m256 yl = approx_tanh_ps(_mm256_mul_ps(xl, d));
++            const __m256 yr = approx_tanh_ps(_mm256_mul_ps(xr, d));
++            const __m256 dry = DRY ? _mm256_load_ps(dry_level + i) : dry_fb;
++            const __m256 wet = WET ? _mm256_load_ps(wet_level + i) : wet_fb;
++            _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(yl, wet)));
++            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(yr, wet)));
++        }
++    }
++}
++
++// ---------------------------------------------------------------------------
++// AVX2 kernel for op_distort_soft, bit-identical to the scalar body:
++// t = clamp(threshold, 0.1, 2.0); wet_v = soft(x / t) * t;
++// out = x*dry + wet_v*wet.  Same IEEE ops in the same order per lane, and
++// the mono fast path mirrors the scalar body computing R from L.
++template <bool DRY, bool WET>
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* in_l, const float* in_r,
++                                                const float* threshold,
++                                                const float* dry_level, const float* wet_level,
++                                                float* out_l, float* out_r, bool stereo_in) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(in_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(threshold, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
++    if (stereo_in) CEDAR_SIMD_ASSERT_ALIGNED(in_r, 32);
++    const __m256 dry_fb = _mm256_set1_ps(0.0f);
++    const __m256 wet_fb = _mm256_set1_ps(1.0f);
++    if (!stereo_in) {
++        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++            const __m256 t = clamp_threshold_ps(_mm256_load_ps(threshold + i));
++            const __m256 xl = _mm256_load_ps(in_l + i);
++            const __m256 s = soft_clip_ps(_mm256_div_ps(xl, t));
++            const __m256 dry = DRY ? _mm256_load_ps(dry_level + i) : dry_fb;
++            const __m256 wet = WET ? _mm256_load_ps(wet_level + i) : wet_fb;
++            const __m256 o = _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                           _mm256_mul_ps(_mm256_mul_ps(s, t), wet));
++            _mm256_store_ps(out_l + i, o);
++            _mm256_store_ps(out_r + i, o);
++        }
++    } else {
++        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++            const __m256 t = clamp_threshold_ps(_mm256_load_ps(threshold + i));
++            const __m256 xl = _mm256_load_ps(in_l + i);
++            const __m256 xr = _mm256_load_ps(in_r + i);
++            const __m256 sl = soft_clip_ps(_mm256_div_ps(xl, t));
++            const __m256 sr = soft_clip_ps(_mm256_div_ps(xr, t));
++            const __m256 dry = DRY ? _mm256_load_ps(dry_level + i) : dry_fb;
++            const __m256 wet = WET ? _mm256_load_ps(wet_level + i) : wet_fb;
++            _mm256_store_ps(out_l + i,
++                            _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                         _mm256_mul_ps(_mm256_mul_ps(sl, t), wet)));
++            _mm256_store_ps(out_r + i,
++                            _mm256_add_ps(_mm256_mul_ps(xr, dry),
++                                         _mm256_mul_ps(_mm256_mul_ps(sr, t), wet)));
++        }
++    }
++}
++#endif
++}  // namespace kernels
++
+ // ============================================================================
+ // DISTORT_TANH: Tanh Saturation
+ // ============================================================================

@@ -1,0 +1,176 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..0cb1c1a 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -20,8 +20,142 @@ namespace cedar {
+ // Classic warm saturation using hyperbolic tangent.
+ // Higher drive values push the signal into saturation more aggressively.
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++// simd: approx std::tanh with a Pade core and range-reduced exponential tail.
++CEDAR_TARGET_AVX2 [[gnu::always_inline]] inline __m256 tanh_avx2(__m256 x) noexcept {
++    const __m256 sign_mask = _mm256_set1_ps(-0.0f);
++    const __m256 ax = _mm256_andnot_ps(sign_mask, x);
++    const __m256 x2 = _mm256_mul_ps(ax, ax);
++
++    // [7/6] Pade form: below the handoff its peak error is under 2e-6.
++    const __m256 numerator = _mm256_mul_ps(
++        ax, _mm256_add_ps(_mm256_set1_ps(135135.0f),
++            _mm256_mul_ps(x2, _mm256_add_ps(_mm256_set1_ps(17325.0f),
++                _mm256_mul_ps(x2, _mm256_add_ps(_mm256_set1_ps(378.0f), x2))))));
++    const __m256 denominator = _mm256_add_ps(
++        _mm256_set1_ps(135135.0f),
++        _mm256_mul_ps(x2, _mm256_add_ps(_mm256_set1_ps(62370.0f),
++            _mm256_mul_ps(x2, _mm256_add_ps(_mm256_set1_ps(3150.0f),
++                _mm256_mul_ps(_mm256_set1_ps(28.0f), x2))))));
++    __m256 reciprocal = _mm256_rcp_ps(denominator);
++    reciprocal = _mm256_mul_ps(reciprocal,
++        _mm256_sub_ps(_mm256_set1_ps(2.0f), _mm256_mul_ps(denominator, reciprocal)));
++    const __m256 rational = _mm256_mul_ps(numerator, reciprocal);
++    const __m256 tail_mask = _mm256_cmp_ps(ax, _mm256_set1_ps(3.125f), _CMP_GT_OQ);
++    if (_mm256_movemask_ps(tail_mask) == 0)
++        return _mm256_xor_ps(rational, _mm256_and_ps(x, sign_mask));
++
++    // For |x| > 3.125, tanh(x) = 1 - 2*exp(-2x) plus less than 7.5e-6.
++    // Range reduction keeps the fourth-order exp polynomial near zero.
++    const __m256 y = _mm256_add_ps(ax, ax);
++    const __m256 z = _mm256_mul_ps(y, _mm256_set1_ps(1.4426950408889634f));
++    const __m256i ni = _mm256_cvttps_epi32(_mm256_add_ps(z, _mm256_set1_ps(0.5f)));
++    const __m256 nf = _mm256_cvtepi32_ps(ni);
++    const __m256 r = _mm256_sub_ps(_mm256_mul_ps(nf, _mm256_set1_ps(0.6931471805599453f)), y);
++    __m256 p = _mm256_set1_ps(1.0f / 24.0f);
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f / 6.0f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.5f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.0f));
++    const __m256i inverse_exponent = _mm256_slli_epi32(
++        _mm256_sub_epi32(_mm256_set1_epi32(127), ni), 23);
++    const __m256 exp_negative = _mm256_mul_ps(p, _mm256_castsi256_ps(inverse_exponent));
++    const __m256 asymptotic = _mm256_sub_ps(_mm256_set1_ps(1.0f),
++                                             _mm256_add_ps(exp_negative, exp_negative));
++    __m256 result = _mm256_blendv_ps(rational, asymptotic, tail_mask);
++    result = _mm256_blendv_ps(result, _mm256_set1_ps(1.0f),
++                              _mm256_cmp_ps(ax, _mm256_set1_ps(9.0f), _CMP_GE_OQ));
++    return _mm256_xor_ps(result, _mm256_and_ps(x, sign_mask));
++}
++
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(
++    const float* input_l, const float* input_r, const float* drive,
++    const float* dry_level, const float* wet_level,
++    float* out_l, float* out_r) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), _mm256_set1_ps(0.1f));
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++        const __m256 xl = _mm256_load_ps(input_l + i);
++        const __m256 shaped_l = tanh_avx2(_mm256_mul_ps(xl, d));
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                                 _mm256_mul_ps(shaped_l, wet)));
++        if (input_r) {
++            const __m256 xr = _mm256_load_ps(input_r + i);
++            const __m256 shaped_r = tanh_avx2(_mm256_mul_ps(xr, d));
++            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry),
++                                                     _mm256_mul_ps(shaped_r, wet)));
++        } else {
++            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                                     _mm256_mul_ps(shaped_l, wet)));
++        }
++    }
++}
++
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(
++    const float* input_l, const float* input_r, const float* threshold,
++    const float* dry_level, const float* wet_level,
++    float* out_l, float* out_r) noexcept {
++    const __m256 lo = _mm256_set1_ps(0.1f);
++    const __m256 hi = _mm256_set1_ps(2.0f);
++    const __m256 three = _mm256_set1_ps(3.0f);
++    const __m256 minus_three = _mm256_set1_ps(-3.0f);
++    const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 minus_one = _mm256_set1_ps(-1.0f);
++    const __m256 c27 = _mm256_set1_ps(27.0f);
++    const __m256 c9 = _mm256_set1_ps(9.0f);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256 t = _mm256_max_ps(lo, _mm256_min_ps(_mm256_load_ps(threshold + i), hi));
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : one;
++        const auto shape = [&](__m256 x) {
++            const __m256 scaled = _mm256_div_ps(x, t);
++            const __m256 x2 = _mm256_mul_ps(scaled, scaled);
++            __m256 soft = _mm256_div_ps(
++                _mm256_mul_ps(scaled, _mm256_add_ps(c27, x2)),
++                _mm256_add_ps(c27, _mm256_mul_ps(c9, x2)));
++            soft = _mm256_blendv_ps(soft, one, _mm256_cmp_ps(scaled, three, _CMP_GT_OQ));
++            soft = _mm256_blendv_ps(soft, minus_one, _mm256_cmp_ps(scaled, minus_three, _CMP_LT_OQ));
++            return _mm256_mul_ps(soft, t);
++        };
++        const __m256 xl = _mm256_load_ps(input_l + i);
++        const __m256 shaped_l = shape(xl);
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                                 _mm256_mul_ps(shaped_l, wet)));
++        if (input_r) {
++            const __m256 xr = _mm256_load_ps(input_r + i);
++            const __m256 shaped_r = shape(xr);
++            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry),
++                                                     _mm256_mul_ps(shaped_r, wet)));
++        } else {
++            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                                     _mm256_mul_ps(shaped_l, wet)));
++        }
++    }
++}
++#endif
++} // namespace kernels
++
+ [[gnu::always_inline]]
+ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        float* simd_out_l = ctx.buffers->get(inst.out_buffer);
++        float* simd_out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++        const float* simd_input_l = ctx.buffers->get(inst.inputs[0]);
++        const bool simd_stereo = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++        const float* simd_input_r = simd_stereo
++            ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1))
++            : nullptr;
++        const float* simd_drive = ctx.buffers->get(inst.inputs[1]);
++        const float* simd_dry = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
++        const float* simd_wet = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
++        kernels::distort_tanh_avx2(simd_input_l, simd_input_r, simd_drive,
++                                   simd_dry, simd_wet, simd_out_l, simd_out_r);
++        return;
++    }
++#endif
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+     float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+     const float* input = ctx.buffers->get(inst.inputs[0]);
+@@ -55,6 +189,23 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+ 
+ [[gnu::always_inline]]
+ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        float* simd_out_l = ctx.buffers->get(inst.out_buffer);
++        float* simd_out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++        const float* simd_input_l = ctx.buffers->get(inst.inputs[0]);
++        const bool simd_stereo = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++        const float* simd_input_r = simd_stereo
++            ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1))
++            : nullptr;
++        const float* simd_threshold = ctx.buffers->get(inst.inputs[1]);
++        const float* simd_dry = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
++        const float* simd_wet = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
++        kernels::distort_soft_avx2(simd_input_l, simd_input_r, simd_threshold,
++                                   simd_dry, simd_wet, simd_out_l, simd_out_r);
++        return;
++    }
++#endif
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+     float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+     const float* input = ctx.buffers->get(inst.inputs[0]);
+@@ -575,3 +726,4 @@ inline void op_distort_excite(ExecutionContext& ctx, const Instruction& inst) {
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"

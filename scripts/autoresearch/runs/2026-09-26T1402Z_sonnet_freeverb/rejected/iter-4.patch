@@ -1,0 +1,67 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 15b2030..ce9ef53 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -142,15 +142,36 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     }
+ 
+     const __m256 rv = _mm256_set1_ps(DC_BLOCKER_R);
+-    __m256 fs[2], x1[2], y1[2];
++    __m256 fs[2], y1[2];
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         fs[ch] = _mm256_loadu_ps(st.comb_filter_state[ch]);
+-        x1[ch] = _mm256_loadu_ps(st.dc_x1[ch]);
+         y1[ch] = _mm256_loadu_ps(st.dc_y1[ch]);
+     }
+     const float* xin[2] = {in_l, in_r};
+ 
++    // The delay lines total far more than L1; pull the first two cache lines of
++    // every comb line in now, the rest are prefetched a few iterations ahead.
++    for (std::size_t ch = 0; ch < 2; ++ch) {
++        for (std::size_t c = 0; c < NC; ++c) {
++            _mm_prefetch(reinterpret_cast<const char*>(cp[ch][c]), _MM_HINT_T0);
++            _mm_prefetch(reinterpret_cast<const char*>(cp[ch][c] + 16), _MM_HINT_T0);
++        }
++    }
++
+     for (std::size_t n = 0; n < N; n += 8) {
++        if ((n & 15) == 0) {
++            for (std::size_t ch = 0; ch < 2; ++ch) {
++                for (std::size_t c = 0; c < NC; ++c)
++                    _mm_prefetch(reinterpret_cast<const char*>(cp[ch][c] + n + 32), _MM_HINT_T0);
++                // Allpass lines are consumed after the comb loop; warm them here.
++                for (std::size_t a = 0; a < NA; ++a) {
++                    const std::size_t size = FreeverbState::ALLPASS_SIZES_LR[ch][a];
++                    std::size_t idx = st.allpass_pos[ch][a] + n;
++                    if (idx >= size) idx -= size;
++                    _mm_prefetch(reinterpret_cast<const char*>(st.allpass_buffers[ch][a] + idx), _MM_HINT_T0);
++                }
++            }
++        }
+         // Comb sums first: they read the delayed samples this iteration overwrites.
+         for (std::size_t ch = 0; ch < 2; ++ch) {
+             __m256 s = _mm256_setzero_ps();
+@@ -175,10 +196,11 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+                 const __m256 bf = _mm256_broadcast_ss(fb + nh + t);
+                 for (std::size_t ch = 0; ch < 2; ++ch) {
+                     const __m256 x = _mm256_broadcast_ss(xin[ch] + nh + t);
+-                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
+-                    const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
++                    // dc_x1 always equals the previous comb_filter_state.
++                    const __m256 fs_prev = fs[ch];
++                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs_prev, bd));
++                    const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], fs_prev),
+                                                         _mm256_mul_ps(rv, y1[ch]));
+-                    x1[ch] = fs[ch];
+                     y1[ch] = dc_out;
+                     v[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
+                 }
+@@ -195,7 +217,7 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+ 
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         _mm256_storeu_ps(st.comb_filter_state[ch], fs[ch]);
+-        _mm256_storeu_ps(st.dc_x1[ch], x1[ch]);
++        _mm256_storeu_ps(st.dc_x1[ch], fs[ch]);
+         _mm256_storeu_ps(st.dc_y1[ch], y1[ch]);
+     }
+ 

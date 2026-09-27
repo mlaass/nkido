@@ -1,0 +1,176 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 15b2030..60fbd81 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -80,6 +80,87 @@ CEDAR_TARGET_AVX2 inline void allpass_run(float* p, float* y, std::size_t len) n
+     }
+ }
+ 
++// True when every element of the block is bit-identical to the first.
++[[gnu::always_inline]] CEDAR_TARGET_AVX2 inline bool uniform_block(const float* a) noexcept {
++    const __m256i first = _mm256_castps_si256(_mm256_broadcast_ss(a));
++    __m256i acc = _mm256_set1_epi32(-1);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        acc = _mm256_and_si256(acc, _mm256_cmpeq_epi32(
++            _mm256_castps_si256(_mm256_load_ps(a + i)), first));
++    }
++    return _mm256_movemask_epi8(acc) == -1;
++}
++
++// Comb recurrence over one block. cp[ch][c] points at BLOCK_SIZE delay samples
++// of comb c; they are read (delayed) and overwritten (feedback) in place.
++// UNIFORM: damping/feedback are constant across the block and come from
++// d0/o0/f0 (damp, 1-damp, feedback); otherwise they are read per sample.
++// MONO: in_l == in_r, so one input broadcast serves both lanes.
++template <bool UNIFORM, bool MONO>
++[[gnu::always_inline]] CEDAR_TARGET_AVX2 inline void comb_pass(
++    float* const (&cp)[2][8], const float* damp, const float* omd, const float* fb,
++    float d0, float o0, float f0,
++    const float* in_l, const float* in_r, float (&ys)[2][BLOCK_SIZE],
++    __m256 (&fs)[2], __m256 (&x1)[2], __m256 (&y1)[2]) noexcept {
++    constexpr std::size_t N = BLOCK_SIZE;
++    const __m256 rv = _mm256_set1_ps(DC_BLOCKER_R);
++    const float* xin[2] = {in_l, in_r};
++    __m256 bd = _mm256_setzero_ps(), bo = bd, bf = bd;
++    if constexpr (UNIFORM) {
++        bd = _mm256_set1_ps(d0);
++        bo = _mm256_set1_ps(o0);
++        bf = _mm256_set1_ps(f0);
++    }
++
++    for (std::size_t n = 0; n < N; n += 8) {
++        // Comb sums first: they read the delayed samples this iteration overwrites.
++        for (std::size_t ch = 0; ch < 2; ++ch) {
++            __m256 s = _mm256_setzero_ps();
++            for (std::size_t c = 0; c < 8; ++c) s = _mm256_add_ps(s, _mm256_loadu_ps(cp[ch][c] + n));
++            _mm256_store_ps(ys[ch] + n, s);
++        }
++        for (std::size_t h = 0; h < 2; ++h) {
++            const std::size_t nh = n + 4 * h;
++            // v[ch][t]: lanes 0..7 = combs 0..7 at time nh+t.
++            __m256 v[2][4];
++            for (std::size_t ch = 0; ch < 2; ++ch) {
++                for (std::size_t i = 0; i < 4; ++i) {
++                    v[ch][i] = _mm256_insertf128_ps(
++                        _mm256_castps128_ps256(_mm_loadu_ps(cp[ch][i] + nh)),
++                        _mm_loadu_ps(cp[ch][i + 4] + nh), 1);
++                }
++                transpose4x4_lanes(v[ch]);
++            }
++            for (std::size_t t = 0; t < 4; ++t) {
++                if constexpr (!UNIFORM) {
++                    bd = _mm256_broadcast_ss(damp + nh + t);
++                    bo = _mm256_broadcast_ss(omd + nh + t);
++                    bf = _mm256_broadcast_ss(fb + nh + t);
++                }
++                __m256 x = _mm256_broadcast_ss(xin[0] + nh + t);
++                for (std::size_t ch = 0; ch < 2; ++ch) {
++                    if constexpr (!MONO) {
++                        if (ch == 1) x = _mm256_broadcast_ss(xin[1] + nh + t);
++                    }
++                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
++                    const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
++                                                        _mm256_mul_ps(rv, y1[ch]));
++                    x1[ch] = fs[ch];
++                    y1[ch] = dc_out;
++                    v[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
++                }
++            }
++            for (std::size_t ch = 0; ch < 2; ++ch) {
++                transpose4x4_lanes(v[ch]);
++                for (std::size_t i = 0; i < 4; ++i) {
++                    _mm_storeu_ps(cp[ch][i] + nh, _mm256_castps256_ps128(v[ch][i]));
++                    _mm_storeu_ps(cp[ch][i + 4] + nh, _mm256_extractf128_ps(v[ch][i], 1));
++                }
++            }
++        }
++    }
++}
++
+ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     FreeverbState& st, const float* in_l, const float* in_r,
+     const float* room_size, const float* damping,
+@@ -100,7 +181,19 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+     alignas(32) float ys[2][N];
+     alignas(32) float stage[2][NC][N];  // only touched when a comb line wraps inside the block
+ 
+-    {
++    // Parameters are usually constant over a block: then the per-sample prep
++    // and the per-step broadcasts in the recurrence are replaced by scalars.
++    const bool uniform = uniform_block(room_size) && uniform_block(damping) &&
++                         uniform_block(room_scale_in) && uniform_block(room_offset_in);
++    float d0 = 0.0f, o0 = 0.0f, f0 = 0.0f;
++    if (uniform) {
++        const float room = std::clamp(room_size[0], 0.0f, 1.0f);
++        d0 = std::clamp(damping[0], 0.0f, 1.0f);
++        o0 = 1.0f - d0;
++        const float room_scale = room_scale_in[0] > 0.0f ? room_scale_in[0] : FREEVERB_ROOM_SCALE_DEFAULT;
++        const float room_offset = room_offset_in[0] > 0.0f ? room_offset_in[0] : FREEVERB_ROOM_OFFSET_DEFAULT;
++        f0 = room * room_scale + room_offset;
++    } else {
+         const __m256 zero = _mm256_setzero_ps();
+         const __m256 one = _mm256_set1_ps(1.0f);
+         const __m256 def_scale = _mm256_set1_ps(FREEVERB_ROOM_SCALE_DEFAULT);
+@@ -141,56 +234,19 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         }
+     }
+ 
+-    const __m256 rv = _mm256_set1_ps(DC_BLOCKER_R);
+     __m256 fs[2], x1[2], y1[2];
+     for (std::size_t ch = 0; ch < 2; ++ch) {
+         fs[ch] = _mm256_loadu_ps(st.comb_filter_state[ch]);
+         x1[ch] = _mm256_loadu_ps(st.dc_x1[ch]);
+         y1[ch] = _mm256_loadu_ps(st.dc_y1[ch]);
+     }
+-    const float* xin[2] = {in_l, in_r};
+ 
+-    for (std::size_t n = 0; n < N; n += 8) {
+-        // Comb sums first: they read the delayed samples this iteration overwrites.
+-        for (std::size_t ch = 0; ch < 2; ++ch) {
+-            __m256 s = _mm256_setzero_ps();
+-            for (std::size_t c = 0; c < NC; ++c) s = _mm256_add_ps(s, _mm256_loadu_ps(cp[ch][c] + n));
+-            _mm256_store_ps(ys[ch] + n, s);
+-        }
+-        for (std::size_t h = 0; h < 2; ++h) {
+-            const std::size_t nh = n + 4 * h;
+-            // v[ch][t]: lanes 0..7 = combs 0..7 at time nh+t.
+-            __m256 v[2][4];
+-            for (std::size_t ch = 0; ch < 2; ++ch) {
+-                for (std::size_t i = 0; i < 4; ++i) {
+-                    v[ch][i] = _mm256_insertf128_ps(
+-                        _mm256_castps128_ps256(_mm_loadu_ps(cp[ch][i] + nh)),
+-                        _mm_loadu_ps(cp[ch][i + 4] + nh), 1);
+-                }
+-                transpose4x4_lanes(v[ch]);
+-            }
+-            for (std::size_t t = 0; t < 4; ++t) {
+-                const __m256 bd = _mm256_broadcast_ss(damp + nh + t);
+-                const __m256 bo = _mm256_broadcast_ss(omd + nh + t);
+-                const __m256 bf = _mm256_broadcast_ss(fb + nh + t);
+-                for (std::size_t ch = 0; ch < 2; ++ch) {
+-                    const __m256 x = _mm256_broadcast_ss(xin[ch] + nh + t);
+-                    fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
+-                    const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
+-                                                        _mm256_mul_ps(rv, y1[ch]));
+-                    x1[ch] = fs[ch];
+-                    y1[ch] = dc_out;
+-                    v[ch][t] = _mm256_add_ps(x, _mm256_mul_ps(bf, dc_out));
+-                }
+-            }
+-            for (std::size_t ch = 0; ch < 2; ++ch) {
+-                transpose4x4_lanes(v[ch]);
+-                for (std::size_t i = 0; i < 4; ++i) {
+-                    _mm_storeu_ps(cp[ch][i] + nh, _mm256_castps256_ps128(v[ch][i]));
+-                    _mm_storeu_ps(cp[ch][i + 4] + nh, _mm256_extractf128_ps(v[ch][i], 1));
+-                }
+-            }
+-        }
++    if (in_l == in_r) {
++        if (uniform) comb_pass<true, true>(cp, damp, omd, fb, d0, o0, f0, in_l, in_r, ys, fs, x1, y1);
++        else comb_pass<false, true>(cp, damp, omd, fb, d0, o0, f0, in_l, in_r, ys, fs, x1, y1);
++    } else {
++        if (uniform) comb_pass<true, false>(cp, damp, omd, fb, d0, o0, f0, in_l, in_r, ys, fs, x1, y1);
++        else comb_pass<false, false>(cp, damp, omd, fb, d0, o0, f0, in_l, in_r, ys, fs, x1, y1);
+     }
+ 
+     for (std::size_t ch = 0; ch < 2; ++ch) {

@@ -1,0 +1,128 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index b2cd5ef..9b7b86f 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -121,6 +121,25 @@ CEDAR_TARGET_AVX2 inline __m128 svf_clamp_ps(__m128 v) noexcept {
+     return _mm_and_ps(c, _mm_cmpord_ps(v, v));  // NaN -> 0
+ }
+ 
++// One recurrence step with the original arithmetic (clamped), kept out of
++// line so the hot loop stays tight. io: in s1[4], s2[4], x[4];
++// out n1[4], n2[4], v1[4], v2[4].
++[[gnu::noinline, gnu::cold]] CEDAR_TARGET_AVX2
++inline void svf_step_exact(float* io, float a1s, float a2s, float a3s) noexcept {
++    const __m128 s1 = _mm_load_ps(io), s2 = _mm_load_ps(io + 4), x = _mm_load_ps(io + 8);
++    const __m128 dc = _mm_set1_ps(DENORMAL_DC), two = _mm_set1_ps(2.0f);
++    const __m128 a1 = _mm_set1_ps(a1s), a2 = _mm_set1_ps(a2s), a3 = _mm_set1_ps(a3s);
++    const __m128 t1 = _mm_add_ps(s1, dc);
++    const __m128 t2 = _mm_add_ps(s2, dc);
++    const __m128 v3 = _mm_sub_ps(x, t2);
++    const __m128 v1 = _mm_add_ps(_mm_mul_ps(a1, t1), _mm_mul_ps(a2, v3));
++    const __m128 v2 = _mm_add_ps(_mm_add_ps(t2, _mm_mul_ps(a2, t1)), _mm_mul_ps(a3, v3));
++    _mm_store_ps(io, svf_clamp_ps(_mm_sub_ps(_mm_mul_ps(two, v1), s1)));
++    _mm_store_ps(io + 4, svf_clamp_ps(_mm_sub_ps(_mm_mul_ps(two, v2), s2)));
++    _mm_store_ps(io + 8, v1);
++    _mm_store_ps(io + 12, v2);
++}
++
+ // Mode: 0 = lowpass (v2), 1 = highpass, 2 = bandpass (v1).
+ // Coefficients are a pure function of (freq, q), so they are computed for the
+ // whole block first; only the integrator recurrence stays serial.
+@@ -171,30 +190,85 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+     state.last_q = q[L];
+     state.g = G[L]; state.k = K[L]; state.a1 = A1[L]; state.a2 = A2[L]; state.a3 = A3[L];
+ 
++    // Doubled coefficients: 2*round(a*b) == round((2a)*b) whenever a*b is a
++    // normal float that does not overflow, so the recurrence can fold the
++    // "2*v" into the products and lose one op of loop-carried latency.
++    // T1/T3lo/T3hi bound |t1| and |v3| (with 2^6 margin) so every product is
++    // normal; samples outside the bounds take the exact original arithmetic.
++    // Bounds are block-wide (from the extreme coefficients), which is only
++    // more conservative.
++    alignas(32) float A1d[BLOCK_SIZE], A2d[BLOCK_SIZE], A3d[BLOCK_SIZE];
++    __m128 T1, T3lo, T3hi;
++    {
++        __m256 m1 = _mm256_set1_ps(1.0f), m3 = m1, mx = _mm256_setzero_ps();
++        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++            const __m256 a1 = _mm256_load_ps(A1 + i);
++            const __m256 a2 = _mm256_load_ps(A2 + i);
++            const __m256 a3 = _mm256_load_ps(A3 + i);
++            _mm256_store_ps(A1d + i, _mm256_add_ps(a1, a1));
++            _mm256_store_ps(A2d + i, _mm256_add_ps(a2, a2));
++            _mm256_store_ps(A3d + i, _mm256_add_ps(a3, a3));
++            m1 = _mm256_min_ps(m1, _mm256_min_ps(a1, a2));
++            m3 = _mm256_min_ps(m3, _mm256_min_ps(a2, a3));
++            mx = _mm256_max_ps(mx, _mm256_max_ps(a2, a3));
++        }
++        // Horizontal min/min/max, then broadcast.
++        __m128 r1 = _mm_min_ps(_mm256_castps256_ps128(m1), _mm256_extractf128_ps(m1, 1));
++        __m128 r3 = _mm_min_ps(_mm256_castps256_ps128(m3), _mm256_extractf128_ps(m3, 1));
++        __m128 rx = _mm_max_ps(_mm256_castps256_ps128(mx), _mm256_extractf128_ps(mx, 1));
++        r1 = _mm_min_ps(r1, _mm_movehl_ps(r1, r1));
++        r3 = _mm_min_ps(r3, _mm_movehl_ps(r3, r3));
++        rx = _mm_max_ps(rx, _mm_movehl_ps(rx, rx));
++        r1 = _mm_min_ss(r1, _mm_shuffle_ps(r1, r1, 1));
++        r3 = _mm_min_ss(r3, _mm_shuffle_ps(r3, r3, 1));
++        rx = _mm_max_ss(rx, _mm_shuffle_ps(rx, rx, 1));
++        T1 = _mm_set1_ps(0x1p-120f / _mm_cvtss_f32(r1));
++        T3lo = _mm_set1_ps(0x1p-120f / _mm_cvtss_f32(r3));
++        T3hi = _mm_set1_ps(0x1p120f / _mm_cvtss_f32(rx));
++    }
++
+     __m128 s1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+     __m128 s2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+     const __m128 dc = _mm_set1_ps(DENORMAL_DC);
+-    const __m128 two = _mm_set1_ps(2.0f);
++    const __m128 half = _mm_set1_ps(0.5f);
+     const __m128 lim = _mm_set1_ps(10.0f);
+     const __m128 absmask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         const __m128 x = in_r ? _mm_unpacklo_ps(_mm_load_ss(in_l + i), _mm_load_ss(in_r + i))
+                               : _mm_set1_ps(in_l[i]);
+-        const __m128 a1 = _mm_set1_ps(A1[i]);
+-        const __m128 a2 = _mm_set1_ps(A2[i]);
+-        const __m128 a3 = _mm_set1_ps(A3[i]);
++        const __m128 a1d = _mm_set1_ps(A1d[i]);
++        const __m128 a2d = _mm_set1_ps(A2d[i]);
++        const __m128 a3d = _mm_set1_ps(A3d[i]);
+         const __m128 t1 = _mm_add_ps(s1, dc);
+         const __m128 t2 = _mm_add_ps(s2, dc);
+         const __m128 v3 = _mm_sub_ps(x, t2);
+-        const __m128 v1 = _mm_add_ps(_mm_mul_ps(a1, t1), _mm_mul_ps(a2, v3));
+-        const __m128 v2 = _mm_add_ps(_mm_add_ps(t2, _mm_mul_ps(a2, t1)), _mm_mul_ps(a3, v3));
+-        __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), s1);
+-        __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), s2);
+-        const __m128 bad = _mm_or_ps(_mm_cmp_ps(_mm_and_ps(n1, absmask), lim, _CMP_NLE_UQ),
+-                                     _mm_cmp_ps(_mm_and_ps(n2, absmask), lim, _CMP_NLE_UQ));
++        // 2*v1 and 2*v2, exact under the range guard below.
++        const __m128 w1 = _mm_add_ps(_mm_mul_ps(a1d, t1), _mm_mul_ps(a2d, v3));
++        const __m128 w2 = _mm_add_ps(_mm_add_ps(_mm_add_ps(t2, t2), _mm_mul_ps(a2d, t1)),
++                                     _mm_mul_ps(a3d, v3));
++        __m128 n1 = _mm_sub_ps(w1, s1);
++        __m128 n2 = _mm_sub_ps(w2, s2);
++        __m128 v1 = _mm_mul_ps(w1, half);
++        __m128 v2 = _mm_mul_ps(w2, half);
++        const __m128 at1 = _mm_and_ps(t1, absmask);
++        const __m128 av3 = _mm_and_ps(v3, absmask);
++        const __m128 range = _mm_or_ps(
++            _mm_or_ps(_mm_cmp_ps(at1, T1, _CMP_NGE_UQ),
++                      _mm_cmp_ps(av3, T3lo, _CMP_NGE_UQ)),
++            _mm_cmp_ps(av3, T3hi, _CMP_GT_OQ));
++        const __m128 bad = _mm_or_ps(range,
++                                     _mm_or_ps(_mm_cmp_ps(_mm_and_ps(n1, absmask), lim, _CMP_NLE_UQ),
++                                               _mm_cmp_ps(_mm_and_ps(n2, absmask), lim, _CMP_NLE_UQ)));
+         if (__builtin_expect((_mm_movemask_ps(bad) & 3) != 0, 0)) {
+-            n1 = svf_clamp_ps(n1);
+-            n2 = svf_clamp_ps(n2);
++            alignas(16) float io[16];
++            _mm_store_ps(io, s1);
++            _mm_store_ps(io + 4, s2);
++            _mm_store_ps(io + 8, x);
++            svf_step_exact(io, A1[i], A2[i], A3[i]);
++            n1 = _mm_load_ps(io);
++            n2 = _mm_load_ps(io + 4);
++            v1 = _mm_load_ps(io + 8);
++            v2 = _mm_load_ps(io + 12);
+         }
+         s1 = n1;
+         s2 = n2;

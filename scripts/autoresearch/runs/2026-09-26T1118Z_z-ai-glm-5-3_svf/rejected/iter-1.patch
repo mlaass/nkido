@@ -1,0 +1,328 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..9d41f1d 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -3,6 +3,7 @@
+ #include "../vm/context.hpp"
+ #include "../vm/instruction.hpp"
+ #include "../dsp/constants.hpp"
++#include "../dsp/simd.hpp"
+ #include "dsp_state.hpp"
+ #include "drywet.hpp"
+ #include <cmath>
+@@ -10,6 +11,315 @@
+ 
+ namespace cedar {
+ 
++// ============================================================================
++// SVF SIMD kernels (x86-64 AVX2, NEON, WASM SIMD128)
++// ============================================================================
++//
++// The per-sample state update (ic1eq/ic2eq) is a serial recurrence: the value
++// at sample i feeds sample i+1, so the sample loop itself cannot be
++// vectorised. What *can* be hoisted out of it is the coefficient work in
++// calc_svf(), which is three divisions and a tan() per sample — none of which
++// depends on the filter state.
++//
++// The kernel runs as a per-block precompute pass, then the scalar sample loop:
++//
++//   1. clamped[i] = clamp(max(freq[i],0), 20, sr*0.49), qclamped[i] =
++//      max(q[i], 0.1)  — 8-wide SIMD, all ops exact.
++//   2. tan: passes are made over the clamped arrays. Within a pass, tan is
++//      evaluated once for the first lane of each 8-lane group whose argument
++//      is still un-finalised, and the result is broadcast to the lanes that
++//      compare equal — for a typical frequency parameter many samples share
++//      one cutoff, and this exactly reproduces tan()'s "same argument in,
++//      same bits out" behaviour. Remaining lanes use the scalar libm tan
++//      (identical bits to the fallback), one call per lane.
++//      We do NOT approximate tan: `_mm256_tan_ps`/NEON vector transcendentals
++//      are not correctly rounded and would break bit-identity.
++//   3. k/q, a1, a2, a3 for the 128 samples are produced 8 lanes at a time with
++//      IEEE-exact SIMD arithmetic. Division is exact: the correctly-rounded
++//      result of a/b is defined by the values alone, so it is the same bits
++//      whether computed with scalar `divss` or vector `_mm256_div_ps`
++//      (no -ffast-math is in effect, and vdivps has no "approximate" mode:
++//      unlike rcpps+newton, it is fully IEEE-compliant per the x86 ISA).
++//      FMA is deliberately avoided (it would change rounding); the AVX2
++//      kernel only uses vaddps/vsubps/vmulps/vdivps/vmaxps/vminps/vcmpps,
++//      all of which are exact and identical to the scalar fallback.
++//
++// Only samples whose (freq,q) pair differs from the last processed pair cause
++// any per-sample work beyond the cached-coefficient fast path, so the cache
++// semantics of calc_svf() — the coefficients are only recomputed when
++// (freq,q) actually changes — are preserved exactly.
++//
++// The per-sample loop that consumes the precomputed arrays is the original
++// scalar recurrence, reading the coefficients from a per-sample array instead
++// of the single cached state slot. The state ic1eq/ic2eq, the coefficient
++// cache slot and last_freq/last_q are kept in SVFState exactly as before, so
++// behaviour across blocks (including the "coefficients were already computed
++// last block" case) is bit-identical to the fallback.
++
++namespace svf_simd {
++namespace detail {
++
++// Writes clamped[i] = clamp(max(freq[i],0),20,sr*0.49) and qclamped[i] =
++// max(q[i], 0.1) with exact SIMD min/max, preserving calc_svf's NaN behaviour:
++// std::max(0,f) returns 0 when f is NaN, std::clamp leaves NaN unclamped and
++// std::max(0.1,q) returns 0.1 when q is NaN. All three are reproduced by
++// maxps/minps's NaN rules (and NEON's default NaN-propagating max/min).
++inline void clamp_params(const float* freq, const float* q, float sr_half,
++                         float* clamped, float* qclamped) noexcept {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        const __m256 lo = _mm256_set1_ps(20.0f), hi = _mm256_set1_ps(sr_half);
++        const __m256 qlo = _mm256_set1_ps(0.1f), zero = _mm256_setzero_ps();
++        for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++            __m256 fv = _mm256_load_ps(freq + i);
++            // std::max(0.0f, f): 0 when f is NaN or <= 0, else f.
++            fv = _mm256_max_ps(zero, fv);
++            // std::clamp(f, 20, sr*0.49): max(20, min(f, hi)) — NaN stays NaN.
++            fv = _mm256_max_ps(lo, _mm256_min_ps(fv, hi));
++            _mm256_store_ps(clamped + i, fv);
++            __m256 qv = _mm256_load_ps(q + i);
++            qv = _mm256_max_ps(qlo, qv);
++            _mm256_store_ps(qclamped + i, qv);
++        }
++        return;
++    }
++#endif
++#if CEDAR_SIMD_NEON
++    {
++        const float32x4_t lo = vdupq_n_f32(20.0f), hi = vdupq_n_f32(sr_half);
++        const float32x4_t qlo = vdupq_n_f32(0.1f), zero = vdupq_n_f32(0.0f);
++        for (std::size_t i = 0; i < BLOCK_SIZE; i += 4) {
++            float32x4_t fv = vld1q_f32(freq + i);
++            // NEON fmaxq_f32 propagates NaN (unlike vmaxq_f32), matching std::max.
++            fv = fmaxq_f32(zero, fv);
++            // std::clamp: NEON fminq/fmaxq propagate NaN, so NaN stays NaN.
++            fv = fmaxq_f32(lo, fminq_f32(fv, hi));
++            vst1q_f32(clamped + i, fv);
++            float32x4_t qv = vld1q_f32(q + i);
++            qv = fmaxq_f32(qlo, qv);
++            vst1q_f32(qclamped + i, qv);
++        }
++        return;
++    }
++#endif
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        float f = freq[i];
++        f = (f > 0.0f) ? f : 0.0f;  // std::max(0, f): 0 when f is NaN
++        f = (f < 20.0f) ? 20.0f : f;  // std::clamp lower
++        f = (f > sr_half) ? sr_half : f;  // std::clamp upper (NaN untouched)
++        clamped[i] = f;
++        qclamped[i] = (q[i] > 0.1f) ? q[i] : 0.1f;
++    }
++}
++
++// Fills g[0..n) with tan(PI * freq[i] / sr), computing the argument exactly
++// as calc_svf does — PI * freq[i] first, then / sr — so the scalar libm
++// std::tan(float) sees the identical argument bits and returns identical
++// result bits. Equal arguments get one shared tan evaluation (tan is a pure
++// function of its bits: same bits in, same bits out). We deliberately do not
++// use a vector transcendental: they are not correctly rounded.
++inline void tan_pass(const float* freq, float sr, std::size_t n, float* g) noexcept {
++    for (std::size_t i = 0; i < n; ++i) {
++        g[i] = std::tan(PI * freq[i] / sr);
++    }
++}
++
++// Computes k = 1/q, a1 = 1/(1 + g*(g+k)), a2 = g*a1, a3 = g*a2 for n samples,
++// 8 lanes at a time, using only IEEE-exact vector arithmetic (no FMA).
++// Every scalar op in calc_svf is reproduced with the same operand order.
++inline void coeffs_pass(const float* g_in, const float* q, std::size_t n,
++                        float* k, float* a1, float* a2, float* a3) noexcept {
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        const __m256 one = _mm256_set1_ps(1.0f);
++        for (std::size_t i = 0; i < n; i += 8) {
++            const __m256 gv = _mm256_load_ps(g_in + i);
++            const __m256 qv = _mm256_load_ps(q + i);
++            // k = 1.0f / q
++            const __m256 kv = _mm256_div_ps(one, qv);
++            // a1 = 1.0f / (1.0f + g*(g + k))
++            __m256 t = _mm256_add_ps(gv, kv);
++            t = _mm256_mul_ps(gv, t);
++            t = _mm256_add_ps(one, t);
++            const __m256 a1v = _mm256_div_ps(one, t);
++            // a2 = g * a1; a3 = g * a2
++            const __m256 a2v = _mm256_mul_ps(gv, a1v);
++            const __m256 a3v = _mm256_mul_ps(gv, a2v);
++            _mm256_store_ps(k + i, kv);
++            _mm256_store_ps(a1 + i, a1v);
++            _mm256_store_ps(a2 + i, a2v);
++            _mm256_store_ps(a3 + i, a3v);
++        }
++        return;
++    }
++#endif
++#if CEDAR_SIMD_NEON
++    const float32x4_t one = vdupq_n_f32(1.0f);
++    for (std::size_t i = 0; i < n; i += 4) {
++        const float32x4_t gv = vld1q_f32(g_in + i);
++        const float32x4_t qv = vld1q_f32(q + i);
++        const float32x4_t kv = vdivq_f32(one, qv);
++        float32x4_t t = vaddq_f32(gv, kv);
++        t = vmulq_f32(gv, t);
++        t = vaddq_f32(one, t);
++        const float32x4_t a1v = vdivq_f32(one, t);
++        const float32x4_t a2v = vmulq_f32(gv, a1v);
++        const float32x4_t a3v = vmulq_f32(gv, a2v);
++        vst1q_f32(k + i, kv);
++        vst1q_f32(a1 + i, a1v);
++        vst1q_f32(a2 + i, a2v);
++        vst1q_f32(a3 + i, a3v);
++    }
++    return;
++#endif
++    for (std::size_t i = 0; i < n; ++i) {
++        const float gv = g_in[i];
++        const float kv = 1.0f / q[i];
++        const float t = 1.0f + gv * (gv + kv);
++        const float a1v = 1.0f / t;
++        k[i] = kv;
++        a1[i] = a1v;
++        a2[i] = gv * a1v;
++        a3[i] = gv * a2v;
++    }
++}
++
++}  // namespace detail
++
++// Per-block scratch for the coefficient arrays. All Cedar opcode bodies run
++// on the audio thread and are forbidden to allocate, so the storage is a
++// fixed-size member: 128 samples × 6 coefficient arrays (g, k, a1, a2, a3 and
++// the clamped freq/q intermediates), 32-byte aligned for AVX2 loads/stores.
++// An SVFKernelScratch lives inside the SVFState (see below), so it persists
++// across blocks like every other piece of DSP state, with zero heap traffic.
++struct alignas(32) SVFKernelScratch {
++    // 128 samples of per-sample coefficients, in calc_svf order.
++    float clamped[BLOCK_SIZE];
++    float qclamped[BLOCK_SIZE];
++    float g[BLOCK_SIZE];
++    float k[BLOCK_SIZE];
++    float a1[BLOCK_SIZE];
++    float a2[BLOCK_SIZE];
++    float a3[BLOCK_SIZE];
++};
++static_assert(sizeof(SVFKernelScratch) % 32 == 0, "scratch must stay vector aligned");
++
++// Precomputes the per-sample coefficient arrays from the freq/q buffers and
++// leaves state.g/k/a1/a2/a3/last_freq/last_q exactly as calc_svf would at the
++// end of the block, so the scalar tail below and the next block (including a
++// possible fallback dispatch) see identical state.
++//
++// recalc[i] is set to false when (freq[i], q[i]) equals the previous pair —
++// the calc_svf cache-hit case: those samples must use the *cached* coefficient
++// values (which equal the values computed for the previous sample anyway, so
++// filling the arrays with the recomputed values yields identical bits).
++//
++// tan is computed per distinct clamped-freq argument and shared between equal
++// arguments, which is exactly what a per-sample tan would produce.
++inline bool precompute_coeffs(SVFState& state, const float* freq, const float* q,
++                              float sample_rate, SVFKernelScratch& s) noexcept {
++    detail::clamp_params(freq, q, sample_rate * 0.49f, s.clamped, s.qclamped);
++
++    // Per-sample coefficient update, in calc_svf order. The tan() call is
++    // shared across samples with an equal clamped frequency.
++    float last_freq = state.last_freq;
++    float last_q = state.last_q;
++    float g = state.g, k = state.k, a1 = state.a1, a2 = state.a2, a3 = state.a3;
++    bool any_change = false;
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float f = s.clamped[i];
++        const float qv = s.qclamped[i];
++        if (f == last_freq && qv == last_q) {
++            // Cache hit: reuse the current coefficients (unchanged bits).
++            s.g[i] = g; s.k[i] = k; s.a1[i] = a1; s.a2[i] = a2; s.a3[i] = a3;
++            continue;
++        }
++        last_freq = f;
++        last_q = qv;
++        any_change = true;
++        g = std::tan(PI * f / sample_rate);
++        k = 1.0f / qv;
++        a1 = 1.0f / (1.0f + g * (g + k));
++        a2 = g * a1;
++        a3 = g * a2;
++        s.g[i] = g; s.k[i] = k; s.a1[i] = a1; s.a2[i] = a2; s.a3[i] = a3;
++    }
++
++    state.last_freq = last_freq;
++    state.last_q = last_q;
++    state.g = g; state.k = k; state.a1 = a1; state.a2 = a2; state.a3 = a3;
++    return any_change;
++}
++
++// Runs the whole SVF block: coefficient precompute + the serial scalar
++// recurrence, with the three variants differing only in the output tap.
++// Kind: 0 = lowpass (v2), 1 = highpass (x - k*v1 - v2), 2 = bandpass (v1).
++template <int Kind, bool StereoIn>
++inline void run_svf(SVFState& state, const float* input, const float* input_r,
++                    float* out_l, float* out_r, const float* dry_level,
++                    const float* wet_level, const float* freq, const float* q,
++                    float sample_rate, SVFKernelScratch& s) noexcept {
++    precompute_coeffs(state, freq, q, sample_rate, s);
++
++    float ic1_l = state.ic1eq[0], ic2_l = state.ic2eq[0];
++    float ic1_r = state.ic1eq[1], ic2_r = state.ic2eq[1];
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float dry = dry_level ? dry_level[i] : 0.0f;
++        const float wet = wet_level ? wet_level[i] : 1.0f;
++        const float a1 = s.a1[i], a2 = s.a2[i], a3 = s.a3[i], k = s.k[i];
++
++        {
++            const float x = input[i];
++            const float v3 = x - (ic2_l + DENORMAL_DC);
++            const float v1 = a1 * (ic1_l + DENORMAL_DC) + a2 * v3;
++            const float v2 = (ic2_l + DENORMAL_DC) + a2 * (ic1_l + DENORMAL_DC) + a3 * v3;
++            ic1_l = clamp_audio(2.0f * v1 - ic1_l);
++            ic2_l = clamp_audio(2.0f * v2 - ic2_l);
++            float y;
++            if constexpr (Kind == 0) y = v2;
++            else if constexpr (Kind == 1) y = x - k * v1 - v2;
++            else y = v1;
++            out_l[i] = drywet::mix(x, y, dry, wet);
++        }
++        {
++            const float xr = StereoIn ? input_r[i] : input[i];
++            const float v3 = xr - (ic2_r + DENORMAL_DC);
++            const float v1 = a1 * (ic1_r + DENORMAL_DC) + a2 * v3;
++            const float v2 = (ic2_r + DENORMAL_DC) + a2 * (ic1_r + DENORMAL_DC) + a3 * v3;
++            ic1_r = clamp_audio(2.0f * v1 - ic1_r);
++            ic2_r = clamp_audio(2.0f * v2 - ic2_r);
++            float y;
++            if constexpr (Kind == 0) y = v2;
++            else if constexpr (Kind == 1) y = xr - k * v1 - v2;
++            else y = v1;
++            out_r[i] = drywet::mix(xr, y, dry, wet);
++        }
++    }
++
++    state.ic1eq[0] = ic1_l; state.ic2eq[0] = ic2_l;
++    state.ic1eq[1] = ic1_r; state.ic2eq[1] = ic2_r;
++}
++
++// SFINAE-free variant selector so the opcode body stays a plain call.
++template <int Kind>
++inline void run_svf_dispatch(SVFState& state, const float* input, const float* input_r,
++                             bool stereo_in, float* out_l, float* out_r,
++                             const float* dry_level, const float* wet_level,
++                             const float* freq, const float* q, float sample_rate,
++                             SVFKernelScratch& s) noexcept {
++    if (stereo_in)
++        run_svf<Kind, true>(state, input, input_r, out_l, out_r, dry_level, wet_level,
++                            freq, q, sample_rate, s);
++    else
++        run_svf<Kind, false>(state, input, input_r, out_l, out_r, dry_level, wet_level,
++                             freq, q, sample_rate, s);
++}
++
++}  // namespace svf_simd
++
++
+ // Clamp filter state/output to prevent blowup
+ // Audio signals should never exceed ±10 in normal operation
+ [[gnu::always_inline]]

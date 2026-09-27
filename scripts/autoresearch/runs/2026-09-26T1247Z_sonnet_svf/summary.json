@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-26T1247Z_sonnet_svf",
+  "provider": "claude-code",
+  "model": "sonnet (claude-sonnet-5)",
+  "target": "svf",
+  "iterations": 8,
+  "accepts": 7,
+  "rejects": 1,
+  "reject_reasons": {
+    "speed": 1
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 8.732,
+  "tokens": {
+    "input": 2647896,
+    "output": 176418,
+    "cached": 2285717
+  },
+  "cost_usd": 3.6698,
+  "wall_clock_s": 2237.0,
+  "gpu_s": null,
+  "active_s": 2043.1,
+  "unstable_iterations": 6,
+  "status": "complete",
+  "branch": "autoresearch/sonnet-svf-202609261247",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

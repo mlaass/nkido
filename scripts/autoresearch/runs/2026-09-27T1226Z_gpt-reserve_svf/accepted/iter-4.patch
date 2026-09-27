@@ -1,0 +1,126 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..26df3c1 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -3,6 +3,7 @@
+ #include "../vm/context.hpp"
+ #include "../vm/instruction.hpp"
+ #include "../dsp/constants.hpp"
++#include "../dsp/simd.hpp"
+ #include "dsp_state.hpp"
+ #include "drywet.hpp"
+ #include <cmath>
+@@ -10,6 +11,55 @@
+ 
+ namespace cedar {
+ 
++inline float clamp_audio(float val);
++inline void calc_svf(SVFState& state, float freq, float q, float sample_rate);
++constexpr float DENORMAL_DC = 1e-18f;
++
++#if CEDAR_SIMD_X86
++namespace kernels {
++
++template <int Mode>
++CEDAR_TARGET_AVX2 inline void filter_svf_avx2(
++    float* out_l, float* out_r, const float* input, const float* input_r,
++    const float* freq, const float* q, const float* dry_level,
++    const float* wet_level, bool stereo_in, SVFState& state,
++    float sample_rate) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        calc_svf(state, freq[i], q[i], sample_rate);
++        const float dry = drywet::coeff(dry_level, i, 0.0f);
++        const float wet = drywet::coeff(wet_level, i, 1.0f);
++
++        const float xl = input[i];
++        const float v3l = xl - (state.ic2eq[0] + DENORMAL_DC);
++        const float v1l = state.a1 * (state.ic1eq[0] + DENORMAL_DC) + state.a2 * v3l;
++        const float v2l = (state.ic2eq[0] + DENORMAL_DC) + state.a2 * (state.ic1eq[0] + DENORMAL_DC) + state.a3 * v3l;
++        state.ic1eq[0] = clamp_audio(2.0f * v1l - state.ic1eq[0]);
++        state.ic2eq[0] = clamp_audio(2.0f * v2l - state.ic2eq[0]);
++        if constexpr (Mode == 0)
++            out_l[i] = drywet::mix(xl, v2l, dry, wet);
++        else if constexpr (Mode == 1)
++            out_l[i] = drywet::mix(xl, xl - state.k * v1l - v2l, dry, wet);
++        else
++            out_l[i] = drywet::mix(xl, v1l, dry, wet);
++
++        const float xr = stereo_in ? input_r[i] : xl;
++        const float v3r = xr - (state.ic2eq[1] + DENORMAL_DC);
++        const float v1r = state.a1 * (state.ic1eq[1] + DENORMAL_DC) + state.a2 * v3r;
++        const float v2r = (state.ic2eq[1] + DENORMAL_DC) + state.a2 * (state.ic1eq[1] + DENORMAL_DC) + state.a3 * v3r;
++        state.ic1eq[1] = clamp_audio(2.0f * v1r - state.ic1eq[1]);
++        state.ic2eq[1] = clamp_audio(2.0f * v2r - state.ic2eq[1]);
++        if constexpr (Mode == 0)
++            out_r[i] = drywet::mix(xr, v2r, dry, wet);
++        else if constexpr (Mode == 1)
++            out_r[i] = drywet::mix(xr, xr - state.k * v1r - v2r, dry, wet);
++        else
++            out_r[i] = drywet::mix(xr, v1r, dry, wet);
++    }
++}
++
++}  // namespace kernels
++#endif
++
+ // Clamp filter state/output to prevent blowup
+ // Audio signals should never exceed ±10 in normal operation
+ [[gnu::always_inline]]
+@@ -20,9 +70,6 @@ inline float clamp_audio(float val) {
+     return val;
+ }
+ 
+-// Tiny DC offset to prevent denormal numbers (inaudible)
+-constexpr float DENORMAL_DC = 1e-18f;
+-
+ // SVF (State Variable Filter) coefficient calculation
+ inline void calc_svf(SVFState& state, float freq, float q, float sample_rate) {
+     freq = std::max(0.0f, freq);
+@@ -59,6 +106,15 @@ inline void op_filter_svf_lp(ExecutionContext& ctx, const Instruction& inst) {
+     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
+     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::filter_svf_avx2<0>(out_l, out_r, input, input_r, freq, q,
++                                    dry_level, wet_level, stereo_in, state,
++                                    ctx.sample_rate);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], ctx.sample_rate);
+         float dry = drywet::coeff(dry_level, i, 0.0f);
+@@ -92,6 +148,15 @@ inline void op_filter_svf_hp(ExecutionContext& ctx, const Instruction& inst) {
+     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
+     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::filter_svf_avx2<1>(out_l, out_r, input, input_r, freq, q,
++                                    dry_level, wet_level, stereo_in, state,
++                                    ctx.sample_rate);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], ctx.sample_rate);
+         float dry = drywet::coeff(dry_level, i, 0.0f);
+@@ -127,6 +192,15 @@ inline void op_filter_svf_bp(ExecutionContext& ctx, const Instruction& inst) {
+     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
+     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::filter_svf_avx2<2>(out_l, out_r, input, input_r, freq, q,
++                                    dry_level, wet_level, stereo_in, state,
++                                    ctx.sample_rate);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         calc_svf(state, freq[i], q[i], ctx.sample_rate);
+         float dry = drywet::coeff(dry_level, i, 0.0f);

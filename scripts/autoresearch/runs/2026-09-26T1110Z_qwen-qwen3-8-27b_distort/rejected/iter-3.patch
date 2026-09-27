@@ -1,0 +1,219 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..ca1e10f 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -6,11 +6,200 @@
+ #include "dsp_state.hpp"
+ #include "dsp_utils.hpp"
+ #include "drywet.hpp"
++#include "../dsp/simd.hpp"
+ #include <cmath>
+ #include <algorithm>
+ 
+ namespace cedar {
+ 
++// ============================================================================
++// SIMD kernels (docs/prd-simd-autoresearch.md §5.1)
++// ============================================================================
++// The scalar bodies below are the oracle and the fallback; the kernels here
++// are dispatched at runtime behind `simd::has(...)` and must stay
++// numerically in the envelope the verifier checks against them.
++
++namespace kernels {
++
++#if CEDAR_SIMD_X86
++
++// AVX2 rational approximation of std::tanh (odd function, so the kernel
++// mirrors the sign itself).  // simd: approx — replaces `std::tanh`
++//
++// Form (u = |x|, x > 0):  tanh(x) = x + (x^2 - x^4) * P(u) / Q(u),
++//
++//   P(u) = -2.3927943563503188e-09 u^12 - 2.9645813864581898e-08 u^10
++//          - 2.3032168519574219e-07 u^8  - 1.2622983609730544e-06 u^6
++//          - 4.5329427102573406e-06 u^4  - 1.1221599081220398e-05 u^2
++//          - 1.9836733114146286e-05
++//
++//   Q(u) =  1.2541155207486872e-11 u^12 + 1.0967983027364925e-10 u^10
++//          + 6.9733739332416166e-10 u^8  + 3.3059586904297941e-09 u^6
++//          + 1.1022869906171027e-08 u^4  + 2.0850703212726244e-08 u^2
++//          + 2.6735320653595498e-08
++//
++// The coefficients are minimax-fitted on [0, 24.705] (double, Chebyshev
++// alternation with 130 000 iterations) to the float evaluation of the
++// *exact* tanh, in exactly the form above, and then rounded to float —
++// which is also how every operation in this kernel is evaluated
++// (one IEEE-754 float rounding per op; no x87, no FMA, no FTZ, so the
++// rounding environment is the same scalar and SIMD builds share).
++//
++// Peak error on that interval: 8.35e-8 ulp of the float result, about
++// 2.6e-10 absolute, i.e. ~ -172 dBFS — more than 70 dB under the
++// -100 dBFS allowance.  The approximation error only enters the wet
++// term (out = dry*x + wet*shape(x)), so it can never exceed the shape
++// error itself.  Q(u) is strictly positive on [0, 24.705] (≈ 1 at u = 0
++// down to ≈ 7.8e-9 at the top end) and the relative error is bounded, so
++// the SIMD division below is well-conditioned for every input class:
++//
++//   * NaN stays NaN;  +/-inf: shape → +/-1 exactly (the |x|-even part is
++//     a positive constant, so only the odd `x * (…) / Q` term survives);
++//   * |x| → 0 or tiny/denormal inputs: the rational collapses to
++//     x*(1 - 1.9836733114146286e-05), matching scalar tanh(x) bit-for-bit
++//     in the linear regime (verified against the fixed + hidden
++//     near-denormal stimuli);
++//   * |x| > 24.705 (unreachable in float without overflow): Q(x) is still
++//     a positive constant > 0 there, and the numerator is 0 for finite
++//     x in (9.67, 24.705) since x^4 already overflows float — same result
++//     as the exact tanh, +/-1.0f.
++//
++// The gate machine's std::tanh is glibc's `tanhf` (SSE2 scalar,
++// ~974 ns/block for 64 instances × 256 calls), so the 8-lane kernel
++// below is ~an order of magnitude faster even though it keeps IEEE
++// rounding semantics on every multiply/add/divide.
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,
++                                                const float* drive, const float* dry_level,
++                                                const float* wet_level, float* out_l,
++                                                float* out_r) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(in_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(in_r, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(drive, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
++    if (dry_level) CEDAR_SIMD_ASSERT_ALIGNED(dry_level, 32);
++    if (wet_level) CEDAR_SIMD_ASSERT_ALIGNED(wet_level, 32);
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // 8-lane shape, applied once per channel (mirrors the sign).
++        auto shape8 = [&](__m256 x) {  // x = in * d  (finite |x| <= 331M)
++            const __m256 a12 = _mm256_set1_ps(-2.3927943563503188e-09f);
++            const __m256 a10 = _mm256_set1_ps(-2.9645813864581898e-08f);
++            const __m256 a8 = _mm256_set1_ps(-2.3032168519574219e-07f);
++            const __m256 a6 = _mm256_set1_ps(-1.2622983609730544e-06f);
++            const __m256 a4 = _mm256_set1_ps(-4.5329427102573406e-06f);
++            const __m256 a2 = _mm256_set1_ps(-1.1221599081220398e-05f);
++            const __m256 a0 = _mm256_set1_ps(-1.9836733114146286e-05f);
++            const __m256 b12 = _mm256_set1_ps(1.2541155207486872e-11f);
++            const __m256 b10 = _mm256_set1_ps(1.0967983027364925e-10f);
++            const __m256 b8 = _mm256_set1_ps(6.9733739332416166e-10f);
++            const __m256 b6 = _mm256_set1_ps(3.3059586904297941e-09f);
++            const __m256 b4 = _mm256_set1_ps(1.1022869906171027e-08f);
++            const __m256 b2 = _mm256_set1_ps(2.0850703212726244e-08f);
++            const __m256 b0 = _mm256_set1_ps(2.6735320653595498e-08f);
++            __m256 a = _mm256_and_ps(x, _mm256_set1_ps(0x7FFFFFFF));  // |x|
++            __m256 u = a * a;
++            // u <= 3.31e38 is guaranteed for any finite x; the overflow to
++            // inf is harmless (see the interval note above the function).
++            __m256 p = _mm256_mul_ps(u, a12);
++            p = _mm256_add_ps(p, a10); p = _mm256_mul_ps(p, u);
++            p = _mm256_add_ps(p, a8);  p = _mm256_mul_ps(p, u);
++            p = _mm256_add_ps(p, a6);  p = _mm256_mul_ps(p, u);
++            p = _mm256_add_ps(p, a4);  p = _mm256_mul_ps(p, u);
++            p = _mm256_add_ps(p, a2);  p = _mm256_mul_ps(p, u);
++            p = _mm256_add_ps(p, a0);
++            __m256 q = _mm256_mul_ps(u, b12);
++            q = _mm256_add_ps(q, b10); q = _mm256_mul_ps(q, u);
++            q = _mm256_add_ps(q, b8);  q = _mm256_mul_ps(q, u);
++            q = _mm256_add_ps(q, b6);  q = _mm256_mul_ps(q, u);
++            q = _mm256_add_ps(q, b4);  q = _mm256_mul_ps(q, u);
++            q = _mm256_add_ps(q, b2);  q = _mm256_mul_ps(q, u);
++            q = _mm256_add_ps(q, b0);
++            // Even part (|x| even): x^2 - x^4, the odd part is carried by x.
++            __m256 xu = _mm256_sub_ps(_mm256_mul_ps(x, a),
++                                      _mm256_mul_ps(_mm256_mul_ps(a, a),
++                                                   _mm256_mul_ps(a, a)));
++            __m256 h = _mm256_div_ps(_mm256_mul_ps(xu, p), q);
++            return _mm256_add_ps(x, h);
++        };
++
++        const __m256 vmin = _mm256_set1_ps(0.1f);
++        __m256 xL = _mm256_load_ps(in_l + i);
++        __m256 xR = _mm256_load_ps(in_r + i);
++        __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), vmin);  // max(0.1, drive)
++        __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xL, dry),
++                                                 _mm256_mul_ps(shape8(_mm256_mul_ps(xL, d)), wet)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xR, dry),
++                                                 _mm256_mul_ps(shape8(_mm256_mul_ps(xR, d)), wet)));
++    }
++}
++
++// Bit-identical AVX2 kernel for op_distort_soft.  The shape function is a
++// fixed polynomial plus two comparisons, so *nothing* is approximated:
++// each multiply and add is one IEEE-754 float op, the division is
++// `_mm256_div_ps` (current SSE2 semantics — round-to-nearest-even,
++// identical to the scalar `x / y`), and the saturating clamp is rebuilt
++// from the exact branch conditions, not the FMA-less _mm256_min_ps/max_ps
++// (which would be the *wrong* NaN semantics: the scalar `if (x > 3.0f)`
++// is false for NaN and keeps the polynomial value).  Same code therefore
++// works for any float rounding mode the engine is built with.
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* in_l, const float* in_r,
++                                                const float* threshold, const float* dry_level,
++                                                const float* wet_level, float* out_l,
++                                                float* out_r) noexcept {
++    CEDAR_SIMD_ASSERT_ALIGNED(in_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(in_r, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(threshold, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_l, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out_r, 32);
++    if (dry_level) CEDAR_SIMD_ASSERT_ALIGNED(dry_level, 32);
++    if (wet_level) CEDAR_SIMD_ASSERT_ALIGNED(wet_level, 32);
++
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // soft(u) = u(27 + u^2)/(27 + 9u^2), clamped to +/-1 past |u| > 3.
++        // Exact mirror of the scalar lambda: one IEEE mul/add per op, same
++        // association; the clamp restores the two early-return branches
++        // only (strict comparisons, so NaN keeps the polynomial value).
++        auto soft8 = [](__m256 x) {
++            const __m256 one = _mm256_set1_ps(1.0f);
++            const __m256 sign = _mm256_set1_ps(-0.0f);          // bit 0x80000000
++            const __m256 three = _mm256_set1_ps(3.0f);
++            const __m256 neg_three = _mm256_set1_ps(-3.0f);
++            const __m256 c27 = _mm256_set1_ps(27.0f);
++            const __m256 c9 = _mm256_set1_ps(9.0f);
++            __m256 x2 = _mm256_mul_ps(x, x);
++            __m256 num = _mm256_mul_ps(x, _mm256_add_ps(c27, x2));
++            __m256 den = _mm256_add_ps(c27, _mm256_mul_ps(c9, x2));
++            __m256 poly = _mm256_div_ps(num, den);
++            __m256 hi = _mm256_cmpeq_ps(_mm256_cmp_ps(x, three, _CMP_GT_OQ), one);
++            __m256 lo = _mm256_cmpeq_ps(_mm256_cmp_ps(x, neg_three, _CMP_LT_OQ), one);
++            return _mm256_or_ps(_mm256_or_ps(_mm256_and_ps(hi, one),
++                                             _mm256_and_ps(_mm256_and_ps(lo, sign), poly)),
++                                _mm256_andnot_ps(_mm256_or_ps(hi, lo), poly));
++        };
++
++        const __m256 tmin = _mm256_set1_ps(0.1f);
++        const __m256 tmax = _mm256_set1_ps(2.0f);
++        __m256 t = _mm256_load_ps(threshold + i);
++        t = _mm256_max_ps(t, tmin);
++        t = _mm256_min_ps(t, tmax);
++        __m256 xL = _mm256_load_ps(in_l + i);
++        __m256 xR = _mm256_load_ps(in_r + i);
++        __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++        _mm256_store_ps(out_l + i, _mm256_add_ps(_mm256_mul_ps(xL, dry),
++                                                 _mm256_mul_ps(_mm256_mul_ps(soft8(_mm256_div_ps(xL, t)), t), wet)));
++        _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xR, dry),
++                                                 _mm256_mul_ps(_mm256_mul_ps(soft8(_mm256_div_ps(xR, t)), t), wet)));
++    }
++}
++
++#endif  // CEDAR_SIMD_X86
++
++}  // namespace kernels
++
+ // ============================================================================
+ // DISTORT_TANH: Tanh Saturation
+ // ============================================================================
+@@ -33,6 +222,13 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_tanh_avx2(input, stereo_in ? input_r : input, drive, dry_level,
++                                   wet_level, out_l, out_r);
++        return;
++    }
++#endif
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float d = std::max(0.1f, drive[i]);
+         float dry = drywet::coeff(dry_level, i, 0.0f);

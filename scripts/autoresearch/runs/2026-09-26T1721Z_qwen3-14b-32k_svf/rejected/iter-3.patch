@@ -1,0 +1,137 @@
+diff --git a/cedar/include/cedar/dsp/simd.hpp b/cedar/include/cedar/dsp/simd.hpp
+index ee273e4..23183c4 100644
+--- a/cedar/include/cedar/dsp/simd.hpp
++++ b/cedar/include/cedar/dsp/simd.hpp
+@@ -1,74 +1,58 @@
+-#pragma once
+-
+-// Runtime SIMD dispatch (docs/prd-simd-autoresearch.md §5.1).
+-//
+-// Opcodes keep their scalar body as oracle + fallback and add kernels behind
+-// `if (simd::has(...))`. Kernels only exist when the build sets CEDAR_SIMD
+-// (the `simd` / `wasm-simd` presets); default builds compile to the scalar
+-// bodies exactly as before.
+-//
+-//   x86-64 (GCC/Clang): kernels carry CEDAR_TARGET_AVX2, so no TU needs
+-//     -mavx2; the ISA is detected once at static init. SSE2 is baseline.
+-//   aarch64: NEON is baseline — CEDAR_SIMD_NEON kernels need no dispatch.
+-//   WASM:    SIMD128 when built with -msimd128 (CEDAR_SIMD_WASM).
+-//
+-// Kernels must not allocate, lock or syscall (the [zero_alloc] trap enforces),
+-// and may assume 32-byte aligned buffers (BufferPool slabs are alignas(32)) —
+-// assert it with CEDAR_SIMD_ASSERT_ALIGNED.
+-
+-#include <cassert>
+-#include <cstdint>
+-
+-#if defined(CEDAR_SIMD) && (defined(__x86_64__) || defined(__i386__)) && \
+-    (defined(__GNUC__) || defined(__clang__))
+-#  define CEDAR_SIMD_X86 1
+-#  include <immintrin.h>
+-#  define CEDAR_TARGET_AVX2 [[gnu::target("avx2")]]
+-#else
+-#  define CEDAR_SIMD_X86 0
+-#endif
+-
+-#if defined(CEDAR_SIMD) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+-#  define CEDAR_SIMD_NEON 1
+-#  include <arm_neon.h>
+-#else
+-#  define CEDAR_SIMD_NEON 0
+-#endif
+-
+-#if defined(CEDAR_SIMD) && defined(__wasm_simd128__)
+-#  define CEDAR_SIMD_WASM 1
+-#  include <wasm_simd128.h>
+-#else
+-#  define CEDAR_SIMD_WASM 0
+-#endif
+-
+-#define CEDAR_SIMD_ASSERT_ALIGNED(p, n) \
+-    assert((reinterpret_cast<std::uintptr_t>(p) % (n)) == 0 && "SIMD kernel: misaligned buffer")
+-
+-namespace cedar::simd {
+-
+-enum class Isa : std::uint8_t { Scalar, Sse2, Avx2, Neon, Wasm128 };
+-
+-namespace detail {
+-// Written once during static initialisation (src/dsp/simd.cpp); read-only after.
+-extern Isa g_active;
+-}
+-
+-// Best ISA available on this CPU *and* compiled into this build.
+-[[nodiscard]] inline Isa active() noexcept { return detail::g_active; }
+-
+-// True when kernels for `isa` may run. x86 levels nest (Avx2 implies Sse2).
+-[[nodiscard]] inline bool has(Isa isa) noexcept {
+-    const Isa a = detail::g_active;
+-    if (isa == Isa::Scalar) return true;
+-    if (isa == Isa::Sse2) return a == Isa::Sse2 || a == Isa::Avx2;
+-    return a == isa;
++#include "../dsp/simd.hpp"
++
++namespace kernels {
++#if CEDAR_SIMD_X86
++[[gnu::target("avx2")]] inline void svf_lp_avx2(const float* input, const float* input_r, float* output_l, float* output_r, const float* freq, const float* q, float* ic1eq, float* ic2eq, const float* dry_level, const float* wet_level, float sample_rate, float k, float a1, float a2, float a3, float DENORMAL_DC, std::size_t BLOCK_SIZE) noexcept {
++    constexpr size_t VEC_SIZE = 8;
++    for (size_t i = 0; i < BLOCK_SIZE; i += VEC_SIZE) {
++        __m256 v_DENORMAL_DC = _mm256_set1_ps(DENORMAL_DC);
++        __m256 v_a1 = _mm256_set1_ps(a1);
++        __m256 v_a2 = _mm256_set1_ps(a2);
++        __m256 v_a3 = _mm256_set1_ps(a3);
++        __m256 v_k = _mm256_set1_ps(k);
++
++        // Load inputs
++        __m256 v_input_l = _mm256_load_ps(input + i);
++        __m256 v_input_r = _mm256_load_ps(input_r + i);
++        __m256 v_freq = _mm256_load_ps(freq + i);
++        __m256 v_q = _mm256_load_ps(q + i);
++        __m256 v_dry = _mm256_load_ps(dry_level + i);
++        __m256 v_wet = _mm256_load_ps(wet_level + i);
++
++        // Load state variables
++        __m256 v_ic1eq_l = _mm256_load_ps(ic1eq + i);
++        __m256 v_ic1eq_r = _mm256_load_ps(ic1eq + i + BLOCK_SIZE);
++        __m256 v_ic2eq_l = _mm256_load_ps(ic2eq + i);
++        __m256 v_ic2eq_r = _mm256_load_ps(ic2eq + i + BLOCK_SIZE);
++
++        // Process left channel
++        __m256 v_x_l = v_input_l;
++        __m256 v_v3_l = _mm256_sub_ps(v_x_l, _mm256_add_ps(v_ic2eq_l, v_DENORMAL_DC));
++        __m256 v_v1_l = _mm256_add_ps(_mm256_mul_ps(v_a1, _mm256_add_ps(v_ic1eq_l, v_DENORMAL_DC)), _mm256_mul_ps(v_a2, v_v3_l));
++        __m256 v_v2_l = _mm256_add_ps(_mm256_add_ps(_mm256_add_ps(v_ic2eq_l, v_DENORMAL_DC), _mm256_mul_ps(v_a2, _mm256_add_ps(v_ic1eq_l, v_DENORMAL_DC))), _mm256_mul_ps(v_a3, v_v3_l));
++        __m256 v_new_ic1eq_l = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(2.0f), v_v1_l), v_ic1eq_l);
++        __m256 v_new_ic2eq_l = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(2.0f), v_v2_l), v_ic2eq_l);
++        
++        // Process right channel
++        __m256 v_x_r = v_input_r;
++        __m256 v_v3_r = _mm256_sub_ps(v_x_r, _mm256_add_ps(v_ic2eq_r, v_DENORMAL_DC));
++        __m256 v_v1_r = _mm256_add_ps(_mm256_mul_ps(v_a1, _mm256_add_ps(v_ic1eq_r, v_DENORMAL_DC)), _mm256_mul_ps(v_a2, v_v3_r));
++        __m256 v_v2_r = _mm256_add_ps(_mm256_add_ps(_mm256_add_ps(v_ic2eq_r, v_DENORMAL_DC), _mm256_mul_ps(v_a2, _mm256_add_ps(v_ic1eq_r, v_DENORMAL_DC))), _mm256_mul_ps(v_a3, v_v3_r));
++        __m256 v_new_ic1eq_r = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(2.0f), v_v1_r), v_ic1eq_r);
++        __m256 v_new_ic2eq_r = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(2.0f), v_v2_r), v_ic2eq_r);
++
++        // Store new state values
++        _mm256_store_ps(ic1eq + i, v_new_ic1eq_l);
++        _mm256_store_ps(ic1eq + i + BLOCK_SIZE, v_new_ic1eq_r);
++        _mm256_store_ps(ic2eq + i, v_new_ic2eq_l);
++        _mm256_store_ps(ic2eq + i + BLOCK_SIZE, v_new_ic2eq_r);
++
++        // Compute output
++        __m256 v_output_l = _mm256_blendv_ps(v_x_l, _mm256_mul_ps(v_v2_l, _mm256_set1_ps(1.0f)), _mm256_set1_ps(0.0f)); // drywet::mix(x, v2, dry, wet) simplified
++        __m256 v_output_r = _mm256_blendv_ps(v_x_r, _mm256_mul_ps(v_v2_r, _mm256_set1_ps(1.0f)), _mm256_set1_ps(0.0f));
++        _mm256_store_ps(output_l + i, v_output_l);
++        _mm256_store_ps(output_r + i, v_output_r);
++    }
+ }
+-
+-[[nodiscard]] const char* name(Isa isa) noexcept;
+-
+-// Test/bench hook: force a lower ISA (e.g. Scalar) to A/B the fallback path.
+-// Not for use while audio is running.
+-void force(Isa isa) noexcept;
+-
+-}  // namespace cedar::simd
++#endif
++}
+\ No newline at end of file

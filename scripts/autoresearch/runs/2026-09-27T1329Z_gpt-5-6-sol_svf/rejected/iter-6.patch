@@ -1,0 +1,41 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 22de0ab..5cf06b0 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -97,15 +97,27 @@ CEDAR_TARGET_AVX2 inline void calc_svf8_avx2(
+     const __m256 reciprocal = _mm256_cmp_ps(x, quarter_pi, _CMP_GT_OQ);
+     const __m256 r = _mm256_blendv_ps(x, _mm256_sub_ps(half_pi, x), reciprocal);
+     const __m256 z = _mm256_mul_ps(r, r);
+-    __m256 p = _mm256_set1_ps(443861162.0f / 1856156927625.0f);
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(6404582.0f / 10854718875.0f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(929569.0f / 638512875.0f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(21844.0f / 6081075.0f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(1382.0f / 155925.0f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(62.0f / 2835.0f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(17.0f / 315.0f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(2.0f / 15.0f));
+-    p = _mm256_add_ps(_mm256_mul_ps(p, z), _mm256_set1_ps(1.0f / 3.0f));
++    const __m256 z2 = _mm256_mul_ps(z, z);
++    const __m256 z4 = _mm256_mul_ps(z2, z2);
++    const __m256 z8 = _mm256_mul_ps(z4, z4);
++    const __m256 p01 = _mm256_add_ps(
++        _mm256_set1_ps(1.0f / 3.0f),
++        _mm256_mul_ps(z, _mm256_set1_ps(2.0f / 15.0f)));
++    const __m256 p23 = _mm256_add_ps(
++        _mm256_set1_ps(17.0f / 315.0f),
++        _mm256_mul_ps(z, _mm256_set1_ps(62.0f / 2835.0f)));
++    const __m256 p45 = _mm256_add_ps(
++        _mm256_set1_ps(1382.0f / 155925.0f),
++        _mm256_mul_ps(z, _mm256_set1_ps(21844.0f / 6081075.0f)));
++    const __m256 p67 = _mm256_add_ps(
++        _mm256_set1_ps(929569.0f / 638512875.0f),
++        _mm256_mul_ps(z, _mm256_set1_ps(6404582.0f / 10854718875.0f)));
++    const __m256 p0123 = _mm256_add_ps(p01, _mm256_mul_ps(z2, p23));
++    const __m256 p4567 = _mm256_add_ps(p45, _mm256_mul_ps(z2, p67));
++    const __m256 p = _mm256_add_ps(
++        _mm256_add_ps(p0123, _mm256_mul_ps(z4, p4567)),
++        _mm256_mul_ps(z8,
++            _mm256_set1_ps(443861162.0f / 1856156927625.0f)));
+     const __m256 tangent = _mm256_add_ps(
+         r, _mm256_mul_ps(_mm256_mul_ps(r, z), p));
+     const __m256 g = _mm256_blendv_ps(

@@ -1,0 +1,99 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..fda8386 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -198,6 +198,15 @@ inline void op_filter_moog(ExecutionContext& ctx, const Instruction& inst) {
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::filter_formant_avx2(out_l, out_r, input, input_r, stereo_in,
++            vowel_a, vowel_b, morph, q_in, state, ctx.sample_rate,
++            dry_buf, dry_const, wet_buf, wet_const);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float cutoff = freq[i];
+         float resonance = res[i];
+@@ -435,6 +444,73 @@ constexpr VowelFormants VOWEL_TABLE[5] = {
+ //
+ // Creates vocal-like filter sweeps by morphing between vowel formants.
+ // Uses 3 parallel Chamberlin SVF bandpass filters.
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void filter_formant_avx2(
++    float* out_l, float* out_r, const float* input, const float* input_r,
++    bool stereo_in, const float* vowel_a, const float* vowel_b,
++    const float* morph, const float* q_in, FormantState& state,
++    float sample_rate, const float* dry_buf, float dry_const,
++    const float* wet_buf, float wet_const) noexcept {
++    alignas(32) float z1[8], z2[8], bp[8], lp[8];
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        float va = std::clamp(vowel_a[i], 0.0f, 4.0f);
++        float vb = std::clamp(vowel_b[i], 0.0f, 4.0f);
++        float m = std::clamp(morph[i], 0.0f, 1.0f);
++        float q = std::clamp(q_in[i], 1.0f, 20.0f);
++        float dry = drywet::coeff(dry_buf, i, dry_const);
++        float wet = drywet::coeff(wet_buf, i, wet_const);
++
++        if (va != state.last_vowel_a || vb != state.last_vowel_b ||
++            m != state.last_morph || q != state.last_q) {
++            state.last_vowel_a = va; state.last_vowel_b = vb;
++            state.last_morph = m; state.last_q = q;
++            int ia = std::min(static_cast<int>(va), 4);
++            int ib = std::min(static_cast<int>(vb), 4);
++            float fa = va - static_cast<float>(ia);
++            float fb = vb - static_cast<float>(ib);
++            int ia2 = std::min(ia + 1, 4), ib2 = std::min(ib + 1, 4);
++            const auto& a = VOWEL_TABLE[ia]; const auto& a2 = VOWEL_TABLE[ia2];
++            const auto& b = VOWEL_TABLE[ib]; const auto& b2 = VOWEL_TABLE[ib2];
++            float oa = 1.0f - fa, ob = 1.0f - fb;
++            float f1a = a.f1 * oa + a2.f1 * fa, f2a = a.f2 * oa + a2.f2 * fa, f3a = a.f3 * oa + a2.f3 * fa;
++            float g1a = a.g1 * oa + a2.g1 * fa, g2a = a.g2 * oa + a2.g2 * fa, g3a = a.g3 * oa + a2.g3 * fa;
++            float f1b = b.f1 * ob + b2.f1 * fb, f2b = b.f2 * ob + b2.f2 * fb, f3b = b.f3 * ob + b2.f3 * fb;
++            float g1b = b.g1 * ob + b2.g1 * fb, g2b = b.g2 * ob + b2.g2 * fb, g3b = b.g3 * ob + b2.g3 * fb;
++            float om = 1.0f - m;
++            state.f1 = f1a * om + f1b * m; state.f2 = f2a * om + f2b * m; state.f3 = f3a * om + f3b * m;
++            state.g1 = g1a * om + g1b * m; state.g2 = g2a * om + g2b * m; state.g3 = g3a * om + g3b * m;
++        }
++
++        auto prewarp_coef = [&](float freq) -> float {
++            float w = PI * std::min(freq, sample_rate * 0.48f) / sample_rate;
++            return std::min(1.9f, 2.0f * std::tan(w));
++        };
++        float c1 = prewarp_coef(state.f1), c2 = prewarp_coef(state.f2), c3 = prewarp_coef(state.f3);
++        float qc = 1.0f / q;
++        float x0 = input[i], x1 = stereo_in ? input_r[i] : x0;
++        __m256 x = _mm256_setr_ps(x0, x1, x0, x1, x0, x1, x0, x1);
++        __m256 vz1 = _mm256_setr_ps(state.bp1_z1[0], state.bp1_z1[1], state.bp2_z1[0], state.bp2_z1[1], state.bp3_z1[0], state.bp3_z1[1], 0.0f, 0.0f);
++        __m256 vz2 = _mm256_setr_ps(state.bp1_z2[0], state.bp1_z2[1], state.bp2_z2[0], state.bp2_z2[1], state.bp3_z2[0], state.bp3_z2[1], 0.0f, 0.0f);
++        __m256 vc = _mm256_setr_ps(c1, c1, c2, c2, c3, c3, 0.0f, 0.0f);
++        __m256 vq = _mm256_set1_ps(qc);
++        __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(vz1, vq)), vz2);
++        __m256 vbp = _mm256_add_ps(vz1, _mm256_mul_ps(vc, hp));
++        __m256 vlp = _mm256_add_ps(vz2, _mm256_mul_ps(vc, vz1));
++        _mm256_store_ps(bp, vbp); _mm256_store_ps(lp, vlp);
++        for (int k = 0; k < 6; ++k) { bp[k] = clamp_audio(bp[k]); lp[k] = clamp_audio(lp[k]); }
++        state.bp1_z1[0] = bp[0]; state.bp1_z1[1] = bp[1]; state.bp1_z2[0] = lp[0]; state.bp1_z2[1] = lp[1];
++        state.bp2_z1[0] = bp[2]; state.bp2_z1[1] = bp[3]; state.bp2_z2[0] = lp[2]; state.bp2_z2[1] = lp[3];
++        state.bp3_z1[0] = bp[4]; state.bp3_z1[1] = bp[5]; state.bp3_z2[0] = lp[4]; state.bp3_z2[1] = lp[5];
++        float p0 = bp[0] * state.g1 + bp[2] * state.g2 + bp[4] * state.g3;
++        float p1 = bp[1] * state.g1 + bp[3] * state.g2 + bp[5] * state.g3;
++        out_l[i] = drywet::mix(x0, p0, dry, wet);
++        out_r[i] = drywet::mix(x1, p1, dry, wet);
++    }
++}
++#endif
++}
++
+ [[gnu::always_inline]]
+ inline void op_filter_formant(ExecutionContext& ctx, const Instruction& inst) {
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+@@ -683,3 +759,4 @@ inline void op_filter_sallenkey(ExecutionContext& ctx, const Instruction& inst)
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"

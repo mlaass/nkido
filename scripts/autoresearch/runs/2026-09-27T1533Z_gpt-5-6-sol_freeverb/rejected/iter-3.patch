@@ -1,0 +1,59 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 7f7fb5a..1f88093 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -72,19 +72,47 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+     constexpr float ALLPASS_GAIN = 0.5f;
+     alignas(32) float delayed_values[FreeverbState::NUM_COMBS];
+     alignas(32) float feedback_values[FreeverbState::NUM_COMBS];
++    alignas(32) float damp_values[BLOCK_SIZE];
++    alignas(32) float feedback_coeffs[BLOCK_SIZE];
++
++    const __m256 zero_v = _mm256_setzero_ps();
++    const __m256 one_v = _mm256_set1_ps(1.0f);
++    const __m256 scale_default_v = _mm256_set1_ps(FREEVERB_ROOM_SCALE_DEFAULT);
++    const __m256 offset_default_v = _mm256_set1_ps(FREEVERB_ROOM_OFFSET_DEFAULT);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        const __m256 room_raw = _mm256_load_ps(room_size + i);
++        __m256 room = _mm256_blendv_ps(
++            room_raw, zero_v, _mm256_cmp_ps(room_raw, zero_v, _CMP_LT_OQ));
++        room = _mm256_blendv_ps(
++            room, one_v, _mm256_cmp_ps(one_v, room, _CMP_LT_OQ));
++
++        const __m256 damp_raw = _mm256_load_ps(damping + i);
++        __m256 damp = _mm256_blendv_ps(
++            damp_raw, zero_v, _mm256_cmp_ps(damp_raw, zero_v, _CMP_LT_OQ));
++        damp = _mm256_blendv_ps(
++            damp, one_v, _mm256_cmp_ps(one_v, damp, _CMP_LT_OQ));
++
++        const __m256 scale_raw = _mm256_load_ps(room_scale_in + i);
++        const __m256 scale = _mm256_blendv_ps(
++            scale_default_v, scale_raw,
++            _mm256_cmp_ps(scale_raw, zero_v, _CMP_GT_OQ));
++        const __m256 offset_raw = _mm256_load_ps(room_offset_in + i);
++        const __m256 offset = _mm256_blendv_ps(
++            offset_default_v, offset_raw,
++            _mm256_cmp_ps(offset_raw, zero_v, _CMP_GT_OQ));
++
++        _mm256_store_ps(damp_values + i, damp);
++        _mm256_store_ps(feedback_coeffs + i,
++                        _mm256_add_ps(_mm256_mul_ps(room, scale), offset));
++    }
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         const float x_l = input[i];
+         const float x_r = stereo_in ? input_r[i] : x_l;
+         const float dry = drywet::coeff(dry_buf, i, dry_const);
+         const float wet = drywet::coeff(wet_buf, i, wet_const);
+-        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+-        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
+-        const float room_scale = room_scale_in[i] > 0.0f
+-            ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
+-        const float room_offset = room_offset_in[i] > 0.0f
+-            ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+-        const float feedback = room * room_scale + room_offset;
++        const float damp = damp_values[i];
++        const float feedback = feedback_coeffs[i];
+ 
+         float y_lr[2] = {0.0f, 0.0f};
+         for (std::size_t ch = 0; ch < 2; ++ch) {

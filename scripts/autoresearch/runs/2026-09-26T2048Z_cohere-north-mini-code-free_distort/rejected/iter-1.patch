@@ -1,0 +1,139 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..9c4121b 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -6,10 +6,134 @@
+ #include "dsp_state.hpp"
+ #include "dsp_utils.hpp"
+ #include "drywet.hpp"
++#include "simd.hpp"
+ #include <cmath>
+ #include <algorithm>
+ 
+ namespace cedar {
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(
++    const float* out_l, const float* out_r,
++    const float* input, bool stereo_in,
++    const float* input_r, const float* drive,
++    const float* dry_level, const float* wet_level,
++    std::size_t block_size) noexcept {
++    // Process up to block_size samples, but we know it's BLOCK_SIZE (128).
++    // Align loops to 8 floats per iteration (AVX2).
++    for (std::size_t i = 0; i < block_size; i += 8) {
++        // Load 8 samples of drive, clamp to >= 0.1
++        __m256 d = _mm256_load_ps(drive + i);
++        d = _mm256_max_ps(d, _mm256_set1_ps(0.1f));
++        // Compute tanh approximation: fast_tanh(x * d) where x = input[i]
++        // Need to compute x * d per lane then apply fast_tanh (which we will vectorize).
++        __m256 x = _mm256_load_ps(input + i);
++        __m256 xd = _mm256_mul_ps(x, d);
++        // Apply fast tanh approximation (Pade) lane‑wise.
++        // fast_tanh uses clamping to ±3 and a rational polynomial.
++        // Vectorize by masking and polynomial evaluation.
++        __m256 sign = _mm256_set1_ps(1.0f);
++        __m256 mask_pos = _mm256_cmp_ps(xd, _mm256_set1_ps(3.0f), _CMP_LE_OQ);
++        __m256 mask_neg = _mm256_cmp_ps(xd, _mm256_set1_ps(-3.0f), _CMP_GE_OQ);
++        __m256 abs_xd = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), xd); // abs(xd)
++        __m256 x2 = _mm256_mul_ps(abs_xd, abs_xd);
++        __m256 numerator = _mm256_mul_ps(xd, _mm256_add_ps(_mm256_set1_ps(27.0f), x2));
++        __m256 denominator = _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), x2));
++        __m256 tanh = _mm256_div_ps(numerator, denominator);
++        // Clamp for |xd| > 3 (tanh approx returns ±1)
++        __m256 clamp_pos = _mm256_and_ps(tanh, mask_pos);
++        __m256 clamp_neg = _mm256_and_ps(_mm256_set1_ps(-1.0f), mask_neg);
++        tanh = _mm256_or_ps(clamp_pos, clamp_neg);
++        // Resolve dry/wet for left channel
++        __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_set1_ps(0.0f);
++        __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++        __m256 mixed = _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(tanh, wet));
++        _mm256_store_ps(out_l + i, mixed);
++
++        // Right channel (if stereo_in)
++        if (stereo_in && input_r) {
++            __m256 xr = _mm256_load_ps(input_r + i);
++            __m256 xrd = _mm256_mul_ps(xr, d);
++            // Same tanh approximation as above, but we can reuse computed d and x2? We'll recompute for simplicity.
++            __m256 abs_xrd = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), xrd);
++            __m256 xrd2 = _mm256_mul_ps(abs_xrd, abs_xrd);
++            __m256 numerator_r = _mm256_mul_ps(xrd, _mm256_add_ps(_mm256_set1_ps(27.0f), xrd2));
++            __m256 denominator_r = _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), xrd2));
++            __m256 tanh_r = _mm256_div_ps(numerator_r, denominator_r);
++            __m256 mask_pos_r = _mm256_cmp_ps(xrd, _mm256_set1_ps(3.0f), _CMP_LE_OQ);
++            __m256 mask_neg_r = _mm256_cmp_ps(xrd, _mm256_set1_ps(-3.0f), _CMP_GE_OQ);
++            __m256 clamp_pos_r = _mm256_and_ps(tanh_r, mask_pos_r);
++            __m256 clamp_neg_r = _mm256_and_ps(_mm256_set1_ps(-1.0f), mask_neg_r);
++            tanh_r = _mm256_or_ps(clamp_pos_r, clamp_neg_r);
++            __m256 dry_r = dry;
++            __m256 wet_r = wet;
++            __m256 mixed_r = _mm256_add_ps(_mm256_mul_ps(xr, dry_r), _mm256_mul_ps(tanh_r, wet_r));
++            _mm256_store_ps(out_r + i, mixed_r);
++        } else {
++            // Mono copy to right (same as left)
++            _mm256_store_ps(out_r + i, mixed);
++        }
++    }
++}
++
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(
++    const float* out_l, const float* out_r,
++    const float* input, bool stereo_in,
++    const float* input_r, const float* threshold,
++    const float* dry_level, const float* wet_level,
++    std::size_t block_size) noexcept {
++    for (std::size_t i = 0; i < block_size; i += 8) {
++        // Clamp threshold to [0.1, 2.0]
++        __m256 t = _mm256_load_ps(threshold + i);
++        t = _mm256_max_ps(t, _mm256_set1_ps(0.1f));
++        t = _mm256_min_ps(t, _mm256_set1_ps(2.0f));
++        // Resolve dry/wet
++        __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_set1_ps(0.0f);
++        __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++
++        // Process left channel
++        __m256 x = _mm256_load_ps(input + i);
++        __m256 xt = _mm256_div_ps(x, t); // x / t
++        // Apply soft clip polynomial: if |xt| > 3 -> sign * 1.0f else xt*(27+xt^2)/(27+9*xt^2)
++        // Vectorized branchless using masks
++        __m256 abs_xt = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), xt);
++        __m256 x2 = _mm256_mul_ps(abs_xt, abs_xt);
++        __m256 numerator = _mm256_mul_ps(xt, _mm256_add_ps(_mm256_set1_ps(27.0f), x2));
++        __m256 denominator = _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), x2));
++        __m256 soft = _mm256_div_ps(numerator, denominator);
++        __m256 mask_pos = _mm256_cmp_ps(xt, _mm256_set1_ps(3.0f), _CMP_LE_OQ);
++        __m256 mask_neg = _mm256_cmp_ps(xt, _mm256_set1_ps(-3.0f), _CMP_GE_OQ);
++        __m256 clamp_pos = _mm256_and_ps(soft, mask_pos);
++        __m256 clamp_neg = _mm256_and_ps(_mm256_set1_ps(-1.0f), mask_neg);
++        soft = _mm256_or_ps(clamp_pos, clamp_neg);
++        soft = _mm256_mul_ps(soft, t); // soft(x/t) * t
++        __m256 mixed_l = _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(soft, wet));
++        _mm256_store_ps(out_l + i, mixed_l);
++
++        // Right channel
++        if (stereo_in && input_r) {
++            __m256 xr = _mm256_load_ps(input_r + i);
++            __m256 xtr = _mm256_div_ps(xr, t);
++            __m256 abs_xtr = _mm256_andnot_ps(_mm256_set1_ps(-0.0f), xtr);
++            __m256 xtr2 = _mm256_mul_ps(abs_xtr, abs_xtr);
++            __m256 numerator_r = _mm256_mul_ps(xtr, _mm256_add_ps(_mm256_set1_ps(27.0f), xtr2));
++            __m256 denominator_r = _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(_mm256_set1_ps(9.0f), xtr2));
++            __m256 soft_r = _mm256_div_ps(numerator_r, denominator_r);
++            __m256 mask_pos_r = _mm256_cmp_ps(xtr, _mm256_set1_ps(3.0f), _CMP_LE_OQ);
++            __m256 mask_neg_r = _mm256_cmp_ps(xtr, _mm256_set1_ps(-3.0f), _CMP_GE_OQ);
++            __m256 clamp_pos_r = _mm256_and_ps(soft_r, mask_pos_r);
++            __m256 clamp_neg_r = _mm256_and_ps(_mm256_set1_ps(-1.0f), mask_neg_r);
++            soft_r = _mm256_or_ps(clamp_pos_r, clamp_neg_r);
++            soft_r = _mm256_mul_ps(soft_r, t);
++            __m256 mixed_r = _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(soft_r, wet));
++            _mm256_store_ps(out_r + i, mixed_r);
++        } else {
++            _mm256_store_ps(out_r + i, mixed_l);
++        }
++    }
++}
++#endif
++} // namespace kernels
+ 
+ // ============================================================================
+ // DISTORT_TANH: Tanh Saturation

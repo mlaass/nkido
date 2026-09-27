@@ -1,0 +1,67 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..ee6b5aa 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include "../dsp/simd.hpp"
++
+ #include "../vm/context.hpp"
+ #include "../vm/instruction.hpp"
+ #include "../dsp/constants.hpp"
+@@ -198,6 +200,7 @@ inline void op_filter_moog(ExecutionContext& ctx, const Instruction& inst) {
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++#if CEDAR_SIMD_X86
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float cutoff = freq[i];
+         float resonance = res[i];
+@@ -435,6 +438,46 @@ constexpr VowelFormants VOWEL_TABLE[5] = {
+ //
+ // Creates vocal-like filter sweeps by morphing between vowel formants.
+ // Uses 3 parallel Chamberlin SVF bandpass filters.
++#if CEDAR_SIMD_X86
++namespace kernels {
++CEDAR_TARGET_AVX2 inline void formant_constant_avx2(
++    const float* input, const float* input_r, float* out_l, float* out_r,
++    bool stereo_in, float f1_coef, float f2_coef, float f3_coef, float q_coef,
++    float g1, float g2, float g3, float dry, float wet, FormantState& state) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        const float x_l = input[i];
++        const float x_r = stereo_in ? input_r[i] : x_l;
++        for (std::size_t ch = 0; ch < 2; ++ch) {
++            const float x = ch == 0 ? x_l : x_r;
++
++            float hp1 = x - state.bp1_z1[ch] * q_coef - state.bp1_z2[ch];
++            float bp1 = state.bp1_z1[ch] + f1_coef * hp1;
++            float lp1 = state.bp1_z2[ch] + f1_coef * state.bp1_z1[ch];
++            state.bp1_z1[ch] = clamp_audio(bp1);
++            state.bp1_z2[ch] = clamp_audio(lp1);
++
++            float hp2 = x - state.bp2_z1[ch] * q_coef - state.bp2_z2[ch];
++            float bp2 = state.bp2_z1[ch] + f2_coef * hp2;
++            float lp2 = state.bp2_z2[ch] + f2_coef * state.bp2_z1[ch];
++            state.bp2_z1[ch] = clamp_audio(bp2);
++            state.bp2_z2[ch] = clamp_audio(lp2);
++
++            float hp3 = x - state.bp3_z1[ch] * q_coef - state.bp3_z2[ch];
++            float bp3 = state.bp3_z1[ch] + f3_coef * hp3;
++            float lp3 = state.bp3_z2[ch] + f3_coef * state.bp3_z1[ch];
++            state.bp3_z1[ch] = clamp_audio(bp3);
++            state.bp3_z2[ch] = clamp_audio(lp3);
++
++            const float processed = bp1 * g1 + bp2 * g2 + bp3 * g3;
++            (ch == 0 ? out_l : out_r)[i] = drywet::mix(x, processed, dry, wet);
++        }
++    }
++    _mm256_zeroupper();
++}
++}
++#endif
++#endif
++
+ [[gnu::always_inline]]
+ inline void op_filter_formant(ExecutionContext& ctx, const Instruction& inst) {
+     float* out_l = ctx.buffers->get(inst.out_buffer);

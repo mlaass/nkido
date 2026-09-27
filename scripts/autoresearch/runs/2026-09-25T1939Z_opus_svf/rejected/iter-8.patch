@@ -1,0 +1,170 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 8536d86..384f758 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -48,80 +48,27 @@ namespace kernels {
+ #if CEDAR_SIMD_X86
+ CEDAR_TARGET_AVX2 inline __m256 svf_splat(float v) noexcept { return _mm256_set1_ps(v); }
+ 
+-// tanf for float x in (2^-13, 3pi/4): a lane-wise transcription of the
+-// fdlibm/glibc float algorithm (rem_pio2f for n = 1, then __kernel_tanf),
+-// so results track std::tan's own rounding.
+-// simd: approx — replaces std::tan in calc_svf.
+-CEDAR_TARGET_AVX2 inline __m256 svf_tanf_ps(__m256 xin) noexcept {
+-    const __m256i ixin = _mm256_castps_si256(xin);
+-    // |x| > pi/4 (0x3f490fda): x - pi/2 with 24+24 bit pi/2, iy = -1.
+-    const __m256 caseb = _mm256_castsi256_ps(_mm256_cmpgt_epi32(ixin, _mm256_set1_epi32(0x3f490fda)));
+-    const __m256 zr = _mm256_sub_ps(xin, _mm256_set1_ps(1.5707855225e+00f));
+-    const __m256 pio2_1t = _mm256_set1_ps(1.0804334124e-05f);
+-    const __m256 y0 = _mm256_sub_ps(zr, pio2_1t);
+-    const __m256 y1 = _mm256_sub_ps(_mm256_sub_ps(zr, y0), pio2_1t);
+-    const __m256 x = _mm256_blendv_ps(xin, y0, caseb);
+-    const __m256 y = _mm256_and_ps(y1, caseb);
+-    const __m256 iy = _mm256_blendv_ps(_mm256_set1_ps(1.0f), _mm256_set1_ps(-1.0f), caseb);
+-
+-    const __m256 signmask = _mm256_set1_ps(-0.0f);
+-    const __m256 neg = _mm256_castsi256_ps(_mm256_srai_epi32(_mm256_castps_si256(x), 31));
+-    const __m256i ix = _mm256_castps_si256(_mm256_andnot_ps(signmask, x));
+-    const __m256 big = _mm256_castsi256_ps(_mm256_cmpgt_epi32(ix, _mm256_set1_epi32(0x3f2ca13f)));
+-    // |x| >= 0.6744: x = (pio4 - |x|) + (pio4lo - sign*y)
+-    const __m256 xa = _mm256_andnot_ps(signmask, x);
+-    const __m256 ya = _mm256_xor_ps(y, _mm256_and_ps(neg, signmask));
+-    const __m256 xb = _mm256_add_ps(_mm256_sub_ps(_mm256_set1_ps(7.8539812565e-01f), xa),
+-                                    _mm256_sub_ps(_mm256_set1_ps(3.7748947079e-08f), ya));
+-    const __m256 X = _mm256_blendv_ps(x, xb, big);
+-    const __m256 Y = _mm256_andnot_ps(big, y);
+-
+-    const __m256 z = _mm256_mul_ps(X, X);
+-    const __m256 w = _mm256_mul_ps(z, z);
+-    constexpr auto c = svf_splat;
+-    __m256 r = _mm256_add_ps(c(7.8179444245e-05f), _mm256_mul_ps(w, c(-1.8558637748e-05f)));
+-    r = _mm256_add_ps(c(5.8804126456e-04f), _mm256_mul_ps(w, r));
+-    r = _mm256_add_ps(c(3.5920790397e-03f), _mm256_mul_ps(w, r));
+-    r = _mm256_add_ps(c(2.1869488060e-02f), _mm256_mul_ps(w, r));
+-    r = _mm256_add_ps(c(1.3333334029e-01f), _mm256_mul_ps(w, r));
+-    __m256 v = _mm256_add_ps(c(7.1407252108e-05f), _mm256_mul_ps(w, c(2.5907305826e-05f)));
+-    v = _mm256_add_ps(c(2.4646313977e-04f), _mm256_mul_ps(w, v));
+-    v = _mm256_add_ps(c(1.4562094584e-03f), _mm256_mul_ps(w, v));
+-    v = _mm256_add_ps(c(8.8632395491e-03f), _mm256_mul_ps(w, v));
+-    v = _mm256_add_ps(c(5.3968254477e-02f), _mm256_mul_ps(w, v));
+-    v = _mm256_mul_ps(z, v);
+-    const __m256 s = _mm256_mul_ps(z, X);
+-    r = _mm256_add_ps(Y, _mm256_mul_ps(z, _mm256_add_ps(_mm256_mul_ps(s, _mm256_add_ps(r, v)), Y)));
+-    r = _mm256_add_ps(r, _mm256_mul_ps(c(3.3333334327e-01f), s));
+-    const __m256 W = _mm256_add_ps(X, r);
+-
+-    // The two divide-bearing tails below are skipped when no lane needs them
+-    // (typical for audio-range cutoffs well below sample_rate / 4).
+-    __m256 res = W;
+-    if (_mm256_movemask_ps(_mm256_andnot_ps(big, caseb)) != 0) {
+-        // small, iy = -1: -1/(X+r) computed accurately
+-        const __m256 hmask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<int>(0xfffff000u)));
+-        const __m256 zt = _mm256_and_ps(W, hmask);
+-        const __m256 vt = _mm256_sub_ps(r, _mm256_sub_ps(zt, X));
+-        const __m256 a = _mm256_div_ps(c(-1.0f), W);
+-        const __m256 t = _mm256_and_ps(a, hmask);
+-        const __m256 st = _mm256_add_ps(c(1.0f), _mm256_mul_ps(t, zt));
+-        const __m256 rm = _mm256_add_ps(t, _mm256_mul_ps(a, _mm256_add_ps(st, _mm256_mul_ps(t, vt))));
+-        res = _mm256_blendv_ps(W, rm, caseb);
+-    }
+-    if (_mm256_movemask_ps(big) != 0) {
+-        // big: sgn * (iy - 2*(X - (W*W/(W+iy) - r)))
+-        const __m256 sgn = _mm256_blendv_ps(c(1.0f), c(-1.0f), neg);
+-        __m256 rb = _mm256_sub_ps(_mm256_div_ps(_mm256_mul_ps(W, W), _mm256_add_ps(W, iy)), r);
+-        rb = _mm256_mul_ps(sgn, _mm256_sub_ps(iy, _mm256_mul_ps(c(2.0f), _mm256_sub_ps(X, rb))));
+-        // big and |X| < 2^-13: sgn*iy * (1 - 2*iy*X)
+-        const __m256 tiny = _mm256_cmp_ps(_mm256_andnot_ps(signmask, xb), c(0x1p-13f), _CMP_LT_OQ);
+-        const __m256 rt = _mm256_mul_ps(_mm256_mul_ps(sgn, iy),
+-                                        _mm256_sub_ps(c(1.0f), _mm256_mul_ps(_mm256_mul_ps(c(2.0f), iy), xb)));
+-        rb = _mm256_blendv_ps(rb, rt, tiny);
+-        res = _mm256_blendv_ps(res, rb, big);
+-    }
+-    return res;
++// sin(x), cos(x) for x in [0, pi/2): Taylor polynomials on a in [0, pi/4],
++// with a = pi/2 - x (two-part pi/2) and sin/cos swapped above pi/4, so the
++// small one of the pair keeps full relative accuracy near both ends.
++// simd: approx — used in place of std::tan in calc_svf (g = s / c).
++CEDAR_TARGET_AVX2 inline void svf_sincos_ps(__m256 x, __m256& s, __m256& c) noexcept {
++    constexpr auto k = svf_splat;
++    const __m256 hi = _mm256_cmp_ps(x, k(7.8539818525e-01f), _CMP_GT_OQ);
++    const __m256 co = _mm256_add_ps(_mm256_sub_ps(k(1.5707855225e+00f), x), k(1.0804334124e-05f));
++    const __m256 a = _mm256_blendv_ps(x, co, hi);
++    const __m256 z = _mm256_mul_ps(a, a);
++    __m256 ps = _mm256_add_ps(k(-1.9841270114e-04f), _mm256_mul_ps(z, k(2.7557314297e-06f)));
++    ps = _mm256_add_ps(k(8.3333337680e-03f), _mm256_mul_ps(z, ps));
++    ps = _mm256_add_ps(k(-1.6666667163e-01f), _mm256_mul_ps(z, ps));
++    const __m256 sa = _mm256_add_ps(a, _mm256_mul_ps(_mm256_mul_ps(a, z), ps));
++    __m256 pc = _mm256_add_ps(k(2.4801587642e-05f), _mm256_mul_ps(z, k(-2.7557319224e-07f)));
++    pc = _mm256_add_ps(k(-1.3888889225e-03f), _mm256_mul_ps(z, pc));
++    pc = _mm256_add_ps(k(4.1666667908e-02f), _mm256_mul_ps(z, pc));
++    pc = _mm256_add_ps(k(-0.5f), _mm256_mul_ps(z, pc));
++    const __m256 ca = _mm256_add_ps(k(1.0f), _mm256_mul_ps(z, pc));
++    s = _mm256_blendv_ps(sa, ca, hi);
++    c = _mm256_blendv_ps(ca, sa, hi);
+ }
+ 
+ CEDAR_TARGET_AVX2 inline __m128 svf_clamp_ps(__m128 v) noexcept {
+@@ -138,8 +85,9 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+                                        const float* freq, const float* q,
+                                        const float* dry_level, const float* wet_level,
+                                        float sample_rate) noexcept {
+-    alignas(32) float A1[BLOCK_SIZE], A2[BLOCK_SIZE], A3[BLOCK_SIZE], K[BLOCK_SIZE], G[BLOCK_SIZE];
++    alignas(32) float A1[BLOCK_SIZE], A2[BLOCK_SIZE], A3[BLOCK_SIZE], K[BLOCK_SIZE];
+     alignas(32) float F0[BLOCK_SIZE];
++    __m256 last_s = _mm256_setzero_ps(), last_c = _mm256_set1_ps(1.0f);
+     alignas(32) float Y[2 * BLOCK_SIZE];
+ 
+     const __m256 hi = _mm256_set1_ps(sample_rate * 0.49f);
+@@ -157,27 +105,40 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+         const __m256 qv = _mm256_load_ps(q + i);
+         const __m256 qc = _mm256_blendv_ps(qmin, qv, _mm256_cmp_ps(qmin, qv, _CMP_LT_OQ));
+         const __m256 x = _mm256_div_ps(_mm256_mul_ps(pi, fc), sr);
+-        const __m256 g = svf_tanf_ps(x);
+-        const __m256 k = _mm256_div_ps(one, qc);
+-        const __m256 a1 = _mm256_div_ps(one, _mm256_add_ps(one, _mm256_mul_ps(g, _mm256_add_ps(g, k))));
+-        const __m256 a2 = _mm256_mul_ps(g, a1);
+-        const __m256 a3 = _mm256_mul_ps(g, a2);
++        // simd: approx — replaces std::tan in calc_svf. With g = s/c,
++        // a1 = c^2 * D, a2 = s*c * D, a3 = s^2 * D, D = q / ((c^2 + s^2) * q + s*c):
++        // one divide instead of tan's plus k's plus a1's.
++        __m256 s, cs;
++        svf_sincos_ps(x, s, cs);
++        const __m256 ss = _mm256_mul_ps(s, s);
++        const __m256 cc = _mm256_mul_ps(cs, cs);
++        const __m256 sc = _mm256_mul_ps(s, cs);
++        const __m256 d = _mm256_div_ps(qc, _mm256_add_ps(_mm256_mul_ps(_mm256_add_ps(cc, ss), qc), sc));
++        if constexpr (Mode == 1) _mm256_store_ps(K + i, _mm256_div_ps(one, qc));
+         _mm256_store_ps(F0 + i, f0);
+-        _mm256_store_ps(G + i, g);
+-        _mm256_store_ps(K + i, k);
+-        _mm256_store_ps(A1 + i, a1);
+-        _mm256_store_ps(A2 + i, a2);
+-        _mm256_store_ps(A3 + i, a3);
++        _mm256_store_ps(A1 + i, _mm256_mul_ps(cc, d));
++        _mm256_store_ps(A2 + i, _mm256_mul_ps(sc, d));
++        _mm256_store_ps(A3 + i, _mm256_mul_ps(ss, d));
++        last_s = s;
++        last_c = cs;
+     }
+     // Honour the scalar coefficient cache for a leading run of unchanged params.
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         if (!(F0[i] == state.last_freq && q[i] == state.last_q)) break;
+-        G[i] = state.g; K[i] = state.k; A1[i] = state.a1; A2[i] = state.a2; A3[i] = state.a3;
++        K[i] = state.k; A1[i] = state.a1; A2[i] = state.a2; A3[i] = state.a3;
+     }
+     constexpr std::size_t L = BLOCK_SIZE - 1;
++    if (!(F0[L] == state.last_freq && q[L] == state.last_q)) {
++        // Whole block ran on fresh coefficients: refresh the cached g and k too.
++        alignas(32) float ls[8], lc[8];
++        _mm256_store_ps(ls, last_s);
++        _mm256_store_ps(lc, last_c);
++        state.g = ls[7] / lc[7];
++        state.k = (Mode == 1) ? K[L] : 1.0f / std::max(0.1f, q[L]);
++    }
+     state.last_freq = F0[L];
+     state.last_q = q[L];
+-    state.g = G[L]; state.k = K[L]; state.a1 = A1[L]; state.a2 = A2[L]; state.a3 = A3[L];
++    state.a1 = A1[L]; state.a2 = A2[L]; state.a3 = A3[L];
+ 
+     __m128 s1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+     __m128 s2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);

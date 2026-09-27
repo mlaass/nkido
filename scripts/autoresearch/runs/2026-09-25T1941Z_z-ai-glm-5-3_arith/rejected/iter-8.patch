@@ -1,0 +1,19 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index 91f62f9..b2adae3 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -37,7 +37,13 @@ namespace kernels {
+ // effect on the computed values, exact for every input.
+ namespace detail {
+ // 8 prefetcht0 ops, one per 64-byte line of the block. BLOCK_SIZE floats
+-// at 4 bytes each: 512 bytes = 8 lines.
++// at 4 bytes each: 512 bytes = 8 lines. The output buffer's lines are
++// almost always cold in L1 when the kernel runs, so each 32-byte store
++// would otherwise trigger a write-allocate L2->L1 line fetch that the store
++// buffer waits behind; starting all 8 fills up front overlaps them with
++// the kernel's 16 input loads. Prefetches are pure hardware hints: no
++// architectural state, no effect on the computed values, exact for every
++// input.
+ CEDAR_TARGET_AVX2 inline void prefetch_out_avx2(const float* out) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
+         _mm_prefetch(reinterpret_cast<const char*>(out + i), _MM_HINT_T0);

@@ -1,0 +1,137 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..23d408d 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -198,6 +198,15 @@ inline void op_filter_moog(ExecutionContext& ctx, const Instruction& inst) {
+         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
+     }
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::filter_formant_avx2(input, input_r, stereo_in, out_l, out_r,
++            vowel_a, vowel_b, morph, q_in, dry_buf, dry_const, wet_buf, wet_const,
++            state, ctx.sample_rate);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float cutoff = freq[i];
+         float resonance = res[i];
+@@ -683,3 +692,116 @@ inline void op_filter_sallenkey(ExecutionContext& ctx, const Instruction& inst)
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"
++
++namespace cedar { namespace kernels {
++#if CEDAR_SIMD_X86
++template <typename State>
++CEDAR_TARGET_AVX2 inline void filter_formant_avx2(
++    const float* input, const float* input_r, bool stereo_in,
++    float* out_l, float* out_r,
++    const float* vowel_a, const float* vowel_b, const float* morph,
++    const float* q_in, const float* dry_buf, float dry_const,
++    const float* wet_buf, float wet_const, State& state, float sample_rate) noexcept {
++    float f1_coef = 0.0f;
++    float f2_coef = 0.0f;
++    float f3_coef = 0.0f;
++    bool coeff_valid = false;
++    auto prewarp_coef = [sample_rate](float freq) -> float {
++        float w = PI * std::min(freq, sample_rate * 0.48f) / sample_rate;
++        // simd: approx std::tan
++        float w2 = w * w;
++        float tan_w = w * (1.0f + w2 * (0.3333333333f + w2 *
++            (0.1333333333f + w2 * (0.0539682540f + w2 * 0.0218694885f))));
++        return std::min(1.9f, 2.0f * tan_w);
++    };
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        float va = std::clamp(vowel_a[i], 0.0f, 4.0f);
++        float vb = std::clamp(vowel_b[i], 0.0f, 4.0f);
++        float m = std::clamp(morph[i], 0.0f, 1.0f);
++        float q = std::clamp(q_in[i], 1.0f, 20.0f);
++        float dry = drywet::coeff(dry_buf, i, dry_const);
++        float wet = drywet::coeff(wet_buf, i, wet_const);
++
++        if (va != state.last_vowel_a || vb != state.last_vowel_b ||
++            m != state.last_morph || q != state.last_q) {
++            state.last_vowel_a = va;
++            state.last_vowel_b = vb;
++            state.last_morph = m;
++            state.last_q = q;
++            int idx_a = static_cast<int>(va);
++            int idx_b = static_cast<int>(vb);
++            float frac_a = va - static_cast<float>(idx_a);
++            float frac_b = vb - static_cast<float>(idx_b);
++            idx_a = std::min(idx_a, 4);
++            idx_b = std::min(idx_b, 4);
++            int idx_a2 = std::min(idx_a + 1, 4);
++            int idx_b2 = std::min(idx_b + 1, 4);
++            const auto& a0 = VOWEL_TABLE[idx_a];
++            const auto& a1 = VOWEL_TABLE[idx_a2];
++            const auto& b0 = VOWEL_TABLE[idx_b];
++            const auto& b1 = VOWEL_TABLE[idx_b2];
++            float ia = 1.0f - frac_a;
++            float ib = 1.0f - frac_b;
++            float f1_a = a0.f1 * ia + a1.f1 * frac_a;
++            float f2_a = a0.f2 * ia + a1.f2 * frac_a;
++            float f3_a = a0.f3 * ia + a1.f3 * frac_a;
++            float g1_a = a0.g1 * ia + a1.g1 * frac_a;
++            float g2_a = a0.g2 * ia + a1.g2 * frac_a;
++            float g3_a = a0.g3 * ia + a1.g3 * frac_a;
++            float f1_b = b0.f1 * ib + b1.f1 * frac_b;
++            float f2_b = b0.f2 * ib + b1.f2 * frac_b;
++            float f3_b = b0.f3 * ib + b1.f3 * frac_b;
++            float g1_b = b0.g1 * ib + b1.g1 * frac_b;
++            float g2_b = b0.g2 * ib + b1.g2 * frac_b;
++            float g3_b = b0.g3 * ib + b1.g3 * frac_b;
++            float im = 1.0f - m;
++            state.f1 = f1_a * im + f1_b * m;
++            state.f2 = f2_a * im + f2_b * m;
++            state.f3 = f3_a * im + f3_b * m;
++            state.g1 = g1_a * im + g1_b * m;
++            state.g2 = g2_a * im + g2_b * m;
++            state.g3 = g3_a * im + g3_b * m;
++            f1_coef = prewarp_coef(state.f1);
++            f2_coef = prewarp_coef(state.f2);
++            f3_coef = prewarp_coef(state.f3);
++            coeff_valid = true;
++        }
++        if (!coeff_valid) {
++            f1_coef = prewarp_coef(state.f1);
++            f2_coef = prewarp_coef(state.f2);
++            f3_coef = prewarp_coef(state.f3);
++            coeff_valid = true;
++        }
++        float q_coef = 1.0f / q;
++        float xl = input[i];
++        float xr = stereo_in ? input_r[i] : xl;
++        __m256 x = _mm256_setr_ps(xl, xr, xl, xr, xl, xr, xl, xr);
++        __m256 qc = _mm256_set1_ps(q_coef);
++        __m256 one = _mm256_set1_ps(1.0f);
++        __m256 neg_one = _mm256_set1_ps(-1.0f);
++        __m256 c = _mm256_setr_ps(f1_coef, f1_coef, f2_coef, f2_coef, f3_coef, f3_coef, 0.0f, 0.0f);
++        alignas(32) float z1[8] = { state.bp1_z1[0], state.bp1_z1[1], state.bp2_z1[0], state.bp2_z1[1], state.bp3_z1[0], state.bp3_z1[1], 0.0f, 0.0f };
++        alignas(32) float z2[8] = { state.bp1_z2[0], state.bp1_z2[1], state.bp2_z2[0], state.bp2_z2[1], state.bp3_z2[0], state.bp3_z2[1], 0.0f, 0.0f };
++        __m256 vz1 = _mm256_load_ps(z1);
++        __m256 vz2 = _mm256_load_ps(z2);
++        __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(vz1, qc)), vz2);
++        __m256 bp = _mm256_add_ps(vz1, _mm256_mul_ps(c, hp));
++        __m256 lp = _mm256_add_ps(vz2, _mm256_mul_ps(c, vz1));
++        bp = _mm256_max_ps(neg_one, _mm256_min_ps(one, bp));
++        lp = _mm256_max_ps(neg_one, _mm256_min_ps(one, lp));
++        _mm256_store_ps(z1, bp); _mm256_store_ps(z2, lp);
++        state.bp1_z1[0] = z1[0]; state.bp1_z1[1] = z1[1];
++        state.bp1_z2[0] = z2[0]; state.bp1_z2[1] = z2[1];
++        state.bp2_z1[0] = z1[0]; state.bp2_z1[1] = z1[1];
++        state.bp2_z2[0] = z2[0]; state.bp2_z2[1] = z2[1];
++        state.bp3_z1[0] = z1[0]; state.bp3_z1[1] = z1[1];
++        state.bp3_z2[0] = z2[0]; state.bp3_z2[1] = z2[1];
++        float p0 = z1[0] * state.g1 + z1[2] * state.g2 + z1[4] * state.g3;
++        float p1 = z1[1] * state.g1 + z1[3] * state.g2 + z1[5] * state.g3;
++        out_l[i] = drywet::mix(xl, p0, dry, wet);
++        out_r[i] = drywet::mix(xr, p1, dry, wet);
++    }
++} }
++#endif
++}

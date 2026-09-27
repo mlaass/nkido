@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-26T1440Z_poolside-laguna-s-2-1-free_arith",
+  "provider": "openrouter",
+  "model": "poolside/laguna-s-2.1:free",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 0,
+  "rejects": 8,
+  "reject_reasons": {
+    "backend error": 8
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 34678,
+    "output": 1193,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 216.3,
+  "gpu_s": null,
+  "active_s": 216.3,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/poolside-laguna-s-2-1-free-arith-202609261440",
+  "base_rev": "917a79d87bfa8ca59470fbb4ba5a9cc2b3e718d5"
+}

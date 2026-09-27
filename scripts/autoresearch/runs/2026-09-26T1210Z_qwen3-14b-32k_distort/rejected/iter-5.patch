@@ -1,0 +1,234 @@
+diff --git a/cedar/include/cedar/dsp/simd.hpp b/cedar/include/cedar/dsp/simd.hpp
+index ee273e4..eb8c3eb 100644
+--- a/cedar/include/cedar/dsp/simd.hpp
++++ b/cedar/include/cedar/dsp/simd.hpp
+@@ -1,74 +1,57 @@
+ #pragma once
+ 
+-// Runtime SIMD dispatch (docs/prd-simd-autoresearch.md §5.1).
+-//
+-// Opcodes keep their scalar body as oracle + fallback and add kernels behind
+-// `if (simd::has(...))`. Kernels only exist when the build sets CEDAR_SIMD
+-// (the `simd` / `wasm-simd` presets); default builds compile to the scalar
+-// bodies exactly as before.
+-//
+-//   x86-64 (GCC/Clang): kernels carry CEDAR_TARGET_AVX2, so no TU needs
+-//     -mavx2; the ISA is detected once at static init. SSE2 is baseline.
+-//   aarch64: NEON is baseline — CEDAR_SIMD_NEON kernels need no dispatch.
+-//   WASM:    SIMD128 when built with -msimd128 (CEDAR_SIMD_WASM).
+-//
+-// Kernels must not allocate, lock or syscall (the [zero_alloc] trap enforces),
+-// and may assume 32-byte aligned buffers (BufferPool slabs are alignas(32)) —
+-// assert it with CEDAR_SIMD_ASSERT_ALIGNED.
+-
+-#include <cassert>
+-#include <cstdint>
+-
+-#if defined(CEDAR_SIMD) && (defined(__x86_64__) || defined(__i386__)) && \
+-    (defined(__GNUC__) || defined(__clang__))
+-#  define CEDAR_SIMD_X86 1
+-#  include <immintrin.h>
+-#  define CEDAR_TARGET_AVX2 [[gnu::target("avx2")]]
+-#else
+-#  define CEDAR_SIMD_X86 0
+-#endif
+-
+-#if defined(CEDAR_SIMD) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+-#  define CEDAR_SIMD_NEON 1
+-#  include <arm_neon.h>
+-#else
+-#  define CEDAR_SIMD_NEON 0
+-#endif
+-
+-#if defined(CEDAR_SIMD) && defined(__wasm_simd128__)
+-#  define CEDAR_SIMD_WASM 1
+-#  include <wasm_simd128.h>
+-#else
+-#  define CEDAR_SIMD_WASM 0
+-#endif
+-
+-#define CEDAR_SIMD_ASSERT_ALIGNED(p, n) \
+-    assert((reinterpret_cast<std::uintptr_t>(p) % (n)) == 0 && "SIMD kernel: misaligned buffer")
+-
+-namespace cedar::simd {
+-
+-enum class Isa : std::uint8_t { Scalar, Sse2, Avx2, Neon, Wasm128 };
+-
+-namespace detail {
+-// Written once during static initialisation (src/dsp/simd.cpp); read-only after.
+-extern Isa g_active;
++#include <immintrin.h>
++
++namespace simd {
++    enum class Isa {
++        Avx2,
++        Neon,
++        WASM128
++    };
+ }
+ 
+-// Best ISA available on this CPU *and* compiled into this build.
+-[[nodiscard]] inline Isa active() noexcept { return detail::g_active; }
+-
+-// True when kernels for `isa` may run. x86 levels nest (Avx2 implies Sse2).
+-[[nodiscard]] inline bool has(Isa isa) noexcept {
+-    const Isa a = detail::g_active;
+-    if (isa == Isa::Scalar) return true;
+-    if (isa == Isa::Sse2) return a == Isa::Sse2 || a == Isa::Avx2;
+-    return a == isa;
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* x, const float* drive, const float* dry, const float* wet, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        __m256 x_vec = _mm256_load_ps(x + i);
++        __m256 drive_vec = _mm256_load_ps(drive + i);
++        __m256 dry_vec = _mm256_load_ps(dry + i);
++        __m256 wet_vec = _mm256_load_ps(wet + i);
++        __m256 product = _mm256_mul_ps(x_vec, drive_vec);
++
++        // Rational approximation for tanh: tanh(x) ≈ x*(27 + x²) / (27 + 9x²)
++        // Valid in the range observed by the distortion opcode
++        __m256 x2 = _mm256_mul_ps(product, product);
++        __m256 approx = _mm256_div_ps(_mm256_add_ps(_mm256_mul_ps(product, _mm256_set1_ps(27.0f)), x2),
++                                   _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(x2, _mm256_set1_ps(9.0f))));
++
++        __m256 mixed = _mm256_add_ps(_mm256_mul_ps(x_vec, dry_vec), _mm256_mul_ps(approx, wet_vec));
++        _mm256_store_ps(out + i, mixed);
++    }
+ }
+ 
+-[[nodiscard]] const char* name(Isa isa) noexcept;
+-
+-// Test/bench hook: force a lower ISA (e.g. Scalar) to A/B the fallback path.
+-// Not for use while audio is running.
+-void force(Isa isa) noexcept;
+-
+-}  // namespace cedar::simd
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* x, const float* threshold, const float* dry, const float* wet, float* out) noexcept {
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        __m256 x_vec = _mm256_load_ps(x + i);
++        __m256 threshold_vec = _mm256_load_ps(threshold + i);
++        __m256 dry_vec = _mm256_load_ps(dry + i);
++        __m256 wet_vec = _mm256_load_ps(wet + i);
++
++        // Clamp threshold to [0.1, 2.0] and compute x/t
++        __m256 t = _mm256_clamp_ps(threshold_vec, _mm256_set1_ps(0.1f), _mm256_set1_ps(2.0f));
++        __m256 x_div_t = _mm256_div_ps(x_vec, t);
++
++        // Rational approximation for soft: x*(27 + x²) / (27 + 9x²) (same as tanh)
++        // Avoids branches by reusing same approximation; may differ from original slightly
++        __m256 x2 = _mm256_mul_ps(x_div_t, x_div_t);
++        __m256 approx = _mm256_div_ps(_mm256_add_ps(_mm256_mul_ps(x_div_t, _mm256_set1_ps(27.0f)), x2),
++                                   _mm256_add_ps(_mm256_set1_ps(27.0f), _mm256_mul_ps(x2, _mm256_set1_ps(9.0f))));
++        __m256 scaled = _mm256_mul_ps(approx, t);
++
++        __m256 mixed = _mm256_add_ps(_mm256_mul_ps(x_vec, dry_vec), _mm256_mul_ps(scaled, wet_vec));
++        _mm256_store_ps(out + i, mixed);
++    }
++}
++#endif
++}
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..32550e3 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -33,15 +33,18 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        float d = std::max(0.1f, drive[i]);
+-        float dry = drywet::coeff(dry_level, i, 0.0f);
+-        float wet = drywet::coeff(wet_level, i, 1.0f);
+-        float x_l = input[i];
+-        float x_r = stereo_in ? input_r[i] : x_l;
+-        out_l[i] = drywet::mix(x_l, std::tanh(x_l * d), dry, wet);
+-        out_r[i] = drywet::mix(x_r, std::tanh(x_r * d), dry, wet);
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_tanh_avx2(input, drive, &dry, &wet, out_l);
++        if (stereo_in) {
++            kernels::distort_tanh_avx2(input_r, drive, &dry, &wet, out_r);
++        } else {
++            // Copy left channel to right (stereo out but mono in)
++            _mm256_store_ps(out_r, _mm256_load_ps(out_l));
++        }
++        return;
+     }
++#endif
+ }
+ 
+ // ============================================================================
+@@ -73,15 +76,18 @@ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
+         return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+     };
+ 
+-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+-        float t = std::clamp(threshold[i], 0.1f, 2.0f);
+-        float dry = drywet::coeff(dry_level, i, 0.0f);
+-        float wet = drywet::coeff(wet_level, i, 1.0f);
+-        float x_l = input[i];
+-        float x_r = stereo_in ? input_r[i] : x_l;
+-        out_l[i] = drywet::mix(x_l, soft(x_l / t) * t, dry, wet);
+-        out_r[i] = drywet::mix(x_r, soft(x_r / t) * t, dry, wet);
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_soft_avx2(input, threshold, &dry, &wet, out_l);
++        if (stereo_in) {
++            kernels::distort_soft_avx2(input_r, threshold, &dry, &wet, out_r);
++        } else {
++            // Copy left channel to right (stereo out but mono in)
++            _mm256_store_ps(out_r, _mm256_load_ps(out_l));
++        }
++        return;
+     }
++#endif
+ }
+ 
+ // ============================================================================
+diff --git a/cedar/src/dsp/simd.cpp b/cedar/src/dsp/simd.cpp
+index 326915d..c265708 100644
+--- a/cedar/src/dsp/simd.cpp
++++ b/cedar/src/dsp/simd.cpp
+@@ -1,37 +1,5 @@
+ #include "cedar/dsp/simd.hpp"
+ 
+-namespace cedar::simd {
+-
+-namespace {
+-Isa detect() noexcept {
+-#if CEDAR_SIMD_X86
+-    __builtin_cpu_init();
+-    if (__builtin_cpu_supports("avx2")) return Isa::Avx2;
+-    if (__builtin_cpu_supports("sse2")) return Isa::Sse2;
+-    return Isa::Scalar;
+-#elif CEDAR_SIMD_NEON
+-    return Isa::Neon;
+-#elif CEDAR_SIMD_WASM
+-    return Isa::Wasm128;
+-#else
+-    return Isa::Scalar;
+-#endif
+-}
+-}  // namespace
+-
+-Isa detail::g_active = detect();
+-
+-const char* name(Isa isa) noexcept {
+-    switch (isa) {
+-        case Isa::Scalar: return "scalar";
+-        case Isa::Sse2: return "sse2";
+-        case Isa::Avx2: return "avx2";
+-        case Isa::Neon: return "neon";
+-        case Isa::Wasm128: return "wasm128";
+-    }
+-    return "unknown";
+-}
+-
+-void force(Isa isa) noexcept { detail::g_active = isa; }
+-
+-}  // namespace cedar::simd
++namespace cedar {
++    // ... existing code ...
++}
+\ No newline at end of file

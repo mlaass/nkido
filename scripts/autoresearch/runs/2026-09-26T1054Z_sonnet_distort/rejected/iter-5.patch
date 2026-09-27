@@ -1,0 +1,112 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index fd48aa0..648ae72 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -21,11 +21,11 @@ inline __m256 coeff8(const float* buf, std::size_t i, float fallback) noexcept {
+     return buf ? _mm256_load_ps(buf + i) : _mm256_set1_ps(fallback);
+ }
+ 
+-// simd: approx -- replaces std::tanh(z). Takes t = 2z; tanh(z) = 1 - 2 / (e + 1),
+-// e = exp(t), t clamped to [-20, 20] so e stays finite (tanh(10) == 1 to 4e-9).
++// simd: approx -- replaces std::tanh(z). Takes t = 2z and returns e + 1, e = exp(t);
++// tanh(z) = 1 - 2 / (e + 1), t clamped to [-20, 20] so e stays finite (tanh(10) == 1 to 4e-9).
+ // exp via 2^n * poly5(r), r in [-ln2/2, ln2/2]; relative error ~3e-6 (tanh err ~1e-6).
+ CEDAR_TARGET_AVX2 [[gnu::always_inline]]
+-inline __m256 tanh8(__m256 t) noexcept {
++inline __m256 exp_p1(__m256 t) noexcept {
+     t = _mm256_min_ps(_mm256_set1_ps(20.0f), t);  // NaN in t propagates (2nd operand)
+     t = _mm256_max_ps(_mm256_set1_ps(-20.0f), t);
+     const __m256i n = _mm256_cvtps_epi32(_mm256_mul_ps(t, _mm256_set1_ps(1.44269504088896341f)));
+@@ -41,8 +41,25 @@ inline __m256 tanh8(__m256 t) noexcept {
+     // p in [0.7, 1.42] is normal: adding n to its exponent field scales by 2^n.
+     const __m256 e = _mm256_castsi256_ps(
+         _mm256_add_epi32(_mm256_castps_si256(p), _mm256_slli_epi32(n, 23)));
+-    return _mm256_sub_ps(_mm256_set1_ps(1.0f),
+-                         _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_add_ps(e, _mm256_set1_ps(1.0f))));
++    return _mm256_add_ps(e, _mm256_set1_ps(1.0f));
++}
++
++// simd: approx -- replaces std::tanh(z) for two vectors at once (ta = 2*za, tb = 2*zb).
++// One shared divide: q = 2/(a*b), 2/a = q*b, 2/b = q*a. a, b in [1, 4.9e8] so a*b is finite;
++// adds ~1 ulp to the reciprocal.
++CEDAR_TARGET_AVX2 [[gnu::always_inline]]
++inline void tanh8x2(__m256 ta, __m256 tb, __m256& ya, __m256& yb) noexcept {
++    const __m256 a = exp_p1(ta);
++    const __m256 b = exp_p1(tb);
++    const __m256 q = _mm256_div_ps(_mm256_set1_ps(2.0f), _mm256_mul_ps(a, b));
++    const __m256 one = _mm256_set1_ps(1.0f);
++    ya = _mm256_sub_ps(one, _mm256_mul_ps(q, b));
++    yb = _mm256_sub_ps(one, _mm256_mul_ps(q, a));
++}
++
++CEDAR_TARGET_AVX2 [[gnu::always_inline]]
++inline __m256 mix8(__m256 x, __m256 y, __m256 dry, __m256 wet) noexcept {
++    return _mm256_add_ps(_mm256_mul_ps(x, dry), _mm256_mul_ps(y, wet));
+ }
+ 
+ CEDAR_TARGET_AVX2
+@@ -50,33 +67,43 @@ inline void tanh_avx2(const float* in_l, const float* in_r, const float* drive,
+                       const float* dry_level, const float* wet_level,
+                       float* out_l, float* out_r) noexcept {
+     const __m256 dmin = _mm256_set1_ps(0.1f);
+-    if (!dry_level && !wet_level) {
+-        // Default dry=0, wet=1: x*0 + y*1 == y for finite x, so skip the mix.
++    // Default dry=0, wet=1: x*0 + y*1 == y for finite x, so skip the mix.
++    const bool plain = !dry_level && !wet_level;
++    if (in_r) {
+         for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-            const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);
+-            const __m256 d2 = _mm256_add_ps(d, d);
+-            const __m256 yl = tanh8(_mm256_mul_ps(_mm256_load_ps(in_l + i), d2));
++            const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);  // == (0.1f < d) ? d : 0.1f
++            const __m256 d2 = _mm256_add_ps(d, d);  // 2*d exact; tanh takes 2*x*d
++            const __m256 xl = _mm256_load_ps(in_l + i);
++            const __m256 xr = _mm256_load_ps(in_r + i);
++            __m256 yl, yr;
++            tanh8x2(_mm256_mul_ps(xl, d2), _mm256_mul_ps(xr, d2), yl, yr);
++            if (!plain) {
++                const __m256 dry = coeff8(dry_level, i, 0.0f);
++                const __m256 wet = coeff8(wet_level, i, 1.0f);
++                yl = mix8(xl, yl, dry, wet);
++                yr = mix8(xr, yr, dry, wet);
++            }
+             _mm256_store_ps(out_l + i, yl);
+-            _mm256_store_ps(out_r + i, in_r ? tanh8(_mm256_mul_ps(_mm256_load_ps(in_r + i), d2)) : yl);
++            _mm256_store_ps(out_r + i, yr);
+         }
+         return;
+     }
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);  // == (0.1f < d) ? d : 0.1f
+-        const __m256 d2 = _mm256_add_ps(d, d);  // 2*d exact; tanh8 takes 2*x*d
+-        const __m256 dry = coeff8(dry_level, i, 0.0f);
+-        const __m256 wet = coeff8(wet_level, i, 1.0f);
+-        const __m256 xl = _mm256_load_ps(in_l + i);
+-        const __m256 yl = _mm256_add_ps(_mm256_mul_ps(xl, dry),
+-                                        _mm256_mul_ps(tanh8(_mm256_mul_ps(xl, d2)), wet));
+-        _mm256_store_ps(out_l + i, yl);
+-        if (in_r) {
+-            const __m256 xr = _mm256_load_ps(in_r + i);
+-            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry),
+-                                        _mm256_mul_ps(tanh8(_mm256_mul_ps(xr, d2)), wet)));
+-        } else {
+-            _mm256_store_ps(out_r + i, yl);
++    // Mono input: pair two consecutive vectors of the same channel.
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 16) {
++        const __m256 d0 = _mm256_max_ps(_mm256_load_ps(drive + i), dmin);
++        const __m256 d1 = _mm256_max_ps(_mm256_load_ps(drive + i + 8), dmin);
++        const __m256 x0 = _mm256_load_ps(in_l + i);
++        const __m256 x1 = _mm256_load_ps(in_l + i + 8);
++        __m256 y0, y1;
++        tanh8x2(_mm256_mul_ps(x0, _mm256_add_ps(d0, d0)), _mm256_mul_ps(x1, _mm256_add_ps(d1, d1)), y0, y1);
++        if (!plain) {
++            y0 = mix8(x0, y0, coeff8(dry_level, i, 0.0f), coeff8(wet_level, i, 1.0f));
++            y1 = mix8(x1, y1, coeff8(dry_level, i + 8, 0.0f), coeff8(wet_level, i + 8, 1.0f));
+         }
++        _mm256_store_ps(out_l + i, y0);
++        _mm256_store_ps(out_l + i + 8, y1);
++        _mm256_store_ps(out_r + i, y0);
++        _mm256_store_ps(out_r + i + 8, y1);
+     }
+ }
+ 

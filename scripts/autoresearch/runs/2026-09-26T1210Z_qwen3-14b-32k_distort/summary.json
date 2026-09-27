@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-26T1210Z_qwen3-14b-32k_distort",
+  "provider": "local",
+  "model": "qwen3:14b-32k (qwen3:14b-32k@?)",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 0,
+  "rejects": 8,
+  "reject_reasons": {
+    "build": 7,
+    "empty patch": 1
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 1225135,
+    "output": 131656,
+    "cached": 0
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 10049.7,
+  "gpu_s": 9373.0,
+  "active_s": 9417.3,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/qwen3-14b-32k-distort-202609261210",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

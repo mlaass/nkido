@@ -1,0 +1,85 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 15b2030..2fb948d 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -64,6 +64,18 @@ namespace freeverb_kernels {
+ CEDAR_TARGET_AVX2 inline void allpass_run(float* p, float* y, std::size_t len) noexcept {
+     const __m256 g = _mm256_set1_ps(0.5f);
+     std::size_t j = 0;
++    for (; j + 16 <= len; j += 16) {
++        const __m256 d0 = _mm256_loadu_ps(p + j);
++        const __m256 d1 = _mm256_loadu_ps(p + j + 8);
++        const __m256 y0 = _mm256_loadu_ps(y + j);
++        const __m256 y1 = _mm256_loadu_ps(y + j + 8);
++        const __m256 o0 = _mm256_sub_ps(d0, _mm256_mul_ps(g, y0));
++        const __m256 o1 = _mm256_sub_ps(d1, _mm256_mul_ps(g, y1));
++        _mm256_storeu_ps(p + j, _mm256_add_ps(y0, _mm256_mul_ps(g, o0)));
++        _mm256_storeu_ps(p + j + 8, _mm256_add_ps(y1, _mm256_mul_ps(g, o1)));
++        _mm256_storeu_ps(y + j, o0);
++        _mm256_storeu_ps(y + j + 8, o1);
++    }
+     for (; j + 8 <= len; j += 8) {
+         const __m256 d = _mm256_loadu_ps(p + j);
+         const __m256 yy = _mm256_loadu_ps(y + j);
+@@ -80,7 +92,8 @@ CEDAR_TARGET_AVX2 inline void allpass_run(float* p, float* y, std::size_t len) n
+     }
+ }
+ 
+-CEDAR_TARGET_AVX2 inline void freeverb_avx2(
++template <bool MONO>
++CEDAR_TARGET_AVX2 inline void freeverb_avx2_impl(
+     FreeverbState& st, const float* in_l, const float* in_r,
+     const float* room_size, const float* damping,
+     const float* room_scale_in, const float* room_offset_in,
+@@ -148,7 +161,6 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         x1[ch] = _mm256_loadu_ps(st.dc_x1[ch]);
+         y1[ch] = _mm256_loadu_ps(st.dc_y1[ch]);
+     }
+-    const float* xin[2] = {in_l, in_r};
+ 
+     for (std::size_t n = 0; n < N; n += 8) {
+         // Comb sums first: they read the delayed samples this iteration overwrites.
+@@ -173,8 +185,11 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+                 const __m256 bd = _mm256_broadcast_ss(damp + nh + t);
+                 const __m256 bo = _mm256_broadcast_ss(omd + nh + t);
+                 const __m256 bf = _mm256_broadcast_ss(fb + nh + t);
++                const __m256 x0 = _mm256_broadcast_ss(in_l + nh + t);
++                // Mono input: both lanes see the same sample, share one broadcast.
++                const __m256 x1s = MONO ? x0 : _mm256_broadcast_ss(in_r + nh + t);
+                 for (std::size_t ch = 0; ch < 2; ++ch) {
+-                    const __m256 x = _mm256_broadcast_ss(xin[ch] + nh + t);
++                    const __m256 x = ch == 0 ? x0 : x1s;
+                     fs[ch] = _mm256_add_ps(_mm256_mul_ps(v[ch][t], bo), _mm256_mul_ps(fs[ch], bd));
+                     const __m256 dc_out = _mm256_add_ps(_mm256_sub_ps(fs[ch], x1[ch]),
+                                                         _mm256_mul_ps(rv, y1[ch]));
+@@ -231,7 +246,7 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+ 
+     for (std::size_t i = 0; i < N; i += 8) {
+         const __m256 xl = _mm256_loadu_ps(in_l + i);
+-        const __m256 xr = _mm256_loadu_ps(in_r + i);
++        const __m256 xr = MONO ? xl : _mm256_loadu_ps(in_r + i);
+         const __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + i) : _mm256_set1_ps(dry_const);
+         const __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + i) : _mm256_set1_ps(wet_const);
+         const __m256 ol = _mm256_add_ps(_mm256_mul_ps(xl, dry),
+@@ -242,6 +257,21 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+         _mm256_storeu_ps(out_r + i, orr);
+     }
+ }
++
++CEDAR_TARGET_AVX2 inline void freeverb_avx2(
++    FreeverbState& st, const float* in_l, const float* in_r,
++    const float* room_size, const float* damping,
++    const float* room_scale_in, const float* room_offset_in,
++    const float* dry_buf, float dry_const, const float* wet_buf, float wet_const,
++    float* out_l, float* out_r) noexcept {
++    if (in_l == in_r) {
++        freeverb_avx2_impl<true>(st, in_l, in_r, room_size, damping, room_scale_in, room_offset_in,
++                                 dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
++    } else {
++        freeverb_avx2_impl<false>(st, in_l, in_r, room_size, damping, room_scale_in, room_offset_in,
++                                  dry_buf, dry_const, wet_buf, wet_const, out_l, out_r);
++    }
++}
+ #endif
+ }  // namespace freeverb_kernels
+ 

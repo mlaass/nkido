@@ -1,0 +1,363 @@
+diff --git a/cedar/include/cedar/dsp/simd.hpp b/cedar/include/cedar/dsp/simd.hpp
+index ee273e4..09fc463 100644
+--- a/cedar/include/cedar/dsp/simd.hpp
++++ b/cedar/include/cedar/dsp/simd.hpp
+@@ -1,74 +1,185 @@
+-#pragma once
+-
+-// Runtime SIMD dispatch (docs/prd-simd-autoresearch.md §5.1).
+-//
+-// Opcodes keep their scalar body as oracle + fallback and add kernels behind
+-// `if (simd::has(...))`. Kernels only exist when the build sets CEDAR_SIMD
+-// (the `simd` / `wasm-simd` presets); default builds compile to the scalar
+-// bodies exactly as before.
+-//
+-//   x86-64 (GCC/Clang): kernels carry CEDAR_TARGET_AVX2, so no TU needs
+-//     -mavx2; the ISA is detected once at static init. SSE2 is baseline.
+-//   aarch64: NEON is baseline — CEDAR_SIMD_NEON kernels need no dispatch.
+-//   WASM:    SIMD128 when built with -msimd128 (CEDAR_SIMD_WASM).
+-//
+-// Kernels must not allocate, lock or syscall (the [zero_alloc] trap enforces),
+-// and may assume 32-byte aligned buffers (BufferPool slabs are alignas(32)) —
+-// assert it with CEDAR_SIMD_ASSERT_ALIGNED.
+-
+-#include <cassert>
+-#include <cstdint>
+-
+-#if defined(CEDAR_SIMD) && (defined(__x86_64__) || defined(__i386__)) && \
+-    (defined(__GNUC__) || defined(__clang__))
+-#  define CEDAR_SIMD_X86 1
+-#  include <immintrin.h>
+-#  define CEDAR_TARGET_AVX2 [[gnu::target("avx2")]]
+-#else
+-#  define CEDAR_SIMD_X86 0
+-#endif
++#include "simd.hpp"
+ 
+-#if defined(CEDAR_SIMD) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+-#  define CEDAR_SIMD_NEON 1
+-#  include <arm_neon.h>
+-#else
+-#  define CEDAR_SIMD_NEON 0
+-#endif
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline void formant_avx2(ExecutionContext& ctx, const Instruction& inst, 
++                                           float* out_l, float* out_r, 
++                                           const float* input, const float* input_r, 
++                                           const float* vowel_a, const float* vowel_b, 
++                                           const float* morph, const float* q_in, 
++                                           const float* dry_buf, const float* wet_buf, 
++                                           float dry_const, float wet_const, 
++                                           FormantState& state) noexcept {
+ 
+-#if defined(CEDAR_SIMD) && defined(__wasm_simd128__)
+-#  define CEDAR_SIMD_WASM 1
+-#  include <wasm_simd128.h>
+-#else
+-#  define CEDAR_SIMD_WASM 0
+-#endif
++    const float* vowel_a_ptr = vowel_a;
++    const float* vowel_b_ptr = vowel_b;
++    const float* morph_ptr = morph;
++    const float* q_in_ptr = q_in;
+ 
+-#define CEDAR_SIMD_ASSERT_ALIGNED(p, n) \
+-    assert((reinterpret_cast<std::uintptr_t>(p) % (n)) == 0 && "SIMD kernel: misaligned buffer")
++    // Load VOWEL_TABLE into AVX registers
++    __m256 f1_a[5], f2_a[5], f3_a[5], g1_a[5], g2_a[5], g3_a[5];
++    __m256 f1_b[5], f2_b[5], f3_b[5], g1_b[5], g2_b[5], g3_b[5];
+ 
+-namespace cedar::simd {
++    // Preload vowel table data into AVX registers
++    for (int i = 0; i < 5; ++i) {
++        f1_a[i] = _mm256_load_ps(&VOWEL_TABLE[i].f1);
++        f2_a[i] = _mm256_load_ps(&VOWEL_TABLE[i].f2);
++        f3_a[i] = _mm256_load_ps(&VOWEL_TABLE[i].f3);
++        g1_a[i] = _mm256_load_ps(&VOWEL_TABLE[i].g1);
++        g2_a[i] = _mm256_load_ps(&VOWEL_TABLE[i].g2);
++        g3_a[i] = _mm256_load_ps(&VOWEL_TABLE[i].g3);
+ 
+-enum class Isa : std::uint8_t { Scalar, Sse2, Avx2, Neon, Wasm128 };
++        f1_b[i] = _mm256_load_ps(&VOWEL_TABLE[i].f1);
++        f2_b[i] = _mm256_load_ps(&VOWEL_TABLE[i].f2);
++        f3_b[i] = _mm256_load_ps(&VOWEL_TABLE[i].f3);
++        g1_b[i] = _mm256_load_ps(&VOWEL_TABLE[i].g1);
++        g2_b[i] = _mm256_load_ps(&VOWEL_TABLE[i].g2);
++        g3_b[i] = _mm256_load_ps(&VOWEL_TABLE[i].g3);
++    }
+ 
+-namespace detail {
+-// Written once during static initialisation (src/dsp/simd.cpp); read-only after.
+-extern Isa g_active;
+-}
++    // Process in blocks of 8 samples
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // Load inputs
++        __m256 va = _mm256_load_ps(vowel_a_ptr + i);
++        __m256 vb = _mm256_load_ps(vowel_b_ptr + i);
++        __m256 m = _mm256_load_ps(morph_ptr + i);
++        __m256 q = _mm256_load_ps(q_in_ptr + i);
+ 
+-// Best ISA available on this CPU *and* compiled into this build.
+-[[nodiscard]] inline Isa active() noexcept { return detail::g_active; }
++        // Clamp values
++        va = _mm256_min_ps(va, _mm256_set1_ps(4.0f));
++        va = _mm256_max_ps(va, _mm256_set1_ps(0.0f));
++        vb = _mm256_min_ps(vb, _mm256_set1_ps(4.0f));
++        vb = _mm256_max_ps(vb, _mm256_set1_ps(0.0f));
++        m = _mm256_min_ps(m, _mm256_set1_ps(1.0f));
++        m = _mm256_max_ps(m, _mm256_set1_ps(0.0f));
++        q = _mm256_min_ps(q, _mm256_set1_ps(20.0f));
++        q = _mm256_max_ps(q, _mm256_set1_ps(1.0f));
+ 
+-// True when kernels for `isa` may run. x86 levels nest (Avx2 implies Sse2).
+-[[nodiscard]] inline bool has(Isa isa) noexcept {
+-    const Isa a = detail::g_active;
+-    if (isa == Isa::Scalar) return true;
+-    if (isa == Isa::Sse2) return a == Isa::Sse2 || a == Isa::Avx2;
+-    return a == isa;
+-}
++        // Calculate dry and wet coefficients
++        __m256 dry = drywet::coeff_avx2(dry_buf, i, dry_const);
++        __m256 wet = drywet::coeff_avx2(wet_buf, i, wet_const);
++
++        // Check if we need to recalculate formant targets
++        __m256 cmp_va = _mm256_cmp_ps(va, _mm256_load_ps(&state.last_vowel_a), _MM_CMPINT_NE);
++        __m256 cmp_vb = _mm256_cmp_ps(vb, _mm256_load_ps(&state.last_vowel_b), _MM_CMPINT_NE);
++        __m256 cmp_m = _mm256_cmp_ps(m, _mm256_load_ps(&state.last_morph), _MM_CMPINT_NE);
++        __m256 cmp_q = _mm256_cmp_ps(q, _mm256_load_ps(&state.last_q), _MM_CMPINT_NE);
++
++        // If any values changed, update formants
++        __m256 any_changed = _mm256_or_ps(_mm256_or_ps(cmp_va, cmp_vb), _mm256_or_ps(cmp_m, cmp_q));
++        __m256 mask = _mm256_castps_si256(_mm256_movemask_ps(any_changed));
++
++        if (_mm256_movemask_ps(any_changed) != 0) {
++            // Update formants for all changed samples
++            // Interpolate between vowel indices (with fractional support)
++            __m256 idx_a = _mm256_floor_ps(va);
++            __m256 idx_b = _mm256_floor_ps(vb);
++            __m256 frac_a = _mm256_sub_ps(va, idx_a);
++            __m256 frac_b = _mm256_sub_ps(vb, idx_b);
++
++            // Clamp indices
++            idx_a = _mm256_min_ps(idx_a, _mm256_set1_ps(4.0f));
++            idx_b = _mm256_min_ps(idx_b, _mm256_set1_ps(4.0f));
++            __m256 idx_a2 = _mm256_min_ps(_mm256_add_ps(idx_a, _mm256_set1_ps(1.0f)), _mm256_set1_ps(4.0f));
++            __m256 idx_b2 = _mm256_min_ps(_mm256_add_ps(idx_b, _mm256_set1_ps(1.0f)), _mm256_set1_ps(4.0f));
++
++            // Convert to integer indices for AVX tables
++            __m256i idx_a_i = _mm256_cvtps_epi32(idx_a);
++            __m256i idx_b_i = _mm256_cvtps_epi32(idx_b);
++            __m256i idx_a2_i = _mm256_cvtps_epi32(idx_a2);
++            __m256i idx_b2_i = _mm256_cvtps_epi32(idx_b2);
++
++            // Get formants for vowel A (with fractional interpolation)
++            __m256 f1_a_total = _mm256_blendv_ps(
++                _mm256_shuffle_ps(f1_a[static_cast<int>(idx_a_i[0])], f1_a[static_cast<int>(idx_a_i[0])], 0x05),
++                _mm256_shuffle_ps(f1_a[static_cast<int>(idx_a2_i[0])], f1_a[static_cast<int>(idx_a2_i[0])], 0x05),
++                frac_a
++            );
++            // Similar for f2_a, f3_a, g1_a, g2_a, g3_a
+ 
+-[[nodiscard]] const char* name(Isa isa) noexcept;
++            // Get formants for vowel B
++            __m256 f1_b_total = _mm256_blendv_ps(
++                _mm256_shuffle_ps(f1_b[static_cast<int>(idx_b_i[0])], f1_b[static_cast<int>(idx_b_i[0])], 0x05),
++                _mm256_shuffle_ps(f1_b[static_cast<int>(idx_b2_i[0])], f1_b[static_cast<int>(idx_b2_i[0])], 0x05),
++                frac_b
++            );
++            // Similar for f2_b, f3_b, g1_b, g2_b, g3_b
+ 
+-// Test/bench hook: force a lower ISA (e.g. Scalar) to A/B the fallback path.
+-// Not for use while audio is running.
+-void force(Isa isa) noexcept;
++            // Morph between A and B
++            state.f1 = _mm256_add_ps(_mm256_mul_ps(f1_a_total, _mm256_sub_ps(_mm256_set1_ps(1.0f), m)),
++                                   _mm256_mul_ps(f1_b_total, m));
++            // Similar for f2, f3, g1, g2, g3
+ 
+-}  // namespace cedar::simd
++            // Update state variables
++            _mm256_store_ps(&state.last_vowel_a, va);
++            _mm256_store_ps(&state.last_vowel_b, vb);
++            _mm256_store_ps(&state.last_morph, m);
++            _mm256_store_ps(&state.last_q, q);
++        }
++
++        // Calculate prewarp coefficients
++        __m256 prewarp = _mm256_mul_ps(_mm256_set1_ps(2.0f), _mm256_tan_ps(_mm256_mul_ps(
++            _mm256_set1_ps(PI), 
++            _mm256_min_ps(_mm256_div_ps(state.f1, _mm256_set1_ps(ctx.sample_rate)), _mm256_set1_ps(0.48f))
++        )));
++
++        __m256 f1_coef = _mm256_min_ps(prewarp, _mm256_set1_ps(1.9f));
++        __m256 f2_coef = _mm256_min_ps(prewarp, _mm256_set1_ps(1.9f));
++        __m256 f3_coef = _mm256_min_ps(prewarp, _mm256_set1_ps(1.9f));
++        __m256 q_coef = _mm256_div_ps(_mm256_set1_ps(1.0f), q);
++
++        // Process both channels in a single AVX block
++        for (int ch = 0; ch < 2; ++ch) {
++            // Load inputs for this channel
++            __m256 x = _mm256_load_ps(input + i);
++            if (ch == 1 && stereo_in) {
++                x = _mm256_load_ps(input_r + i);
++            }
++
++            // Bandpass 1 (F1 - first formant)
++            __m256 hp1 = _mm256_sub_ps(x, 
++                                     _mm256_mul_ps(state.bp1_z1[static_cast<int>(ch)], q_coef), 
++                                     state.bp1_z2[static_cast<int>(ch)]);
++            __m256 bp1 = _mm256_add_ps(state.bp1_z1[static_cast<int>(ch)], 
++                                     _mm256_mul_ps(f1_coef, hp1));
++            __m256 lp1 = _mm256_add_ps(state.bp1_z2[static_cast<int>(ch)], 
++                                     _mm256_mul_ps(f1_coef, state.bp1_z1[static_cast<int>(ch)]));
++            state.bp1_z1[static_cast<int>(ch)] = _mm256_min_ps(_mm256_max_ps(bp1, _mm256_set1_ps(-10.0f)), _mm256_set1_ps(10.0f));
++            state.bp1_z2[static_cast<int>(ch)] = _mm256_min_ps(_mm256_max_ps(lp1, _mm256_set1_ps(-10.0f)), _mm256_set1_ps(10.0f));
++
++            // Bandpass 2 (F2 - second formant)
++            __m256 hp2 = _mm256_sub_ps(x, 
++                                     _mm256_mul_ps(state.bp2_z1[static_cast<int>(ch)], q_coef), 
++                                     state.bp2_z2[static_cast<int>(ch)]);
++            __m256 bp2 = _mm256_add_ps(state.bp2_z1[static_cast<int>(ch)], 
++                                     _mm256_mul_ps(f2_coef, hp2));
++            __m256 lp2 = _mm256_add_ps(state.bp2_z2[static_cast<int>(ch)], 
++                                     _mm256_mul_ps(f2_coef, state.bp2_z1[static_cast<int>(ch)]));
++            state.bp2_z1[static_cast<int>(ch)] = _mm256_min_ps(_mm256_max_ps(bp2, _mm256_set1_ps(-10.0f)), _mm256_set1_ps(10.0f));
++            state.bp2_z2[static_cast<int>(ch)] = _mm256_min_ps(_mm256_max_ps(lp2, _mm256_set1_ps(-10.0f)), _mm256_set1_ps(10.0f));
++
++            // Bandpass 3 (F3 - third formant)
++            __m256 hp3 = _mm256_sub_ps(x, 
++                                     _mm256_mul_ps(state.bp3_z1[static_cast<int>(ch)], q_coef), 
++                                     state.bp3_z2[static_cast<int>(ch)]);
++            __m256 bp3 = _mm256_add_ps(state.bp3_z1[static_cast<int>(ch)], 
++                                     _mm256_mul_ps(f3_coef, hp3));
++            __m256 lp3 = _mm256_add_ps(state.bp3_z2[static_cast<int>(ch)], 
++                                     _mm256_mul_ps(f3_coef, state.bp3_z1[static_cast<int>(ch)]));
++            state.bp3_z1[static_cast<int>(ch)] = _mm256_min_ps(_mm256_max_ps(bp3, _mm256_set1_ps(-10.0f)), _mm256_set1_ps(10.0f));
++            state.bp3_z2[static_cast<int>(ch)] = _mm256_min_ps(_mm256_max_ps(lp3, _mm256_set1_ps(-10.0f)), _mm256_set1_ps(10.0f));
++
++            // Sum bandpasses with formant gains
++            __m256 processed = _mm256_add_ps(
++                _mm256_mul_ps(bp1, state.g1),
++                _mm256_add_ps(_mm256_mul_ps(bp2, state.g2), _mm256_mul_ps(bp3, state.g3))
++            );
++
++            // Output mix
++            __m256 out = drywet::mix_avx2(x, processed, dry, wet);
++            _mm256_store_ps((ch == 0 ? out_l : out_r) + i, out);
++        }
++    }
++}
++#endif
++} // namespace kernels
+\ No newline at end of file
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..b44e187 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -469,50 +469,50 @@ inline void op_filter_formant(ExecutionContext& ctx, const Instruction& inst) {
+         float dry = drywet::coeff(dry_buf, i, dry_const);
+         float wet = drywet::coeff(wet_buf, i, wet_const);
+ 
+-        // Check if we need to recalculate formant targets
+-        if (va != state.last_vowel_a || vb != state.last_vowel_b ||
+-            m != state.last_morph || q != state.last_q) {
+-
+-            state.last_vowel_a = va;
+-            state.last_vowel_b = vb;
+-            state.last_morph = m;
+-            state.last_q = q;
+-
+-            // Interpolate between vowel indices (with fractional support)
+-            int idx_a = static_cast<int>(va);
+-            int idx_b = static_cast<int>(vb);
+-            float frac_a = va - static_cast<float>(idx_a);
+-            float frac_b = vb - static_cast<float>(idx_b);
+-
+-            idx_a = std::min(idx_a, 4);
+-            idx_b = std::min(idx_b, 4);
+-            int idx_a2 = std::min(idx_a + 1, 4);
+-            int idx_b2 = std::min(idx_b + 1, 4);
+-
+-            // Get formants for vowel A (with fractional interpolation)
+-            float f1_a = VOWEL_TABLE[idx_a].f1 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f1 * frac_a;
+-            float f2_a = VOWEL_TABLE[idx_a].f2 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f2 * frac_a;
+-            float f3_a = VOWEL_TABLE[idx_a].f3 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f3 * frac_a;
+-            float g1_a = VOWEL_TABLE[idx_a].g1 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g1 * frac_a;
+-            float g2_a = VOWEL_TABLE[idx_a].g2 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g2 * frac_a;
+-            float g3_a = VOWEL_TABLE[idx_a].g3 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g3 * frac_a;
+-
+-            // Get formants for vowel B
+-            float f1_b = VOWEL_TABLE[idx_b].f1 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f1 * frac_b;
+-            float f2_b = VOWEL_TABLE[idx_b].f2 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f2 * frac_b;
+-            float f3_b = VOWEL_TABLE[idx_b].f3 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f3 * frac_b;
+-            float g1_b = VOWEL_TABLE[idx_b].g1 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g1 * frac_b;
+-            float g2_b = VOWEL_TABLE[idx_b].g2 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g2 * frac_b;
+-            float g3_b = VOWEL_TABLE[idx_b].g3 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g3 * frac_b;
+-
+-            // Morph between A and B
+-            state.f1 = f1_a * (1.0f - m) + f1_b * m;
+-            state.f2 = f2_a * (1.0f - m) + f2_b * m;
+-            state.f3 = f3_a * (1.0f - m) + f3_b * m;
+-            state.g1 = g1_a * (1.0f - m) + g1_b * m;
+-            state.g2 = g2_a * (1.0f - m) + g2_b * m;
+-            state.g3 = g3_a * (1.0f - m) + g3_b * m;
+-        }
++    // Check if we need to recalculate formant targets
++    if (va != state.last_vowel_a || vb != state.last_vowel_b ||
++        m != state.last_morph || q != state.last_q) {
++
++        state.last_vowel_a = va;
++        state.last_vowel_b = vb;
++        state.last_morph = m;
++        state.last_q = q;
++
++        // Interpolate between vowel indices (with fractional support)
++        int idx_a = static_cast<int>(va);
++        int idx_b = static_cast<int>(vb);
++        float frac_a = va - static_cast<float>(idx_a);
++        float frac_b = vb - static_cast<float>(idx_b);
++
++        idx_a = std::min(idx_a, 4);
++        idx_b = std::min(idx_b, 4);
++        int idx_a2 = std::min(idx_a + 1, 4);
++        int idx_b2 = std::min(idx_b + 1, 4);
++
++        // Get formants for vowel A (with fractional interpolation)
++        float f1_a = VOWEL_TABLE[idx_a].f1 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f1 * frac_a;
++        float f2_a = VOWEL_TABLE[idx_a].f2 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f2 * frac_a;
++        float f3_a = VOWEL_TABLE[idx_a].f3 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].f3 * frac_a;
++        float g1_a = VOWEL_TABLE[idx_a].g1 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g1 * frac_a;
++        float g2_a = VOWEL_TABLE[idx_a].g2 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g2 * frac_a;
++        float g3_a = VOWEL_TABLE[idx_a].g3 * (1.0f - frac_a) + VOWEL_TABLE[idx_a2].g3 * frac_a;
++
++        // Get formants for vowel B
++        float f1_b = VOWEL_TABLE[idx_b].f1 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f1 * frac_b;
++        float f2_b = VOWEL_TABLE[idx_b].f2 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f2 * frac_b;
++        float f3_b = VOWEL_TABLE[idx_b].f3 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].f3 * frac_b;
++        float g1_b = VOWEL_TABLE[idx_b].g1 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g1 * frac_b;
++        float g2_b = VOWEL_TABLE[idx_b].g2 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g2 * frac_b;
++        float g3_b = VOWEL_TABLE[idx_b].g3 * (1.0f - frac_b) + VOWEL_TABLE[idx_b2].g3 * frac_b;
++
++        // Morph between A and B
++        state.f1 = f1_a * (1.0f - m) + f1_b * m;
++        state.f2 = f2_a * (1.0f - m) + f2_b * m;
++        state.f3 = f3_a * (1.0f - m) + f3_b * m;
++        state.g1 = g1_a * (1.0f - m) + g1_b * m;
++        state.g2 = g2_a * (1.0f - m) + g2_b * m;
++        state.g3 = g3_a * (1.0f - m) + g3_b * m;
++    }
+ 
+         // Chamberlin SVF coefficients with bilinear pre-warping (shared across channels)
+         auto prewarp_coef = [&](float freq) -> float {
+diff --git a/cedar/src/dsp/simd.cpp b/cedar/src/dsp/simd.cpp
+index 326915d..f212a74 100644
+--- a/cedar/src/dsp/simd.cpp
++++ b/cedar/src/dsp/simd.cpp
+@@ -1,4 +1,4 @@
+-#include "cedar/dsp/simd.hpp"
++#include "../../include/cedar/dsp/simd.hpp"
+ 
+ namespace cedar::simd {
+ 

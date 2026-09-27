@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-26T1118Z_z-ai-glm-5-3_svf",
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.3 (z-ai/glm-5.3@Makora, z-ai/glm-5.3@Parasail, z-ai/glm-5.3@Relace, z-ai/glm-5.3@Wafer)",
+  "target": "svf",
+  "iterations": 8,
+  "accepts": 3,
+  "rejects": 5,
+  "reject_reasons": {
+    "build": 1,
+    "backend error": 4
+  },
+  "first_accept_iteration": 3,
+  "best_speedup": 2.542,
+  "tokens": {
+    "input": 4847140,
+    "output": 524879,
+    "cached": 4443008
+  },
+  "cost_usd": 3.791,
+  "wall_clock_s": 5819.5,
+  "gpu_s": null,
+  "active_s": 5701.4,
+  "unstable_iterations": 2,
+  "status": "complete",
+  "branch": "autoresearch/z-ai-glm-5-3-svf-202609261118",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

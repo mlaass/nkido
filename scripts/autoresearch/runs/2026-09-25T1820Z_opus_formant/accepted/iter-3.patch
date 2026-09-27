@@ -1,0 +1,208 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index f16fdce..a552118 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -516,6 +516,12 @@ CEDAR_TARGET_AVX2 inline __m256 formant_tan_kernel_avx2(__m256 x) noexcept {
+     return _mm256_add_ps(x, r);
+ }
+ 
++// Out of line so the hot loop contains no call (ymm registers are all
++// caller-saved; a call inside the loop pushes the compiler into spilling).
++[[gnu::noinline, gnu::cold]] inline void formant_tan_lanes_cold(float* lanes) noexcept {
++    for (int k = 0; k < 8; ++k) lanes[k] = std::tan(lanes[k]);
++}
++
+ // min(1.9, 2 * tan(PI * min(f, sr * 0.48) / sr)); std::tan per lane when any
+ // argument leaves the range the polynomial kernel covers.
+ CEDAR_TARGET_AVX2 inline __m256 formant_prewarp_avx2(__m256 f, __m256 lim, __m256 sr) noexcept {
+@@ -525,12 +531,12 @@ CEDAR_TARGET_AVX2 inline __m256 formant_prewarp_avx2(__m256 f, __m256 lim, __m25
+     const __m256 ok = _mm256_and_ps(_mm256_cmp_ps(w, lo, _CMP_GE_OQ),
+                                     _mm256_cmp_ps(w, hi, _CMP_LT_OQ));
+     __m256 t;
+-    if (_mm256_movemask_ps(ok) == 0xFF) {
++    if (__builtin_expect(_mm256_movemask_ps(ok) == 0xFF, 1)) {
+         t = formant_tan_kernel_avx2(w);
+     } else {
+         alignas(32) float lanes[8];
+         _mm256_store_ps(lanes, w);
+-        for (float& l : lanes) l = std::tan(l);
++        formant_tan_lanes_cold(lanes);
+         t = _mm256_load_ps(lanes);
+     }
+     return _mm256_min_ps(_mm256_mul_ps(_mm256_set1_ps(2.0f), t), _mm256_set1_ps(1.9f));
+@@ -552,58 +558,88 @@ CEDAR_TARGET_AVX2 inline void formant_store3_avx2(float* dst, __m256 a, __m256 b
+     _mm256_store_ps(dst + 24, _mm256_permute2f128_ps(r2, r3, 0x31));
+ }
+ 
+-// SVF recurrence over samples [i0, i0 + 8).
++// clamp_audio on the bit pattern with 1-cycle integer ops (the float
++// max/min/cmp version sits on the recurrence's critical path): non-negative
++// float magnitudes order like their int bits, so |v| is clamped with
++// min_epi32, the sign is put back, and NaN magnitudes (> inf bits) become +0.
++CEDAR_TARGET_AVX2 inline __m256 formant_clamp_audio_avx2(__m256 v) noexcept {
++    const __m256i vi = _mm256_castps_si256(v);
++    const __m256i mag = _mm256_and_si256(vi, _mm256_set1_epi32(0x7fffffff));
++    const __m256i sign = _mm256_and_si256(vi, _mm256_set1_epi32(static_cast<int>(0x80000000u)));
++    const __m256i nan = _mm256_cmpgt_epi32(mag, _mm256_set1_epi32(0x7f800000));
++    const __m256i c = _mm256_or_si256(_mm256_min_epi32(mag, _mm256_set1_epi32(0x41200000)),
++                                      sign);  // 0x41200000 = 10.0f
++    return _mm256_castsi256_ps(_mm256_andnot_si256(nan, c));
++}
++
++// SVF recurrence over samples [i0, i0 + 8). xs holds [L L L L | R R R R] per
++// sample; the raw bp vector of each sample goes to bps for the gain sum.
+ CEDAR_TARGET_AVX2 inline void formant_svf_avx2(std::size_t i0, __m256& z1r, __m256& z2r,
+-                                               const float* coefs,
+-                                               const float* gains, const float* qcs,
+-                                               const float* in_l, const float* in_r,
+-                                               float* proc_l, float* proc_r) noexcept {
+-    const __m256 lim_hi = _mm256_set1_ps(10.0f);
+-    const __m256 lim_lo = _mm256_set1_ps(-10.0f);
++                                               const float* coefs, const float* qcs,
++                                               const float* xs, float* bps) noexcept {
+     __m256 z1 = z1r, z2 = z2r;
+ 
+     for (std::size_t i = i0; i < i0 + 8; ++i) {
+         const __m256 coef = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(coefs + i * 4));
+-        const __m256 gain = _mm256_broadcast_ps(reinterpret_cast<const __m128*>(gains + i * 4));
+         const __m256 qc = _mm256_broadcast_ss(qcs + i);
++        const __m256 x = _mm256_load_ps(xs + i * 8);
+ 
+-        __m256 x = _mm256_insertf128_ps(_mm256_castps128_ps256(_mm_set1_ps(in_l[i])),
+-                                        _mm_set1_ps(in_r[i]), 1);
+         __m256 hp = _mm256_sub_ps(_mm256_sub_ps(x, _mm256_mul_ps(z1, qc)), z2);
+         __m256 bp = _mm256_add_ps(z1, _mm256_mul_ps(coef, hp));
+         __m256 lp = _mm256_add_ps(z2, _mm256_mul_ps(coef, z1));
+-        // clamp_audio: NaN -> 0, else clamp to [-10, 10]
+-        z1 = _mm256_and_ps(_mm256_min_ps(_mm256_max_ps(bp, lim_lo), lim_hi),
+-                           _mm256_cmp_ps(bp, bp, _CMP_ORD_Q));
+-        z2 = _mm256_and_ps(_mm256_min_ps(_mm256_max_ps(lp, lim_lo), lim_hi),
+-                           _mm256_cmp_ps(lp, lp, _CMP_ORD_Q));
+-
+-        // (bp1*g1 + bp2*g2) + bp3*g3 in lane 0 of each half
+-        __m256 p = _mm256_mul_ps(bp, gain);
+-        __m256 s = _mm256_add_ps(_mm256_add_ps(p, _mm256_permute_ps(p, 0x55)),
+-                                 _mm256_permute_ps(p, 0xAA));
+-        _mm_store_ss(proc_l + i, _mm256_castps256_ps128(s));
+-        _mm_store_ss(proc_r + i, _mm256_extractf128_ps(s, 1));
++        z1 = formant_clamp_audio_avx2(bp);
++        z2 = formant_clamp_audio_avx2(lp);
++        _mm256_store_ps(bps + i * 8, bp);
+     }
+     z1r = z1;
+     z2r = z2;
+ }
+ 
+-// drywet::mix over samples [i, i + 8).
++// (b1*g1 + b2*g2) + b3*g3
++CEDAR_TARGET_AVX2 inline __m256 formant_gsum_avx2(__m256 b1, __m256 b2, __m256 b3, __m256 g1,
++                                                  __m256 g2, __m256 g3) noexcept {
++    return _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(b1, g1), _mm256_mul_ps(b2, g2)),
++                         _mm256_mul_ps(b3, g3));
++}
++
++// Formant gain sum (bp1*g1 + bp2*g2) + bp3*g3, then drywet::mix, over
++// samples [i, i + 8). bps rows are transposed to per-band columns first.
+ CEDAR_TARGET_AVX2 inline void formant_mix_avx2(std::size_t i, const float* in_l,
+-                                               const float* in_r, const float* proc_l,
+-                                               const float* proc_r, const float* dry_buf,
++                                               const float* in_r, const float* bps,
++                                               const float* g1s, const float* g2s,
++                                               const float* g3s, const float* dry_buf,
+                                                float dry_const, const float* wet_buf,
+                                                float wet_const, float* out_l,
+                                                float* out_r) noexcept {
++    const float* b = bps + i * 8;
++    __m256 t0 = _mm256_unpacklo_ps(_mm256_load_ps(b + 0), _mm256_load_ps(b + 8));
++    __m256 t1 = _mm256_unpackhi_ps(_mm256_load_ps(b + 0), _mm256_load_ps(b + 8));
++    __m256 t2 = _mm256_unpacklo_ps(_mm256_load_ps(b + 16), _mm256_load_ps(b + 24));
++    __m256 t3 = _mm256_unpackhi_ps(_mm256_load_ps(b + 16), _mm256_load_ps(b + 24));
++    __m256 t4 = _mm256_unpacklo_ps(_mm256_load_ps(b + 32), _mm256_load_ps(b + 40));
++    __m256 t5 = _mm256_unpackhi_ps(_mm256_load_ps(b + 32), _mm256_load_ps(b + 40));
++    __m256 t6 = _mm256_unpacklo_ps(_mm256_load_ps(b + 48), _mm256_load_ps(b + 56));
++    __m256 t7 = _mm256_unpackhi_ps(_mm256_load_ps(b + 48), _mm256_load_ps(b + 56));
++    // u*: samples 0-3 of bands (1 | 1R), (2 | 2R), (3 | 3R); v*: samples 4-7
++    __m256 u0 = _mm256_shuffle_ps(t0, t2, 0x44), v0 = _mm256_shuffle_ps(t4, t6, 0x44);
++    __m256 u1 = _mm256_shuffle_ps(t0, t2, 0xEE), v1 = _mm256_shuffle_ps(t4, t6, 0xEE);
++    __m256 u2 = _mm256_shuffle_ps(t1, t3, 0x44), v2 = _mm256_shuffle_ps(t5, t7, 0x44);
++    const __m256 g1 = _mm256_load_ps(g1s + i);
++    const __m256 g2 = _mm256_load_ps(g2s + i);
++    const __m256 g3 = _mm256_load_ps(g3s + i);
++    const __m256 proc_l = formant_gsum_avx2(_mm256_permute2f128_ps(u0, v0, 0x20),
++                                            _mm256_permute2f128_ps(u1, v1, 0x20),
++                                            _mm256_permute2f128_ps(u2, v2, 0x20), g1, g2, g3);
++    const __m256 proc_r = formant_gsum_avx2(_mm256_permute2f128_ps(u0, v0, 0x31),
++                                            _mm256_permute2f128_ps(u1, v1, 0x31),
++                                            _mm256_permute2f128_ps(u2, v2, 0x31), g1, g2, g3);
++
+     __m256 dry = dry_buf ? _mm256_loadu_ps(dry_buf + i) : _mm256_set1_ps(dry_const);
+     __m256 wet = wet_buf ? _mm256_loadu_ps(wet_buf + i) : _mm256_set1_ps(wet_const);
+     __m256 xl = _mm256_loadu_ps(in_l + i);
+     __m256 xr = _mm256_loadu_ps(in_r + i);
+-    __m256 ol = _mm256_add_ps(_mm256_mul_ps(xl, dry),
+-                              _mm256_mul_ps(_mm256_load_ps(proc_l + i), wet));
+-    __m256 orr = _mm256_add_ps(_mm256_mul_ps(xr, dry),
+-                               _mm256_mul_ps(_mm256_load_ps(proc_r + i), wet));
++    __m256 ol = _mm256_add_ps(_mm256_mul_ps(xl, dry), _mm256_mul_ps(proc_l, wet));
++    __m256 orr = _mm256_add_ps(_mm256_mul_ps(xr, dry), _mm256_mul_ps(proc_r, wet));
+     _mm256_storeu_ps(out_l + i, ol);
+     _mm256_storeu_ps(out_r + i, orr);
+ }
+@@ -619,16 +655,15 @@ CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
+                                            const float* wet_buf, float wet_const,
+                                            float sr, FormantState& state,
+                                            float* out_l, float* out_r) noexcept {
+-    alignas(32) float proc_l[BLOCK_SIZE];
+-    alignas(32) float proc_r[BLOCK_SIZE];
+-
+     __m256 z1 = _mm256_setr_ps(state.bp1_z1[0], state.bp2_z1[0], state.bp3_z1[0], 0.0f,
+                                state.bp1_z1[1], state.bp2_z1[1], state.bp3_z1[1], 0.0f);
+     __m256 z2 = _mm256_setr_ps(state.bp1_z2[0], state.bp2_z2[0], state.bp3_z2[0], 0.0f,
+                                state.bp1_z2[1], state.bp2_z2[1], state.bp3_z2[1], 0.0f);
+     alignas(32) float coefs[BLOCK_SIZE * 4];
+-    alignas(32) float gains[BLOCK_SIZE * 4];
++    alignas(32) float g1s[BLOCK_SIZE], g2s[BLOCK_SIZE], g3s[BLOCK_SIZE];
+     alignas(32) float qcs[BLOCK_SIZE];
++    alignas(32) float xs[BLOCK_SIZE * 8];
++    alignas(32) float bps[BLOCK_SIZE * 8];
+ 
+     const VowelFormants* T = VOWEL_TABLE;
+     const __m256 tf1 = _mm256_setr_ps(T[0].f1, T[1].f1, T[2].f1, T[3].f1, T[4].f1, 0, 0, 0);
+@@ -693,10 +728,26 @@ CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
+             formant_store3_avx2(coefs + i * 4, formant_prewarp_avx2(f1, lim, srv),
+                                 formant_prewarp_avx2(f2, lim, srv),
+                                 formant_prewarp_avx2(f3, lim, srv));
+-            formant_store3_avx2(gains + i * 4, g1, g2, g3);
++            _mm256_store_ps(g1s + i, g1);
++            _mm256_store_ps(g2s + i, g2);
++            _mm256_store_ps(g3s + i, g3);
+             _mm256_store_ps(qcs + i, _mm256_div_ps(one, q));
++
++            // xs: [L L L L | R R R R] per sample
++            const __m256 xl = _mm256_loadu_ps(in_l + i), xr = _mm256_loadu_ps(in_r + i);
++            const __m256 lo = _mm256_permute2f128_ps(xl, xr, 0x20);
++            const __m256 hi = _mm256_permute2f128_ps(xl, xr, 0x31);
++            float* xd = xs + i * 8;
++            _mm256_store_ps(xd + 0, _mm256_permute_ps(lo, 0x00));
++            _mm256_store_ps(xd + 8, _mm256_permute_ps(lo, 0x55));
++            _mm256_store_ps(xd + 16, _mm256_permute_ps(lo, 0xAA));
++            _mm256_store_ps(xd + 24, _mm256_permute_ps(lo, 0xFF));
++            _mm256_store_ps(xd + 32, _mm256_permute_ps(hi, 0x00));
++            _mm256_store_ps(xd + 40, _mm256_permute_ps(hi, 0x55));
++            _mm256_store_ps(xd + 48, _mm256_permute_ps(hi, 0xAA));
++            _mm256_store_ps(xd + 56, _mm256_permute_ps(hi, 0xFF));
+         }
+-        if (i != 0) formant_svf_avx2(i - 8, z1, z2, coefs, gains, qcs, in_l, in_r, proc_l, proc_r);
++        if (i != 0) formant_svf_avx2(i - 8, z1, z2, coefs, qcs, xs, bps);
+     }
+ 
+     alignas(32) float zz1[8], zz2[8];
+@@ -709,7 +760,7 @@ CEDAR_TARGET_AVX2 inline void formant_avx2(const float* in_l, const float* in_r,
+     }
+ 
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        formant_mix_avx2(i, in_l, in_r, proc_l, proc_r, dry_buf, dry_const, wet_buf,
++        formant_mix_avx2(i, in_l, in_r, bps, g1s, g2s, g3s, dry_buf, dry_const, wet_buf,
+                          wet_const, out_l, out_r);
+ }
+ #endif

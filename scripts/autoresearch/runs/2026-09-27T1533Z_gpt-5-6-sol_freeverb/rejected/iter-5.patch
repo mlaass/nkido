@@ -1,0 +1,90 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 685509d..050de55 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -87,6 +87,10 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+             ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+         const float feedback = room * room_scale + room_offset;
+ 
++        const __m256 damp_v = _mm256_set1_ps(damp);
++        const __m256 one_minus_damp_v = _mm256_set1_ps(1.0f - damp);
++        const __m256 dc_r_v = _mm256_set1_ps(DC_BLOCKER_R);
++        const __m256 feedback_v = _mm256_set1_ps(feedback);
+         float y_lr[2] = {0.0f, 0.0f};
+         for (std::size_t ch = 0; ch < 2; ++ch) {
+             const float x = ch == 0 ? x_l : x_r;
+@@ -99,8 +103,6 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+             }
+ 
+             const __m256 delayed = _mm256_load_ps(delayed_values);
+-            const __m256 damp_v = _mm256_set1_ps(damp);
+-            const __m256 one_minus_damp_v = _mm256_set1_ps(1.0f - damp);
+             const __m256 old_filter = _mm256_loadu_ps(state.comb_filter_state[ch]);
+             const __m256 filtered = _mm256_add_ps(
+                 _mm256_mul_ps(delayed, one_minus_damp_v),
+@@ -109,13 +111,13 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+             const __m256 old_y1 = _mm256_loadu_ps(state.dc_y1[ch]);
+             const __m256 dc_out = _mm256_add_ps(
+                 _mm256_sub_ps(filtered, old_x1),
+-                _mm256_mul_ps(_mm256_set1_ps(DC_BLOCKER_R), old_y1));
++                _mm256_mul_ps(dc_r_v, old_y1));
+             _mm256_storeu_ps(state.comb_filter_state[ch], filtered);
+             _mm256_storeu_ps(state.dc_x1[ch], filtered);
+             _mm256_storeu_ps(state.dc_y1[ch], dc_out);
+             const __m256 writes = _mm256_add_ps(
+                 _mm256_set1_ps(x),
+-                _mm256_mul_ps(_mm256_set1_ps(feedback), dc_out));
++                _mm256_mul_ps(feedback_v, dc_out));
+             _mm256_store_ps(feedback_values, writes);
+ 
+             for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+@@ -135,15 +137,26 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+                     reinterpret_cast<__m256i*>(state.comb_pos[ch] + c), next);
+             }
+ 
+-            float y = comb_sum;
+-            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
+-                float* buffer = state.allpass_buffers[ch][a];
+-                std::size_t pos = state.allpass_pos[ch][a];
+-                const float delayed_ap = buffer[pos];
+-                const float output = delayed_ap - ALLPASS_GAIN * y;
+-                buffer[pos] = y + ALLPASS_GAIN * output;
+-                y = output;
+-            }
++            y_lr[ch] = comb_sum;
++        }
++
++        float y_l = y_lr[0];
++        float y_r = y_lr[1];
++        for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
++            float* const buffer_l = state.allpass_buffers[0][a];
++            float* const buffer_r = state.allpass_buffers[1][a];
++            const std::size_t pos_l = state.allpass_pos[0][a];
++            const std::size_t pos_r = state.allpass_pos[1][a];
++            const float delayed_l = buffer_l[pos_l];
++            const float delayed_r = buffer_r[pos_r];
++            const float output_l = delayed_l - ALLPASS_GAIN * y_l;
++            const float output_r = delayed_r - ALLPASS_GAIN * y_r;
++            buffer_l[pos_l] = y_l + ALLPASS_GAIN * output_l;
++            buffer_r[pos_r] = y_r + ALLPASS_GAIN * output_r;
++            y_l = output_l;
++            y_r = output_r;
++        }
++        for (std::size_t ch = 0; ch < 2; ++ch) {
+             const auto* const ap_pos_ptr = reinterpret_cast<const __m256i*>(
+                 state.allpass_pos[ch]);
+             const auto* const ap_size_ptr = reinterpret_cast<const __m256i*>(
+@@ -155,11 +168,10 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+             ap_next = _mm256_andnot_si256(ap_wrap, ap_next);
+             _mm256_storeu_si256(
+                 reinterpret_cast<__m256i*>(state.allpass_pos[ch]), ap_next);
+-            y_lr[ch] = y;
+         }
+ 
+-        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
+-        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
++        out_l[i] = drywet::mix(x_l, y_l, dry, wet);
++        out_r[i] = drywet::mix(x_r, y_r, dry, wet);
+     }
+ }
+ #endif

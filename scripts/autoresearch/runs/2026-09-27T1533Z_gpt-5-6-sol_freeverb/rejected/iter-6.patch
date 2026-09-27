@@ -1,0 +1,72 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 685509d..dfacd9d 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -71,9 +71,7 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+ 
+     constexpr float ALLPASS_GAIN = 0.5f;
+     alignas(32) float delayed_values[FreeverbState::NUM_COMBS];
+-    alignas(32) float feedback_values[FreeverbState::NUM_COMBS];
+     const __m256i index_one = _mm256_set1_epi64x(1);
+-
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         const float x_l = input[i];
+         const float x_r = stereo_in ? input_r[i] : x_l;
+@@ -86,6 +84,10 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+         const float room_offset = room_offset_in[i] > 0.0f
+             ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+         const float feedback = room * room_scale + room_offset;
++        const __m256 damp_v = _mm256_set1_ps(damp);
++        const __m256 one_minus_damp_v = _mm256_set1_ps(1.0f - damp);
++        const __m256 feedback_v = _mm256_set1_ps(feedback);
++        const __m256 dc_blocker_v = _mm256_set1_ps(DC_BLOCKER_R);
+ 
+         float y_lr[2] = {0.0f, 0.0f};
+         for (std::size_t ch = 0; ch < 2; ++ch) {
+@@ -99,8 +101,6 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+             }
+ 
+             const __m256 delayed = _mm256_load_ps(delayed_values);
+-            const __m256 damp_v = _mm256_set1_ps(damp);
+-            const __m256 one_minus_damp_v = _mm256_set1_ps(1.0f - damp);
+             const __m256 old_filter = _mm256_loadu_ps(state.comb_filter_state[ch]);
+             const __m256 filtered = _mm256_add_ps(
+                 _mm256_mul_ps(delayed, one_minus_damp_v),
+@@ -109,19 +109,29 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
+             const __m256 old_y1 = _mm256_loadu_ps(state.dc_y1[ch]);
+             const __m256 dc_out = _mm256_add_ps(
+                 _mm256_sub_ps(filtered, old_x1),
+-                _mm256_mul_ps(_mm256_set1_ps(DC_BLOCKER_R), old_y1));
++                _mm256_mul_ps(dc_blocker_v, old_y1));
+             _mm256_storeu_ps(state.comb_filter_state[ch], filtered);
+             _mm256_storeu_ps(state.dc_x1[ch], filtered);
+             _mm256_storeu_ps(state.dc_y1[ch], dc_out);
+             const __m256 writes = _mm256_add_ps(
+                 _mm256_set1_ps(x),
+-                _mm256_mul_ps(_mm256_set1_ps(feedback), dc_out));
+-            _mm256_store_ps(feedback_values, writes);
+-
+-            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+-                const std::size_t pos = state.comb_pos[ch][c];
+-                state.comb_buffers[ch][c][pos] = feedback_values[c];
+-            }
++                _mm256_mul_ps(feedback_v, dc_out));
++            const __m128 writes_lo = _mm256_castps256_ps128(writes);
++            const __m128 writes_hi = _mm256_extractf128_ps(writes, 1);
++            state.comb_buffers[ch][0][state.comb_pos[ch][0]] = _mm_cvtss_f32(writes_lo);
++            state.comb_buffers[ch][1][state.comb_pos[ch][1]] = _mm_cvtss_f32(
++                _mm_shuffle_ps(writes_lo, writes_lo, _MM_SHUFFLE(1, 1, 1, 1)));
++            state.comb_buffers[ch][2][state.comb_pos[ch][2]] = _mm_cvtss_f32(
++                _mm_shuffle_ps(writes_lo, writes_lo, _MM_SHUFFLE(2, 2, 2, 2)));
++            state.comb_buffers[ch][3][state.comb_pos[ch][3]] = _mm_cvtss_f32(
++                _mm_shuffle_ps(writes_lo, writes_lo, _MM_SHUFFLE(3, 3, 3, 3)));
++            state.comb_buffers[ch][4][state.comb_pos[ch][4]] = _mm_cvtss_f32(writes_hi);
++            state.comb_buffers[ch][5][state.comb_pos[ch][5]] = _mm_cvtss_f32(
++                _mm_shuffle_ps(writes_hi, writes_hi, _MM_SHUFFLE(1, 1, 1, 1)));
++            state.comb_buffers[ch][6][state.comb_pos[ch][6]] = _mm_cvtss_f32(
++                _mm_shuffle_ps(writes_hi, writes_hi, _MM_SHUFFLE(2, 2, 2, 2)));
++            state.comb_buffers[ch][7][state.comb_pos[ch][7]] = _mm_cvtss_f32(
++                _mm_shuffle_ps(writes_hi, writes_hi, _MM_SHUFFLE(3, 3, 3, 3)));
+             for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; c += 4) {
+                 const auto* const pos_ptr = reinterpret_cast<const __m256i*>(
+                     state.comb_pos[ch] + c);

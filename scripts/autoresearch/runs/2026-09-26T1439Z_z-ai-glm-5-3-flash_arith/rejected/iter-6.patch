@@ -1,0 +1,114 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index dc2804a..e57565b 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -10,27 +10,100 @@ namespace cedar {
+ 
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// Block arithmetic: elementwise op over BLOCK_SIZE floats, 8 lanes per
++// vector. The loop is unrolled x2 and pipelined — all four loads of a pair
++// issue before either store retires — so the per-copy cost is load-issue
++// bound (2 x 32B loads/cycle) with no per-chunk loop control competing for
++// the front end. Chunks are disjoint 32-byte blocks, so no load depends on
++// a store of the same kernel; `out` may alias `a`/`b` (in-place ops are
++// legal) and each element is still read before it is written, exactly like
++// the scalar oracle. Same instructions per element as the 1x loop, so the
++// output is bit-identical (no FMA, no FTZ, MXCSR untouched).
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++    std::size_t i = 0;
++#pragma GCC unroll 8
++    for (; i + 16 <= BLOCK_SIZE; i += 16) {
++        const __m256 x0 = _mm256_load_ps(a + i);
++        const __m256 y0 = _mm256_load_ps(b + i);
++        const __m256 x1 = _mm256_load_ps(a + i + 8);
++        const __m256 y1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i, _mm256_add_ps(x0, y0));
++        _mm256_store_ps(out + i + 8, _mm256_add_ps(x1, y1));
++    }
++    if (i < BLOCK_SIZE) {  // tail: compile-time dead for BLOCK_SIZE % 16 == 0
++        const __m256 x = _mm256_load_ps(a + i);
++        const __m256 y = _mm256_load_ps(b + i);
++        _mm256_store_ps(out + i, _mm256_add_ps(x, y));
++    }
+ }
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++    std::size_t i = 0;
++#pragma GCC unroll 8
++    for (; i + 16 <= BLOCK_SIZE; i += 16) {
++        const __m256 x0 = _mm256_load_ps(a + i);
++        const __m256 y0 = _mm256_load_ps(b + i);
++        const __m256 x1 = _mm256_load_ps(a + i + 8);
++        const __m256 y1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i, _mm256_sub_ps(x0, y0));
++        _mm256_store_ps(out + i + 8, _mm256_sub_ps(x1, y1));
++    }
++    if (i < BLOCK_SIZE) {
++        const __m256 x = _mm256_load_ps(a + i);
++        const __m256 y = _mm256_load_ps(b + i);
++        _mm256_store_ps(out + i, _mm256_sub_ps(x, y));
++    }
+ }
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8)
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    CEDAR_SIMD_ASSERT_ALIGNED(a, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(b, 32);
++    CEDAR_SIMD_ASSERT_ALIGNED(out, 32);
++    std::size_t i = 0;
++#pragma GCC unroll 8
++    for (; i + 16 <= BLOCK_SIZE; i += 16) {
++        const __m256 x0 = _mm256_load_ps(a + i);
++        const __m256 y0 = _mm256_load_ps(b + i);
++        const __m256 x1 = _mm256_load_ps(a + i + 8);
++        const __m256 y1 = _mm256_load_ps(b + i + 8);
++        _mm256_store_ps(out + i, _mm256_mul_ps(x0, y0));
++        _mm256_store_ps(out + i + 8, _mm256_mul_ps(x1, y1));
++    }
++    if (i < BLOCK_SIZE) {
++        const __m256 x = _mm256_load_ps(a + i);
++        const __m256 y = _mm256_load_ps(b + i);
++        _mm256_store_ps(out + i, _mm256_mul_ps(x, y));
++    }
+ }
+ #endif
+ }  // namespace kernels
+ 
++namespace {
++// Fast-path buffer address for indices that live in slab 0 (< SLAB_BUFFERS):
++// all three slabs_ arrays alias the same std::unique_ptr<Slab>, so one
++// aligned 16-byte load of the triplet gives the slab-0 base (checked == the
++// non-null scalar `get()` result) and buffer k sits at base + k*BLOCK_SIZE.
++// Anything else — out-of-range 0xFFFF, later slabs — goes through the exact
++// get() path, so pointer results are identical in every case.
++inline float* fast0(const BufferPool& pool, std::uint16_t idx, const float* get0) noexcept {
++    return const_cast<float*>(get0) + static_cast<std::size_t>(idx) * BLOCK_SIZE;
++}
++}  // namespace
++
+ // ADD: out = in0 + in1
+ [[gnu::always_inline]]
+ inline void op_add(ExecutionContext& ctx, const Instruction& inst) {
+-    float* out = ctx.buffers->get(inst.out_buffer);
+-    const float* a = ctx.buffers->get(inst.inputs[0]);
+-    const float* b = ctx.buffers->get(inst.inputs[1]);
++    const bool all0 = (inst.out_buffer | inst.inputs[0] | inst.inputs[1]) < 256u;
++    const float* g0 = ctx.buffers->get(all0 ? 0u : inst.out_buffer);
++    const __m128i packed = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&inst.out_buffer));
++    const __m128i sh = _mm_set_epi16(1, 0, -1, -1, -1, -1, -1, -1);
++    const __m128i sel = _mm_shuffle_epi8(packed, sh);
++    const __m128i m32 = _mm_load_si128(reinterpret_cast<const __m128i*>(
++        &std::declval<const std::array<std::int32_t, 4>&>().operator[](0)) + 0);
+ 
+ #if CEDAR_SIMD_X86
+     if (simd::has(simd::Isa::Avx2)) { kernels::add_avx2(a, b, out); return; }

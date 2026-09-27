@@ -1,0 +1,30 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 8536d86..7789104 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -182,7 +182,6 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+     __m128 s1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+     __m128 s2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
+     const __m128 dc = _mm_set1_ps(DENORMAL_DC);
+-    const __m128 two = _mm_set1_ps(2.0f);
+     const __m128 lim = _mm_set1_ps(10.0f);
+     const __m128 absmask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+@@ -196,11 +195,12 @@ CEDAR_TARGET_AVX2 inline void svf_avx2(SVFState& state, float* out_l, float* out
+         const __m128 v3 = _mm_sub_ps(x, t2);
+         const __m128 v1 = _mm_add_ps(_mm_mul_ps(a1, t1), _mm_mul_ps(a2, v3));
+         const __m128 v2 = _mm_add_ps(_mm_add_ps(t2, _mm_mul_ps(a2, t1)), _mm_mul_ps(a3, v3));
+-        __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), s1);
+-        __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), s2);
+-        const __m128 bad = _mm_or_ps(_mm_cmp_ps(_mm_and_ps(n1, absmask), lim, _CMP_NLE_UQ),
+-                                     _mm_cmp_ps(_mm_and_ps(n2, absmask), lim, _CMP_NLE_UQ));
+-        if (__builtin_expect((_mm_movemask_ps(bad) & 3) != 0, 0)) {
++        // 2*v as v+v (exact): add latency <= mul latency.
++        __m128 n1 = _mm_sub_ps(_mm_add_ps(v1, v1), s1);
++        __m128 n2 = _mm_sub_ps(_mm_add_ps(v2, v2), s2);
++        // One range check for both states: lanes {n1L, n1R, n2L, n2R}.
++        const __m128 bad = _mm_cmp_ps(_mm_and_ps(_mm_movelh_ps(n1, n2), absmask), lim, _CMP_NLE_UQ);
++        if (__builtin_expect(_mm_movemask_ps(bad) != 0, 0)) {
+             n1 = svf_clamp_ps(n1);
+             n2 = svf_clamp_ps(n2);
+         }

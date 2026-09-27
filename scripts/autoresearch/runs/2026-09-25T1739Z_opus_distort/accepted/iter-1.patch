@@ -1,0 +1,152 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 4a294b4..e4b4621 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -6,11 +6,119 @@
+ #include "dsp_state.hpp"
+ #include "dsp_utils.hpp"
+ #include "drywet.hpp"
++#include "../dsp/simd.hpp"
+ #include <cmath>
+ #include <algorithm>
+ 
+ namespace cedar {
+ 
++namespace kernels {
++#if CEDAR_SIMD_X86
++// simd: approx tanh — tanh(a) = (1 - e) / (1 + e), e = exp(-2|y|) (Cephes expf
++// polynomial, Cody-Waite reduction), odd Taylor series for |y| < 1/16.
++// Peak absolute error ~1e-7.
++CEDAR_TARGET_AVX2 inline __m256 tanh_approx_avx2(__m256 y) noexcept {
++    const __m256 sign_mask = _mm256_set1_ps(-0.0f);
++    const __m256 one = _mm256_set1_ps(1.0f);
++    const __m256 sign = _mm256_and_ps(y, sign_mask);
++    // min(9, a) keeps NaN propagating; tanh(9) rounds to 1.0f
++    const __m256 a = _mm256_min_ps(_mm256_set1_ps(9.0f), _mm256_andnot_ps(sign_mask, y));
++
++    // e = exp(-2a), -2a in [-18, 0]
++    const __m256 z = _mm256_mul_ps(a, _mm256_set1_ps(-2.0f));
++    const __m256 fn = _mm256_round_ps(_mm256_mul_ps(z, _mm256_set1_ps(1.44269504088896341f)),
++                                      _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
++    __m256 r = _mm256_sub_ps(z, _mm256_mul_ps(fn, _mm256_set1_ps(0.693359375f)));
++    r = _mm256_sub_ps(r, _mm256_mul_ps(fn, _mm256_set1_ps(-2.12194440e-4f)));
++    const __m256 r2 = _mm256_mul_ps(r, r);
++    __m256 p = _mm256_set1_ps(1.9875691500e-4f);
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.3981999507e-3f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(8.3334519073e-3f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(4.1665795894e-2f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(1.6666665459e-1f));
++    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(5.0000001201e-1f));
++    p = _mm256_add_ps(_mm256_add_ps(_mm256_mul_ps(p, r2), r), one);
++    const __m256i n = _mm256_cvtps_epi32(fn);
++    const __m256 pow2n = _mm256_castsi256_ps(
++        _mm256_slli_epi32(_mm256_add_epi32(n, _mm256_set1_epi32(127)), 23));
++    const __m256 e = _mm256_mul_ps(p, pow2n);
++    const __m256 t = _mm256_div_ps(_mm256_sub_ps(one, e), _mm256_add_ps(one, e));
++
++    // small |y|: a - a^3/3 + 2a^5/15 (avoids cancellation in 1 - e)
++    const __m256 a2 = _mm256_mul_ps(a, a);
++    __m256 s = _mm256_add_ps(_mm256_mul_ps(a2, _mm256_set1_ps(2.0f / 15.0f)),
++                             _mm256_set1_ps(-1.0f / 3.0f));
++    s = _mm256_add_ps(_mm256_mul_ps(a, _mm256_mul_ps(a2, s)), a);
++    const __m256 small = _mm256_cmp_ps(a, _mm256_set1_ps(0.0625f), _CMP_LT_OQ);
++    return _mm256_or_ps(_mm256_blendv_ps(t, s, small), sign);
++}
++
++CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(const float* in_l, const float* in_r,
++                                                const float* drive, const float* dry_level,
++                                                const float* wet_level, float* out_l,
++                                                float* out_r) noexcept {
++    const __m256 min_drive = _mm256_set1_ps(0.1f);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // std::max(0.1f, d) == (0.1 < d) ? d : 0.1
++        const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i), min_drive);
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++        const __m256 xl = _mm256_load_ps(in_l + i);
++        const __m256 yl = _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                        _mm256_mul_ps(tanh_approx_avx2(_mm256_mul_ps(xl, d)), wet));
++        _mm256_store_ps(out_l + i, yl);
++        if (in_r) {
++            const __m256 xr = _mm256_load_ps(in_r + i);
++            _mm256_store_ps(out_r + i,
++                            _mm256_add_ps(_mm256_mul_ps(xr, dry),
++                                          _mm256_mul_ps(tanh_approx_avx2(_mm256_mul_ps(xr, d)), wet)));
++        } else {
++            _mm256_store_ps(out_r + i, yl);
++        }
++    }
++}
++
++// Exact vector form of the scalar soft clipper: soft(x / t) * t.
++CEDAR_TARGET_AVX2 inline __m256 soft_clip_avx2(__m256 x, __m256 t) noexcept {
++    const __m256 u = _mm256_div_ps(x, t);
++    const __m256 u2 = _mm256_mul_ps(u, u);
++    const __m256 c27 = _mm256_set1_ps(27.0f);
++    __m256 v = _mm256_div_ps(_mm256_mul_ps(u, _mm256_add_ps(c27, u2)),
++                             _mm256_add_ps(c27, _mm256_mul_ps(_mm256_set1_ps(9.0f), u2)));
++    v = _mm256_blendv_ps(v, _mm256_set1_ps(-1.0f),
++                         _mm256_cmp_ps(u, _mm256_set1_ps(-3.0f), _CMP_LT_OQ));
++    v = _mm256_blendv_ps(v, _mm256_set1_ps(1.0f),
++                         _mm256_cmp_ps(u, _mm256_set1_ps(3.0f), _CMP_GT_OQ));
++    return _mm256_mul_ps(v, t);
++}
++
++CEDAR_TARGET_AVX2 inline void distort_soft_avx2(const float* in_l, const float* in_r,
++                                                const float* threshold, const float* dry_level,
++                                                const float* wet_level, float* out_l,
++                                                float* out_r) noexcept {
++    const __m256 lo = _mm256_set1_ps(0.1f);
++    const __m256 hi = _mm256_set1_ps(2.0f);
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        // std::clamp(v, lo, hi): (v < lo) ? lo : (hi < v) ? hi : v
++        const __m256 t = _mm256_min_ps(hi, _mm256_max_ps(lo, _mm256_load_ps(threshold + i)));
++        const __m256 dry = dry_level ? _mm256_load_ps(dry_level + i) : _mm256_setzero_ps();
++        const __m256 wet = wet_level ? _mm256_load_ps(wet_level + i) : _mm256_set1_ps(1.0f);
++        const __m256 xl = _mm256_load_ps(in_l + i);
++        const __m256 yl = _mm256_add_ps(_mm256_mul_ps(xl, dry),
++                                        _mm256_mul_ps(soft_clip_avx2(xl, t), wet));
++        _mm256_store_ps(out_l + i, yl);
++        if (in_r) {
++            const __m256 xr = _mm256_load_ps(in_r + i);
++            _mm256_store_ps(out_r + i, _mm256_add_ps(_mm256_mul_ps(xr, dry),
++                                                     _mm256_mul_ps(soft_clip_avx2(xr, t), wet)));
++        } else {
++            _mm256_store_ps(out_r + i, yl);
++        }
++    }
++}
++#endif
++}  // namespace kernels
++
+ // ============================================================================
+ // DISTORT_TANH: Tanh Saturation
+ // ============================================================================
+@@ -33,6 +141,13 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
+     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
+     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_tanh_avx2(input, input_r, drive, dry_level, wet_level, out_l, out_r);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float d = std::max(0.1f, drive[i]);
+         float dry = drywet::coeff(dry_level, i, 0.0f);
+@@ -73,6 +188,13 @@ inline void op_distort_soft(ExecutionContext& ctx, const Instruction& inst) {
+         return x * (27.0f + x2) / (27.0f + 9.0f * x2);
+     };
+ 
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2)) {
++        kernels::distort_soft_avx2(input, input_r, threshold, dry_level, wet_level, out_l, out_r);
++        return;
++    }
++#endif
++
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+         float t = std::clamp(threshold[i], 0.1f, 2.0f);
+         float dry = drywet::coeff(dry_level, i, 0.0f);

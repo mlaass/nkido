@@ -1,0 +1,51 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 22de0ab..573dd8a 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -147,10 +147,6 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
+         calc_svf8_avx2(freq + base, q + base, sample_rate, a1, a2, a3, k);
+         for (std::size_t lane = 0; lane < 8; ++lane) {
+         const std::size_t i = base + lane;
+-        state.a1 = a1[lane];
+-        state.a2 = a2[lane];
+-        state.a3 = a3[lane];
+-        state.k = k[lane];
+         const float dry = HasDry ? dry_level[i] : 0.0f;
+         const float wet = HasWet ? wet_level[i] : 1.0f;
+         const float xl = input_l[i];
+@@ -161,11 +157,11 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
+         const __m128 ic2 = _mm_add_ps(old_ic2, denormal_dc);
+         const __m128 v3 = _mm_sub_ps(x, ic2);
+         const __m128 v1 = _mm_add_ps(
+-            _mm_mul_ps(_mm_set1_ps(state.a1), ic1),
+-            _mm_mul_ps(_mm_set1_ps(state.a2), v3));
++            _mm_mul_ps(_mm_set1_ps(a1[lane]), ic1),
++            _mm_mul_ps(_mm_set1_ps(a2[lane]), v3));
+         const __m128 v2 = _mm_add_ps(
+-            _mm_add_ps(ic2, _mm_mul_ps(_mm_set1_ps(state.a2), ic1)),
+-            _mm_mul_ps(_mm_set1_ps(state.a3), v3));
++            _mm_add_ps(ic2, _mm_mul_ps(_mm_set1_ps(a2[lane]), ic1)),
++            _mm_mul_ps(_mm_set1_ps(a3[lane]), v3));
+         const __m128 next_ic1 = _mm_sub_ps(_mm_mul_ps(two, v1), old_ic1);
+         const __m128 next_ic2 = _mm_sub_ps(_mm_mul_ps(two, v2), old_ic2);
+ 
+@@ -183,7 +179,7 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
+             filtered = v2;
+         } else if constexpr (Output == 1) {
+             filtered = _mm_sub_ps(
+-                _mm_sub_ps(x, _mm_mul_ps(_mm_set1_ps(state.k), v1)), v2);
++                _mm_sub_ps(x, _mm_mul_ps(_mm_set1_ps(k[lane]), v1)), v2);
+         } else {
+             filtered = v1;
+         }
+@@ -196,6 +192,10 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
+         }
+     }
+ 
++    state.a1 = a1[7];
++    state.a2 = a2[7];
++    state.a3 = a3[7];
++    state.k = k[7];
+     state.ic1eq[0] = _mm_cvtss_f32(old_ic1);
+     state.ic1eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(
+         old_ic1, old_ic1, _MM_SHUFFLE(1, 1, 1, 1)));

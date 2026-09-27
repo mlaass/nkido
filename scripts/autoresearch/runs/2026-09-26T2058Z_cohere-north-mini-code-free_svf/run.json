@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-26T2058Z_cohere-north-mini-code-free_svf",
+  "target": "svf",
+  "base_rev": "d5afd067a4dde71d81028b8c2a1d4b866ae761e5",
+  "branch": "autoresearch/cohere-north-mini-code-free-svf-202609262058",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-26T2058Z_cohere-north-mini-code-free_svf/check.sh",
+  "model": "cohere/north-mini-code:free",
+  "provider": "openrouter",
+  "iterations": 8,
+  "budget_usd": 6.0
+}

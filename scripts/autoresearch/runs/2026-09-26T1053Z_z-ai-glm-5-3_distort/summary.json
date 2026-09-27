@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-26T1053Z_z-ai-glm-5-3_distort",
+  "provider": "openrouter",
+  "model": "z-ai/glm-5.3 (z-ai/glm-5.3@InferenceNet, z-ai/glm-5.3@Io Net)",
+  "target": "distort",
+  "iterations": 6,
+  "accepts": 1,
+  "rejects": 5,
+  "reject_reasons": {
+    "empty patch": 2,
+    "backend error": 3
+  },
+  "first_accept_iteration": 2,
+  "best_speedup": 9.826,
+  "tokens": {
+    "input": 5287747,
+    "output": 1434132,
+    "cached": 4927680
+  },
+  "cost_usd": 6.048,
+  "wall_clock_s": 6784.6,
+  "gpu_s": null,
+  "active_s": 6465.1,
+  "unstable_iterations": 0,
+  "status": "budget-stopped",
+  "branch": "autoresearch/z-ai-glm-5-3-distort-202609261053",
+  "base_rev": "d2b25c3bce13093d5b1ae21568a11c508a1ec517"
+}

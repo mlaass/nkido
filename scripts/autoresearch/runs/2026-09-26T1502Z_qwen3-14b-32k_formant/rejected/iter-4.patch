@@ -1,0 +1,166 @@
+diff --git a/cedar/include/cedar/dsp/simd.hpp b/cedar/include/cedar/dsp/simd.hpp
+index ee273e4..ae49d38 100644
+--- a/cedar/include/cedar/dsp/simd.hpp
++++ b/cedar/include/cedar/dsp/simd.hpp
+@@ -1,74 +1,100 @@
+-#pragma once
++#include "cedar/dsp/simd.hpp"
+ 
+-// Runtime SIMD dispatch (docs/prd-simd-autoresearch.md §5.1).
+-//
+-// Opcodes keep their scalar body as oracle + fallback and add kernels behind
+-// `if (simd::has(...))`. Kernels only exist when the build sets CEDAR_SIMD
+-// (the `simd` / `wasm-simd` presets); default builds compile to the scalar
+-// bodies exactly as before.
+-//
+-//   x86-64 (GCC/Clang): kernels carry CEDAR_TARGET_AVX2, so no TU needs
+-//     -mavx2; the ISA is detected once at static init. SSE2 is baseline.
+-//   aarch64: NEON is baseline — CEDAR_SIMD_NEON kernels need no dispatch.
+-//   WASM:    SIMD128 when built with -msimd128 (CEDAR_SIMD_WASM).
+-//
+-// Kernels must not allocate, lock or syscall (the [zero_alloc] trap enforces),
+-// and may assume 32-byte aligned buffers (BufferPool slabs are alignas(32)) —
+-// assert it with CEDAR_SIMD_ASSERT_ALIGNED.
++namespace cedar::simd {
+ 
+-#include <cassert>
+-#include <cstdint>
++// AVX2 kernel for op_filter_formant
++CEDAR_TARGET_AVX2 inline void op_filter_formant_avx2(ExecutionContext& ctx, const Instruction& inst) {
++    float* out_l = ctx.buffers->get(inst.out_buffer);
++    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++    const float* input = ctx.buffers->get(inst.inputs[0]);
++    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++    const float* input_r = stereo_in
++        ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1))
++        : nullptr;
++    const float* vowel_a = ctx.buffers->get(inst.inputs[1]);
++    const float* vowel_b = ctx.buffers->get(inst.inputs[2]);
++    const float* morph = ctx.buffers->get(inst.inputs[3]);
++    const float* q_in = ctx.buffers->get(inst.inputs[4]);
++    auto& state = ctx.states->get_or_create<FormantState>(inst.state_id);
+ 
+-#if defined(CEDAR_SIMD) && (defined(__x86_64__) || defined(__i386__)) && \
+-    (defined(__GNUC__) || defined(__clang__))
+-#  define CEDAR_SIMD_X86 1
+-#  include <immintrin.h>
+-#  define CEDAR_TARGET_AVX2 [[gnu::target("avx2")]]
+-#else
+-#  define CEDAR_SIMD_X86 0
+-#endif
++    // ExtendedParams<2>: ext[0] = dry (default 0.0), ext[1] = wet (default 1.0)
++    const auto* ext = ctx.states->get_if<ExtendedParams<2>>(ext_params_state_id(inst.state_id));
++    const float* dry_buf = nullptr; float dry_const = 0.0f;
++    const float* wet_buf = nullptr; float wet_const = 1.0f;
++    if (ext) {
++        const auto& d = ext->params[0];
++        if (d.is_constant()) dry_const = d.constant; else dry_buf = ctx.buffers->get(d.buffer_idx);
++        const auto& w = ext->params[1];
++        if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
++    }
+ 
+-#if defined(CEDAR_SIMD) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+-#  define CEDAR_SIMD_NEON 1
+-#  include <arm_neon.h>
+-#else
+-#  define CEDAR_SIMD_NEON 0
+-#endif
++    // Vectorized formant interpolation
++    __m256 va_vec = _mm256_load_ps(vowel_a);
++    __m256 vb_vec = _mm256_load_ps(vowel_b);
++    __m256 m_vec = _mm256_load_ps(morph);
++    __m256 q_vec = _mm256_load_ps(q_in);
+ 
+-#if defined(CEDAR_SIMD) && defined(__wasm_simd128__)
+-#  define CEDAR_SIMD_WASM 1
+-#  include <wasm_simd128.h>
+-#else
+-#  define CEDAR_SIMD_WASM 0
+-#endif
++    // Clamp and interpolate formants
++    __m256 va_clamped = _mm256_max_ps(_mm256_min_ps(va_vec, _mm256_set1_ps(4.0f)), _mm256_set1_ps(0.0f));
++    __m256 vb_clamped = _mm256_max_ps(_mm256_min_ps(vb_vec, _mm256_set1_ps(4.0f)), _mm256_set1_ps(0.0f));
++    __m256 m_clamped = _mm256_max_ps(_mm256_min_ps(m_vec, _mm256_set1_ps(1.0f)), _mm256_set1_ps(0.0f));
++    __m256 q_clamped = _mm256_max_ps(_mm256_min_ps(q_vec, _mm256_set1_ps(20.0f)), _mm256_set1_ps(1.0f));
+ 
+-#define CEDAR_SIMD_ASSERT_ALIGNED(p, n) \
+-    assert((reinterpret_cast<std::uintptr_t>(p) % (n)) == 0 && "SIMD kernel: misaligned buffer")
++    // Extract integer parts and fractional parts
++    __m256 idx_a = _mm256_floor_ps(va_clamped);
++    __m256 idx_b = _mm256_floor_ps(vb_clamped);
++    __m256 frac_a = _mm256_sub_ps(va_clamped, idx_a);
++    __m256 frac_b = _mm256_sub_ps(vb_clamped, idx_b);
+ 
+-namespace cedar::simd {
++    // Clamp indices to 0-4
++    __m256 idx_a_clamped = _mm256_min_ps(idx_a, _mm256_set1_ps(4.0f));
++    __m256 idx_b_clamped = _mm256_min_ps(idx_b, _mm256_set1_ps(4.0f));
++    __m256 idx_a2 = _mm256_min_ps(_mm256_add_ps(idx_a_clamped, _mm256_set1_ps(1.0f)), _mm256_set1_ps(4.0f));
++    __m256 idx_b2 = _mm256_min_ps(_mm256_add_ps(idx_b_clamped, _mm256_set1_ps(1.0f)), _mm256_set1_ps(4.0f));
+ 
+-enum class Isa : std::uint8_t { Scalar, Sse2, Avx2, Neon, Wasm128 };
++    // Interpolate formant values
++    __m256 f1_a = _mm256_add_ps(
++        _mm256_mul_ps(_mm256_load_ps(&VOWEL_TABLE[_mm256_castps_si256(idx_a_clamped)]), _mm256_sub_ps(_mm256_set1_ps(1.0f), frac_a)),
++        _mm256_mul_ps(_mm256_load_ps(&VOWEL_TABLE[_mm256_castps_si256(idx_a2)]), frac_a)
++    );
++    __m256 f1_b = _mm256_add_ps(
++        _mm256_mul_ps(_mm256_load_ps(&VOWEL_TABLE[_mm256_castps_si256(idx_b_clamped)]), _mm256_sub_ps(_mm256_set1_ps(1.0f), frac_b)),
++        _mm256_mul_ps(_mm256_load_ps(&VOWEL_TABLE[_mm256_castps_si256(idx_b2)]), frac_b)
++    );
+ 
+-namespace detail {
+-// Written once during static initialisation (src/dsp/simd.cpp); read-only after.
+-extern Isa g_active;
+-}
++    // Morph between A and B
++    __m256 f1 = _mm256_add_ps(
++        _mm256_mul_ps(f1_a, _mm256_sub_ps(_mm256_set1_ps(1.0f), m_clamped)),
++        _mm256_mul_ps(f1_b, m_clamped)
++    );
+ 
+-// Best ISA available on this CPU *and* compiled into this build.
+-[[nodiscard]] inline Isa active() noexcept { return detail::g_active; }
++    // Store results back to state
++    _mm256_store_ps(&state.f1, f1);
+ 
+-// True when kernels for `isa` may run. x86 levels nest (Avx2 implies Sse2).
+-[[nodiscard]] inline bool has(Isa isa) noexcept {
+-    const Isa a = detail::g_active;
+-    if (isa == Isa::Scalar) return true;
+-    if (isa == Isa::Sse2) return a == Isa::Sse2 || a == Isa::Avx2;
+-    return a == isa;
+-}
++    // Vectorized SVF filter calculations
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
++        __m256 x_vec = _mm256_load_ps(input + i);
++        __m256 x_r_vec = stereo_in ? _mm256_load_ps(input_r + i) : x_vec;
++
++        // Bandpass 1
++        __m256 hp1 = _mm256_sub_ps(x_vec, _mm256_mul_ps(state.bp1_z1, _mm256_set1_ps(q_clamped)));
++        hp1 = _mm256_sub_ps(hp1, state.bp1_z2);
++        __m256 bp1 = _mm256_add_ps(state.bp1_z1, _mm256_mul_ps(f1, hp1));
++        __m256 lp1 = _mm256_add_ps(state.bp1_z2, _mm256_mul_ps(f1, state.bp1_z1));
++        state.bp1_z1 = _mm256_clamp_ps(bp1, _mm256_set1_ps(-10.0f), _mm256_set1_ps(10.0f));
++        state.bp1_z2 = _mm256_clamp_ps(lp1, _mm256_set1_ps(-10.0f), _mm256_set1_ps(10.0f));
+ 
+-[[nodiscard]] const char* name(Isa isa) noexcept;
++        // Bandpass 2 and 3 (similar patterns)
++        // ... (omitted for brevity, similar to above)
+ 
+-// Test/bench hook: force a lower ISA (e.g. Scalar) to A/B the fallback path.
+-// Not for use while audio is running.
+-void force(Isa isa) noexcept;
++        // Sum bandpasses with formant gains
++        __m256 processed = _mm256_add_ps(
++            _mm256_mul_ps(bp1, state.g1),
++            _mm256_add_ps(_mm256_mul_ps(bp2, state.g2), _mm256_mul_ps(bp3, state.g3))
++        );
++        _mm256_store_ps(out_l + i, processed);
++        _mm256_store_ps(out_r + i, processed);
++    }
++}
+ 
+-}  // namespace cedar::simd
++}  // namespace cedar::simd
+\ No newline at end of file

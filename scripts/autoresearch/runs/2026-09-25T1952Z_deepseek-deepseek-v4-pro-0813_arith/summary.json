@@ -1,0 +1,27 @@
+{
+  "run_id": "2026-09-25T1952Z_deepseek-deepseek-v4-pro-0813_arith",
+  "provider": "openrouter",
+  "model": "deepseek/deepseek-v4-pro-0813 (deepseek/deepseek-v4-pro-0813@Baidu)",
+  "target": "arith",
+  "iterations": 8,
+  "accepts": 1,
+  "rejects": 7,
+  "reject_reasons": {
+    "speed": 7
+  },
+  "first_accept_iteration": 1,
+  "best_speedup": 1.272,
+  "tokens": {
+    "input": 24629892,
+    "output": 361814,
+    "cached": 20118528
+  },
+  "cost_usd": 2.2536,
+  "wall_clock_s": 10907.5,
+  "gpu_s": null,
+  "active_s": null,
+  "unstable_iterations": 1,
+  "status": "complete",
+  "branch": "autoresearch/deepseek-deepseek-v4-pro-0813-arith-202609251952",
+  "base_rev": "f2f822f5636629d3612ed4141b1123bd429ccdfd"
+}

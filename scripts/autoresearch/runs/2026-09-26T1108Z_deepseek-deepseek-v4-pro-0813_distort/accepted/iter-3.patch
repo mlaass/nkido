@@ -1,0 +1,26 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 0c65258..a26e67e 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -16,7 +16,7 @@ namespace kernels {
+ #if CEDAR_SIMD_X86
+ 
+ // Exp(x) on [-80, 80]: range-reduce to r = x - round(x / ln2) * ln2 and use
+-// a degree-7 Taylor polynomial for exp(r); scale by 2^round(x / ln2).  This
++// a degree-5 Taylor polynomial for exp(r); scale by 2^round(x / ln2).  This
+ // is branchless and accurate enough for the tanh null-test below.
+ CEDAR_TARGET_AVX2 inline __m256 exp_taylor_avx2(__m256 x) noexcept {
+     const __m256 log2e = _mm256_set1_ps(1.44269504088896341f);
+@@ -34,10 +34,8 @@ CEDAR_TARGET_AVX2 inline __m256 exp_taylor_avx2(__m256 x) noexcept {
+     __m256 r = _mm256_sub_ps(x, _mm256_mul_ps(fx, ln2_hi));
+     r = _mm256_sub_ps(r, _mm256_mul_ps(fx, ln2_lo));
+ 
+-    // Horner for exp(r) = 1 + r + r^2/2 + ... + r^7/5040, r in [-ln2/2, ln2/2].
+-    __m256 p = _mm256_set1_ps(0.00019841269798041558f);  // 1/5040
+-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.0013888889225199819f));  // 1/720
+-    p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.0083333337679505348f));  // 1/120
++    // Horner for exp(r) = 1 + r + r^2/2 + ... + r^5/120, r in [-ln2/2, ln2/2].
++    __m256 p = _mm256_set1_ps(0.0083333337679505348f);  // 1/120
+     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.041666667908430099f));   // 1/24
+     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.1666666716337204f));     // 1/6
+     p = _mm256_add_ps(_mm256_mul_ps(p, r), _mm256_set1_ps(0.5f));

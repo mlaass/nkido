@@ -1,0 +1,11 @@
+{
+  "run_id": "2026-09-25T1739Z_opus_distort",
+  "target": "distort",
+  "base_rev": "8778ac4820c4c65a908051f76e0b91aaaf9f35b7",
+  "branch": "autoresearch/opus-distort-202609251739",
+  "check_cmd": "/home/moritz/workspace/nkido/scripts/autoresearch/runs/2026-09-25T1739Z_opus_distort/check.sh",
+  "model": "opus",
+  "provider": "claude-code",
+  "iterations": 8,
+  "budget_usd": 20.0
+}
