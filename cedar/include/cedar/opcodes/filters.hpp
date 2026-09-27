@@ -439,6 +439,19 @@ constexpr VowelFormants VOWEL_TABLE[5] = {
 // Uses 3 parallel Chamberlin SVF bandpass filters.
 namespace kernels {
 #if CEDAR_SIMD_X86
+alignas(32) inline constexpr float VOWEL_TABLE_AVX2[5][8] = {
+    {VOWEL_TABLE[0].f1, VOWEL_TABLE[0].f2, VOWEL_TABLE[0].f3,
+     VOWEL_TABLE[0].g1, VOWEL_TABLE[0].g2, VOWEL_TABLE[0].g3, 0.0f, 0.0f},
+    {VOWEL_TABLE[1].f1, VOWEL_TABLE[1].f2, VOWEL_TABLE[1].f3,
+     VOWEL_TABLE[1].g1, VOWEL_TABLE[1].g2, VOWEL_TABLE[1].g3, 0.0f, 0.0f},
+    {VOWEL_TABLE[2].f1, VOWEL_TABLE[2].f2, VOWEL_TABLE[2].f3,
+     VOWEL_TABLE[2].g1, VOWEL_TABLE[2].g2, VOWEL_TABLE[2].g3, 0.0f, 0.0f},
+    {VOWEL_TABLE[3].f1, VOWEL_TABLE[3].f2, VOWEL_TABLE[3].f3,
+     VOWEL_TABLE[3].g1, VOWEL_TABLE[3].g2, VOWEL_TABLE[3].g3, 0.0f, 0.0f},
+    {VOWEL_TABLE[4].f1, VOWEL_TABLE[4].f2, VOWEL_TABLE[4].f3,
+     VOWEL_TABLE[4].g1, VOWEL_TABLE[4].g2, VOWEL_TABLE[4].g3, 0.0f, 0.0f},
+};
+
 CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
                                                   const Instruction& inst) noexcept {
     float* out_l = ctx.buffers->get(inst.out_buffer);
@@ -546,11 +559,10 @@ CEDAR_TARGET_AVX2 inline void filter_formant_avx2(ExecutionContext& ctx,
             int idx_a2 = std::min(idx_a + 1, 4);
             int idx_b2 = std::min(idx_b + 1, 4);
 
-            const __m256i six_lanes = _mm256_setr_epi32(-1, -1, -1, -1, -1, -1, 0, 0);
-            __m256 a0 = _mm256_maskload_ps(&VOWEL_TABLE[idx_a].f1, six_lanes);
-            __m256 a1 = _mm256_maskload_ps(&VOWEL_TABLE[idx_a2].f1, six_lanes);
-            __m256 b0 = _mm256_maskload_ps(&VOWEL_TABLE[idx_b].f1, six_lanes);
-            __m256 b1 = _mm256_maskload_ps(&VOWEL_TABLE[idx_b2].f1, six_lanes);
+            __m256 a0 = _mm256_load_ps(VOWEL_TABLE_AVX2[idx_a]);
+            __m256 a1 = _mm256_load_ps(VOWEL_TABLE_AVX2[idx_a2]);
+            __m256 b0 = _mm256_load_ps(VOWEL_TABLE_AVX2[idx_b]);
+            __m256 b1 = _mm256_load_ps(VOWEL_TABLE_AVX2[idx_b2]);
             __m256 av = _mm256_add_ps(
                 _mm256_mul_ps(a0, _mm256_set1_ps(1.0f - frac_a)),
                 _mm256_mul_ps(a1, _mm256_set1_ps(frac_a)));
