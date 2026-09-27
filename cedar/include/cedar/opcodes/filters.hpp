@@ -60,6 +60,10 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
     const __m128 two = _mm_set1_ps(2.0f);
     const __m128 clamp_lo = _mm_set1_ps(clamp_audio(-__builtin_inff()));
     const __m128 clamp_hi = _mm_set1_ps(clamp_audio(__builtin_inff()));
+    __m128 old_ic1 = _mm_setr_ps(
+        state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
+    __m128 old_ic2 = _mm_setr_ps(
+        state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         calc_svf(state, freq[i], q[i], sample_rate);
@@ -69,8 +73,6 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
         const float xr = input_r[i];
 
         const __m128 x = _mm_setr_ps(xl, xr, 0.0f, 0.0f);
-        const __m128 old_ic1 = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1], 0.0f, 0.0f);
-        const __m128 old_ic2 = _mm_setr_ps(state.ic2eq[0], state.ic2eq[1], 0.0f, 0.0f);
         const __m128 ic1 = _mm_add_ps(old_ic1, denormal_dc);
         const __m128 ic2 = _mm_add_ps(old_ic2, denormal_dc);
         const __m128 v3 = _mm_sub_ps(x, ic2);
@@ -89,12 +91,8 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
             clamp_hi, _mm_max_ps(clamp_lo, next_ic1));
         const __m128 clamped_ic2 = _mm_min_ps(
             clamp_hi, _mm_max_ps(clamp_lo, next_ic2));
-        state.ic1eq[0] = _mm_cvtss_f32(clamped_ic1);
-        state.ic1eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(
-            clamped_ic1, clamped_ic1, _MM_SHUFFLE(1, 1, 1, 1)));
-        state.ic2eq[0] = _mm_cvtss_f32(clamped_ic2);
-        state.ic2eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(
-            clamped_ic2, clamped_ic2, _MM_SHUFFLE(1, 1, 1, 1)));
+        old_ic1 = clamped_ic1;
+        old_ic2 = clamped_ic2;
 
         __m128 filtered;
         if constexpr (Output == 0) {
@@ -112,6 +110,13 @@ CEDAR_TARGET_AVX2 inline void svf_stereo_avx2(
         out_r[i] = _mm_cvtss_f32(
             _mm_shuffle_ps(mixed, mixed, _MM_SHUFFLE(1, 1, 1, 1)));
     }
+
+    state.ic1eq[0] = _mm_cvtss_f32(old_ic1);
+    state.ic1eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(
+        old_ic1, old_ic1, _MM_SHUFFLE(1, 1, 1, 1)));
+    state.ic2eq[0] = _mm_cvtss_f32(old_ic2);
+    state.ic2eq[1] = _mm_cvtss_f32(_mm_shuffle_ps(
+        old_ic2, old_ic2, _MM_SHUFFLE(1, 1, 1, 1)));
 }
 
 template <int Output>
