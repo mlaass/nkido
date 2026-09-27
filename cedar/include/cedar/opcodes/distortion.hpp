@@ -22,6 +22,58 @@ namespace cedar {
 // Classic warm saturation using hyperbolic tangent.
 // Higher drive values push the signal into saturation more aggressively.
 
+#if CEDAR_SIMD_X86
+namespace kernels {
+// simd: approx std::tanh via a [7/6] Pade approximant on [-2.25, 2.25].
+// Two double-angle steps recover tanh(x); beyond |x|=9 the tail is < 4e-8.
+CEDAR_TARGET_AVX2 inline __m256 distort_tanh_curve_avx2(__m256 x) noexcept {
+    x = _mm256_max_ps(_mm256_set1_ps(-9.0f),
+        _mm256_min_ps(_mm256_set1_ps(9.0f), x));
+    x = _mm256_mul_ps(x, _mm256_set1_ps(0.25f));
+    const __m256 z = _mm256_mul_ps(x, x);
+    __m256 p = _mm256_add_ps(_mm256_set1_ps(378.0f), z);
+    p = _mm256_add_ps(_mm256_set1_ps(17325.0f), _mm256_mul_ps(z, p));
+    p = _mm256_add_ps(_mm256_set1_ps(135135.0f), _mm256_mul_ps(z, p));
+    __m256 q = _mm256_add_ps(_mm256_set1_ps(3150.0f),
+        _mm256_mul_ps(_mm256_set1_ps(28.0f), z));
+    q = _mm256_add_ps(_mm256_set1_ps(62370.0f), _mm256_mul_ps(z, q));
+    q = _mm256_add_ps(_mm256_set1_ps(135135.0f), _mm256_mul_ps(z, q));
+    __m256 y = _mm256_div_ps(_mm256_mul_ps(x, p), q);
+    y = _mm256_div_ps(_mm256_add_ps(y, y),
+        _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(y, y)));
+    return _mm256_div_ps(_mm256_add_ps(y, y),
+        _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(y, y)));
+}
+
+CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(
+    const float* input, const float* input_r, const float* drive,
+    const float* dry_level, const float* wet_level, float* out_l, float* out_r) noexcept {
+    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+        // std::max(0.1f, drive) returns 0.1f for a NaN drive.
+        const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i),
+            _mm256_set1_ps(0.1f));
+        const __m256 y_l = distort_tanh_curve_avx2(
+            _mm256_mul_ps(_mm256_load_ps(input + i), d));
+        const __m256 y_r = input_r ? distort_tanh_curve_avx2(
+            _mm256_mul_ps(_mm256_load_ps(input_r + i), d)) : y_l;
+        alignas(32) float shaped_l[8];
+        alignas(32) float shaped_r[8];
+        _mm256_store_ps(shaped_l, y_l);
+        _mm256_store_ps(shaped_r, y_r);
+        for (std::size_t lane = 0; lane < 8; ++lane) {
+            const std::size_t j = i + lane;
+            const float dry = drywet::coeff(dry_level, j, 0.0f);
+            const float wet = drywet::coeff(wet_level, j, 1.0f);
+            const float left = input[j];
+            const float right = input_r ? input_r[j] : left;
+            out_l[j] = drywet::mix(left, shaped_l[lane], dry, wet);
+            out_r[j] = drywet::mix(right, shaped_r[lane], dry, wet);
+        }
+    }
+}
+} // namespace kernels
+#endif
+
 [[gnu::always_inline]]
 inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
     float* out_l = ctx.buffers->get(inst.out_buffer);
@@ -34,6 +86,13 @@ inline void op_distort_tanh(ExecutionContext& ctx, const Instruction& inst) {
     const float* drive = ctx.buffers->get(inst.inputs[1]);
     const float* dry_level = (inst.inputs[2] != 0xFFFF) ? ctx.buffers->get(inst.inputs[2]) : nullptr;
     const float* wet_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+
+#if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        kernels::distort_tanh_avx2(input, input_r, drive, dry_level, wet_level, out_l, out_r);
+        return;
+    }
+#endif
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         float d = std::max(0.1f, drive[i]);
