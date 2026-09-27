@@ -72,6 +72,7 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
     constexpr float ALLPASS_GAIN = 0.5f;
     alignas(32) float delayed_values[FreeverbState::NUM_COMBS];
     alignas(32) float feedback_values[FreeverbState::NUM_COMBS];
+    const __m256i index_one = _mm256_set1_epi64x(1);
 
     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
         const float x_l = input[i];
@@ -118,11 +119,20 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
             _mm256_store_ps(feedback_values, writes);
 
             for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
-                std::size_t pos = state.comb_pos[ch][c];
+                const std::size_t pos = state.comb_pos[ch][c];
                 state.comb_buffers[ch][c][pos] = feedback_values[c];
-                ++pos;
-                if (pos == FreeverbState::COMB_SIZES_LR[ch][c]) pos = 0;
-                state.comb_pos[ch][c] = pos;
+            }
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; c += 4) {
+                const auto* const pos_ptr = reinterpret_cast<const __m256i*>(
+                    state.comb_pos[ch] + c);
+                const auto* const size_ptr = reinterpret_cast<const __m256i*>(
+                    FreeverbState::COMB_SIZES_LR[ch] + c);
+                __m256i next = _mm256_add_epi64(_mm256_loadu_si256(pos_ptr), index_one);
+                const __m256i wrap = _mm256_cmpeq_epi64(
+                    next, _mm256_loadu_si256(size_ptr));
+                next = _mm256_andnot_si256(wrap, next);
+                _mm256_storeu_si256(
+                    reinterpret_cast<__m256i*>(state.comb_pos[ch] + c), next);
             }
 
             float y = comb_sum;
@@ -132,11 +142,19 @@ CEDAR_TARGET_AVX2 inline void reverb_freeverb_avx2(ExecutionContext& ctx,
                 const float delayed_ap = buffer[pos];
                 const float output = delayed_ap - ALLPASS_GAIN * y;
                 buffer[pos] = y + ALLPASS_GAIN * output;
-                ++pos;
-                if (pos == FreeverbState::ALLPASS_SIZES_LR[ch][a]) pos = 0;
-                state.allpass_pos[ch][a] = pos;
                 y = output;
             }
+            const auto* const ap_pos_ptr = reinterpret_cast<const __m256i*>(
+                state.allpass_pos[ch]);
+            const auto* const ap_size_ptr = reinterpret_cast<const __m256i*>(
+                FreeverbState::ALLPASS_SIZES_LR[ch]);
+            __m256i ap_next = _mm256_add_epi64(
+                _mm256_loadu_si256(ap_pos_ptr), index_one);
+            const __m256i ap_wrap = _mm256_cmpeq_epi64(
+                ap_next, _mm256_loadu_si256(ap_size_ptr));
+            ap_next = _mm256_andnot_si256(ap_wrap, ap_next);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(state.allpass_pos[ch]), ap_next);
             y_lr[ch] = y;
         }
 
