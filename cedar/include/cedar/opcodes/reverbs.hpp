@@ -52,56 +52,85 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
         dc_y[ch] = _mm256_loadu_ps(&state.dc_y1[ch][0]);
     }
     const __m256 dc_r = _mm256_set1_ps(DC_BLOCKER_R);
-    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
-        const float x_l = input[i];
-        const float x_r = stereo_in ? input_r[i] : x_l;
-        const float dry = drywet::coeff(dry_buf, i, dry_const);
-        const float wet = drywet::coeff(wet_buf, i, wet_const);
-        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
-        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
-        const float scale = room_scale_in[i] > 0.0f
-            ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
-        const float offset = room_offset_in[i] > 0.0f
-            ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
-        const __m256 feedback = _mm256_set1_ps(room * scale + offset);
-        const __m256 d = _mm256_set1_ps(damp);
-        const __m256 undamped = _mm256_set1_ps(1.0f - damp);
-        float y_lr[2];
+    // Within a span no delay line wraps. Keep positions fixed until its end,
+    // avoiding per-sample position stores and wrap checks for all 24 lines.
+    for (std::size_t base = 0; base < BLOCK_SIZE;) {
+        std::size_t count = BLOCK_SIZE - base;
+        float* comb[2][FreeverbState::NUM_COMBS];
+        float* allpass[2][FreeverbState::NUM_ALLPASSES];
         for (std::size_t ch = 0; ch < 2; ++ch) {
-            alignas(32) float delayed[8], written[8];
-            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c)
-                delayed[c] = state.comb_buffers[ch][c][state.comb_pos[ch][c]];
-            const __m256 delay = _mm256_load_ps(delayed);
-            filter[ch] = _mm256_add_ps(_mm256_mul_ps(delay, undamped),
-                                       _mm256_mul_ps(filter[ch], d));
-            const __m256 dc_out = _mm256_add_ps(
-                _mm256_sub_ps(filter[ch], dc_x[ch]),
-                _mm256_mul_ps(dc_r, dc_y[ch]));
-            dc_x[ch] = filter[ch];
-            dc_y[ch] = dc_out;
-            _mm256_store_ps(written, _mm256_add_ps(
-                _mm256_set1_ps(ch == 0 ? x_l : x_r),
-                _mm256_mul_ps(feedback, dc_out)));
-            float y = 0.0f;
             for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
-                auto& pos = state.comb_pos[ch][c];
-                state.comb_buffers[ch][c][pos] = written[c];
-                if (++pos == FreeverbState::COMB_SIZES_LR[ch][c]) pos = 0;
-                y += delayed[c];
+                const auto pos = state.comb_pos[ch][c];
+                count = std::min(count, FreeverbState::COMB_SIZES_LR[ch][c] - pos);
+                comb[ch][c] = state.comb_buffers[ch][c] + pos;
             }
             for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
-                float* buffer = state.allpass_buffers[ch][a];
-                auto& pos = state.allpass_pos[ch][a];
-                const float delayed_sample = buffer[pos];
-                const float output = delayed_sample - 0.5f * y;
-                buffer[pos] = y + 0.5f * output;
-                if (++pos == FreeverbState::ALLPASS_SIZES_LR[ch][a]) pos = 0;
-                y = output;
+                const auto pos = state.allpass_pos[ch][a];
+                count = std::min(count, FreeverbState::ALLPASS_SIZES_LR[ch][a] - pos);
+                allpass[ch][a] = state.allpass_buffers[ch][a] + pos;
             }
-            y_lr[ch] = y;
         }
-        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
-        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
+        for (std::size_t j = 0; j < count; ++j) {
+            const std::size_t i = base + j;
+            const float x_l = input[i];
+            const float x_r = stereo_in ? input_r[i] : x_l;
+            const float dry = drywet::coeff(dry_buf, i, dry_const);
+            const float wet = drywet::coeff(wet_buf, i, wet_const);
+            const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+            const float damp = std::clamp(damping[i], 0.0f, 1.0f);
+            const float scale = room_scale_in[i] > 0.0f
+                ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
+            const float offset = room_offset_in[i] > 0.0f
+                ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+            const __m256 feedback = _mm256_set1_ps(room * scale + offset);
+            const __m256 d = _mm256_set1_ps(damp);
+            const __m256 undamped = _mm256_set1_ps(1.0f - damp);
+            float y_lr[2];
+            for (std::size_t ch = 0; ch < 2; ++ch) {
+                alignas(32) float delayed[8], written[8];
+                for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c)
+                    delayed[c] = comb[ch][c][j];
+                const __m256 delay = _mm256_load_ps(delayed);
+                filter[ch] = _mm256_add_ps(_mm256_mul_ps(delay, undamped),
+                                           _mm256_mul_ps(filter[ch], d));
+                const __m256 dc_out = _mm256_add_ps(
+                    _mm256_sub_ps(filter[ch], dc_x[ch]),
+                    _mm256_mul_ps(dc_r, dc_y[ch]));
+                dc_x[ch] = filter[ch];
+                dc_y[ch] = dc_out;
+                _mm256_store_ps(written, _mm256_add_ps(
+                    _mm256_set1_ps(ch == 0 ? x_l : x_r),
+                    _mm256_mul_ps(feedback, dc_out)));
+                float y = 0.0f;
+                for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                    comb[ch][c][j] = written[c];
+                    y += delayed[c];
+                }
+                for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
+                    float* buffer = allpass[ch][a];
+                    const float delayed_sample = buffer[j];
+                    const float output = delayed_sample - 0.5f * y;
+                    buffer[j] = y + 0.5f * output;
+                    y = output;
+                }
+                y_lr[ch] = y;
+            }
+            out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
+            out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
+        }
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                auto& pos = state.comb_pos[ch][c];
+                pos += count;
+                if (pos == FreeverbState::COMB_SIZES_LR[ch][c]) pos = 0;
+            }
+            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
+                auto& pos = state.allpass_pos[ch][a];
+                pos += count;
+                if (pos == FreeverbState::ALLPASS_SIZES_LR[ch][a]) pos = 0;
+            }
+        }
+        base += count;
     }
     for (std::size_t ch = 0; ch < 2; ++ch) {
         _mm256_storeu_ps(&state.comb_filter_state[ch][0], filter[ch]);
