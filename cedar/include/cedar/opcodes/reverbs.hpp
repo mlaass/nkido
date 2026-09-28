@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../dsp/simd.hpp"
+
 #include "../vm/context.hpp"
 #include "../vm/instruction.hpp"
 #include "../dsp/constants.hpp"
@@ -32,6 +34,83 @@ constexpr float FREEVERB_ROOM_OFFSET_DEFAULT = 0.7f;
 //
 // Classic algorithm: 8 parallel lowpass-feedback comb filters summed,
 // then through 4 series allpass filters. Creates lush, dense reverb.
+
+namespace kernels {
+#if CEDAR_SIMD_X86
+// SIMD lanes are independent combs, not successive samples: the feedback
+// recurrence and the left-to-right comb sum retain their scalar ordering.
+CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+    FreeverbState& state, const float* input, const float* input_r,
+    bool stereo_in, const float* room_size, const float* damping,
+    const float* room_scale_in, const float* room_offset_in,
+    const float* dry_buf, float dry_const, const float* wet_buf,
+    float wet_const, float* out_l, float* out_r) noexcept {
+    __m256 filter[2], dc_x[2], dc_y[2];
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        filter[ch] = _mm256_loadu_ps(&state.comb_filter_state[ch][0]);
+        dc_x[ch] = _mm256_loadu_ps(&state.dc_x1[ch][0]);
+        dc_y[ch] = _mm256_loadu_ps(&state.dc_y1[ch][0]);
+    }
+    const __m256 dc_r = _mm256_set1_ps(DC_BLOCKER_R);
+    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+        const float x_l = input[i];
+        const float x_r = stereo_in ? input_r[i] : x_l;
+        const float dry = drywet::coeff(dry_buf, i, dry_const);
+        const float wet = drywet::coeff(wet_buf, i, wet_const);
+        const float room = std::clamp(room_size[i], 0.0f, 1.0f);
+        const float damp = std::clamp(damping[i], 0.0f, 1.0f);
+        const float scale = room_scale_in[i] > 0.0f
+            ? room_scale_in[i] : FREEVERB_ROOM_SCALE_DEFAULT;
+        const float offset = room_offset_in[i] > 0.0f
+            ? room_offset_in[i] : FREEVERB_ROOM_OFFSET_DEFAULT;
+        const __m256 feedback = _mm256_set1_ps(room * scale + offset);
+        const __m256 d = _mm256_set1_ps(damp);
+        const __m256 undamped = _mm256_set1_ps(1.0f - damp);
+        float y_lr[2];
+        for (std::size_t ch = 0; ch < 2; ++ch) {
+            alignas(32) float delayed[8], written[8];
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c)
+                delayed[c] = state.comb_buffers[ch][c][state.comb_pos[ch][c]];
+            const __m256 delay = _mm256_load_ps(delayed);
+            filter[ch] = _mm256_add_ps(_mm256_mul_ps(delay, undamped),
+                                       _mm256_mul_ps(filter[ch], d));
+            const __m256 dc_out = _mm256_add_ps(
+                _mm256_sub_ps(filter[ch], dc_x[ch]),
+                _mm256_mul_ps(dc_r, dc_y[ch]));
+            dc_x[ch] = filter[ch];
+            dc_y[ch] = dc_out;
+            _mm256_store_ps(written, _mm256_add_ps(
+                _mm256_set1_ps(ch == 0 ? x_l : x_r),
+                _mm256_mul_ps(feedback, dc_out)));
+            float y = 0.0f;
+            for (std::size_t c = 0; c < FreeverbState::NUM_COMBS; ++c) {
+                auto& pos = state.comb_pos[ch][c];
+                state.comb_buffers[ch][c][pos] = written[c];
+                if (++pos == FreeverbState::COMB_SIZES_LR[ch][c]) pos = 0;
+                y += delayed[c];
+            }
+            for (std::size_t a = 0; a < FreeverbState::NUM_ALLPASSES; ++a) {
+                float* buffer = state.allpass_buffers[ch][a];
+                auto& pos = state.allpass_pos[ch][a];
+                const float delayed_sample = buffer[pos];
+                const float output = delayed_sample - 0.5f * y;
+                buffer[pos] = y + 0.5f * output;
+                if (++pos == FreeverbState::ALLPASS_SIZES_LR[ch][a]) pos = 0;
+                y = output;
+            }
+            y_lr[ch] = y;
+        }
+        out_l[i] = drywet::mix(x_l, y_lr[0], dry, wet);
+        out_r[i] = drywet::mix(x_r, y_lr[1], dry, wet);
+    }
+    for (std::size_t ch = 0; ch < 2; ++ch) {
+        _mm256_storeu_ps(&state.comb_filter_state[ch][0], filter[ch]);
+        _mm256_storeu_ps(&state.dc_x1[ch][0], dc_x[ch]);
+        _mm256_storeu_ps(&state.dc_y1[ch][0], dc_y[ch]);
+    }
+}
+#endif
+} // namespace kernels
 
 [[gnu::always_inline]]
 inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
@@ -73,6 +152,15 @@ inline void op_reverb_freeverb(ExecutionContext& ctx, const Instruction& inst) {
         const auto& w = ext->params[1];
         if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
     }
+
+    #if CEDAR_SIMD_X86
+    if (simd::has(simd::Isa::Avx2)) {
+        kernels::freeverb_avx2(state, input, input_r, stereo_in, room_size,
+            damping, room_scale_in, room_offset_in, dry_buf, dry_const,
+            wet_buf, wet_const, out_l, out_r);
+        return;
+    }
+    #endif
 
     constexpr float ALLPASS_GAIN = 0.5f;
 
