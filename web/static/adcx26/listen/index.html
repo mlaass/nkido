@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Before/after listening test for AI-written AVX2 rewrites of two nkido effects (ADCx Gather 2026).">
+<title>SIMD Listening Test</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one column of effect sections; each holds a grid of source cards (player + spectrum).
+   Deliberately single-theme dark, matching the nkido talk deck. */
+:root {
+  --bg: #1b1b1a;
+  --panel: #262624;
+  --line: #3a3935;
+  --fg: #dcdad3;
+  --muted: #9a978d;
+  --amber: #f1c232;
+  --red: #e06c5a;
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font: 16px/1.55 var(--display); }
+main { max-width: 1180px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 64px; display: grid; gap: 56px; }
+h1, h2 { text-wrap: balance; margin: 0; }
+h1 { font-weight: 800; font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.05; color: var(--amber); letter-spacing: -0.01em; }
+.intro { display: grid; gap: 16px; max-width: 68ch; }
+.intro p { margin: 0; }
+.eyebrow { font: 600 12px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }
+section { display: grid; gap: 20px; }
+.sec-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 20px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+h2 { font-size: 1.5rem; font-weight: 800; }
+.speed { font: 600 1.1rem var(--mono); color: var(--amber); }
+.sec-head .who { color: var(--muted); font-size: 0.95rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 20px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.card-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; align-items: baseline; }
+.card h3 { margin: 0; font-size: 1.1rem; font-weight: 600; }
+.src { color: var(--muted); font-size: 0.85rem; }
+.stats { font: 400 0.8rem/1.4 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.stats b { color: var(--fg); font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+button { font: 600 0.85rem var(--mono); color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.play.diff[aria-pressed="true"] { background: var(--red); border-color: var(--red); }
+.play[aria-pressed="true"] { background: var(--amber); color: var(--bg); border-color: var(--amber); }
+.status { font: 0.8rem var(--mono); color: var(--muted); }
+.card img { width: 100%; height: auto; border-radius: 3px; display: block; }
+footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--line); padding-top: 16px; display: grid; gap: 6px; max-width: 80ch; }
+footer p { margin: 0; }
+a { color: var(--amber); }
+kbd { font: 0.8rem var(--mono); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<main>
+  <header class="intro">
+    <span class="eyebrow">nkido · SIMD autoresearch · ADCx Gather 2026</span>
+    <h1>Same sound, up to 31× faster</h1>
+    <p>AI agents rewrote two of nkido's audio effects in AVX2. These rewrites don't produce bit-identical output, so every example here is rendered twice, with the original code and with the agent's code. Each example has a play button for the original render, one for the agent's render, and one for the difference.</p>
+    <p><b>Difference</b> plays the after-minus-before signal <b>boosted by 100 dB</b>. At normal level it peaks at -115 dBFS or lower, below the 16-bit noise floor. Turn your volume down before you play it.</p>
+  </header>
+  <div id="sections"></div>
+  <footer>
+    <p>Drum loops: <a href="https://orangefreesounds.com/amen-break/">Amen break</a>, <a href="https://orangefreesounds.com/acoustic-old-school-drum-loop-100-bpm/">acoustic old-school drum loop</a> and <a href="https://orangefreesounds.com/rock-drum-loop/">rock drum loop</a> from Orange Free Sounds, licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Basslines from nkido's welcome patches (acid 303 and rock groove).</p>
+    <p>Rendered offline at 48 kHz with <span class="stats">nkido render --float32</span>. Audio is lossless FLAC. The spectra are Welch power spectra of the mono sum.</p>
+  </footer>
+</main>
+
+<script>
+const EFFECTS = [
+  { id: "distort", title: "Saturation (tanh)", speed: "30.7× faster", who: "opus: vector exp approximation with 2^(j/8) lookup tables", code: "saturate(@, 4)" },
+  { id: "svf", title: "Filter sweep (state-variable lowpass)", speed: "9.2× faster", who: "sonnet: the recurrence as a 2×2 matrix step, two samples per step", code: "lp(@, sine(0.25) * 2200 + 2500, 1.8)" },
+];
+const SOURCES = [
+  { id: "amen", name: "Amen break", src: "drum loop, ~136 bpm" },
+  { id: "hiphop", name: "Old-school hip-hop", src: "drum loop, 100 bpm" },
+  { id: "rock", name: "Rock groove", src: "drum loop, 122 bpm" },
+  { id: "acid303", name: "Acid bassline", src: "saw bass, 130 bpm" },
+  { id: "rockbass", name: "Rock bassline", src: "triangle bass, 120 bpm" },
+];
+const STATS = { // diff peak / diff rms in dBFS, from drums.py
+  amen_distort: [-115.0, -119.4], amen_svf: [-125.4, -153.0],
+  hiphop_distort: [-115.0, -120.7], hiphop_svf: [-126.4, -152.3],
+  rock_distort: [-115.0, -119.5], rock_svf: [-131.4, -157.8],
+  acid303_distort: [-115.1, -120.7], acid303_svf: [-122.2, -148.9],
+  rockbass_distort: [-115.0, -124.9], rockbass_svf: [-122.2, -146.2],
+};
+const MODES = [["before", "Play before"], ["after", "Play after"], ["diff100", "Play difference +100 dB"]];
+
+let current = null; // the button that is playing: { stop() }
+
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? e.className = v : e.setAttribute(k, v);
+  for (const k of kids) e.append(k);
+  return e;
+}
+
+function makeCard(fx, s) {
+  const key = `${s.id}_${fx.id}`;
+  const [peak, rms] = STATS[key];
+  const status = el("span", { class: "status" });
+  // One looped <audio> per version (fetch() is blocked on file:// pages); one plays at a time.
+  const buttons = MODES.map(([m, label]) => {
+    const b = el("button", { class: m === "diff100" ? "play diff" : "play", "aria-pressed": "false" }, label);
+    const a = Object.assign(new Audio(`a/${key}_${m}.flac`), { loop: true, preload: "none" });
+    const stop = () => {
+      a.pause(); a.currentTime = 0;
+      b.textContent = label; b.setAttribute("aria-pressed", "false");
+      if (current?.stop === stop) current = null;
+    };
+    b.addEventListener("click", async () => {
+      if (current?.stop === stop) return stop();
+      current?.stop();
+      current = { stop };
+      try { await a.play(); status.textContent = ""; }
+      catch (e) { status.textContent = `Could not play audio (${e.message}).`; return stop(); }
+      b.textContent = "Stop"; b.setAttribute("aria-pressed", "true");
+    });
+    return b;
+  });
+
+  return el("article", { class: "card" },
+    el("div", { class: "card-top" }, el("h3", {}, s.name), el("span", { class: "src" }, s.src)),
+    el("div", { class: "stats" }, "difference peak ", el("b", {}, `${peak.toFixed(0)} dBFS`), " · rms ", el("b", {}, `${rms.toFixed(0)} dBFS`)),
+    el("div", { class: "controls" }, ...buttons, status),
+    el("img", { src: `img/${key}.png`, alt: `Spectrum of ${s.name} through ${fx.title}: before, after and difference. Difference peak ${peak.toFixed(0)} dBFS.`, loading: "lazy", width: "2000", height: "1050" }));
+}
+
+const root = document.getElementById("sections");
+for (const fx of EFFECTS) {
+  const cards = el("div", { class: "cards" });
+  SOURCES.forEach(s => cards.append(makeCard(fx, s)));
+  root.append(el("section", {},
+    el("div", { class: "sec-head" }, el("h2", {}, fx.title), el("span", { class: "speed" }, fx.speed), el("span", { class: "who" }, fx.who)),
+    el("div", { class: "stats" }, "effect: ", el("b", {}, fx.code)),
+    cards));
+}
+root.style.display = "grid"; root.style.gap = "56px";
+</script>
+
+</body>
+</html>
