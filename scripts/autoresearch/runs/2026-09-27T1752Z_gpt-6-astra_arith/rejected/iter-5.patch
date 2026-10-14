@@ -1,0 +1,72 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index cd1a4ee..91935d6 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -12,22 +12,61 @@ namespace cedar {
+ // ADD: out = in0 + in1
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+-CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
++// Keep the AVX instructions inline in the baseline-ISA caller. The opcode's
++// runtime AVX2 guard must dominate this call.
++[[gnu::always_inline]]
++inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++        __asm__ volatile(
++            "vmovaps %[a], %%ymm0\n\t"
++            "vaddps %[b], %%ymm0, %%ymm0\n\t"
++            "vmovaps %%ymm0, %[out]"
++            : [out] "=m" (*reinterpret_cast<float (*)[8]>(out + i))
++            : [a] "m" (*reinterpret_cast<const float (*)[8]>(a + i)),
++              [b] "m" (*reinterpret_cast<const float (*)[8]>(b + i))
++            : "ymm0");
+     }
++    __asm__ volatile("vzeroupper" ::: "ymm0", "ymm1", "ymm2", "ymm3",
++                     "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9",
++                     "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15");
+ }
+ 
+-CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
++// Keep the AVX instructions inline in the baseline-ISA caller. The opcode's
++// runtime AVX2 guard must dominate this call.
++[[gnu::always_inline]]
++inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++        __asm__ volatile(
++            "vmovaps %[a], %%ymm0\n\t"
++            "vsubps %[b], %%ymm0, %%ymm0\n\t"
++            "vmovaps %%ymm0, %[out]"
++            : [out] "=m" (*reinterpret_cast<float (*)[8]>(out + i))
++            : [a] "m" (*reinterpret_cast<const float (*)[8]>(a + i)),
++              [b] "m" (*reinterpret_cast<const float (*)[8]>(b + i))
++            : "ymm0");
+     }
++    __asm__ volatile("vzeroupper" ::: "ymm0", "ymm1", "ymm2", "ymm3",
++                     "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9",
++                     "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15");
+ }
+ 
+-CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
++// Keep the AVX instructions inline in the baseline-ISA caller. The opcode's
++// runtime AVX2 guard must dominate this call.
++[[gnu::always_inline]]
++inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++        __asm__ volatile(
++            "vmovaps %[a], %%ymm0\n\t"
++            "vmulps %[b], %%ymm0, %%ymm0\n\t"
++            "vmovaps %%ymm0, %[out]"
++            : [out] "=m" (*reinterpret_cast<float (*)[8]>(out + i))
++            : [a] "m" (*reinterpret_cast<const float (*)[8]>(a + i)),
++              [b] "m" (*reinterpret_cast<const float (*)[8]>(b + i))
++            : "ymm0");
+     }
++    __asm__ volatile("vzeroupper" ::: "ymm0", "ymm1", "ymm2", "ymm3",
++                     "ymm4", "ymm5", "ymm6", "ymm7", "ymm8", "ymm9",
++                     "ymm10", "ymm11", "ymm12", "ymm13", "ymm14", "ymm15");
+ }
+ #endif
+ } // namespace kernels

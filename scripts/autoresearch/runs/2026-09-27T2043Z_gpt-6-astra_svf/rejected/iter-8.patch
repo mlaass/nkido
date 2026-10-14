@@ -1,0 +1,33 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 1fa378c..aefa811 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -83,10 +83,12 @@ CEDAR_TARGET_AVX2 inline bool svf_channels_avx2(
+     // A shared mono recurrence has only one live channel. Avoid constructing
+     // vectors and extracting their lanes around the scalar clamp/mix helpers.
+     if constexpr (SharedChannels) {
++        // Separate the independent output mix from the serial feedback chain.
++        // Buffer slots do not overlap across sample indices, so in-place
++        // control/output buffers retain their read-before-write semantics.
++        alignas(32) float filtered[BLOCK_SIZE];
+         for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+             calc_svf(state, freq[i], q[i], ctx.sample_rate);
+-            const float dry = drywet::coeff(dry_level, i, 0.0f);
+-            const float wet = drywet::coeff(wet_level, i, 1.0f);
+             const float x = input[i];
+             const float v3 = x - (state.ic2eq[0] + DENORMAL_DC);
+             const float v1 = state.a1 * (state.ic1eq[0] + DENORMAL_DC)
+@@ -102,7 +104,12 @@ CEDAR_TARGET_AVX2 inline bool svf_channels_avx2(
+             if constexpr (Mode == 0) result = v2;
+             else if constexpr (Mode == 1) result = x - state.k * v1 - v2;
+             else result = v1;
+-            out_l[i] = drywet::mix(x, result, dry, wet);
++            filtered[i] = result;
++        }
++        for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++            const float dry = drywet::coeff(dry_level, i, 0.0f);
++            const float wet = drywet::coeff(wet_level, i, 1.0f);
++            out_l[i] = drywet::mix(input[i], filtered[i], dry, wet);
+             out_r[i] = out_l[i];
+         }
+         return true;

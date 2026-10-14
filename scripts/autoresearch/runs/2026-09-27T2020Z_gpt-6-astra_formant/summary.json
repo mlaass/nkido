@@ -1,0 +1,29 @@
+{
+  "run_id": "2026-09-27T2020Z_gpt-6-astra_formant",
+  "provider": "codex",
+  "model": "gpt-6-astra (gpt-6-astra)",
+  "target": "formant",
+  "iterations": 8,
+  "accepts": 0,
+  "rejects": 8,
+  "reject_reasons": {
+    "empty patch": 3,
+    "speed": 4,
+    "equality": 1
+  },
+  "first_accept_iteration": null,
+  "best_speedup": null,
+  "tokens": {
+    "input": 2064061,
+    "output": 18228,
+    "cached": 1837312
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 828.0,
+  "gpu_s": null,
+  "active_s": 828.0,
+  "unstable_iterations": 0,
+  "status": "complete",
+  "branch": "autoresearch/gpt-6-astra-formant-202609272020",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

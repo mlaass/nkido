@@ -1,0 +1,45 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 5f18514..b34d05d 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -103,19 +103,32 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+             const std::size_t i = base + j;
+             float feedbacks[8], damps[8], undampeds[8];
+             float x[2][8], dry[8], wet[8];
++            // Put the input second in min/max to retain std::clamp's
++            // NaN and signed-zero behavior. Default selection uses > 0,
++            // so unordered values select the default just as in scalar.
++            const __m256 zero = _mm256_setzero_ps();
++            const __m256 one = _mm256_set1_ps(1.0f);
++            const __m256 room = _mm256_min_ps(one,
++                _mm256_max_ps(zero, _mm256_loadu_ps(room_size + i)));
++            const __m256 damp = _mm256_min_ps(one,
++                _mm256_max_ps(zero, _mm256_loadu_ps(damping + i)));
++            const __m256 raw_scale = _mm256_loadu_ps(room_scale_in + i);
++            const __m256 raw_offset = _mm256_loadu_ps(room_offset_in + i);
++            const __m256 scale = _mm256_blendv_ps(
++                _mm256_set1_ps(FREEVERB_ROOM_SCALE_DEFAULT), raw_scale,
++                _mm256_cmp_ps(raw_scale, zero, _CMP_GT_OQ));
++            const __m256 offset = _mm256_blendv_ps(
++                _mm256_set1_ps(FREEVERB_ROOM_OFFSET_DEFAULT), raw_offset,
++                _mm256_cmp_ps(raw_offset, zero, _CMP_GT_OQ));
++            _mm256_storeu_ps(feedbacks,
++                _mm256_add_ps(_mm256_mul_ps(room, scale), offset));
++            _mm256_storeu_ps(damps, damp);
++            _mm256_storeu_ps(undampeds, _mm256_sub_ps(one, damp));
+             for (std::size_t t = 0; t < 8; ++t) {
+                 x[0][t] = input[i + t];
+                 x[1][t] = stereo_in ? input_r[i + t] : x[0][t];
+                 dry[t] = drywet::coeff(dry_buf, i + t, dry_const);
+                 wet[t] = drywet::coeff(wet_buf, i + t, wet_const);
+-                const float room = std::clamp(room_size[i + t], 0.0f, 1.0f);
+-                damps[t] = std::clamp(damping[i + t], 0.0f, 1.0f);
+-                undampeds[t] = 1.0f - damps[t];
+-                const float scale = room_scale_in[i + t] > 0.0f
+-                    ? room_scale_in[i + t] : FREEVERB_ROOM_SCALE_DEFAULT;
+-                const float offset = room_offset_in[i + t] > 0.0f
+-                    ? room_offset_in[i + t] : FREEVERB_ROOM_OFFSET_DEFAULT;
+-                feedbacks[t] = room * scale + offset;
+             }
+             float y_lr[2][8];
+             for (std::size_t ch = 0; ch < 2; ++ch) {

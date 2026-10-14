@@ -1,0 +1,1 @@
+n"c4 e4 g4" as e |> sine(e.freq) |> @ * e.vel |> out(@)

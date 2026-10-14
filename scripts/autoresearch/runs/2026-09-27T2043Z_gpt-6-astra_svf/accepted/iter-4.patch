@@ -1,0 +1,60 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index 4cc66fa..2e75ea5 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -50,7 +50,7 @@ namespace kernels {
+ #if CEDAR_SIMD_X86
+ // The recurrence is serial in time, but its two channels are independent.
+ // Keep the original helpers and operation ordering, including separate mul/add.
+-template <int Mode>
++template <int Mode, bool SharedChannels = false>
+ CEDAR_TARGET_AVX2 inline bool svf_channels_avx2(
+     ExecutionContext& ctx, const Instruction& inst) noexcept {
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+@@ -68,6 +68,18 @@ CEDAR_TARGET_AVX2 inline bool svf_channels_avx2(
+     const float* dry_level = (inst.inputs[3] != 0xFFFF) ? ctx.buffers->get(inst.inputs[3]) : nullptr;
+     const float* wet_level = (inst.inputs[4] != 0xFFFF) ? ctx.buffers->get(inst.inputs[4]) : nullptr;
+     auto& state = ctx.states->get_or_create<SVFState>(inst.state_id);
++    // Identical mono channels stay identical throughout the recurrence. Compare
++    // bits (including signed zero) before sharing the scalar clamp/mix work.
++    if constexpr (!SharedChannels) {
++        if (input_r == input) {
++            const __m128 histories = _mm_setr_ps(state.ic1eq[0], state.ic1eq[1],
++                                                state.ic2eq[0], state.ic2eq[1]);
++            const __m128 swapped = _mm_shuffle_ps(histories, histories, 0xB1);
++            if (_mm_movemask_epi8(_mm_cmpeq_epi32(_mm_castps_si128(histories),
++                                                 _mm_castps_si128(swapped))) == 0xFFFF)
++                return svf_channels_avx2<Mode, true>(ctx, inst);
++        }
++    }
+     const __m128 dc = _mm_set1_ps(DENORMAL_DC);
+     const __m128 two = _mm_set1_ps(2.0f);
+     for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
+@@ -88,17 +100,23 @@ CEDAR_TARGET_AVX2 inline bool svf_channels_avx2(
+         const __m128 n1 = _mm_sub_ps(_mm_mul_ps(two, v1), s1);
+         const __m128 n2 = _mm_sub_ps(_mm_mul_ps(two, v2), s2);
+         state.ic1eq[0] = clamp_audio(_mm_cvtss_f32(n1));
+-        state.ic1eq[1] = clamp_audio(_mm_cvtss_f32(_mm_shuffle_ps(n1, n1, 0x55)));
+         state.ic2eq[0] = clamp_audio(_mm_cvtss_f32(n2));
+-        state.ic2eq[1] = clamp_audio(_mm_cvtss_f32(_mm_shuffle_ps(n2, n2, 0x55)));
++        if constexpr (SharedChannels) {
++            state.ic1eq[1] = state.ic1eq[0];
++            state.ic2eq[1] = state.ic2eq[0];
++        } else {
++            state.ic1eq[1] = clamp_audio(_mm_cvtss_f32(_mm_shuffle_ps(n1, n1, 0x55)));
++            state.ic2eq[1] = clamp_audio(_mm_cvtss_f32(_mm_shuffle_ps(n2, n2, 0x55)));
++        }
+         __m128 result;
+         if constexpr (Mode == 0) result = v2;
+         else if constexpr (Mode == 1)
+             result = _mm_sub_ps(_mm_sub_ps(x, _mm_mul_ps(_mm_set1_ps(state.k), v1)), v2);
+         else result = v1;
+         out_l[i] = drywet::mix(_mm_cvtss_f32(x), _mm_cvtss_f32(result), dry, wet);
+-        out_r[i] = drywet::mix(_mm_cvtss_f32(_mm_shuffle_ps(x, x, 0x55)),
+-            _mm_cvtss_f32(_mm_shuffle_ps(result, result, 0x55)), dry, wet);
++        if constexpr (SharedChannels) out_r[i] = out_l[i];
++        else out_r[i] = drywet::mix(_mm_cvtss_f32(_mm_shuffle_ps(x, x, 0x55)),
++                _mm_cvtss_f32(_mm_shuffle_ps(result, result, 0x55)), dry, wet);
+     }
+     return true;
+ }

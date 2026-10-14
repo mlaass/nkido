@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-27T1812Z_gpt-6-astra_distort",
+  "provider": "codex",
+  "model": "gpt-6-astra (gpt-6-astra)",
+  "target": "distort",
+  "iterations": 8,
+  "accepts": 5,
+  "rejects": 3,
+  "reject_reasons": {
+    "empty patch": 1,
+    "speed": 2
+  },
+  "first_accept_iteration": 2,
+  "best_speedup": 5.307,
+  "tokens": {
+    "input": 1966809,
+    "output": 11979,
+    "cached": 1757440
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 766.1,
+  "gpu_s": null,
+  "active_s": 766.1,
+  "unstable_iterations": 4,
+  "status": "complete",
+  "branch": "autoresearch/gpt-6-astra-distort-202609271812",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

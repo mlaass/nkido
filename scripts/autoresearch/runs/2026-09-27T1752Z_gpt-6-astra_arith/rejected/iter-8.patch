@@ -1,0 +1,27 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index cd1a4ee..fc3c329 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -12,18 +12,22 @@ namespace cedar {
+ // ADD: out = in0 + in1
+ namespace kernels {
+ #if CEDAR_SIMD_X86
++// Keep the hot arithmetic entry points on instruction-cache line boundaries.
++[[gnu::aligned(64)]]
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ 
++[[gnu::aligned(64)]]
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ 
++[[gnu::aligned(64)]]
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));

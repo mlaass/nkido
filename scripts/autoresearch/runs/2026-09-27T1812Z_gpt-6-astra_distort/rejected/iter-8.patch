@@ -1,0 +1,22 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index add6c20..1c6c395 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -47,6 +47,8 @@ CEDAR_TARGET_AVX2 inline __m256 distort_tanh_curve_avx2(__m256 x) noexcept {
+ CEDAR_TARGET_AVX2 inline void distort_tanh_avx2(
+     const float* input, const float* input_r, const float* drive,
+     const float* dry_level, const float* wet_level, float* out_l, float* out_r) noexcept {
++    // Expose independent groups to overlap vector division latency.
++    #pragma GCC unroll 4
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         // std::max(0.1f, drive) returns 0.1f for a NaN drive.
+         const __m256 d = _mm256_max_ps(_mm256_load_ps(drive + i),
+@@ -130,6 +132,8 @@ CEDAR_TARGET_AVX2 inline __m256 distort_soft_curve_avx2(__m256 x) noexcept {
+ CEDAR_TARGET_AVX2 inline void distort_soft_avx2(
+     const float* input, const float* input_r, const float* threshold,
+     const float* dry_level, const float* wet_level, float* out_l, float* out_r) noexcept {
++    // Expose independent groups to overlap vector division latency.
++    #pragma GCC unroll 4
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         // Operand order preserves std::clamp's handling of a NaN threshold.
+         const __m256 t = _mm256_min_ps(_mm256_set1_ps(2.0f),

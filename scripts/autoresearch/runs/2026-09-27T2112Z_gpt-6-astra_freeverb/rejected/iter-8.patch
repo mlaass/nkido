@@ -1,0 +1,81 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 5f18514..25a498f 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -67,7 +67,76 @@ CEDAR_TARGET_AVX2 inline void freeverb_transpose8(__m256* v) noexcept {
+ 
+ // SIMD lanes are independent combs, not successive samples: the feedback
+ // recurrence and the left-to-right comb sum retain their scalar ordering.
++CEDAR_TARGET_AVX2 inline void freeverb_avx2_linear(
++    FreeverbState& state, const float* input, const float* input_r,
++    bool stereo_in, const float* room_size, const float* damping,
++    const float* room_scale_in, const float* room_offset_in,
++    const float* dry_buf, float dry_const, const float* wet_buf,
++    float wet_const, float* out_l, float* out_r) noexcept;
++
++// Every Freeverb delay exceeds one block. Present a contiguous block to the
++// tiled kernel, copying only the lines whose current block crosses the ring
++// boundary. This keeps unrelated wraps from fragmenting the SIMD work.
+ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
++    FreeverbState& state, const float* input, const float* input_r,
++    bool stereo_in, const float* room_size, const float* damping,
++    const float* room_scale_in, const float* room_offset_in,
++    const float* dry_buf, float dry_const, const float* wet_buf,
++    float wet_const, float* out_l, float* out_r) noexcept {
++    constexpr std::size_t lines = FreeverbState::NUM_COMBS + FreeverbState::NUM_ALLPASSES;
++    alignas(32) float wrapped[2][lines][BLOCK_SIZE];
++    float* original[2][lines];
++    std::size_t positions[2][lines];
++    for (std::size_t ch = 0; ch < 2; ++ch) {
++        for (std::size_t line = 0; line < lines; ++line) {
++            const bool comb = line < FreeverbState::NUM_COMBS;
++            const std::size_t a = line - FreeverbState::NUM_COMBS;
++            auto& buffer = comb ? state.comb_buffers[ch][line] : state.allpass_buffers[ch][a];
++            auto& pos = comb ? state.comb_pos[ch][line] : state.allpass_pos[ch][a];
++            const std::size_t size = comb ? FreeverbState::COMB_SIZES_LR[ch][line]
++                                          : FreeverbState::ALLPASS_SIZES_LR[ch][a];
++            original[ch][line] = buffer;
++            positions[ch][line] = pos;
++            const std::size_t tail = size - pos;
++            if (tail < BLOCK_SIZE) {
++                for (std::size_t t = 0; t < tail; ++t)
++                    wrapped[ch][line][t] = buffer[pos + t];
++                for (std::size_t t = tail; t < BLOCK_SIZE; ++t)
++                    wrapped[ch][line][t] = buffer[t - tail];
++                buffer = wrapped[ch][line];
++            } else {
++                buffer += pos;
++            }
++            pos = 0;
++        }
++    }
++    freeverb_avx2_linear(state, input, input_r, stereo_in, room_size, damping,
++        room_scale_in, room_offset_in, dry_buf, dry_const, wet_buf, wet_const,
++        out_l, out_r);
++    for (std::size_t ch = 0; ch < 2; ++ch) {
++        for (std::size_t line = 0; line < lines; ++line) {
++            const bool comb = line < FreeverbState::NUM_COMBS;
++            const std::size_t a = line - FreeverbState::NUM_COMBS;
++            auto& buffer = comb ? state.comb_buffers[ch][line] : state.allpass_buffers[ch][a];
++            auto& pos = comb ? state.comb_pos[ch][line] : state.allpass_pos[ch][a];
++            const std::size_t size = comb ? FreeverbState::COMB_SIZES_LR[ch][line]
++                                          : FreeverbState::ALLPASS_SIZES_LR[ch][a];
++            const std::size_t old_pos = positions[ch][line];
++            const std::size_t tail = size - old_pos;
++            buffer = original[ch][line];
++            if (tail < BLOCK_SIZE) {
++                for (std::size_t t = 0; t < tail; ++t)
++                    buffer[old_pos + t] = wrapped[ch][line][t];
++                for (std::size_t t = tail; t < BLOCK_SIZE; ++t)
++                    buffer[t - tail] = wrapped[ch][line][t];
++            }
++            const std::size_t next = old_pos + BLOCK_SIZE;
++            pos = next >= size ? next - size : next;
++        }
++    }
++}
++
++CEDAR_TARGET_AVX2 inline void freeverb_avx2_linear(
+     FreeverbState& state, const float* input, const float* input_r,
+     bool stereo_in, const float* room_size, const float* damping,
+     const float* room_scale_in, const float* room_offset_in,

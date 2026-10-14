@@ -1,0 +1,3 @@
+x = saw(220) |> lp(@, 800)
+pingpong(stereo(x), 0.25, 0.4) |> out(@)
+pingpong(x, x, 0.25, 0.4, 1.0) |> out(@)

@@ -1,0 +1,126 @@
+diff --git a/cedar/include/cedar/opcodes/filters.hpp b/cedar/include/cedar/opcodes/filters.hpp
+index c8d3d39..98ecc11 100644
+--- a/cedar/include/cedar/opcodes/filters.hpp
++++ b/cedar/include/cedar/opcodes/filters.hpp
+@@ -435,8 +435,116 @@ constexpr VowelFormants VOWEL_TABLE[5] = {
+ //
+ // Creates vocal-like filter sweeps by morphing between vowel formants.
+ // Uses 3 parallel Chamberlin SVF bandpass filters.
++namespace kernels {
++#if CEDAR_SIMD_X86
++CEDAR_TARGET_AVX2 inline bool formant_split_avx2(ExecutionContext& ctx, const Instruction& inst) {
++    float* out_l = ctx.buffers->get(inst.out_buffer);
++    float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
++    const float* input = ctx.buffers->get(inst.inputs[0]);
++    const bool stereo_in = (inst.flags & InstructionFlag::STEREO_INPUT) != 0;
++    const float* input_r = stereo_in
++        ? ctx.buffers->get(static_cast<std::uint16_t>(inst.inputs[0] + 1)) : input;
++    const float* controls[4] = {
++        ctx.buffers->get(inst.inputs[1]), ctx.buffers->get(inst.inputs[2]),
++        ctx.buffers->get(inst.inputs[3]), ctx.buffers->get(inst.inputs[4])
++    };
++    // Controls that are overwritten by this opcode require sample ordering.
++    for (const float* p : controls)
++        if (p == out_l || p == out_r) return false;
++    auto& state = ctx.states->get_or_create<FormantState>(inst.state_id);
++    const auto* ext = ctx.states->get_if<ExtendedParams<2>>(ext_params_state_id(inst.state_id));
++    const float* dry_buf = nullptr; float dry_const = 0.0f;
++    const float* wet_buf = nullptr; float wet_const = 1.0f;
++    if (ext) {
++        const auto& d = ext->params[0];
++        if (d.is_constant()) dry_const = d.constant; else dry_buf = ctx.buffers->get(d.buffer_idx);
++        const auto& w = ext->params[1];
++        if (w.is_constant()) wet_const = w.constant; else wet_buf = ctx.buffers->get(w.buffer_idx);
++    }
++    alignas(32) float coefficients[BLOCK_SIZE][8];
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        float va = std::clamp(controls[0][i], 0.0f, 4.0f);
++        float vb = std::clamp(controls[1][i], 0.0f, 4.0f);
++        float m = std::clamp(controls[2][i], 0.0f, 1.0f);
++        float q = std::clamp(controls[3][i], 1.0f, 20.0f);
++        if (va != state.last_vowel_a || vb != state.last_vowel_b ||
++            m != state.last_morph || q != state.last_q) {
++            state.last_vowel_a = va;
++            state.last_vowel_b = vb;
++            state.last_morph = m;
++            state.last_q = q;
++            int ia = static_cast<int>(va), ib = static_cast<int>(vb);
++            float fa = va - static_cast<float>(ia), fb = vb - static_cast<float>(ib);
++            ia = std::min(ia, 4); ib = std::min(ib, 4);
++            int ja = std::min(ia + 1, 4), jb = std::min(ib + 1, 4);
++            const auto& a = VOWEL_TABLE[ia];
++            const auto& aa = VOWEL_TABLE[ja];
++            const auto& b = VOWEL_TABLE[ib];
++            const auto& bb = VOWEL_TABLE[jb];
++            __m256 av = _mm256_setr_ps(a.f1, a.f2, a.f3, a.g1, a.g2, a.g3, 0, 0);
++            __m256 aav = _mm256_setr_ps(aa.f1, aa.f2, aa.f3, aa.g1, aa.g2, aa.g3, 0, 0);
++            __m256 bv = _mm256_setr_ps(b.f1, b.f2, b.f3, b.g1, b.g2, b.g3, 0, 0);
++            __m256 bbv = _mm256_setr_ps(bb.f1, bb.f2, bb.f3, bb.g1, bb.g2, bb.g3, 0, 0);
++            av = _mm256_add_ps(_mm256_mul_ps(av, _mm256_set1_ps(1.0f - fa)),
++                              _mm256_mul_ps(aav, _mm256_set1_ps(fa)));
++            bv = _mm256_add_ps(_mm256_mul_ps(bv, _mm256_set1_ps(1.0f - fb)),
++                              _mm256_mul_ps(bbv, _mm256_set1_ps(fb)));
++            __m256 targets = _mm256_add_ps(_mm256_mul_ps(av, _mm256_set1_ps(1.0f - m)),
++                                         _mm256_mul_ps(bv, _mm256_set1_ps(m)));
++            alignas(32) float t[8];
++            _mm256_store_ps(t, targets);
++            state.f1 = t[0]; state.f2 = t[1]; state.f3 = t[2];
++            state.g1 = t[3]; state.g2 = t[4]; state.g3 = t[5];
++        }
++        auto prewarp = [&](float freq) -> float {
++            float w = PI * std::min(freq, ctx.sample_rate * 0.48f) / ctx.sample_rate;
++            return std::min(1.9f, 2.0f * std::tan(w));
++        };
++        coefficients[i][0] = prewarp(state.f1);
++        coefficients[i][1] = prewarp(state.f2);
++        coefficients[i][2] = prewarp(state.f3);
++        coefficients[i][3] = 1.0f / q;
++        coefficients[i][4] = state.g1;
++        coefficients[i][5] = state.g2;
++        coefficients[i][6] = state.g3;
++    }
++    for (std::size_t i = 0; i < BLOCK_SIZE; ++i) {
++        float dry = drywet::coeff(dry_buf, i, dry_const);
++        float wet = drywet::coeff(wet_buf, i, wet_const);
++        const float* c = coefficients[i];
++        for (std::size_t ch = 0; ch < 2; ++ch) {
++            float x = ch == 0 ? input[i] : input_r[i];
++            float hp1 = x - state.bp1_z1[ch] * c[3] - state.bp1_z2[ch];
++            float bp1 = state.bp1_z1[ch] + c[0] * hp1;
++            float lp1 = state.bp1_z2[ch] + c[0] * state.bp1_z1[ch];
++            state.bp1_z1[ch] = clamp_audio(bp1);
++            state.bp1_z2[ch] = clamp_audio(lp1);
++            float hp2 = x - state.bp2_z1[ch] * c[3] - state.bp2_z2[ch];
++            float bp2 = state.bp2_z1[ch] + c[1] * hp2;
++            float lp2 = state.bp2_z2[ch] + c[1] * state.bp2_z1[ch];
++            state.bp2_z1[ch] = clamp_audio(bp2);
++            state.bp2_z2[ch] = clamp_audio(lp2);
++            float hp3 = x - state.bp3_z1[ch] * c[3] - state.bp3_z2[ch];
++            float bp3 = state.bp3_z1[ch] + c[2] * hp3;
++            float lp3 = state.bp3_z2[ch] + c[2] * state.bp3_z1[ch];
++            state.bp3_z1[ch] = clamp_audio(bp3);
++            state.bp3_z2[ch] = clamp_audio(lp3);
++            float processed = bp1 * c[4] + bp2 * c[5] + bp3 * c[6];
++            (ch == 0 ? out_l : out_r)[i] = drywet::mix(x, processed, dry, wet);
++        }
++    }
++    return true;
++}
++#endif
++}
++
+ [[gnu::always_inline]]
+ inline void op_filter_formant(ExecutionContext& ctx, const Instruction& inst) {
++    // Prepare coefficients separately so transcendental calls do not spill the
++    // live feedback recurrences. The original loop remains the scalar oracle.
++#if CEDAR_SIMD_X86
++    if (simd::has(simd::Isa::Avx2) && kernels::formant_split_avx2(ctx, inst)) return;
++#endif
+     float* out_l = ctx.buffers->get(inst.out_buffer);
+     float* out_r = ctx.buffers->get(static_cast<std::uint16_t>(inst.out_buffer + 1));
+     const float* input = ctx.buffers->get(inst.inputs[0]);
+@@ -683,3 +791,4 @@ inline void op_filter_sallenkey(ExecutionContext& ctx, const Instruction& inst)
+ }
+ 
+ }  // namespace cedar
++#include "../dsp/simd.hpp"

@@ -1,0 +1,35 @@
+diff --git a/cedar/include/cedar/opcodes/distortion.hpp b/cedar/include/cedar/opcodes/distortion.hpp
+index 3251b7f..1e00049 100644
+--- a/cedar/include/cedar/opcodes/distortion.hpp
++++ b/cedar/include/cedar/opcodes/distortion.hpp
+@@ -24,6 +24,16 @@ namespace cedar {
+ 
+ #if CEDAR_SIMD_X86
+ namespace kernels {
++// simd: approx division inside std::tanh's approximation. All denominators
++// below are positive normal floats; one Newton step squares the reciprocal
++// estimate's relative error, reducing it to roughly float precision.
++CEDAR_TARGET_AVX2 inline __m256 distort_tanh_div_avx2(__m256 numerator, __m256 denominator) noexcept {
++    const __m256 reciprocal = _mm256_rcp_ps(denominator);
++    const __m256 refined = _mm256_mul_ps(reciprocal,
++        _mm256_sub_ps(_mm256_set1_ps(2.0f), _mm256_mul_ps(denominator, reciprocal)));
++    return _mm256_mul_ps(numerator, refined);
++}
++
+ // simd: approx std::tanh via a [7/6] Pade approximant on [-2.25, 2.25].
+ // Two double-angle steps recover tanh(x); beyond |x|=9 the tail is < 4e-8.
+ CEDAR_TARGET_AVX2 inline __m256 distort_tanh_curve_avx2(__m256 x) noexcept {
+@@ -38,10 +48,10 @@ CEDAR_TARGET_AVX2 inline __m256 distort_tanh_curve_avx2(__m256 x) noexcept {
+         _mm256_mul_ps(_mm256_set1_ps(28.0f), z));
+     q = _mm256_add_ps(_mm256_set1_ps(62370.0f), _mm256_mul_ps(z, q));
+     q = _mm256_add_ps(_mm256_set1_ps(135135.0f), _mm256_mul_ps(z, q));
+-    __m256 y = _mm256_div_ps(_mm256_mul_ps(x, p), q);
+-    y = _mm256_div_ps(_mm256_add_ps(y, y),
++    __m256 y = distort_tanh_div_avx2(_mm256_mul_ps(x, p), q);
++    y = distort_tanh_div_avx2(_mm256_add_ps(y, y),
+         _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(y, y)));
+-    return _mm256_div_ps(_mm256_add_ps(y, y),
++    return distort_tanh_div_avx2(_mm256_add_ps(y, y),
+         _mm256_add_ps(_mm256_set1_ps(1.0f), _mm256_mul_ps(y, y)));
+ }
+ 

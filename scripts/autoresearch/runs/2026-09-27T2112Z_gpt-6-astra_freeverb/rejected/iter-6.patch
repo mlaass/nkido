@@ -1,0 +1,52 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 5f18514..c48c9a3 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -118,8 +118,10 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+                 feedbacks[t] = room * scale + offset;
+             }
+             float y_lr[2][8];
++            __m256 tiles[2][8];
++            __m256 sums[2];
+             for (std::size_t ch = 0; ch < 2; ++ch) {
+-                __m256 tile[8];
++                __m256* tile = tiles[ch];
+                 __m256 y = _mm256_setzero_ps();
+                 for (std::size_t c = 0; c < 8; ++c) {
+                     tile[c] = _mm256_loadu_ps(comb[ch][c] + j);
+@@ -127,18 +129,30 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+                     y = _mm256_add_ps(y, tile[c]);
+                 }
+                 freeverb_transpose8(tile);
+-                for (std::size_t t = 0; t < 8; ++t) {
++                sums[ch] = y;
++            }
++            // Interleave the independent stereo recurrences so the CPU can
++            // overlap their arithmetic without reassociating either one.
++            for (std::size_t t = 0; t < 8; ++t) {
++                const __m256 undamped = _mm256_set1_ps(undampeds[t]);
++                const __m256 damp = _mm256_set1_ps(damps[t]);
++                const __m256 feedback = _mm256_set1_ps(feedbacks[t]);
++                for (std::size_t ch = 0; ch < 2; ++ch) {
+                     filter[ch] = _mm256_add_ps(
+-                        _mm256_mul_ps(tile[t], _mm256_set1_ps(undampeds[t])),
+-                        _mm256_mul_ps(filter[ch], _mm256_set1_ps(damps[t])));
++                        _mm256_mul_ps(tiles[ch][t], undamped),
++                        _mm256_mul_ps(filter[ch], damp));
+                     const __m256 dc_out = _mm256_add_ps(
+                         _mm256_sub_ps(filter[ch], dc_x[ch]),
+                         _mm256_mul_ps(dc_r, dc_y[ch]));
+                     dc_x[ch] = filter[ch];
+                     dc_y[ch] = dc_out;
+-                    tile[t] = _mm256_add_ps(_mm256_set1_ps(x[ch][t]),
+-                        _mm256_mul_ps(_mm256_set1_ps(feedbacks[t]), dc_out));
++                    tiles[ch][t] = _mm256_add_ps(_mm256_set1_ps(x[ch][t]),
++                        _mm256_mul_ps(feedback, dc_out));
+                 }
++            }
++            for (std::size_t ch = 0; ch < 2; ++ch) {
++                __m256* tile = tiles[ch];
++                __m256 y = sums[ch];
+                 freeverb_transpose8(tile);
+                 for (std::size_t c = 0; c < 8; ++c)
+                     _mm256_storeu_ps(comb[ch][c] + j, tile[c]);

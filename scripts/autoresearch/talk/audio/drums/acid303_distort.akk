@@ -1,0 +1,5 @@
+bpm = 130
+n"a2 a3 c3 a2 e3 a2 g3 c3".fast(4)
+    |> saw(@freq / 2) * ar(@trig, 0.001, 0.2) * 0.6
+    |> saturate(@, 4)
+    |> out(@)

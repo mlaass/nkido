@@ -1,0 +1,5 @@
+samples("file:///home/moritz/workspace/nkido/build/talk-slides/audio/drums/loops/strudel.json")
+bpm = 25.0000
+s"hiphop".bank("loops") * 0.7
+    |> lp(@, sine(0.25) * 2200 + 2500, 1.8)
+    |> out(@)

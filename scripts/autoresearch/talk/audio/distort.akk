@@ -1,0 +1,7 @@
+bpm = 90
+fn pad ({freq, gate, vel}) ->
+    saw(freq) * adsr(gate, 0.01, 0.3, 0.7, 0.4) * vel * 0.3
+chord("Am7 Fmaj7 C G")
+    |> poly(@, pad)
+    |> saturate(@, 4)
+    |> out(@)

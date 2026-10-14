@@ -1,0 +1,54 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index cd1a4ee..7249a2a 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -13,20 +13,43 @@ namespace cedar {
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    // Compute a group before storing so potentially aliased stores do not
++    // constrain scheduling of the group's independent input loads.
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32) {
++        const __m256 r0 = _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i));
++        const __m256 r1 = _mm256_add_ps(_mm256_load_ps(a + i + 8), _mm256_load_ps(b + i + 8));
++        const __m256 r2 = _mm256_add_ps(_mm256_load_ps(a + i + 16), _mm256_load_ps(b + i + 16));
++        const __m256 r3 = _mm256_add_ps(_mm256_load_ps(a + i + 24), _mm256_load_ps(b + i + 24));
++        _mm256_store_ps(out + i, r0);
++        _mm256_store_ps(out + i + 8, r1);
++        _mm256_store_ps(out + i + 16, r2);
++        _mm256_store_ps(out + i + 24, r3);
+     }
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32) {
++        const __m256 r0 = _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i));
++        const __m256 r1 = _mm256_sub_ps(_mm256_load_ps(a + i + 8), _mm256_load_ps(b + i + 8));
++        const __m256 r2 = _mm256_sub_ps(_mm256_load_ps(a + i + 16), _mm256_load_ps(b + i + 16));
++        const __m256 r3 = _mm256_sub_ps(_mm256_load_ps(a + i + 24), _mm256_load_ps(b + i + 24));
++        _mm256_store_ps(out + i, r0);
++        _mm256_store_ps(out + i + 8, r1);
++        _mm256_store_ps(out + i + 16, r2);
++        _mm256_store_ps(out + i + 24, r3);
+     }
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
+-    for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+-        _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
++    for (std::size_t i = 0; i < BLOCK_SIZE; i += 32) {
++        const __m256 r0 = _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i));
++        const __m256 r1 = _mm256_mul_ps(_mm256_load_ps(a + i + 8), _mm256_load_ps(b + i + 8));
++        const __m256 r2 = _mm256_mul_ps(_mm256_load_ps(a + i + 16), _mm256_load_ps(b + i + 16));
++        const __m256 r3 = _mm256_mul_ps(_mm256_load_ps(a + i + 24), _mm256_load_ps(b + i + 24));
++        _mm256_store_ps(out + i, r0);
++        _mm256_store_ps(out + i + 8, r1);
++        _mm256_store_ps(out + i + 16, r2);
++        _mm256_store_ps(out + i + 24, r3);
+     }
+ }
+ #endif

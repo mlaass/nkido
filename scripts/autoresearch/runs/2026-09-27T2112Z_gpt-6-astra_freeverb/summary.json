@@ -1,0 +1,28 @@
+{
+  "run_id": "2026-09-27T2112Z_gpt-6-astra_freeverb",
+  "provider": "codex",
+  "model": "gpt-6-astra (gpt-6-astra)",
+  "target": "freeverb",
+  "iterations": 8,
+  "accepts": 3,
+  "rejects": 5,
+  "reject_reasons": {
+    "empty patch": 1,
+    "speed": 4
+  },
+  "first_accept_iteration": 2,
+  "best_speedup": 4.125,
+  "tokens": {
+    "input": 1950961,
+    "output": 16012,
+    "cached": 1729024
+  },
+  "cost_usd": 0,
+  "wall_clock_s": 733.2,
+  "gpu_s": null,
+  "active_s": 733.2,
+  "unstable_iterations": 2,
+  "status": "complete",
+  "branch": "autoresearch/gpt-6-astra-freeverb-202609272112",
+  "base_rev": "59a054360c2c1a0dd184f708a88531a29cfe3315"
+}

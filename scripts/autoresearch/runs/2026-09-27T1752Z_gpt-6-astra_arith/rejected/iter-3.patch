@@ -1,0 +1,26 @@
+diff --git a/cedar/include/cedar/opcodes/arithmetic.hpp b/cedar/include/cedar/opcodes/arithmetic.hpp
+index cd1a4ee..861dba5 100644
+--- a/cedar/include/cedar/opcodes/arithmetic.hpp
++++ b/cedar/include/cedar/opcodes/arithmetic.hpp
+@@ -13,18 +13,21 @@ namespace cedar {
+ namespace kernels {
+ #if CEDAR_SIMD_X86
+ CEDAR_TARGET_AVX2 inline void add_avx2(const float* a, const float* b, float* out) noexcept {
++    #pragma GCC unroll 16
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_add_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void sub_avx2(const float* a, const float* b, float* out) noexcept {
++    #pragma GCC unroll 16
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_sub_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }
+ }
+ 
+ CEDAR_TARGET_AVX2 inline void mul_avx2(const float* a, const float* b, float* out) noexcept {
++    #pragma GCC unroll 16
+     for (std::size_t i = 0; i < BLOCK_SIZE; i += 8) {
+         _mm256_store_ps(out + i, _mm256_mul_ps(_mm256_load_ps(a + i), _mm256_load_ps(b + i)));
+     }

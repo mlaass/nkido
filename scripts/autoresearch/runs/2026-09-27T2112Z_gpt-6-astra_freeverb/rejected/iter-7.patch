@@ -1,0 +1,14 @@
+diff --git a/cedar/include/cedar/opcodes/reverbs.hpp b/cedar/include/cedar/opcodes/reverbs.hpp
+index 5f18514..939a539 100644
+--- a/cedar/include/cedar/opcodes/reverbs.hpp
++++ b/cedar/include/cedar/opcodes/reverbs.hpp
+@@ -127,6 +127,9 @@ CEDAR_TARGET_AVX2 inline void freeverb_avx2(
+                     y = _mm256_add_ps(y, tile[c]);
+                 }
+                 freeverb_transpose8(tile);
++                // Fixed trip count lets each transposed vector stay in a
++                // register through the sequential feedback recurrence.
++                #pragma GCC unroll 8
+                 for (std::size_t t = 0; t < 8; ++t) {
+                     filter[ch] = _mm256_add_ps(
+                         _mm256_mul_ps(tile[t], _mm256_set1_ps(undampeds[t])),
